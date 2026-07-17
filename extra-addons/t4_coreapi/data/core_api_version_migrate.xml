@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <function model="core.api.endpoint" name="_migrate_legacy_route_fields"/>
+
+</odoo>

@@ -1,0 +1,4 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_nsp_sync_record_it,nsp.sync.record IT,model_nsp_sync_record,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_sync_job_it,nsp.sync.job IT,model_nsp_sync_job,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_sync_auth_it,nsp.sync.auth IT,model_nsp_sync_auth,nsp_core.group_nsp_it_parking,1,1,1,0

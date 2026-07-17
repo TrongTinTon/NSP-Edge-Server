@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_core_api_domain_list" model="ir.ui.view">
+        <field name="name">core.api.domain.list</field>
+        <field name="model">core.api.domain</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="protocol"/>
+                <field name="hostname"/>
+                <field name="base_url"/>
+                <field name="is_default"/>
+                <field name="active"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_core_api_domain_form" model="ir.ui.view">
+        <field name="name">core.api.domain.form</field>
+        <field name="model">core.api.domain</field>
+        <field name="arch" type="xml">
+            <form string="API Host Domain">
+                <sheet>
+                    <widget name="web_ribbon" title="Inactive" bg_color="text-bg-danger"
+                            invisible="active"/>
+                    <group>
+                        <group>
+                            <field name="name"/>
+                            <field name="protocol"/>
+                            <field name="hostname" placeholder="cloud_web:8069 / localhost:8070 / api.example.com"/>
+                            <field name="base_url" readonly="1" widget="CopyClipboardChar"/>
+                            <field name="sequence"/>
+                        </group>
+                        <group>
+                            <field name="is_default" readonly="1"/>
+                            <field name="active"/>
+                        </group>
+                    </group>
+                    <field name="description" placeholder="Describe this host and which clients use it…"/>
+                    <div class="alert alert-info" role="alert" invisible="is_default">
+                        Enter only the API host root here. NSP Sync will add /&lt;service_code&gt;/&lt;version&gt;/&lt;route&gt; automatically.
+                    </div>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_core_api_domain_search" model="ir.ui.view">
+        <field name="name">core.api.domain.search</field>
+        <field name="model">core.api.domain</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="hostname"/>
+                <field name="protocol"/>
+                <filter string="Active" name="filter_active" domain="[('active', '=', True)]"/>
+                <filter string="Inactive" name="filter_inactive" domain="[('active', '=', False)]"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_core_api_domain" model="ir.actions.act_window">
+        <field name="name">API Host Domains</field>
+        <field name="res_model">core.api.domain</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_filter_active': 1}</field>
+    </record>
+
+</odoo>

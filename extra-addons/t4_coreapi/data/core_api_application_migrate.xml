@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <function model="core.api.application" name="write">
+        <value model="core.api.application" search="[('domain_id', '=', False)]"/>
+        <value eval="{'domain_id': ref('t4_coreapi.core_api_domain_default')}"/>
+    </function>
+
+</odoo>

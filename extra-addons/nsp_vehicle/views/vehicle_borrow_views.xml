@@ -1,0 +1,110 @@
+<odoo>
+    <record id="view_nsp_vehicle_borrow_request_tree" model="ir.ui.view">
+        <field name="name">nsp.vehicle.borrow.request.list</field>
+        <field name="model">nsp.vehicle.borrow.request</field>
+        <field name="arch" type="xml">
+            <list decoration-success="state == 'approved'" decoration-muted="state in ('returned','cancelled')" decoration-danger="state == 'rejected'">
+                <field name="borrow_code"/>
+                <field name="vehicle_id"/>
+                <field name="license_plate"/>
+                <field name="borrower_id"/>
+                <field name="owner_id"/>
+                <field name="valid_from"/>
+                <field name="valid_to"/>
+                <field name="state"/>
+                <field name="active_for_controller"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_vehicle_borrow_request_form" model="ir.ui.view">
+        <field name="name">nsp.vehicle.borrow.request.form</field>
+        <field name="model">nsp.vehicle.borrow.request</field>
+        <field name="arch" type="xml">
+            <form string="Vehicle Borrow Request">
+                <header>
+                    <button name="action_submit" type="object" string="Submit" class="btn-primary" invisible="state != 'draft'"/>
+                    <button name="action_approve" type="object" string="Approve" class="btn-primary" invisible="state not in ['draft', 'waiting']"/>
+                    <button name="action_return_vehicle" type="object" string="Return / Close" class="btn-success" invisible="state != 'approved'"/>
+                    <button name="action_reject" type="object" string="Reject" invisible="state not in ['draft', 'waiting', 'approved']"/>
+                    <button name="action_cancel" type="object" string="Cancel" invisible="state in ['returned', 'cancelled']"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,waiting,approved,returned"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="borrow_code" readonly="1"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="vehicle_id" readonly="state not in ['draft', 'waiting']"/>
+                            <field name="license_plate" readonly="1"/>
+                            <field name="owner_id" readonly="1"/>
+                            <field name="borrower_id" readonly="state not in ['draft', 'waiting']"/>
+                            <field name="borrower_code" readonly="1"/>
+                        </group>
+                        <group>
+                            <field name="request_date" readonly="1"/>
+                            <field name="valid_from" readonly="state not in ['draft', 'waiting']"/>
+                            <field name="valid_to" readonly="state not in ['draft', 'waiting']"/>
+                            <field name="approved_at" readonly="1"/>
+                            <field name="returned_at" readonly="1"/>
+                            <field name="active_for_controller" readonly="1"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Reason">
+                            <field name="reason" readonly="state not in ['draft', 'waiting']"/>
+                        </page>
+                        <page string="Approval / Return">
+                            <group>
+                                <field name="approved_by_id" readonly="1"/>
+                                <field name="approval_note"/>
+                                <field name="returned_by_id" readonly="1"/>
+                                <field name="return_note"/>
+                                <field name="reject_reason"/>
+                            </group>
+                        </page>
+                        <page string="Sync">
+                            <group>
+                                <field name="sync_record_key" readonly="1"/>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+                <div class="oe_chatter">
+                    <field name="message_follower_ids"/>
+                    <field name="activity_ids"/>
+                    <field name="message_ids"/>
+                </div>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_nsp_vehicle_borrow_request_search" model="ir.ui.view">
+        <field name="name">nsp.vehicle.borrow.request.search</field>
+        <field name="model">nsp.vehicle.borrow.request</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="borrow_code"/>
+                <field name="vehicle_id"/>
+                <field name="borrower_id"/>
+                <field name="license_plate"/>
+                <filter name="waiting" string="Waiting Approval" domain="[('state','=','waiting')]"/>
+                <filter name="approved" string="Approved" domain="[('state','=','approved')]"/>
+                <filter name="active_controller" string="Active For Controller" domain="[('active_for_controller','=',True)]"/>
+                <filter name="returned" string="Returned" domain="[('state','=','returned')]"/>
+                <separator/>
+                    <filter name="group_state" string="Status" context="{'group_by':'state'}"/>
+                    <filter name="group_vehicle" string="Vehicle" context="{'group_by':'vehicle_id'}"/>
+                    <filter name="group_borrower" string="Borrower" context="{'group_by':'borrower_id'}"/>
+                </search>
+        </field>
+    </record>
+
+    <record id="action_nsp_vehicle_borrow_request" model="ir.actions.act_window">
+        <field name="name">Vehicle Borrow Requests</field>
+        <field name="res_model">nsp.vehicle.borrow.request</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_nsp_vehicle_borrow_request_search"/>
+    </record>
+</odoo>

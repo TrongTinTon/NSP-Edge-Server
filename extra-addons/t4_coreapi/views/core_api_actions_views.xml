@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_ir_actions_core_api_list" model="ir.ui.view">
+        <field name="name">ir.actions.core_api.list</field>
+        <field name="model">ir.actions.core_api</field>
+        <field name="arch" type="xml">
+            <list string="API Actions">
+                <field name="name"/>
+                <field name="endpoint_code"/>
+                <field name="route_suffix"/>
+                <field name="http_methods"/>
+                <field name="model_id"/>
+                <!-- <field name="endpoint_manager_id"/> -->
+            </list>
+        </field>
+    </record>
+
+    <record id="view_ir_actions_core_api_form" model="ir.ui.view">
+        <field name="name">ir.actions.core_api.form</field>
+        <field name="model">ir.actions.core_api</field>
+        <field name="arch" type="xml">
+            <form string="API Action">
+                <sheet>
+                    <div class="oe_title">
+                        <label for="name" class="oe_edit_only"/>
+                        <h1>
+                            <field name="name" placeholder="Ví dụ: Xử lý đồng bộ dữ liệu..."/>
+                        </h1>
+                    </div>
+                    
+                    <group>
+                        <group>
+                            <field name="model_id"/>
+                        </group>
+                        <group>
+                            <field name="endpoint_manager_id"/>
+                            <field name="endpoint_code"/>
+                            <field name="route_suffix"/>
+                            <field name="http_methods"/>
+                        </group>
+                    </group>
+
+                    <notebook>
+                        <page string="Python Code" name="code_page">
+                            <field name="code" widget="ace" options="{'mode': 'python'}"/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_ir_actions_core_api" model="ir.actions.act_window">
+        <field name="name">API Actions</field>
+        <field name="res_model">ir.actions.core_api</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Tạo một API Action mới
+            </p>
+            <p>
+                Action này được sử dụng để thực thi các đoạn mã Python ngầm ở backend.
+            </p>
+        </field>
+    </record>
+    
+    </odoo>

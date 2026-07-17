@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <record id="vehicle_type_motorbike" model="nsp.vehicle.type">
+        <field name="name">Motorbike</field>
+        <field name="code">motorbike</field>
+    </record>
+    <record id="vehicle_type_car" model="nsp.vehicle.type">
+        <field name="name">Car</field>
+        <field name="code">car</field>
+    </record>
+    <record id="vehicle_type_truck" model="nsp.vehicle.type">
+        <field name="name">Truck</field>
+        <field name="code">truck</field>
+    </record>
+    <record id="vehicle_type_other" model="nsp.vehicle.type">
+        <field name="name">Other</field>
+        <field name="code">other</field>
+    </record>
+</odoo>

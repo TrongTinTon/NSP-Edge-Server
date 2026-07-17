@@ -1,0 +1,286 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_nsp_gate_measurement_session_search" model="ir.ui.view">
+        <field name="name">view.nsp.gate.measurement.session.search</field>
+        <field name="model">nsp.gate.measurement.session</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="measurement_code"/>
+                <field name="measurement_session_uid"/>
+                <field name="gate_id"/>
+                <field name="lane_id"/>
+                <field name="controller_id"/>
+                <field name="measurement_status"/>
+                <filter string="Draft" name="draft" domain="[('measurement_status','=','draft')]"/>
+                <filter string="Ready" name="ready" domain="[('measurement_status','=','ready')]"/>
+                <filter string="Measuring" name="measuring" domain="[('measurement_status','=','measuring')]"/>
+                <filter string="Completed" name="completed" domain="[('measurement_status','=','completed')]"/>
+                <separator/>
+                <filter string="Gate" name="group_gate" context="{'group_by':'gate_id'}"/>
+                <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
+                <filter string="Status" name="group_status" context="{'group_by':'measurement_status'}"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_gate_measurement_session_list" model="ir.ui.view">
+        <field name="name">view.nsp.gate.measurement.session.list</field>
+        <field name="model">nsp.gate.measurement.session</field>
+        <field name="arch" type="xml">
+            <list string="Measurement Sessions">
+                <field name="measurement_code"/>
+                <field name="branch_id"/>
+                <field name="gate_id"/>
+                <field name="lane_id" optional="hide"/>
+                <field name="controller_id"/>
+                <field name="planned_direction"/>
+                <field name="measurement_status"/>
+                <field name="apply_status"/>
+                <field name="config_revision"/>
+                <field name="run_count"/>
+                <field name="event_count"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_gate_measurement_session_form" model="ir.ui.view">
+        <field name="name">view.nsp.gate.measurement.session.form</field>
+        <field name="model">nsp.gate.measurement.session</field>
+        <field name="arch" type="xml">
+            <form string="Measurement Session">
+                <header>
+                    <button name="action_ready" type="object" string="Release Configuration" class="btn-primary" groups="nsp_core.group_nsp_it_parking" invisible="measurement_status != 'draft'"/>
+                    <button name="action_complete" type="object" string="Complete" class="btn-primary" groups="nsp_core.group_nsp_it_parking" invisible="measurement_status != 'measuring'"/>
+                    <button name="action_cancel" type="object" string="Cancel" groups="nsp_core.group_nsp_it_parking" invisible="measurement_status in ('completed','cancelled')"/>
+                    <field name="measurement_status" widget="statusbar" statusbar_visible="draft,ready,measuring,completed,cancelled"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="measurement_code" readonly="measurement_status != 'draft'"/>
+                            <field name="measurement_session_uid" readonly="1"/>
+                            <field name="gate_id" readonly="measurement_status != 'draft'"/>
+                            <field name="branch_id" readonly="1"/>
+                            <field name="lane_id" readonly="measurement_status != 'draft'" domain="[('gate_id','=',gate_id)]"/>
+                            <field name="controller_id" readonly="measurement_status != 'draft'"/>
+                        </group>
+                        <group>
+                            <field name="planned_direction" readonly="measurement_status != 'draft'"/>
+                            <field name="planned_start_at" readonly="measurement_status != 'draft'"/>
+                            <field name="planned_end_at" readonly="measurement_status != 'draft'"/>
+                            <field name="config_revision" readonly="1"/>
+                            <field name="config_hash" readonly="1"/>
+                            <field name="apply_status" readonly="1"/>
+                            <field name="sync_state" readonly="1"/>
+                        </group>
+                    </group>
+                    <group>
+                        <field name="objective_note" readonly="measurement_status != 'draft'"/>
+                    </group>
+                    <notebook>
+                        <page string="Antennas">
+                            <field name="antenna_ids" readonly="measurement_status != 'draft'">
+                                <list editable="bottom">
+                                    <field name="antenna_ref_id" domain="[('device_id.controller_id','=',parent.controller_id)]"/>
+                                    <field name="serial_number" readonly="1"/>
+                                    <field name="antenna_no" readonly="1"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Runs">
+                            <field name="run_ids" readonly="1">
+                                <list>
+                                    <field name="measurement_run_uid"/>
+                                    <field name="actual_direction"/>
+                                    <field name="run_status"/>
+                                    <field name="started_at"/>
+                                    <field name="stopped_at"/>
+                                    <field name="measurement_count"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Events">
+                            <field name="event_ids" readonly="1">
+                                <list>
+                                    <field name="measurement_uid"/>
+                                    <field name="run_id"/>
+                                    <field name="serial_number"/>
+                                    <field name="antenna_no"/>
+                                    <field name="tid"/>
+                                    <field name="read_at"/>
+                                    <field name="rssi_dbm"/>
+                                    <field name="sync_state"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Antenna Summary" invisible="measurement_status != 'completed'">
+                            <field name="antenna_summary_ids" readonly="1">
+                                <list>
+                                    <field name="serial_number"/>
+                                    <field name="antenna_no"/>
+                                    <field name="read_count"/>
+                                    <field name="min_rssi_dbm"/>
+                                    <field name="max_rssi_dbm"/>
+                                    <field name="average_rssi_dbm"/>
+                                    <field name="first_read_at"/>
+                                    <field name="last_read_at"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Interval Summary" invisible="measurement_status != 'completed'">
+                            <field name="pair_summary_ids" readonly="1">
+                                <list>
+                                    <field name="from_serial_number"/>
+                                    <field name="from_antenna_no"/>
+                                    <field name="to_serial_number"/>
+                                    <field name="to_antenna_no"/>
+                                    <field name="sample_count"/>
+                                    <field name="min_interval_ms"/>
+                                    <field name="max_interval_ms"/>
+                                    <field name="average_interval_ms"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_nsp_gate_measurement_event_search" model="ir.ui.view">
+        <field name="name">view.nsp.gate.measurement.event.search</field>
+        <field name="model">nsp.gate.measurement.event</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="measurement_uid"/>
+                <field name="session_id"/>
+                <field name="run_id"/>
+                <field name="serial_number"/>
+                <field name="antenna_no"/>
+                <field name="tid"/>
+                <filter string="Pending Sync" name="pending" domain="[('sync_state','=','pending')]"/>
+                <separator/>
+                <filter string="Session" name="group_session" context="{'group_by':'session_id'}"/>
+                <filter string="Run" name="group_run" context="{'group_by':'run_id'}"/>
+                <filter string="Reader" name="group_reader" context="{'group_by':'serial_number'}"/>
+                <filter string="TID" name="group_tid" context="{'group_by':'tid'}"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_gate_measurement_event_list" model="ir.ui.view">
+        <field name="name">view.nsp.gate.measurement.event.list</field>
+        <field name="model">nsp.gate.measurement.event</field>
+        <field name="arch" type="xml">
+            <list string="Measurement Events" create="0" edit="0" delete="0">
+                <field name="measurement_uid"/>
+                <field name="session_id"/>
+                <field name="run_id"/>
+                <field name="serial_number"/>
+                <field name="antenna_no"/>
+                <field name="tid"/>
+                <field name="read_at"/>
+                <field name="rssi_dbm"/>
+                <field name="sync_state"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_gate_measurement_event_form" model="ir.ui.view">
+        <field name="name">view.nsp.gate.measurement.event.form</field>
+        <field name="model">nsp.gate.measurement.event</field>
+        <field name="arch" type="xml">
+            <form string="Measurement Event" create="0" edit="0" delete="0">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="measurement_uid"/>
+                            <field name="session_id"/>
+                            <field name="run_id"/>
+                            <field name="tid"/>
+                        </group>
+                        <group>
+                            <field name="serial_number"/>
+                            <field name="antenna_no"/>
+                            <field name="read_at"/>
+                            <field name="rssi_dbm"/>
+                            <field name="sync_state"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_nsp_gate_measurement_session" model="ir.actions.act_window">
+        <field name="name">Measurement Sessions</field>
+        <field name="res_model">nsp.gate.measurement.session</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_nsp_gate_measurement_session_search"/>
+    </record>
+
+    <record id="action_nsp_gate_measurement_event" model="ir.actions.act_window">
+        <field name="name">Measurement Events</field>
+        <field name="res_model">nsp.gate.measurement.event</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_nsp_gate_measurement_event_search"/>
+    </record>
+
+    <record id="view_nsp_gate_measurement_pair_summary_search" model="ir.ui.view">
+        <field name="name">view.nsp.gate.measurement.pair.summary.search</field>
+        <field name="model">nsp.gate.measurement.pair.summary</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="session_id"/>
+                <field name="from_serial_number"/>
+                <field name="to_serial_number"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_gate_measurement_pair_summary_list" model="ir.ui.view">
+        <field name="name">view.nsp.gate.measurement.pair.summary.list</field>
+        <field name="model">nsp.gate.measurement.pair.summary</field>
+        <field name="arch" type="xml">
+            <list string="Antenna Pair Summary" create="0" edit="0" delete="0">
+                <field name="session_id"/>
+                <field name="from_serial_number"/>
+                <field name="from_antenna_no"/>
+                <field name="to_serial_number"/>
+                <field name="to_antenna_no"/>
+                <field name="sample_count"/>
+                <field name="average_interval_ms"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_gate_measurement_pair_summary_form" model="ir.ui.view">
+        <field name="name">view.nsp.gate.measurement.pair.summary.form</field>
+        <field name="model">nsp.gate.measurement.pair.summary</field>
+        <field name="arch" type="xml">
+            <form string="Antenna Pair Summary" create="0" edit="0" delete="0">
+                <sheet>
+                    <group>
+                        <field name="session_id"/>
+                        <field name="from_serial_number"/>
+                        <field name="from_antenna_no"/>
+                        <field name="to_serial_number"/>
+                        <field name="to_antenna_no"/>
+                        <field name="sample_count"/>
+                        <field name="min_interval_ms"/>
+                        <field name="max_interval_ms"/>
+                        <field name="average_interval_ms"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_nsp_gate_measurement_pair_summary" model="ir.actions.act_window">
+        <field name="name">Antenna Pair Summary</field>
+        <field name="res_model">nsp.gate.measurement.pair.summary</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_nsp_gate_measurement_pair_summary_search"/>
+    </record>
+
+</odoo>

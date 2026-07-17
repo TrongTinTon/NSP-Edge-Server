@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_reject_vehicle_wizard_form" model="ir.ui.view">
+        <field name="name">nsp.vehicle.reject.wizard.form</field>
+        <field name="model">nsp.vehicle.reject.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Reject Reason">
+                <group>
+                    <field name="reason" placeholder="Example: The vehicle registration image is blurry. Please upload a clearer image..."/>
+                </group>
+                <footer>
+                    <button name="action_confirm_reject" string="Confirm Rejection" type="object" class="btn-danger"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

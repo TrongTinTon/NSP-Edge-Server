@@ -1,0 +1,39 @@
+<odoo>
+    <record id="module_category_nsp" model="ir.module.category">
+        <field name="name">Non Stop Parking</field>
+        <field name="description">Role based access groups for NSP Parking / Gatekeeper.</field>
+        <field name="sequence">20</field>
+    </record>
+
+    <record id="privilege_nsp_parking" model="res.groups.privilege">
+        <field name="name">NSP Parking</field>
+        <field name="category_id" ref="module_category_nsp"/>
+    </record>
+
+    <record id="group_nsp_employee" model="res.groups">
+        <field name="name">Employee Self Service</field>
+        <field name="privilege_id" ref="privilege_nsp_parking"/>
+        <field name="sequence">10</field>
+    </record>
+
+    <record id="group_nsp_operator" model="res.groups">
+        <field name="name">Parking Operator</field>
+        <field name="privilege_id" ref="privilege_nsp_parking"/>
+        <field name="sequence">20</field>
+        <field name="implied_ids" eval="[(4, ref('group_nsp_employee'))]"/>
+    </record>
+
+    <record id="group_nsp_hr_parking" model="res.groups">
+        <field name="name">HR Parking Officer</field>
+        <field name="privilege_id" ref="privilege_nsp_parking"/>
+        <field name="sequence">30</field>
+        <field name="implied_ids" eval="[(4, ref('group_nsp_employee'))]"/>
+    </record>
+
+    <record id="group_nsp_it_parking" model="res.groups">
+        <field name="name">IT Parking Admin</field>
+        <field name="privilege_id" ref="privilege_nsp_parking"/>
+        <field name="sequence">40</field>
+        <field name="implied_ids" eval="[(4, ref('group_nsp_operator')), (4, ref('group_nsp_hr_parking'))]"/>
+    </record>
+</odoo>

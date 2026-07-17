@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_core_api_version_list" model="ir.ui.view">
+        <field name="name">core.api.version.list</field>
+        <field name="model">core.api.version</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="code"/>
+                <field name="endpoint_count"/>
+                <field name="active"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_core_api_version_form" model="ir.ui.view">
+        <field name="name">core.api.version.form</field>
+        <field name="model">core.api.version</field>
+        <field name="arch" type="xml">
+            <form string="API Version">
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button class="oe_stat_button" icon="fa-link" type="object"
+                                name="action_view_endpoints">
+                            <field name="endpoint_count" widget="statinfo" string="Routes"/>
+                        </button>
+                    </div>
+                    <widget name="web_ribbon" title="Inactive" bg_color="text-bg-danger"
+                            invisible="active"/>
+                    <group>
+                        <group>
+                            <field name="name"/>
+                            <field name="code" placeholder="v1"/>
+                            <field name="sequence"/>
+                        </group>
+                        <group>
+                            <field name="active"/>
+                        </group>
+                    </group>
+                    <field name="description" placeholder="Notes about this API version…"/>
+                    <div class="alert alert-info" role="alert">
+                        Gateway URLs combine host domain service code + this version code,
+                        e.g. <code>/gk/v1/gate1</code>.
+                    </div>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_core_api_version_search" model="ir.ui.view">
+        <field name="name">core.api.version.search</field>
+        <field name="model">core.api.version</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="code"/>
+                <filter string="Active" name="filter_active" domain="[('active', '=', True)]"/>
+                <filter string="Inactive" name="filter_inactive" domain="[('active', '=', False)]"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_core_api_version" model="ir.actions.act_window">
+        <field name="name">API Versions</field>
+        <field name="res_model">core.api.version</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_filter_active': 1}</field>
+    </record>
+
+</odoo>

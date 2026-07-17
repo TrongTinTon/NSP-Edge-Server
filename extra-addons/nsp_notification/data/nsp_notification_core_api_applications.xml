@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="0">
+    <!--
+        Bootstrap official Core API Applications for external notification clients.
+        Mobile app and parking monitor/kiosk/browser clients must authenticate through
+        /auth/token and call only the Gateway Routes assigned to their application.
+    -->
+    <function model="core.api.application" name="_ensure_nsp_notification_applications"/>
+</odoo>

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Record rules are not required: access is controlled via ir.model.access.csv -->
+</odoo>

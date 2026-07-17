@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<odoo>
+
+
+
+    <menuitem id="menu_core_api_root"
+
+              name="Core API"
+
+              groups="t4_coreapi.group_core_api_manager"
+
+              sequence="90"/>
+
+
+
+    <menuitem id="menu_core_api_applications"
+
+              name="Applications"
+
+              parent="menu_core_api_root"
+
+              action="action_core_api_application"
+
+              sequence="10"/>
+
+
+
+    <menuitem id="menu_core_api_tokens"
+
+              name="Access Tokens"
+
+              parent="menu_core_api_root"
+
+              action="action_core_api_token"
+
+              sequence="20"/>
+
+
+
+    <menuitem id="menu_core_api_logs"
+
+              name="Request Logs"
+
+              parent="menu_core_api_root"
+
+              action="action_core_api_log"
+
+              sequence="30"/>
+
+
+    <!-- CONFIGURATIONS -->
+    <menuitem id="menu_core_api_configuration" 
+      
+              name="Configuration" 
+
+              parent="menu_core_api_root"
+
+              sequence="200"/>
+
+
+    <menuitem id="menu_core_api_configuration_apis_menu" 
+      
+              name="APIs" 
+
+              parent="menu_core_api_configuration"
+
+              sequence="10"/>
+
+    <menuitem id="menu_core_api_domains"
+
+              name="API Host Domains"
+
+              parent="menu_core_api_configuration_apis_menu"
+
+              action="action_core_api_domain"
+
+              sequence="5"/>
+
+    <menuitem id="menu_core_api_versions"
+
+              name="API Versions"
+
+              parent="menu_core_api_configuration_apis_menu"
+
+              action="action_core_api_version"
+
+              sequence="10"/>
+
+
+    <menuitem id="menu_core_api_configuration_endpoints_menu" 
+      
+              name="Endpoints" 
+
+              parent="menu_core_api_configuration"
+
+              sequence="50"/>
+
+    <menuitem id="menu_core_api_configuration_endpoints_menu_enpoints" 
+                
+              name="Endpoints" 
+      
+              parent="menu_core_api_configuration_endpoints_menu" 
+      
+              action="action_endpoint_manager_window" 
+      
+              sequence="10"/>
+
+
+    <menuitem id="menu_core_api_configuration_actions_menu" 
+      
+              name="Actions" 
+
+              parent="menu_core_api_configuration"
+
+              sequence="100"/>
+
+    <menuitem id="menu_core_api_configuration_actions_menu_actions" 
+                
+              name="Actions" 
+      
+              parent="menu_core_api_configuration_actions_menu" 
+      
+              action="action_ir_actions_core_api" 
+      
+              sequence="10"/>
+
+
+
+</odoo>
+

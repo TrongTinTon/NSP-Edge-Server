@@ -1,0 +1,9 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_nsp_notification_operator,nsp.notification Operator,model_nsp_notification,nsp_core.group_nsp_operator,1,0,0,0
+access_nsp_notification_it,nsp.notification IT,model_nsp_notification,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_push_device_operator,nsp.push.device Operator,model_nsp_push_device,nsp_core.group_nsp_operator,1,0,0,0
+access_nsp_push_device_it,nsp.push.device IT,model_nsp_push_device,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_push_delivery_operator,nsp.push.delivery Operator,model_nsp_push_delivery,nsp_core.group_nsp_operator,1,0,0,0
+access_nsp_push_delivery_it,nsp.push.delivery IT,model_nsp_push_delivery,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_push_rule_it,nsp.push.rule IT,model_nsp_push_rule,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_push_provider_it,nsp.push.provider IT,model_nsp_push_provider,nsp_core.group_nsp_it_parking,1,1,1,1

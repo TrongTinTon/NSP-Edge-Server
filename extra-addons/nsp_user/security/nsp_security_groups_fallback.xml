@@ -1,0 +1,45 @@
+<odoo>
+    <!--
+        Compatibility fallback for databases upgraded module-by-module.
+        The NSP role groups are owned by nsp_whitelist, but access CSV files in
+        other NSP modules reference these XML IDs. If nsp_gatekeeper/nsp_user/
+        nsp_vehicle/nsp_sync is upgraded before nsp_whitelist has been upgraded,
+        Odoo cannot resolve the group XML IDs while processing ir.model.access.csv.
+
+        Defining the same fully-qualified XML IDs here is safe: when nsp_whitelist
+        is upgraded later, it updates the same records instead of creating
+        duplicates.
+    -->
+    <record id="nsp_whitelist.module_category_nsp" model="ir.module.category">
+        <field name="name">Non Stop Parking</field>
+        <field name="description">Role based access groups for NSP Parking / Gatekeeper.</field>
+        <field name="sequence">20</field>
+    </record>
+
+    <record id="nsp_whitelist.group_nsp_employee" model="res.groups">
+        <field name="name">NSP / Employee Self Service</field>
+        <field name="category_id" ref="nsp_whitelist.module_category_nsp"/>
+        <field name="comment">Employee self-service role for mobile/API flows that show own vehicles, cards and notifications.</field>
+    </record>
+
+    <record id="nsp_whitelist.group_nsp_operator" model="res.groups">
+        <field name="name">NSP / Parking Operator</field>
+        <field name="category_id" ref="nsp_whitelist.module_category_nsp"/>
+        <field name="implied_ids" eval="[(4, ref('nsp_whitelist.group_nsp_employee'))]"/>
+        <field name="comment">Parking operator role for realtime screens, vehicle in/out logs and operational alerts.</field>
+    </record>
+
+    <record id="nsp_whitelist.group_nsp_hr_parking" model="res.groups">
+        <field name="name">NSP / HR Parking Officer</field>
+        <field name="category_id" ref="nsp_whitelist.module_category_nsp"/>
+        <field name="implied_ids" eval="[(4, ref('nsp_whitelist.group_nsp_employee'))]"/>
+        <field name="comment">HR role for employee registration, employee RFID cards, vehicle RFID cards and vehicle borrowing approval.</field>
+    </record>
+
+    <record id="nsp_whitelist.group_nsp_it_parking" model="res.groups">
+        <field name="name">NSP / IT Parking Admin</field>
+        <field name="category_id" ref="nsp_whitelist.module_category_nsp"/>
+        <field name="implied_ids" eval="[(4, ref('nsp_whitelist.group_nsp_operator')), (4, ref('nsp_whitelist.group_nsp_hr_parking'))]"/>
+        <field name="comment">IT administrator role for controllers, devices, configuration, dashboards, history logs and synchronization.</field>
+    </record>
+</odoo>

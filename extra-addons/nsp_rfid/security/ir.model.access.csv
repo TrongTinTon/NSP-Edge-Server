@@ -1,0 +1,4 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_nsp_rfid_card_hr,nsp.rfid.card HR,model_nsp_rfid_card,nsp_core.group_nsp_hr_parking,1,1,1,0
+access_nsp_rfid_card_it,nsp.rfid.card IT,model_nsp_rfid_card,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_rfid_card_operator,nsp.rfid.card Operator,model_nsp_rfid_card,nsp_core.group_nsp_operator,1,0,0,0

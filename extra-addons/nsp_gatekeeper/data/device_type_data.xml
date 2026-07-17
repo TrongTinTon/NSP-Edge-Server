@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <record id="nsp_device_type_rfid_reader" model="nsp.device.type">
+        <field name="name">RFID Reader</field>
+        <field name="code">rfid_reader</field>
+        <field name="category">rfid_reader</field>
+        <field name="supports_antenna_mapping" eval="True"/>
+        <field name="sequence">10</field>
+    </record>
+    <record id="nsp_device_type_camera" model="nsp.device.type">
+        <field name="name">Camera</field>
+        <field name="code">camera</field>
+        <field name="category">camera</field>
+        <field name="supports_antenna_mapping" eval="False"/>
+        <field name="sequence">20</field>
+    </record>
+    <record id="nsp_device_type_other" model="nsp.device.type">
+        <field name="name">Other</field>
+        <field name="code">other</field>
+        <field name="category">other</field>
+        <field name="supports_antenna_mapping" eval="False"/>
+        <field name="sequence">99</field>
+    </record>
+</odoo>

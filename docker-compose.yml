@@ -1,0 +1,58 @@
+services:
+  web:
+    build: .
+    image: nsp-odoo:19
+    depends_on:
+      - db
+    ports:
+      - 8069:8069
+    volumes:
+      - odoo-web-data:/var/lib/odoo
+      - ./config:/etc/odoo
+      - ./extra-addons:/mnt/extra-addons
+    env_file:
+      - env/odoo.env
+    # Edge / local server node
+    restart: on-failure
+
+  db:
+    image: postgres:14
+    ports:
+      - 5433:5432
+    env_file:
+      - env/postgresql.env
+    volumes:
+      - odoo-db-data:/var/lib/postgresql/data
+    restart: on-failure
+
+  cloud_web:
+    build: .
+    image: nsp-odoo:19
+    depends_on:
+      - cloud_db
+    ports:
+      - 8070:8069
+    volumes:
+      - odoo-cloud-web-data:/var/lib/odoo
+      - ./config:/etc/odoo
+      - ./extra-addons:/mnt/extra-addons
+    env_file:
+      - env/cloud_odoo.env
+    # Cloud simulation node, same source code as edge/local server
+    restart: on-failure
+
+  cloud_db:
+    image: postgres:14
+    ports:
+      - 5434:5432
+    env_file:
+      - env/cloud_postgresql.env
+    volumes:
+      - odoo-cloud-db-data:/var/lib/postgresql/data
+    restart: on-failure
+
+volumes:
+  odoo-web-data:
+  odoo-db-data:
+  odoo-cloud-web-data:
+  odoo-cloud-db-data:

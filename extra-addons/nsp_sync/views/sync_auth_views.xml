@@ -1,0 +1,94 @@
+<odoo>
+    <record id="view_nsp_sync_auth_search" model="ir.ui.view">
+        <field name="name">nsp.sync.auth.search</field>
+        <field name="model">nsp.sync.auth</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="remote_server_url"/>
+                <field name="remote_base_url"/>
+                <field name="edge_server_id"/>
+                <field name="client_id"/>
+                <field name="remote_service_code"/>
+                <field name="connected"/>
+                <filter string="Active" name="active" domain="[('active','=',True)]"/>
+                <filter string="Connected" name="connected" domain="[('connected','=',True)]"/>
+                <filter string="Disconnected" name="disconnected" domain="[('connected','=',False)]"/>
+                <separator/>
+                <filter string="Cloud Server" name="group_remote_server" context="{'group_by':'remote_base_url'}"/>
+                <filter string="Connected" name="group_connected" context="{'group_by':'connected'}"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_sync_auth_list" model="ir.ui.view">
+        <field name="name">nsp.sync.auth.list</field>
+        <field name="model">nsp.sync.auth</field>
+        <field name="arch" type="xml">
+            <list string="Edge Server Sync Authentications">
+                <field name="sequence" widget="handle"/>
+                <field name="active" widget="boolean_toggle"/>
+                <field name="name"/>
+                <field name="edge_server_id" optional="show"/>
+                <field name="remote_base_url" string="Cloud Server"/>
+                <field name="client_id"/>
+                <field name="remote_service_code" optional="show"/>
+                <field name="connected" widget="boolean_toggle" readonly="1"/>
+                <field name="last_auth_at" optional="show"/>
+                <field name="job_count"/>
+                <button name="action_authenticate" type="object" string="Authenticate" class="btn btn-secondary" icon="fa-key"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_sync_auth_form" model="ir.ui.view">
+        <field name="name">nsp.sync.auth.form</field>
+        <field name="model">nsp.sync.auth</field>
+        <field name="arch" type="xml">
+            <form string="Edge Server Sync Authentication">
+                <header>
+                    <button name="action_authenticate" type="object" string="Authenticate" class="btn-primary"/>
+                    <button name="action_view_jobs" type="object" string="Sync Jobs" class="btn-secondary"/>
+                </header>
+                <sheet>
+                    <div class="alert alert-warning" role="alert">
+                        NSP Sync chỉ cài và cấu hình trên Edge Server. Cloud chỉ cấp Edge Server Code, Client ID và Client Secret qua Core API.
+                    </div>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_view_jobs" type="object" class="oe_stat_button" icon="fa-refresh">
+                            <field name="job_count" widget="statinfo" string="Sync Jobs"/>
+                        </button>
+                    </div>
+                    <group>
+                        <group string="Authentication">
+                            <field name="active"/>
+                            <field name="name"/>
+                            <field name="edge_server_id" required="1" options="{'no_create': False, 'no_open': False}"/>
+                            <field name="remote_server_url" placeholder="http://localhost:8070 / http://cloud_web:8069"/>
+                            <field name="remote_base_url" readonly="1" widget="CopyClipboardChar"/>
+                            <field name="client_id"/>
+                            <field name="client_secret" password="False"/>
+                        </group>
+                        <group string="Runtime Status">
+                            <field name="connected" readonly="1"/>
+                            <field name="remote_service_code" readonly="1"/>
+                            <field name="last_auth_at" readonly="1"/>
+                            <field name="token_expiry" readonly="1"/>
+                            <field name="refresh_expiry" readonly="1"/>
+                        </group>
+                    </group>
+                    <group string="Last Authentication Error" invisible="not last_error">
+                        <field name="last_error" nolabel="1" readonly="1"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_nsp_sync_auth" model="ir.actions.act_window">
+        <field name="name">Edge Server Authentication</field>
+        <field name="res_model">nsp.sync.auth</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_active': 1}</field>
+    </record>
+</odoo>

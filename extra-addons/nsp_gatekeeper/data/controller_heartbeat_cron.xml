@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <record id="ir_cron_nsp_controller_heartbeat_offline" model="ir.cron">
+            <field name="name">NSP Controller Heartbeat Offline Check</field>
+            <field name="model_id" search="[('model', '=', 'nsp.controller')]"/>
+            <field name="state">code</field>
+            <field name="code">model.cron_mark_offline_controllers()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+
+        <record id="ir_cron_nsp_device_report_offline" model="ir.cron">
+            <field name="name">NSP Device Report Offline Check</field>
+            <field name="model_id" ref="nsp_gatekeeper.model_nsp_device"/>
+            <field name="state">code</field>
+            <field name="code">model.cron_mark_offline_devices()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+
+        <record id="ir_cron_nsp_gate_measurement_cleanup" model="ir.cron">
+            <field name="name">NSP Gate Measurement Retention Cleanup</field>
+            <field name="model_id" ref="nsp_gatekeeper.model_nsp_gate_measurement_session"/>
+            <field name="state">code</field>
+            <field name="code">model.cron_cleanup_expired_measurements()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">days</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>

@@ -1,0 +1,4 @@
+<odoo>
+    <menuitem id="menu_nsp_rfid_root" name="RFID Cards" parent="nsp_core.menu_nsp_master_data" sequence="10" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking,nsp_core.group_nsp_operator"/>
+    <menuitem id="menu_nsp_rfid_cards" name="RFID Cards" parent="menu_nsp_rfid_root" action="action_nsp_rfid_card" sequence="1" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking,nsp_core.group_nsp_operator"/>
+</odoo>

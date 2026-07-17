@@ -1,0 +1,7 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_nsp_user_hr,nsp.user HR,model_nsp_user,nsp_core.group_nsp_hr_parking,1,1,1,0
+access_nsp_user_it,nsp.user IT,model_nsp_user,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_user_operator,nsp.user Operator,model_nsp_user,nsp_core.group_nsp_operator,1,0,0,0
+access_nsp_user_card_hr,nsp.user.card HR,model_nsp_user_card,nsp_core.group_nsp_hr_parking,1,1,1,0
+access_nsp_user_card_it,nsp.user.card IT,model_nsp_user_card,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_user_card_operator,nsp.user.card Operator,model_nsp_user_card,nsp_core.group_nsp_operator,1,0,0,0

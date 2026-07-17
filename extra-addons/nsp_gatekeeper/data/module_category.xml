@@ -1,0 +1,7 @@
+<odoo>
+    <record id="module_category_nsp" model="ir.module.category">
+        <field name="name">Non Stop Parking</field>
+        <field name="description">Modules for the Non-stop Parking project</field>
+        <field name="sequence">20</field>
+    </record>
+</odoo>

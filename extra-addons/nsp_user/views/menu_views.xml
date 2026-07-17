@@ -1,0 +1,5 @@
+<odoo>
+    <menuitem id="menu_nsp_user_root" name="Users" parent="nsp_core.menu_nsp_master_data" sequence="20" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking,nsp_core.group_nsp_operator"/>
+    <menuitem id="menu_nsp_users" name="Users" parent="menu_nsp_user_root" action="action_nsp_user" sequence="1" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking,nsp_core.group_nsp_operator"/>
+    <menuitem id="menu_nsp_user_cards" name="User Cards" parent="menu_nsp_user_root" action="action_nsp_user_card" sequence="2" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking,nsp_core.group_nsp_operator"/>
+</odoo>

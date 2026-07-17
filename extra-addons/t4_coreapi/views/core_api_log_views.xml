@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_core_api_log_list" model="ir.ui.view">
+        <field name="name">core.api.log.list</field>
+        <field name="model">core.api.log</field>
+        <field name="arch" type="xml">
+            <list decoration-danger="not success" decoration-success="success">
+                <field name="create_date"/>
+                <field name="event_type"/>
+                <field name="route"/>
+                <field name="method"/>
+                <field name="client_id"/>
+                <field name="application_id"/>
+                <field name="ip_address"/>
+                <field name="status_code"/>
+                <field name="success"/>
+                <field name="duration_ms"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_core_api_log_form" model="ir.ui.view">
+        <field name="name">core.api.log.form</field>
+        <field name="model">core.api.log</field>
+        <field name="arch" type="xml">
+            <form string="API Log" create="false" edit="false">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="create_date"/>
+                            <field name="event_type"/>
+                            <field name="route"/>
+                            <field name="method"/>
+                            <field name="status_code"/>
+                            <field name="success"/>
+                            <field name="duration_ms"/>
+                        </group>
+                        <group>
+                            <field name="application_id"/>
+                            <field name="client_id"/>
+                            <field name="ip_address"/>
+                            <field name="user_agent"/>
+                        </group>
+                    </group>
+                    <field name="error_message"/>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_core_api_log" model="ir.actions.act_window">
+        <field name="name">Request Logs</field>
+        <field name="res_model">core.api.log</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+</odoo>

@@ -1,0 +1,3 @@
+<odoo>
+    <!-- Deprecated: IT/Core API group link is applied safely by nsp_gatekeeper hooks/migration when both groups exist. -->
+</odoo>

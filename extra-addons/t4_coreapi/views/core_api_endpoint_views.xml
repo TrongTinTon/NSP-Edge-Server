@@ -1,0 +1,146 @@
+<odoo>
+
+    <!-- Read-only picker: no create or edit from Gateway Routes -->
+    <record id="view_ir_actions_server_core_api_picker_list" model="ir.ui.view">
+        <field name="name">ir.actions.core_api.core.api.picker.list</field>
+        <field name="model">ir.actions.core_api</field>
+        <field name="priority">99</field>
+        <field name="arch" type="xml">
+            <list string="Server Actions" create="false" edit="false" delete="false" import="false">
+                <field name="name"/>
+                <field name="model_id"/>
+                <!-- <field name="state"/>
+                <field name="usage"/> -->
+            </list>
+        </field>
+    </record>
+
+    <record id="view_core_api_endpoint_list" model="ir.ui.view">
+        <field name="name">core.api.endpoint.list</field>
+        <field name="model">core.api.endpoint</field>
+        <field name="arch" type="xml">
+            <list decoration-muted="not route_active">
+                <field name="application_id"/>
+                <field name="version_id"/>
+                <field name="code"/>
+                <field name="name"/>
+                <field name="route_suffix"/>
+                <field name="route_pattern" column_invisible="1"/>
+                <field name="public_gateway_url"/>
+                <field name="http_methods"/>
+                <field name="action_id" readonly="1"/>
+                <field name="route_active"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_core_api_endpoint_application_embedded_list" model="ir.ui.view">
+        <field name="name">core.api.endpoint.application.embedded.list</field>
+        <field name="model">core.api.endpoint</field>
+        <field name="priority">20</field>
+        <field name="arch" type="xml">
+            <list editable="bottom">
+                <field name="version_id"/>
+                <field name="name"/>
+                <field name="code"/>
+                <field name="route_suffix"/>
+                <field name="route_pattern" column_invisible="1"/>
+                <field name="public_gateway_url" readonly="1"/>
+                <field name="http_methods"/>
+                <field name="action_id" can_create="0" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True}" context="{                            'list_view_ref': 't4_coreapi.view_ir_actions_server_core_api_picker_list',                        }"/>
+                <field name="route_active"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_core_api_endpoint_application_embedded_form" model="ir.ui.view">
+        <field name="name">core.api.endpoint.application.embedded.form</field>
+        <field name="model">core.api.endpoint</field>
+        <field name="priority">20</field>
+        <field name="arch" type="xml">
+            <form string="Gateway Route">
+                <sheet>
+                    <group>
+                        <group string="Gateway (public)">
+                            <field name="version_id"/>
+                            <field name="name"/>
+                            <field name="code"/>
+                            <field name="route_suffix" placeholder="orders"/>
+                            <field name="route_pattern" invisible="1"/>
+                            <field name="public_gateway_url" readonly="1"/>
+                            <field name="http_methods" placeholder="GET,POST"/>
+                            <field name="route_active"/>
+                        </group>
+                        <group string="Handler">
+                            <field name="action_id" can_create="0" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" context="{                                        'create': False,                                        'edit': False,                                        'delete': False,                                        'list_view_ref': 't4_coreapi.view_ir_actions_server_core_api_picker_list',                                    }"/>
+                        </group>
+                    </group>
+                    <field name="description" placeholder="What this route is for…"/>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_core_api_endpoint_form" model="ir.ui.view">
+        <field name="name">core.api.endpoint.form</field>
+        <field name="model">core.api.endpoint</field>
+        <field name="arch" type="xml">
+            <form string="Gateway Route">
+                <sheet>
+                    <div class="alert alert-info" role="alert">
+                        Each route belongs to one application and API version. After auth, Odoo runs the linked
+                        <strong>Server Action</strong>. Use
+                        <code>env['core.api.application'].set_api_response({...})</code>
+                        in the action code to return JSON (or return a dict from generated actions).
+                    </div>
+                    <group>
+                        <group string="Owner">
+                            <field name="application_id" required="1"/>
+                        </group>
+                        <group string="Gateway (public)">
+                            <field name="version_id"/>
+                            <field name="name"/>
+                            <field name="code"/>
+                            <field name="route_suffix" placeholder="orders"/>
+                            <field name="route_pattern" invisible="1"/>
+                            <field name="public_gateway_url" readonly="1"/>
+                            <field name="http_methods" placeholder="GET,POST"/>
+                            <field name="route_active"/>
+                        </group>
+                        <group string="Handler">
+                            <field name="action_id" can_create="0" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" context="{                                        'create': False,                                        'edit': False,                                        'delete': False,                                        'list_view_ref': 't4_coreapi.view_ir_actions_server_core_api_picker_list',                                    }"/>
+                        </group>
+                    </group>
+                    <field name="description" placeholder="What this route is for…"/>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_core_api_endpoint_search" model="ir.ui.view">
+        <field name="name">core.api.endpoint.search</field>
+        <field name="model">core.api.endpoint</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="code"/>
+                <field name="route_suffix"/>
+                <field name="application_id"/>
+                <field name="version_id"/>
+                <filter string="Active" name="filter_active" domain="[('route_active', '=', True)]"/>
+                <filter string="Inactive" name="filter_inactive" domain="[('route_active', '=', False)]"/>
+                <separator/>
+                    <filter string="API Version" name="group_version" context="{'group_by': 'version_id'}"/>
+                    <filter string="Application" name="group_application" context="{'group_by': 'application_id'}"/>
+                </search>
+        </field>
+    </record>
+
+    <record id="action_core_api_endpoint" model="ir.actions.act_window">
+        <field name="name">Gateway Routes</field>
+        <field name="res_model">core.api.endpoint</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_group_version': 1}</field>
+    </record>
+
+</odoo>

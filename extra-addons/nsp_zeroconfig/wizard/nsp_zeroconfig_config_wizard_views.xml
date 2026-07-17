@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_nsp_zeroconfig_config_wizard_form" model="ir.ui.view">
+        <field name="name">nsp.zeroconfig.config.wizard.form</field>
+        <field name="model">nsp.zeroconfig.config.wizard</field>
+        <field name="arch" type="xml">
+            <form string="NSP Zeroconfig">
+                <sheet>
+                    <div class="alert alert-info" role="alert">
+                        Zeroconfig uses LAN IPv6 only. Service Type and Discovery Secret Key must match the Controller. The Edge Server automatically selects the LAN IPv6 address.
+                    </div>
+                    <group>
+                        <group string="Configuration">
+                            <field name="service_type" placeholder="_nsp._tcp.local."/>
+                            <field name="show_discovery_secret" widget="boolean_toggle"/>
+                            <field name="discovery_secret" password="1" invisible="show_discovery_secret"/>
+                            <field name="discovery_secret" invisible="not show_discovery_secret"/>
+                            <field name="service_port"/>
+                        </group>
+                        <group string="Advertisement Status">
+                            <field name="running" widget="boolean_toggle" readonly="1"/>
+                            <field name="advertised_ipv6" readonly="1"/>
+                            <field name="advertised_port" readonly="1"/>
+                            <field name="runtime_message" readonly="1" invisible="not runtime_message"/>
+                        </group>
+                    </group>
+                </sheet>
+                <footer>
+                    <button name="action_start_discovery" type="object" string="Save &amp; Start" class="btn-primary"/>
+                    <button name="action_stop_discovery" type="object" string="Stop" class="btn-secondary"/>
+                    <button string="Close" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+    <record id="action_nsp_zeroconfig_config" model="ir.actions.act_window">
+        <field name="name">Zeroconfig</field>
+        <field name="res_model">nsp.zeroconfig.config.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+</odoo>

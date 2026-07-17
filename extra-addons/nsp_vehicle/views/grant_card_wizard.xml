@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_grant_card_wizard_form" model="ir.ui.view">
+        <field name="name">nsp.grant.card.wizard.form</field>
+        <field name="model">nsp.grant.card.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Grant Vehicle Card">
+                <sheet>
+                    <group>
+                        <field name="vehicle_id"/>
+                    </group>
+                    
+                    <div class="alert alert-info" role="alert" style="margin-bottom: 20px;">
+                        <strong>Instructions:</strong> Place the card on the reader to automatically fetch and assign the TID.
+                    </div>
+
+                    <group string="Scan Card (Reader)">
+                        <field name="current_tid"/>
+                        <field name="scanned_tid" widget="tag_scanner_listener" decoration-bf="1" force_save="1"/>
+                    </group>
+                </sheet>
+                <footer>
+                    <button name="action_apply" string="Confirm &amp; Save" type="object" class="btn-primary" data-hotkey="q"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel" data-hotkey="z"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

@@ -1,0 +1,11 @@
+<odoo>
+    <menuitem id="menu_nsp_vehicle_root" name="Vehicles" parent="nsp_core.menu_nsp_master_data" sequence="30" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking,nsp_core.group_nsp_operator"/>
+    <menuitem id="menu_nsp_vehicle_vehicles" name="Vehicles" parent="menu_nsp_vehicle_root" action="action_nsp_vehicle" sequence="1" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking,nsp_core.group_nsp_operator"/>
+    <menuitem id="menu_nsp_vehicle_cards" name="Vehicle Cards" parent="menu_nsp_vehicle_root" action="action_nsp_vehicle_card" sequence="2" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking,nsp_core.group_nsp_operator"/>
+    <menuitem id="menu_nsp_vehicle_borrow_requests" name="Vehicle Borrow Requests" parent="menu_nsp_vehicle_root" action="action_nsp_vehicle_borrow_request" sequence="3" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking,nsp_core.group_nsp_operator"/>
+    <menuitem id="menu_nsp_vehicle_config" name="Configuration" parent="menu_nsp_vehicle_root" sequence="90" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking"/>
+    <menuitem id="menu_nsp_vehicle_types" name="Vehicle Types" parent="menu_nsp_vehicle_config" action="action_nsp_vehicle_type" sequence="1" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking"/>
+    <menuitem id="menu_nsp_vehicle_brands" name="Brands" parent="menu_nsp_vehicle_config" action="action_nsp_vehicle_brand" sequence="2" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking"/>
+    <menuitem id="menu_nsp_vehicle_models" name="Models" parent="menu_nsp_vehicle_config" action="action_nsp_vehicle_model" sequence="3" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking"/>
+    <menuitem id="menu_nsp_vehicle_colors" name="Colors" parent="menu_nsp_vehicle_config" action="action_nsp_vehicle_color" sequence="4" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking"/>
+</odoo>

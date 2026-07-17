@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_action_endpoint_manager_list" model="ir.ui.view">
+        <field name="name">action.endpoint.manager.list</field>
+        <field name="model">action.endpoint.manager</field>
+        <field name="arch" type="xml">
+            <list string="Endpoint Managers">
+                <field name="name"/>
+                <field name="model_id"/>
+                <field name="create_date"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_action_endpoint_manager_form" model="ir.ui.view">
+        <field name="name">action.endpoint.manager.form</field>
+        <field name="model">action.endpoint.manager</field>
+        <field name="arch" type="xml">
+            <form string="Endpoint Manager">
+                <div>
+                    <h1>
+                        <field name="name"/>
+                    </h1>
+                </div>
+                <header>
+                    <!-- <button name="action_generate_endpoints" 
+                            type="object" 
+                            string="Generate actions" 
+                            class="oe_highlight" 
+                            icon="fa-refresh"/> -->
+
+                    <button name="action_generate_core_api_routes"
+                            type="object"
+                            string="Generate API Actions &amp; Routes"
+                            class="oe_highlight"
+                            icon="fa-refresh"/>
+                    <button name="action_generate_core_api_action"
+                            type="object"
+                            string="Generate API Actions Only"
+                            class="btn-secondary"
+                            icon="fa-code"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="model_id" options="{'no_create': True, 'no_open': True}"/>
+                            <field name="version_id"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <!-- <page string="Server Actions">
+                            <field name="generated_action_ids">
+                                <list>
+                                    <field name="name" string="Action name"/>
+                                    <field name="code" string="Code"/>
+                                    <field name="write_date" string="Last updated"/>
+                                </list>
+                            </field>
+                        </page> -->
+                        <page string="API Actions">
+                            <field name="core_api_action_ids">
+                                <list>
+                                    <field name="name" string="Action Name"/>
+                                    <field name="endpoint_code" string="Action Code"/>
+                                    <field name="route_suffix" string="Route"/>
+                                    <field name="http_methods" string="Methods"/>
+                                    <field name="code" string="Python Code" optional="hide"/>
+                                    <field name="write_date" string="Last Updated"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Gateway Routes">
+                            <field name="generated_endpoint_ids">
+                                <list>
+                                    <field name="name"/>
+                                    <field name="application_id"/>
+                                    <field name="version_id"/>
+                                    <field name="route_suffix"/>
+                                    <field name="route_pattern"/>
+                                    <field name="http_methods"/>
+                                    <field name="route_active"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_endpoint_manager_window" model="ir.actions.act_window">
+        <field name="name">Action Endpoints Management</field>
+        <field name="res_model">action.endpoint.manager</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+
+</odoo>

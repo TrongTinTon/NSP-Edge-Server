@@ -1,0 +1,114 @@
+<odoo>
+    <record id="view_nsp_sync_job_search" model="ir.ui.view">
+        <field name="name">nsp.sync.job.search</field>
+        <field name="model">nsp.sync.job</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="auth_id"/>
+                <field name="sync_action_id"/>
+                <field name="sync_action_name"/>
+                <field name="sync_action_code"/>
+                <field name="route_suffix"/>
+                <field name="direction"/>
+                <field name="status"/>
+                <filter string="Active" name="active" domain="[('active','=',True)]"/>
+                <filter string="Failed" name="failed" domain="[('status','=','failed')]"/>
+                <separator/>
+                <filter string="Authentication" name="group_auth" context="{'group_by':'auth_id'}"/>
+                <filter string="Sync Action" name="group_action" context="{'group_by':'sync_action_name'}"/>
+                <filter string="Direction" name="group_direction" context="{'group_by':'direction'}"/>
+                <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_sync_job_list" model="ir.ui.view">
+        <field name="name">nsp.sync.job.list</field>
+        <field name="model">nsp.sync.job</field>
+        <field name="arch" type="xml">
+            <list string="Edge Server Sync Jobs">
+                <field name="sequence" widget="handle"/>
+                <field name="active" widget="boolean_toggle"/>
+                <field name="auth_id" string="Authentication"/>
+                <field name="nsp_remote_base_url" string="Remote Server" optional="show"/>
+                <field name="sync_action_id" string="Sync Action"/>
+                <field name="route_suffix" optional="show"/>
+                <field name="direction" widget="badge"/>
+                <field name="interval_seconds"/>
+                <field name="batch_size"/>
+                <field name="status" widget="badge" decoration-info="status == 'running'" decoration-success="status == 'success'" decoration-danger="status == 'failed'" decoration-muted="status in ('idle','disabled')"/>
+                <field name="last_pull_at" optional="hide"/>
+                <field name="last_push_at" optional="hide"/>
+                <field name="next_run_at" optional="show"/>
+                <button name="action_run_now" type="object" string="Run Now" class="btn btn-primary" icon="fa-play"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_sync_job_form" model="ir.ui.view">
+        <field name="name">nsp.sync.job.form</field>
+        <field name="model">nsp.sync.job</field>
+        <field name="arch" type="xml">
+            <form string="Edge Server Sync Job">
+                <header>
+                    <button name="action_run_now" type="object" string="Run Now" class="btn-primary"/>
+                    <button name="action_authenticate_application" type="object" string="Authenticate" class="btn-secondary"/>
+                    <field name="status" widget="statusbar" statusbar_visible="idle,running,success,failed,disabled"/>
+                </header>
+                <sheet>
+                    <div class="alert alert-warning" role="alert">
+                        NSP Sync chỉ cài trên Edge Server. Edge Server chủ động pull/push, quản lý retry và cập nhật Sync Records từ response của Cloud.
+                    </div>
+                    <group>
+                        <group string="Shared Authentication">
+                            <field name="auth_id" required="1" options="{'no_open': False, 'no_create': False}"/>
+                            <field name="edge_server_id" readonly="1"/>
+                            <field name="nsp_remote_base_url" readonly="1" widget="CopyClipboardChar"/>
+                            <field name="nsp_remote_service_code" readonly="1"/>
+                            <field name="nsp_connected" readonly="1"/>
+                            <field name="nsp_last_auth_at" readonly="1"/>
+                        </group>
+                        <group string="Sync Action">
+                            <field name="active"/>
+                            <field name="sync_action_id"
+                                   string="Sync Action"
+                                   domain="[('endpoint_manager_id', '!=', False), ('endpoint_code', '!=', False), ('route_suffix', 'in', ['edge-server/status','devices-status/sync','branches/sync','cards/sync','employees/sync','vehicles/sync','vehicle-borrow/sync','gate-config/sync','parking-transactions/sync','controller-pairing-requests/sync','controller-pairing-decisions/sync','gate-measurement/sync'])]"
+                                   options="{'no_create': True}"/>
+                            <field name="endpoint_manager_id" readonly="1"/>
+                            <field name="sync_action_name" readonly="1"/>
+                            <field name="sync_action_code" readonly="1"/>
+                            <field name="route_suffix" readonly="1"/>
+                            <field name="version_id" options="{'no_create': True}"/>
+                            <field name="direction"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Runtime">
+                            <field name="interval_seconds"/>
+                            <field name="batch_size"/>
+                        </group>
+                        <group string="Run State">
+                            <field name="last_pull_at" readonly="1"/>
+                            <field name="last_push_at" readonly="1"/>
+                            <field name="pull_cursor" readonly="1"/>
+                            <field name="next_run_at" readonly="1"/>
+                        </group>
+                    </group>
+                    <group string="Last Message">
+                        <field name="last_message" nolabel="1" readonly="1"/>
+                    </group>
+                    <group string="Last Authentication Error" invisible="not nsp_last_error">
+                        <field name="nsp_last_error" nolabel="1" readonly="1"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_nsp_sync_job" model="ir.actions.act_window">
+        <field name="name">Edge Server Sync Jobs</field>
+        <field name="res_model">nsp.sync.job</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_active': 1}</field>
+    </record>
+</odoo>

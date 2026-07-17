@@ -1,0 +1,72 @@
+# -*- coding: utf-8 -*-
+from odoo import fields, models
+
+
+class VehicleCloudSyncMixin(models.AbstractModel):
+    _name = 'nsp.vehicle.cloud.sync.mixin'
+    _description = 'Vehicle master data'
+
+
+class VehicleType(models.Model):
+    _name = 'nsp.vehicle.type'
+    _description = 'Vehicle Type'
+    _inherit = ['mail.thread', 'mail.activity.mixin', 'nsp.vehicle.cloud.sync.mixin']
+    _rec_name = 'name'
+    _order = 'name'
+
+    name = fields.Char(required=True, tracking=True)
+    code = fields.Char(tracking=True)
+    active = fields.Boolean(default=True)
+
+    _sql_constraints = [
+        ('nsp_vehicle_type_name_uniq', 'unique(name)', 'Vehicle Type already exists.'),
+    ]
+
+
+class VehicleBrand(models.Model):
+    _name = 'nsp.vehicle.brand'
+    _description = 'Vehicle Brand'
+    _inherit = ['mail.thread', 'mail.activity.mixin', 'nsp.vehicle.cloud.sync.mixin']
+    _rec_name = 'name'
+    _order = 'name'
+
+    name = fields.Char(required=True, tracking=True)
+    code = fields.Char(tracking=True)
+    active = fields.Boolean(default=True)
+
+    _sql_constraints = [
+        ('nsp_vehicle_brand_name_uniq', 'unique(name)', 'Brand already exists.'),
+    ]
+
+
+class VehicleModel(models.Model):
+    _name = 'nsp.vehicle.model'
+    _description = 'Vehicle Model'
+    _inherit = ['mail.thread', 'mail.activity.mixin', 'nsp.vehicle.cloud.sync.mixin']
+    _rec_name = 'name'
+    _order = 'brand_id, name'
+
+    name = fields.Char(required=True, tracking=True)
+    brand_id = fields.Many2one('nsp.vehicle.brand', string='Brand', ondelete='set null', tracking=True)
+    code = fields.Char(tracking=True)
+    active = fields.Boolean(default=True)
+
+    _sql_constraints = [
+        ('nsp_vehicle_model_brand_name_uniq', 'unique(brand_id, name)', 'Model already exists for this brand.'),
+    ]
+
+
+class VehicleColor(models.Model):
+    _name = 'nsp.vehicle.color'
+    _description = 'Vehicle Color'
+    _inherit = ['mail.thread', 'mail.activity.mixin', 'nsp.vehicle.cloud.sync.mixin']
+    _rec_name = 'name'
+    _order = 'name'
+
+    name = fields.Char(required=True, tracking=True)
+    code = fields.Char(tracking=True)
+    active = fields.Boolean(default=True)
+
+    _sql_constraints = [
+        ('nsp_vehicle_color_name_uniq', 'unique(name)', 'Color already exists.'),
+    ]

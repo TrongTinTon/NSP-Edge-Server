@@ -1,0 +1,99 @@
+<odoo>
+    <record id="view_nsp_vehicle_search" model="ir.ui.view">
+        <field name="name">nsp.vehicle.search</field>
+        <field name="model">nsp.vehicle</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="license_plate"/>
+                <field name="tid"/>
+                <field name="owner_id" string="Owner / User"/>
+                <field name="vehicle_type_id"/>
+                <field name="brand_id"/>
+                <field name="model_id"/>
+                <field name="color_id"/>
+                <filter string="Approved" name="approved" domain="[('state','=','approved')]"/>
+                <filter string="Pending" name="pending" domain="[('state','=','pending')]"/>
+                <separator/>
+                    <filter string="Vehicle Type" name="groupby_type" context="{'group_by':'vehicle_type_id'}"/>
+                    <filter string="Brand" name="groupby_brand" context="{'group_by':'brand_id'}"/>
+                    <filter string="Model" name="groupby_model" context="{'group_by':'model_id'}"/>
+                    <filter string="Color" name="groupby_color" context="{'group_by':'color_id'}"/>
+                    <filter string="Owner" name="groupby_owner" context="{'group_by':'owner_id'}"/>
+                    <filter string="Status" name="groupby_state" context="{'group_by':'state'}"/>
+                </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_vehicle_list" model="ir.ui.view">
+        <field name="name">nsp.vehicle.list</field>
+        <field name="model">nsp.vehicle</field>
+        <field name="arch" type="xml">
+            <list string="Vehicle List">
+                <field name="license_plate" decoration-bf="1"/>
+                <field name="owner_id" string="Owner / User"/>
+                <field name="vehicle_type_id"/>
+                <field name="brand_id"/>
+                <field name="model_id"/>
+                <field name="color_id" optional="hide"/>
+                <field name="tid" string="Primary TID"/>
+                <field name="vehicle_tid_tids" optional="hide"/>
+                <field name="active_vehicle_card_count" optional="hide"/>
+                <field name="state" widget="badge" decoration-success="state == 'approved'" decoration-warning="state == 'pending'" decoration-danger="state == 'rejected'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_vehicle_form" model="ir.ui.view">
+        <field name="name">nsp.vehicle.form</field>
+        <field name="model">nsp.vehicle</field>
+        <field name="arch" type="xml">
+            <form string="Vehicle Information">
+                <header>
+                    <button name="action_approve" string="Approve Vehicle" type="object" class="btn-primary" invisible="state != 'pending'"/>
+                    <button name="action_reject" string="Reject" type="object" class="btn-secondary" invisible="state != 'pending'"/>
+                    <button name="action_open_grant_card_wizard" string="Grant Card by Scan" type="object" class="btn-secondary" icon="fa-id-card-o"/>
+                    <field name="state" widget="statusbar" statusbar_visible="pending,approved,rejected"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <label for="license_plate" string="License Plate"/>
+                        <h1><field name="license_plate"/></h1>
+                    </div>
+                    <group>
+                        <group string="Vehicle Information">
+                                        <field name="owner_id" string="Owner / User"/>
+                            <field name="vehicle_type_id" options="{'no_create': False, 'no_quick_create': False}"/>
+                            <field name="brand_id" options="{'no_create': False, 'no_quick_create': False}"/>
+                            <field name="model_id" options="{'no_create': False, 'no_quick_create': False}"/>
+                            <field name="color_id" options="{'no_create': False, 'no_quick_create': False}"/>
+                        </group>
+                        <group string="Current Cards / Cloud">
+                            <field name="tid" string="Primary Active TID" readonly="1"/>
+                            <field name="vehicle_tid_tids" string="All Active TIDs" readonly="1"/>
+                            <field name="active_vehicle_card_count" readonly="1"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Vehicle Cards">
+                            <field name="vehicle_card_ids" context="{'default_vehicle_id': id}">
+                                <list editable="bottom">
+                                    <field name="card_id" domain="[('card_type','=','vehicle_card'), ('usage_state','=','available')]" options="{'no_create': True}"/>
+                                    <field name="tid" readonly="1"/>
+                                    <field name="state" widget="badge" class="nsp-card-status-badge" decoration-success="state == 'active'" decoration-muted="state == 'revoked'"/>
+                                    <field name="assigned_at" optional="hide"/>
+                                    <field name="revoked_at" optional="hide"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_nsp_vehicle" model="ir.actions.act_window">
+        <field name="name">Vehicles</field>
+        <field name="res_model">nsp.vehicle</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>

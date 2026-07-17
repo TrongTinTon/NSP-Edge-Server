@@ -1,0 +1,66 @@
+<odoo>
+    <record id="view_nsp_rfid_card_search" model="ir.ui.view">
+        <field name="name">view.nsp.rfid.card.search</field>
+        <field name="model">nsp.rfid.card</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="tid"/>
+                <field name="card_type"/>
+                <field name="assigned_to"/>
+                <filter string="Available" name="available" domain="[('is_used','=',False)]"/>
+                <filter string="Used" name="used" domain="[('is_used','=',True)]"/>
+                <filter string="User Cards" name="user_cards" domain="[('card_type','=','user_card')]"/>
+                <filter string="Vehicle Cards" name="vehicle_cards" domain="[('card_type','=','vehicle_card')]"/>
+                <separator/>
+                    <filter string="Card Type" name="group_card_type" context="{'group_by':'card_type'}"/>
+                </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_rfid_card_list" model="ir.ui.view">
+        <field name="name">view.nsp.rfid.card.list</field>
+        <field name="model">nsp.rfid.card</field>
+        <field name="arch" type="xml">
+            <list string="RFID Cards">
+                <field name="card_type" widget="badge" class="nsp-card-type-badge" decoration-primary="card_type == 'user_card'" decoration-info="card_type == 'vehicle_card'"/>
+                <field name="tid"/>
+                <field name="usage_state" widget="badge" class="nsp-card-status-badge" decoration-success="usage_state == 'available'" decoration-muted="usage_state == 'used'"/>
+                <field name="assigned_to"/>
+                <field name="note"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_rfid_card_form" model="ir.ui.view">
+        <field name="name">view.nsp.rfid.card.form</field>
+        <field name="model">nsp.rfid.card</field>
+        <field name="arch" type="xml">
+            <form string="Master Card">
+                <sheet>
+                    <div class="oe_title">
+                        <label for="tid"/>
+                        <h1><field name="tid" placeholder="RFID TID"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="card_type"/>
+                            <field name="usage_state" readonly="1" widget="badge" class="nsp-card-status-badge" decoration-success="usage_state == 'available'" decoration-muted="usage_state == 'used'"/>
+                            <field name="assigned_to" readonly="1"/>
+                        </group>
+                        <group>
+                            <field name="note"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_nsp_rfid_card" model="ir.actions.act_window">
+        <field name="name">RFID Cards</field>
+        <field name="res_model">nsp.rfid.card</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_nsp_rfid_card_search"/>
+        <field name="context">{'search_default_available': 1}</field>
+    </record>
+</odoo>

@@ -1,0 +1,12 @@
+<odoo>
+    <menuitem id="menu_nsp_parking_realtime_root" name="Realtime" parent="nsp_core.menu_nsp_operations" sequence="40" groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking"/>
+
+    <record id="action_nsp_parking_realtime_display" model="ir.actions.client">
+        <field name="name">Parking Realtime</field>
+        <field name="tag">nsp_parking_display</field>
+        <field name="target">fullscreen</field>
+    </record>
+
+    <menuitem id="menu_nsp_parking_realtime_display" name="Parking Realtime" parent="menu_nsp_parking_realtime_root" action="action_nsp_parking_realtime_display" sequence="1" groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking"/>
+    <menuitem id="menu_nsp_parking_realtime_logs" name="Logs" parent="menu_nsp_parking_realtime_root" action="nsp_gatekeeper.action_nsp_parking_transaction" sequence="2" groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking"/>
+</odoo>

@@ -1,0 +1,40 @@
+/* NSP badge palette: softer and visually separated card-type vs status colors. */
+.o_field_widget.nsp-card-type-badge .badge.text-bg-primary,
+.o_field_widget.nsp-card-type-badge .badge.bg-primary,
+.o_field_widget.nsp-card-type-badge.text-bg-primary,
+.o_field_widget.nsp-card-type-badge.bg-primary {
+    background-color: #E7ECFF !important;
+    color: #334A7D !important;
+    border: 1px solid #CBD6FF !important;
+}
+
+.o_field_widget.nsp-card-type-badge .badge.text-bg-info,
+.o_field_widget.nsp-card-type-badge .badge.bg-info,
+.o_field_widget.nsp-card-type-badge.text-bg-info,
+.o_field_widget.nsp-card-type-badge.bg-info {
+    background-color: #E1F4F1 !important;
+    color: #2F625B !important;
+    border: 1px solid #B9E3DC !important;
+}
+
+.o_field_widget.nsp-card-status-badge .badge.text-bg-success,
+.o_field_widget.nsp-card-status-badge .badge.bg-success,
+.o_field_widget.nsp-card-status-badge.text-bg-success,
+.o_field_widget.nsp-card-status-badge.bg-success {
+    background-color: #E7F6E9 !important;
+    color: #356B3C !important;
+    border: 1px solid #C9E8CE !important;
+}
+
+.o_field_widget.nsp-card-status-badge .badge.text-bg-secondary,
+.o_field_widget.nsp-card-status-badge .badge.bg-secondary,
+.o_field_widget.nsp-card-status-badge .badge.text-bg-muted,
+.o_field_widget.nsp-card-status-badge .badge.bg-muted,
+.o_field_widget.nsp-card-status-badge.text-bg-secondary,
+.o_field_widget.nsp-card-status-badge.bg-secondary,
+.o_field_widget.nsp-card-status-badge.text-bg-muted,
+.o_field_widget.nsp-card-status-badge.bg-muted {
+    background-color: #F1F2F4 !important;
+    color: #60656F !important;
+    border: 1px solid #DADDE3 !important;
+}

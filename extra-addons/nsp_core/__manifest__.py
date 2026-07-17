@@ -1,0 +1,16 @@
+{
+    'name': 'NSP Core',
+    'summary': 'Shared NSP security groups, menus, mixins and constants',
+    'description': 'Base module for Non Stop Parking. Owns role groups, common menu categories, mixins and shared constants used by all NSP modules.',
+    'version': '19.0.1.0.2',
+    'sequence': 5,
+    'author': 'BKU Team',
+    'category': 'Services',
+    'depends': ['base', 'mail'],
+    'data': ['security/nsp_groups.xml', 'views/menu_views.xml'],
+    'installable': True,
+    'application': False,
+    'auto_install': False,
+    'license': 'LGPL-3',
+    'post_init_hook': 'post_init_hook',
+}

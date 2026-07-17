@@ -1,0 +1,6 @@
+<odoo>
+    <menuitem id="menu_nsp_root" name="NSP" sequence="15" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking,nsp_core.group_nsp_operator"/>
+    <menuitem id="menu_nsp_operations" name="Operations" parent="menu_nsp_root" sequence="10" groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking"/>
+    <menuitem id="menu_nsp_master_data" name="Master Data" parent="menu_nsp_root" sequence="20" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking"/>
+    <menuitem id="menu_nsp_configuration" name="Configuration" parent="menu_nsp_root" sequence="90" groups="nsp_core.group_nsp_it_parking"/>
+</odoo>
