@@ -22,7 +22,7 @@ _logger = logging.getLogger(__name__)
 class CoreApiAuthController(http.Controller):
     """OAuth2-style token endpoint (client credentials + refresh token)."""
 
-    def _log_auth(self, application, route, ip, ua, status_code, success, duration_ms=0, error=None):
+    def _log_auth(self, application, route, ip, ua, status_code, success, duration_ms=0, error=None, token=None, client_instance_id=None):
         """Write an authentication attempt to core.api.log."""
         request.env['core.api.log'].sudo().log_event(
             event_type='auth',
@@ -32,6 +32,8 @@ class CoreApiAuthController(http.Controller):
             status_code=status_code,
             success=success,
             application=application,
+            token=token,
+            client_instance_id=client_instance_id,
             duration_ms=duration_ms,
             error_message=error,
             user_agent=ua,
@@ -89,22 +91,26 @@ class CoreApiAuthController(http.Controller):
                 )
                 raise Unauthorized(auth_error)
 
-            token_result = request.env['core.api.token'].sudo().issue_for_application(application, revoke_existing=False)
+            client_instance_id = (data.get('client_instance_id') or kw.get('client_instance_id') or '').strip()
+            token_result = request.env['core.api.token'].sudo().issue_for_application(
+                application,
+                client_instance_id=client_instance_id,
+                revoke_existing=False,
+            )
 
         elif grant_type == 'refresh_token':
             refresh_token = (data.get('refresh_token') or kw.get('refresh_token') or '').strip()
             if not refresh_token:
                 raise BadRequest('refresh_token is required for grant_type refresh_token.')
 
-            token_result = request.env['core.api.token'].sudo().refresh_for_application(refresh_token)
-            if not token_result:
+            Token = request.env['core.api.token'].sudo()
+            application, refresh_token_rec = Token.authenticate_refresh(refresh_token)
+            if not application:
                 duration = (time.time() - t0) * 1000
                 error = 'Invalid or expired refresh_token. Re-authenticate with client credentials.'
                 self._log_auth(application, auth_route, ip, ua, 401, False, duration, error)
                 raise Unauthorized(error)
 
-            application = token_result['access_token_rec'].application_id
-            success_message = 'Token refreshed successfully.'
             try:
                 application.check_ip_allowed(ip)
                 application.check_auth_rate_limit()
@@ -116,16 +122,27 @@ class CoreApiAuthController(http.Controller):
                     raise TooManyRequests(str(e)) from e
                 raise
 
+            token_result = Token.rotate_refresh_token(refresh_token_rec)
+            if not token_result:
+                duration = (time.time() - t0) * 1000
+                error = 'Refresh token was already used or revoked. Re-authenticate with client credentials.'
+                self._log_auth(application, auth_route, ip, ua, 401, False, duration, error)
+                raise Unauthorized(error)
+            success_message = 'Token refreshed successfully.'
+
         else:
             raise BadRequest(
                 f'Unsupported grant_type "{grant_type}". Use client_credentials or refresh_token.'
             )
 
         duration = (time.time() - t0) * 1000
-        self._log_auth(application, auth_route, ip, ua, 200, True, duration)
-        # Authentication rate limiting must reject only the excessive token
-        # request. It must never revoke token pairs already used by other
-        # clients sharing the same Core API Application.
+        self._log_auth(
+            application, auth_route, ip, ua, 200, True, duration,
+            token=token_result['access_token_rec'],
+            client_instance_id=token_result.get('client_instance_id'),
+        )
+        application.check_suspicious_and_revoke()
+
         return auth_success_response(success_message, token_result, application)
 
     @http.route(

@@ -8,7 +8,6 @@ from passlib.context import CryptContext
 
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
-from odoo.http import request
 
 _logger = logging.getLogger(__name__)
 
@@ -17,7 +16,7 @@ SECRET_CRYPT_CONTEXT = CryptContext(['pbkdf2_sha512'], pbkdf2_sha512__rounds=600
 
 class CoreApiApplication(models.Model):
     _name = 'core.api.application'
-    _description = 'Core API Application'
+    _description = 'External API Application'
     _inherit = ['mail.thread', 'mail.activity.mixin']
     _order = 'name'
 
@@ -36,6 +35,13 @@ class CoreApiApplication(models.Model):
         copy=False,
         readonly=True,
         groups='base.group_system',
+    )
+    client_secret_plaintext = fields.Char(
+        string='Client Secret',
+        copy=False,
+        readonly=True,
+        groups='t4_coreapi.group_core_api_manager',
+        help='Stored so authorized Core API managers can view credentials whenever required.',
     )
     state = fields.Selection(
         [('active', 'Active'), ('inactive', 'Inactive')],
@@ -101,7 +107,7 @@ class CoreApiApplication(models.Model):
         help='Public hostname used in integration examples for this application.',
     )
     service_code = fields.Char(
-        string='Route Code',
+        string='Server Code',
         required=True,
         copy=False,
         tracking=True,
@@ -158,7 +164,7 @@ class CoreApiApplication(models.Model):
     _client_id_unique = models.Constraint('unique(client_id)', 'Client ID must be unique.')
     _service_code_unique = models.Constraint(
         'unique(service_code)',
-        'Route Code must be unique across applications.',
+        'Server Code must be unique across applications.',
     )
 
     @api.constrains('service_code')
@@ -167,9 +173,9 @@ class CoreApiApplication(models.Model):
         for rec in self:
             code = (rec.service_code or '').strip()
             if not code:
-                raise ValidationError(_('Route Code is required.'))
+                raise ValidationError(_('Server Code is required.'))
             if '/' in code or ' ' in code:
-                raise ValidationError(_('Route Code must not contain slashes or spaces.'))
+                raise ValidationError(_('Server Code must not contain slashes or spaces.'))
 
     @api.model
     def get_by_service_code(self, service_code):
@@ -425,38 +431,21 @@ class CoreApiApplication(models.Model):
             rec.has_active_token = has_token
 
     def check_suspicious_and_revoke(self):
-        """Revoke only for excessive API traffic, never for authentication volume.
+        """Record suspicious aggregate traffic without revoking another client.
 
-        Authentication requests are already protected by the authentication rate
-        limiter. Exceeding that limit rejects the new request only; it must not
-        invalidate token pairs held by other clients sharing this Application.
+        An Application may be shared by multiple independent clients. Aggregate
+        rate-limit pressure cannot identify which token family is malicious, so
+        automatic revocation would risk terminating an unrelated client. The
+        configured rate limiter still rejects excess requests.
         """
-        Token = self.env['core.api.token'].sudo()
         for app in self:
-            api_count, auth_count, _status, has_token = self._traffic_snapshot(app)
-            api_limit = app.rate_limit_per_minute or 0
-            api_is_suspicious = bool(api_limit and api_count >= api_limit)
-            if not api_is_suspicious or not has_token:
-                continue
-            token = self._find_active_access_token(app)
-            if not token:
-                continue
-            Token.search([
-                ('token_pair_id', '=', token.token_pair_id),
-                ('active', '=', True),
-            ]).action_revoke()
-            app.message_post(body=_(
-                'Latest active token pair revoked automatically due to suspicious '
-                'API request rate (API: %(api)s/min, Auth: %(auth)s/min).',
-                api=api_count,
-                auth=auth_count,
-            ))
-            app._notify_application_form_reload()
-            _logger.warning(
-                'Core API auto-revoked latest token pair for application %s '
-                '(excessive API traffic)',
-                app.client_id,
-            )
+            api_count, auth_count, status, _has_token = self._traffic_snapshot(app)
+            if status == 'suspicious':
+                _logger.warning(
+                    'Core API suspicious aggregate traffic for application %s '
+                    '(API=%s/min, Auth=%s/min)',
+                    app.client_id, api_count, auth_count,
+                )
         return True
 
     @api.model_create_multi
@@ -472,19 +461,20 @@ class CoreApiApplication(models.Model):
                 vals['client_id'] = self._generate_client_id()
             if plaintext_secret:
                 vals['client_secret'] = SECRET_CRYPT_CONTEXT.hash(plaintext_secret)
+                vals['client_secret_plaintext'] = plaintext_secret
             elif not vals.get('client_secret'):
                 plaintext_secret = secrets.token_urlsafe(32)
                 vals['client_secret'] = SECRET_CRYPT_CONTEXT.hash(plaintext_secret)
+                vals['client_secret_plaintext'] = plaintext_secret
             else:
-                plaintext_secret = None
+                plaintext_secret = vals.get('client_secret_plaintext')
             prepared.append((vals, plaintext_secret))
         records = super().create([v for v, _ in prepared])
         for record, (_, plaintext_secret) in zip(records, prepared):
             if not record.client_id:
                 record.sudo().write({'client_id': self._generate_client_id()})
             if plaintext_secret:
-                record._store_pending_secret(plaintext_secret)
-                record.sudo().write({'credentials_pending': True})
+                record.sudo().write({'credentials_pending': False})
                 record._notify_application_form_reload()
         return records
 
@@ -492,30 +482,6 @@ class CoreApiApplication(models.Model):
     def _generate_client_id(self):
         """Return a unique client_id value for a new application."""
         return f'app_{secrets.token_hex(16)}'
-
-    def _store_pending_secret(self, plaintext_secret):
-        """Keep the plaintext secret in the user session until the wizard opens."""
-        self.ensure_one()
-        if request and getattr(request, 'session', None) is not None:
-            pending = dict(request.session.get('core_api_application_secrets', {}))
-            pending[str(self.id)] = plaintext_secret
-            request.session['core_api_application_secrets'] = pending
-
-    def _pop_pending_secret(self):
-        """Read and remove the plaintext secret from the user session."""
-        self.ensure_one()
-        if request and getattr(request, 'session', None) is not None:
-            pending = dict(request.session.get('core_api_application_secrets', {}))
-            return pending.pop(str(self.id), None)
-        return None
-
-    def _clear_pending_secret(self):
-        """Discard any pending plaintext secret from the user session."""
-        self.ensure_one()
-        if request and getattr(request, 'session', None) is not None:
-            pending = dict(request.session.get('core_api_application_secrets', {}))
-            pending.pop(str(self.id), None)
-            request.session['core_api_application_secrets'] = pending
 
     def _notify_application_form_reload(self):
         """Ask open application forms to reload after credential state changes."""
@@ -527,7 +493,7 @@ class CoreApiApplication(models.Model):
         )
 
     def _open_secret_wizard(self, plaintext_secret):
-        """Open the one-time credentials popup for the current application."""
+        """Open the credentials popup for the current application."""
         self.ensure_one()
         wizard = self.env['core.api.application.secret.wizard'].create({
             'application_id': self.id,
@@ -544,15 +510,13 @@ class CoreApiApplication(models.Model):
         }
 
     def action_view_credentials(self):
-        """Show credentials once after create when they are still in session."""
+        """Show credentials whenever requested by an authorized manager."""
         self.ensure_one()
-        if not self.credentials_pending:
-            raise UserError(_('Client secret was already displayed. Use "Regenerate Secret" if needed.'))
-        plaintext = self._pop_pending_secret()
+        plaintext = self.client_secret_plaintext
         if not plaintext:
             raise UserError(_(
-                'Credentials are no longer available in this session. '
-                'Use "Regenerate Secret" to issue new credentials.'
+                'The existing secret predates persistent credential viewing and cannot be recovered. '
+                'Use "Regenerate Secret" once to create a viewable secret.'
             ))
         return self._open_secret_wizard(plaintext)
 
@@ -564,9 +528,9 @@ class CoreApiApplication(models.Model):
         plaintext = secrets.token_urlsafe(32)
         self.sudo().write({
             'client_secret': SECRET_CRYPT_CONTEXT.hash(plaintext),
-            'credentials_pending': True,
+            'client_secret_plaintext': plaintext,
+            'credentials_pending': False,
         })
-        self._store_pending_secret(plaintext)
         self._notify_application_form_reload()
         return self._open_secret_wizard(plaintext)
 
@@ -579,19 +543,23 @@ class CoreApiApplication(models.Model):
         self.write({'state': 'inactive'})
 
     def action_revoke_token(self):
-        """Revoke the latest active token pair for this application."""
+        """Revoke every active token family owned by this Application."""
         self.ensure_one()
-        token = self.active_token_id
-        if not token:
-            raise UserError(_('No active token pair to revoke.'))
-        token.action_revoke()
+        tokens = self.env['core.api.token'].sudo().search([
+            ('application_id', '=', self.id),
+            ('active', '=', True),
+        ])
+        if not tokens:
+            raise UserError(_('No active tokens to revoke.'))
+        count = len(tokens)
+        tokens.write({'active': False})
         self._notify_application_form_reload()
         return {
             'type': 'ir.actions.client',
             'tag': 'display_notification',
             'params': {
-                'title': _('Token Pair Revoked'),
-                'message': _('The latest active token pair for application "%s" has been revoked.', self.name),
+                'title': _('Tokens Revoked'),
+                'message': _('%(count)s active token records for application "%(name)s" were revoked.', count=count, name=self.name),
                 'type': 'warning',
                 'sticky': False,
             },

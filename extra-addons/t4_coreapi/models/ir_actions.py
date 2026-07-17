@@ -29,11 +29,11 @@ class IrActionsCoreApi(models.Model):
     endpoint_code = fields.Char(
         string='Action Code',
         index=True,
-        help='Stable API action code declared by the @endpoint decorator, e.g. nsp_gatekeeper_vehicles_sync.',
+        help='Stable API action code declared by the @endpoint decorator, e.g. inventory_product_sync.',
     )
     route_suffix = fields.Char(
         string='Route Path',
-        help='Gateway route path after the API version, e.g. vehicles/sync.',
+        help='Route Path only, e.g. vehicles/sync. Core API derives the gateway path from Application and API Version.',
     )
     http_methods = fields.Char(
         string='Allowed Methods',

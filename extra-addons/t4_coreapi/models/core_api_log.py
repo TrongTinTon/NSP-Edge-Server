@@ -10,6 +10,8 @@ class CoreApiLog(models.Model):
 
     application_id = fields.Many2one('core.api.application', index=True, ondelete='set null')
     client_id = fields.Char(index=True)
+    client_instance_id = fields.Char(index=True)
+    token_id = fields.Many2one('core.api.token', index=True, ondelete='set null')
     event_type = fields.Selection(
         [('auth', 'Authentication'), ('api', 'API Call')],
         required=True,
@@ -34,6 +36,8 @@ class CoreApiLog(models.Model):
         status_code,
         success,
         application=None,
+        token=None,
+        client_instance_id=None,
         duration_ms=0,
         error_message=None,
         user_agent=None,
@@ -42,6 +46,8 @@ class CoreApiLog(models.Model):
         return self.sudo().create({
             'application_id': application.id if application else False,
             'client_id': application.client_id if application else False,
+            'token_id': token.id if token else False,
+            'client_instance_id': client_instance_id or (token.client_instance_id if token else False),
             'event_type': event_type,
             'route': route,
             'method': method,

@@ -5,7 +5,7 @@ from odoo import fields, models
 
 class CoreApiApplicationSecretWizard(models.TransientModel):
     _name = 'core.api.application.secret.wizard'
-    _description = 'Application Credentials (shown once)'
+    _description = 'Application Credentials'
 
     application_id = fields.Many2one('core.api.application', required=True, ondelete='cascade')
     client_id = fields.Char(readonly=True)
@@ -20,10 +20,7 @@ class CoreApiApplicationSecretWizard(models.TransientModel):
         return res
 
     def action_confirm(self):
-        """Mark credentials as viewed, refresh the form, and close the popup."""
+        """Close the popup without invalidating stored credentials."""
         self.ensure_one()
-        application = self.application_id
-        application.sudo().write({'credentials_pending': False})
-        application._clear_pending_secret()
-        application._notify_application_form_reload()
+        self.application_id._notify_application_form_reload()
         return {'type': 'ir.actions.act_window_close'}

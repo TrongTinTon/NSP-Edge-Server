@@ -63,9 +63,15 @@ class CoreApiToken(models.Model):
         index=True,
     )
     token_pair_id = fields.Char(
-        string='Token Pair',
+        string='Token Family',
         index=True,
-        help='Links access and refresh tokens issued together.',
+        help='Links the access and refresh tokens belonging to one independent client session.',
+    )
+    client_instance_id = fields.Char(
+        string='Client Instance ID',
+        index=True,
+        readonly=True,
+        help='Optional caller-provided identifier for the device, process, or installation using this token family.',
     )
     active = fields.Boolean(default=True)
     token_state = fields.Selection(
@@ -104,7 +110,7 @@ class CoreApiToken(models.Model):
         return binascii.hexlify(os.urandom(TOKEN_SIZE)).decode()
 
     @api.model
-    def _create_token_record(self, application, token_type, expiration, pair_id, name_suffix):
+    def _create_token_record(self, application, token_type, expiration, pair_id, name_suffix, client_instance_id=None):
         """Create one hashed token record and return (plaintext, record)."""
         plaintext = self._generate_plaintext()
         token_rec = self.sudo().create({
@@ -112,6 +118,7 @@ class CoreApiToken(models.Model):
             'application_id': application.id,
             'token_type': token_type,
             'token_pair_id': pair_id,
+            'client_instance_id': client_instance_id or False,
             'expiration_date': expiration,
             'token_index': plaintext[:INDEX_SIZE],
             'token_hash': TOKEN_CRYPT_CONTEXT.hash(plaintext),
@@ -133,16 +140,16 @@ class CoreApiToken(models.Model):
             tokens.write({'active': False})
 
     @api.model
-    def issue_for_application(self, application, revoke_existing=False):
-        """Issue an independent access + refresh token pair.
+    def issue_for_application(self, application, client_instance_id=None, revoke_existing=False):
+        """Issue an independent access + refresh token family.
 
-        Existing token pairs remain active by default so multiple clients can
-        safely share one Core API Application. ``revoke_existing=True`` is
-        reserved for explicit administrative/security rotation workflows.
-
-        Returns a dict with plaintext tokens and their records.
+        Multiple callers may authenticate against the same Application. Issuing a
+        token family therefore does not revoke token families belonging to other
+        callers. ``revoke_existing`` is retained only for explicit administrative
+        rotation of every token owned by the Application.
         """
         application.ensure_one()
+        client_instance_id = (client_instance_id or '').strip()[:128] or False
         if application.state != 'active':
             raise UserError(_('Cannot issue a token for an inactive application.'))
 
@@ -159,6 +166,7 @@ class CoreApiToken(models.Model):
             refresh_expiration,
             pair_id,
             'Refresh',
+            client_instance_id=client_instance_id,
         )
         access_plaintext, access_rec = self._create_token_record(
             application,
@@ -166,6 +174,7 @@ class CoreApiToken(models.Model):
             access_expiration,
             pair_id,
             'Access',
+            client_instance_id=client_instance_id,
         )
 
         ip = request.httprequest.environ.get('REMOTE_ADDR', 'n/a') if request else 'n/a'
@@ -179,10 +188,11 @@ class CoreApiToken(models.Model):
             'refresh_token': refresh_plaintext,
             'access_token_rec': access_rec,
             'refresh_token_rec': refresh_rec,
+            'client_instance_id': client_instance_id,
         }
 
     @api.model
-    def _authenticate_token(self, plaintext_token, token_type):
+    def _authenticate_token(self, plaintext_token, token_type, update_usage=True):
         """Validate a token of the given type. Returns (application, token) or empty."""
         empty_application = self.env['core.api.application']
         empty_token = self.browse()
@@ -201,8 +211,9 @@ class CoreApiToken(models.Model):
         ])
         for token in tokens:
             if TOKEN_CRYPT_CONTEXT.verify(plaintext_token, token.token_hash):
-                ip = request.httprequest.environ.get('REMOTE_ADDR') if request else None
-                token.write({'last_used_at': fields.Datetime.now(), 'last_used_ip': ip})
+                if update_usage:
+                    ip = request.httprequest.environ.get('REMOTE_ADDR') if request else None
+                    token.write({'last_used_at': fields.Datetime.now(), 'last_used_ip': ip})
                 return token.application_id, token
         return empty_application, empty_token
 
@@ -214,17 +225,54 @@ class CoreApiToken(models.Model):
     @api.model
     def authenticate_refresh(self, plaintext_token):
         """Validate a refresh token. Returns (application, token) or empty."""
-        return self._authenticate_token(plaintext_token, 'refresh')
+        return self._authenticate_token(plaintext_token, 'refresh', update_usage=False)
+
+    @api.model
+    def rotate_refresh_token(self, refresh_token):
+        """Atomically rotate only the token family owning ``refresh_token``.
+
+        The caller must complete IP and rate-limit checks before invoking this
+        method. A PostgreSQL row lock prevents two concurrent refresh requests
+        from successfully rotating the same refresh token.
+        """
+        refresh_token.ensure_one()
+        self.env.cr.execute(
+            "SELECT id FROM core_api_token WHERE id = %s FOR UPDATE",
+            [refresh_token.id],
+        )
+        refresh_token.invalidate_recordset(['active', 'expiration_date'])
+        now = fields.Datetime.now()
+        if (
+            not refresh_token.active
+            or refresh_token.token_type != 'refresh'
+            or refresh_token.application_id.state != 'active'
+            or (refresh_token.expiration_date and refresh_token.expiration_date < now)
+        ):
+            return None
+
+        application = refresh_token.application_id
+        client_instance_id = refresh_token.client_instance_id
+        self._revoke_active_tokens([
+            ('application_id', '=', application.id),
+            ('token_pair_id', '=', refresh_token.token_pair_id),
+        ])
+        return self.issue_for_application(
+            application,
+            client_instance_id=client_instance_id,
+            revoke_existing=False,
+        )
 
     @api.model
     def refresh_for_application(self, refresh_plaintext):
-        """Rotate an access + refresh pair using a valid refresh token."""
+        """Compatibility helper: authenticate and rotate one token family.
+
+        HTTP controllers should authenticate, enforce policies, and then call
+        :meth:`rotate_refresh_token` so rejected requests never mutate tokens.
+        """
         application, refresh_token = self.authenticate_refresh(refresh_plaintext)
         if not application:
             return None
-
-        self._revoke_active_tokens([('token_pair_id', '=', refresh_token.token_pair_id)])
-        return self.issue_for_application(application, revoke_existing=False)
+        return self.rotate_refresh_token(refresh_token)
 
     def action_revoke(self):
         """Deactivate the selected token records."""

@@ -20,8 +20,8 @@ class TestMultiClientTokens(TransactionCase):
     def test_new_authentication_preserves_existing_token_pairs(self):
         Token = self.env["core.api.token"]
 
-        first = Token.issue_for_application(self.application)
-        second = Token.issue_for_application(self.application)
+        first = Token.issue_for_application(self.application, client_instance_id="client-a")
+        second = Token.issue_for_application(self.application, client_instance_id="client-b")
 
         active_tokens = Token.search([
             ("application_id", "=", self.application.id),
@@ -32,6 +32,8 @@ class TestMultiClientTokens(TransactionCase):
         self.assertTrue(first["refresh_token_rec"].active)
         self.assertTrue(second["access_token_rec"].active)
         self.assertTrue(second["refresh_token_rec"].active)
+        self.assertEqual(first["access_token_rec"].client_instance_id, "client-a")
+        self.assertEqual(second["access_token_rec"].client_instance_id, "client-b")
         self.assertNotEqual(
             first["access_token_rec"].token_pair_id,
             second["access_token_rec"].token_pair_id,
@@ -40,8 +42,8 @@ class TestMultiClientTokens(TransactionCase):
     def test_refresh_rotates_only_the_calling_client_pair(self):
         Token = self.env["core.api.token"]
 
-        first = Token.issue_for_application(self.application)
-        second = Token.issue_for_application(self.application)
+        first = Token.issue_for_application(self.application, client_instance_id="client-a")
+        second = Token.issue_for_application(self.application, client_instance_id="client-b")
         refreshed = Token.refresh_for_application(first["refresh_token"])
 
         self.assertTrue(refreshed)
@@ -51,3 +53,4 @@ class TestMultiClientTokens(TransactionCase):
         self.assertTrue(second["refresh_token_rec"].active)
         self.assertTrue(refreshed["access_token_rec"].active)
         self.assertTrue(refreshed["refresh_token_rec"].active)
+        self.assertEqual(refreshed["access_token_rec"].client_instance_id, "client-a")

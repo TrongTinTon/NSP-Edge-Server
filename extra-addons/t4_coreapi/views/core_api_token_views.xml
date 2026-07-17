@@ -8,6 +8,7 @@
                 <field name="application_name"/>
                 <field name="service_code"/>
                 <field name="client_id"/>
+                <field name="client_instance_id"/>
                 <filter string="Active" name="filter_active" domain="[('token_state', '=', 'active')]"/>
                 <filter string="Revoked" name="filter_revoked" domain="[('token_state', '=', 'revoked')]"/>
                 <separator/>
@@ -15,6 +16,7 @@
                 <filter string="Refresh" name="filter_refresh" domain="[('token_type', '=', 'refresh')]"/>
                 <separator/>
                     <filter string="Application" name="group_application" context="{'group_by': 'application_id'}"/>
+                    <filter string="Client Instance" name="group_client_instance" context="{'group_by': 'client_instance_id'}"/>
                     <filter string="Type" name="group_type" context="{'group_by': 'token_type'}"/>
                     <filter string="Status" name="group_state" context="{'group_by': 'token_state'}"/>
                     <filter string="Traffic Status" name="group_traffic" context="{'group_by': 'traffic_status'}"/>
@@ -29,6 +31,7 @@
             <list decoration-muted="token_state == 'revoked'" decoration-danger="traffic_status == 'suspicious' and token_state == 'active'">
                 <field name="application_name"/>
                 <field name="service_code" optional="show"/>
+                <field name="client_instance_id" optional="show"/>
                 <field name="token_type"/>
                 <field name="token_state" widget="badge" decoration-success="token_state == 'active'" decoration-muted="token_state == 'revoked'"/>
                 <field name="traffic_status" widget="badge" decoration-success="traffic_status == 'normal'" decoration-warning="traffic_status == 'elevated'" decoration-danger="traffic_status == 'suspicious'"/>
@@ -64,6 +67,7 @@
                             <field name="application_id"/>
                             <field name="service_code"/>
                             <field name="client_id"/>
+                            <field name="client_instance_id"/>
                             <field name="application_state" widget="badge" decoration-success="application_state == 'active'" decoration-muted="application_state == 'inactive'"/>
                         </group>
                         <group string="Application Status">

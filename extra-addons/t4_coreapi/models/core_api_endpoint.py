@@ -47,7 +47,7 @@ class CoreApiEndpoint(models.Model):
     route_suffix = fields.Char(
         string='Route Path',
         required=True,
-        help='Path after the version segment, e.g. gate1 in /gk/v1/gate1.',
+        help='Route Path only, e.g. gate1. Core API automatically derives /{server_code}/{version}/gate1.',
     )
     route_pattern = fields.Char(
         string='Gateway Path',
@@ -213,6 +213,13 @@ class CoreApiEndpoint(models.Model):
                 if version_id:
                     vals['version_id'] = version_id
 
+            if 'route_suffix' in vals:
+                vals['route_suffix'] = self._route_path_from_input(
+                    vals.get('route_suffix'),
+                    application_id=vals.get('application_id'),
+                    version_id=vals.get('version_id'),
+                )
+
             prepared.append(vals)
         return super().create(prepared)
 
@@ -220,6 +227,39 @@ class CoreApiEndpoint(models.Model):
     def _normalize_route_suffix(self, suffix):
         """Return a canonical route suffix without leading or trailing slashes."""
         return (suffix or '').strip().strip('/')
+
+    @api.model
+    def _route_path_from_input(self, route_path, application_id=False, version_id=False):
+        """Accept only a Route Path while tolerating a pasted full gateway path.
+
+        The stored value is always the suffix. Core API derives the gateway path from
+        Application Server Code + API Version + Route Path.
+        """
+        normalized = self._normalize_route_suffix(route_path)
+        if not normalized:
+            return normalized
+        application = self.env['core.api.application'].browse(application_id).exists()
+        version = self.env['core.api.version'].browse(version_id).exists()
+        parts = normalized.split('/')
+        if application and parts and parts[0] == (application.service_code or '').strip('/'):
+            parts = parts[1:]
+        if version and parts and parts[0] == (version.code or '').strip('/'):
+            parts = parts[1:]
+        return '/'.join(parts).strip('/')
+
+    def write(self, vals):
+        vals = dict(vals)
+        if 'route_suffix' not in vals:
+            return super().write(vals)
+        for endpoint in self:
+            endpoint_vals = dict(vals)
+            endpoint_vals['route_suffix'] = self._route_path_from_input(
+                vals.get('route_suffix'),
+                application_id=endpoint_vals.get('application_id') or endpoint.application_id.id,
+                version_id=endpoint_vals.get('version_id') or endpoint.version_id.id,
+            )
+            super(CoreApiEndpoint, endpoint).write(endpoint_vals)
+        return True
 
     def _parsed_methods(self):
         """Return the list of allowed HTTP methods for this route."""

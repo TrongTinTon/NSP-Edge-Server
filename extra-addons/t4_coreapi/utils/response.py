@@ -63,6 +63,10 @@ def auth_token_body(token_result, application):
     if application.refresh_token_ttl_hours:
         refresh_token['expires_in'] = application.refresh_token_ttl_hours * 3600
 
+    client_instance_id = token_result.get('client_instance_id')
+    if client_instance_id:
+        api_token['client_instance_id'] = client_instance_id
+        refresh_token['client_instance_id'] = client_instance_id
     return api_token, refresh_token
 
 

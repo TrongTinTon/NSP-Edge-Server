@@ -7,5 +7,3 @@ from . import core_api_log
 from . import ir_http
 from . import ir_actions
 from . import action_endpoint
-from . import my_api_service
-from . import connection_blacklist

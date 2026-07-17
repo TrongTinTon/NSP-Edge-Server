@@ -22,9 +22,13 @@ def log_core_api(event_type='api'):
             ip = request.httprequest.environ.get('REMOTE_ADDR')
             ua = request.httprequest.headers.get('User-Agent')
             application = None
+            token_rec = None
             application_id = request.env.context.get('core_api_application_id')
             if application_id:
                 application = request.env['core.api.application'].sudo().browse(application_id)
+            token_id = request.env.context.get('core_api_token_id')
+            if token_id:
+                token_rec = request.env['core.api.token'].sudo().browse(token_id)
 
             try:
                 result = func(self, *args, **kwargs)
@@ -38,6 +42,8 @@ def log_core_api(event_type='api'):
                     status_code=status_code,
                     success=True,
                     application=application,
+                    token=token_rec,
+                    client_instance_id=request.env.context.get('core_api_client_instance_id'),
                     duration_ms=duration,
                     user_agent=ua,
                 )
@@ -55,6 +61,8 @@ def log_core_api(event_type='api'):
                     status_code=status_code,
                     success=False,
                     application=application,
+                    token=token_rec,
+                    client_instance_id=request.env.context.get('core_api_client_instance_id'),
                     duration_ms=duration,
                     error_message=str(e)[:500],
                     user_agent=ua,
