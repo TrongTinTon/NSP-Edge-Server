@@ -119,7 +119,6 @@ class NspSyncJob(models.Model):
         related="auth_id.edge_server_code", readonly=True, store=True, index=True
     )
     nsp_remote_base_url = fields.Char(related="auth_id.remote_base_url", readonly=True)
-    nsp_remote_service_code = fields.Char(related="auth_id.remote_service_code", readonly=True)
     nsp_connected = fields.Boolean(related="auth_id.connected", readonly=True)
     nsp_last_error = fields.Text(related="auth_id.last_error", readonly=True)
 

@@ -7,6 +7,7 @@ import secrets
 from passlib.context import CryptContext
 
 from odoo import _, api, fields, models
+from odoo.http import request
 from odoo.exceptions import AccessError, UserError, ValidationError
 
 _logger = logging.getLogger(__name__)

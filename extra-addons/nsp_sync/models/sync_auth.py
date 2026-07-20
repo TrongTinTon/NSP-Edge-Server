@@ -12,6 +12,11 @@ from odoo.exceptions import UserError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
+# T4 Core API route prefix used by NSP Edge-to-Cloud APIs.
+# It is an internal protocol constant, not user-managed connection data.
+CLOUD_API_PREFIX = "EdgeServer"
+
+
 class NspSyncAuth(models.Model):
     _name = "nsp.sync.auth"
     _description = "NSP Cloud Connection"
@@ -40,13 +45,6 @@ class NspSyncAuth(models.Model):
         compute="_compute_remote_base_url",
         store=True,
         readonly=True,
-    )
-    remote_service_code = fields.Char(
-        string="Cloud Service Code",
-        readonly=True,
-        copy=False,
-        index=True,
-        help="Resolved from the Cloud Core API token response and used to build /<service_code>/v1/<route>.",
     )
     client_id = fields.Char(string="Core API Client ID", required=True, copy=False)
     client_secret = fields.Char(
@@ -134,7 +132,7 @@ class NspSyncAuth(models.Model):
         protected_fields = {
             "edge_server_code", "remote_server_url", "client_id", "client_secret",
             "access_token", "refresh_token", "token_expiry", "refresh_expiry",
-            "remote_service_code", "connected",
+            "connected",
         }
         if protected_fields.intersection(vals):
             self._ensure_edge_server_instance()
@@ -206,6 +204,71 @@ class NspSyncAuth(models.Model):
             return raw.rstrip("/")
         return urlunsplit((parsed.scheme or "http", parsed.netloc, "", "", "")).rstrip("/")
 
+    @staticmethod
+    def _running_in_container():
+        """Best-effort container detection used only for loopback URL handling."""
+        if os.path.exists("/.dockerenv"):
+            return True
+        try:
+            content = ""
+            for filename in ("/proc/1/cgroup", "/proc/self/cgroup"):
+                if os.path.exists(filename):
+                    with open(filename, "r", encoding="utf-8", errors="ignore") as stream:
+                        content += stream.read().lower()
+            return any(marker in content for marker in ("docker", "containerd", "kubepods", "podman"))
+        except OSError:
+            return False
+
+    @staticmethod
+    def _is_loopback_hostname(hostname):
+        return str(hostname or "").strip().lower() in {"localhost", "127.0.0.1", "::1"}
+
+    def _replace_url_hostname(self, base_url, hostname):
+        self.ensure_one()
+        parsed = urlsplit(base_url)
+        if not parsed.netloc:
+            return base_url
+        host = str(hostname or "").strip()
+        if not host:
+            return base_url
+        userinfo = ""
+        if parsed.username:
+            userinfo = parsed.username
+            if parsed.password:
+                userinfo += ":%s" % parsed.password
+            userinfo += "@"
+        port = ":%s" % parsed.port if parsed.port else ""
+        if ":" in host and not host.startswith("["):
+            host = "[%s]" % host
+        netloc = "%s%s%s" % (userinfo, host, port)
+        return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)).rstrip("/")
+
+    def _connection_base_candidates(self):
+        """Return reachable URL candidates without embedding Docker topology in stored data.
+
+        A loopback address inside an Edge container points to that container, not to the
+        Docker host. Docker Desktop exposes the host through ``host.docker.internal``.
+        The configured URL is always attempted first so localhost still works for
+        non-container and host-network deployments.
+        """
+        self.ensure_one()
+        configured = self._normalize_remote_base_url().rstrip("/")
+        candidates = [configured] if configured else []
+        parsed = urlsplit(configured)
+        if self._running_in_container() and self._is_loopback_hostname(parsed.hostname):
+            aliases = []
+            explicit = (
+                os.getenv("NSP_CLOUD_DOCKER_HOST")
+                or self.env["ir.config_parameter"].sudo().get_param("nsp_sync.docker_host_alias")
+                or "host.docker.internal"
+            )
+            aliases.extend(part.strip() for part in str(explicit).split(",") if part.strip())
+            for alias in aliases:
+                candidate = self._replace_url_hostname(configured, alias)
+                if candidate and candidate not in candidates:
+                    candidates.append(candidate)
+        return candidates
+
     def _effective_remote_base_url(self):
         self.ensure_one()
         return self._normalize_remote_base_url().rstrip("/")
@@ -217,9 +280,9 @@ class NspSyncAuth(models.Model):
             return False
         return (self.env.cr.dbname or "").strip() or False
 
-    def _url(self, path):
+    def _url(self, path, base_url=None):
         self.ensure_one()
-        base = self._effective_remote_base_url()
+        base = str(base_url or self._effective_remote_base_url()).rstrip("/")
         if not base:
             raise UserError(_("Cloud Server URL is required."))
         url = urljoin(base.rstrip("/") + "/", str(path or "").lstrip("/"))
@@ -228,22 +291,13 @@ class NspSyncAuth(models.Model):
             url = "%s%sdb=%s" % (url, "&" if "?" in url else "?", dbname)
         return url
 
-    def _remote_service_code(self):
-        self.ensure_one()
-        code = (self.remote_service_code or "").strip().strip("/")
-        if not code:
-            self._authenticate_client_credentials()
-            code = (self.remote_service_code or "").strip().strip("/")
-        if not code:
-            raise UserError(_("Cloud Service Code could not be resolved from the Core API token response."))
-        return code
-
     def gateway_url(self, route_suffix, version_code="v1"):
         self.ensure_one()
         suffix = str(route_suffix or "").strip().strip("/")
         if not suffix:
             raise UserError(_("Route is required for NSP Sync."))
-        return self._url("/%s/%s/%s" % (self._remote_service_code(), version_code or "v1", suffix))
+        version = str(version_code or "v1").strip().strip("/") or "v1"
+        return self._url("/%s/%s/%s" % (CLOUD_API_PREFIX, version, suffix))
 
     def base_headers(self):
         return {"Content-Type": "application/json"}
@@ -256,30 +310,12 @@ class NspSyncAuth(models.Model):
             return False
         return self.token_expiry <= fields.Datetime.now() + timedelta(seconds=margin_seconds)
 
-    def _extract_remote_service_code(self, data):
-        payloads = []
-        if isinstance(data, dict):
-            payloads.append(data)
-            nested = data.get("data")
-            if isinstance(nested, dict):
-                payloads.append(nested)
-                if isinstance(nested.get("application"), dict):
-                    payloads.append(nested["application"])
-            if isinstance(data.get("application"), dict):
-                payloads.append(data["application"])
-        for payload in payloads:
-            code = payload.get("service_code") or payload.get("server_code") or payload.get("gateway_service_code")
-            code = str(code or "").strip().strip("/")
-            if code:
-                return code
-        return False
-
     def _parse_auth_response(self, data):
         self.ensure_one()
         data = dict(data or {})
         if isinstance(data.get("data"), dict):
             nested = dict(data["data"])
-            for key in ("api_token", "refresh_token", "access_token", "token", "application", "service_code", "server_code"):
+            for key in ("api_token", "refresh_token", "access_token", "token", "application"):
                 if key in nested and key not in data:
                     data[key] = nested[key]
         api_token = data.get("api_token") or {}
@@ -298,9 +334,6 @@ class NspSyncAuth(models.Model):
             "token_expiry": now + timedelta(seconds=int(api_token.get("expires_in") or 0)) if api_token.get("expires_in") else False,
             "refresh_expiry": now + timedelta(seconds=int(refresh_token.get("expires_in") or 0)) if refresh_token.get("expires_in") else False,
         }
-        service_code = self._extract_remote_service_code(data)
-        if service_code:
-            vals["remote_service_code"] = service_code
         self.sudo().write(vals)
         return access
 
@@ -313,13 +346,39 @@ class NspSyncAuth(models.Model):
             "client_id": self.client_id,
             "client_secret": self.client_secret,
         }
-        url = self._url("/auth/token")
-        try:
-            response = requests.post(url, data=json.dumps(payload), headers=self.base_headers(), timeout=30)
-        except requests.exceptions.RequestException as exc:
-            message = _("Cannot connect to Cloud Server at %(url)s: %(detail)s") % {"url": url, "detail": str(exc)}
+        attempts = []
+        response = None
+        successful_base = False
+        last_exception = None
+        candidates = self._connection_base_candidates()
+        for base_url in candidates:
+            url = self._url("/auth/token", base_url=base_url)
+            try:
+                response = requests.post(url, data=json.dumps(payload), headers=self.base_headers(), timeout=30)
+                successful_base = base_url
+                break
+            except requests.exceptions.RequestException as exc:
+                last_exception = exc
+                attempts.append("%s (%s)" % (url, exc))
+
+        if response is None:
+            configured = self._effective_remote_base_url()
+            parsed = urlsplit(configured)
+            docker_hint = ""
+            if self._running_in_container() and self._is_loopback_hostname(parsed.hostname):
+                docker_hint = _(
+                    " In Docker, localhost points to the Edge container. Use the Cloud container service name "
+                    "(for example http://cloud-web:8069), the Cloud host LAN IP, or "
+                    "http://host.docker.internal:%(port)s when Cloud is published on the Docker host."
+                ) % {"port": parsed.port or 80}
+            detail = "; ".join(attempts) or str(last_exception or "Connection failed")
+            message = _("Cannot connect to Cloud Server. Attempts: %(detail)s.%(hint)s") % {
+                "detail": detail,
+                "hint": docker_hint,
+            }
             self.sudo().write({"connected": False, "last_error": message})
-            raise UserError(message) from exc
+            raise UserError(message) from last_exception
+
         try:
             data = response.json()
         except Exception:
@@ -328,6 +387,12 @@ class NspSyncAuth(models.Model):
             message = data.get("message") or data.get("error") or ("HTTP %s" % response.status_code)
             self.sudo().write({"connected": False, "last_error": message})
             raise UserError(message)
+
+        configured_base = self._effective_remote_base_url()
+        if successful_base and successful_base != configured_base:
+            # Persist the URL that is actually reachable so token refresh and all sync jobs
+            # use the same route instead of retrying an invalid container-local address.
+            self.sudo().write({"remote_server_url": successful_base})
         return self._parse_auth_response(data)
 
     def _refresh_access_token(self):

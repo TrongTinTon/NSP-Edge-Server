@@ -13,8 +13,7 @@ from datetime import datetime, timezone
 
 from psycopg2 import IntegrityError
 
-from odoo import api, fields, models, SUPERUSER_ID
-from odoo.http import request
+from odoo import api, fields, models
 
 from odoo.addons.t4_coreapi.utils import endpoint, get_params, get_body
 
@@ -83,8 +82,7 @@ class NspGatekeeperApiService(models.AbstractModel):
         Internal database IDs and historical aliases are deliberately rejected.
         """
         data = data or {}
-        headers = request.httprequest.headers
-        return str(headers.get("X-Controller-Code") or data.get("controller_code") or "").strip()
+        return str(data.get("controller_code") or "").strip()
 
     @api.model
     def _application_from_context(self):
@@ -133,11 +131,7 @@ class NspGatekeeperApiService(models.AbstractModel):
                 details={"controller_code": controller.controller_id},
             )
 
-        try:
-            request.update_env(user=SUPERUSER_ID)
-            controller = request.env["nsp.controller"].sudo().browse(controller.id)
-        except Exception:
-            controller = self.env["nsp.controller"].sudo().browse(controller.id)
+        controller = self.env["nsp.controller"].sudo().browse(controller.id)
 
         controller.write({
             "timestamp": fields.Datetime.now(),
@@ -157,10 +151,6 @@ class NspGatekeeperApiService(models.AbstractModel):
         app = self._application_from_context()
         if not app:
             return app, "none", self._error("Core API Application authentication is required", 401)
-        try:
-            request.update_env(user=SUPERUSER_ID)
-        except Exception:
-            pass
         return app.sudo(), "core_api", None
 
     @api.model
@@ -280,8 +270,7 @@ class NspGatekeeperApiService(models.AbstractModel):
     @api.model
     def _edge_server_code_from_payload(self, data=None):
         data = data or {}
-        headers = request.httprequest.headers
-        return str(headers.get("X-Edge-Server-Code") or data.get("edge_server_code") or "").strip()
+        return str(data.get("edge_server_code") or "").strip()
 
     @api.model
     def _edge_server_for_sync_application(self, application, data=None):
@@ -733,7 +722,7 @@ class NspGatekeeperApiService(models.AbstractModel):
     @api.model
     def _measurement_input(self):
         data = self._payload()
-        if request.httprequest.method == "GET":
+        if str(self.env.context.get("core_api_method") or "").upper() == "GET":
             data.update(self._params())
         return data
 

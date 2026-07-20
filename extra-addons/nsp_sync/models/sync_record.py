@@ -18,7 +18,6 @@ class NspSyncRecord(models.Model):
         "ir.actions.core_api", related="sync_job_id.sync_action_id", store=True, readonly=True, index=True
     )
     source_code = fields.Char(string="Source", index=True)
-    remote_service_code = fields.Char(index=True)
     route_suffix = fields.Char(index=True)
     sync_action_code = fields.Char(string="Action Code", required=True, index=True)
     sync_action_name = fields.Char(string="Action", index=True)
@@ -112,7 +111,6 @@ class NspSyncRecord(models.Model):
         vals = {
             "sync_job_id": sync_job.id,
             "source_code": source_code,
-            "remote_service_code": sync_job.nsp_remote_service_code,
             "route_suffix": route_suffix or sync_job.route_suffix,
             "sync_action_code": action_code,
             "sync_action_name": action_name or sync_job.sync_action_name or action_code,

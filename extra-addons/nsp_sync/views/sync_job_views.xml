@@ -63,7 +63,6 @@
                             <field name="auth_id" options="{'no_open': False, 'no_create': False}"/>
                             <field name="edge_server_code" readonly="1" widget="CopyClipboardChar"/>
                             <field name="nsp_remote_base_url" readonly="1" widget="CopyClipboardChar"/>
-                            <field name="nsp_remote_service_code" readonly="1"/>
                             <field name="nsp_connected" readonly="1"/>
                         </group>
                         <group string="Sync API">

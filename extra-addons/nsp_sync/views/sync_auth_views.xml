@@ -43,7 +43,7 @@
                 </header>
                 <sheet>
                     <div class="alert alert-info" role="alert">
-                        Enter the Edge Server Code and Core API credentials issued by the Cloud Server. The local Edge Server identity is created automatically.
+                        Enter a Cloud URL reachable from the Edge runtime. In Docker, do not use localhost for another container. Use the Cloud service name, host LAN IP, or host.docker.internal when Cloud is published on the Docker host.
                     </div>
                     <group>
                         <group string="Edge Server">
@@ -51,7 +51,7 @@
                             <field name="active"/>
                         </group>
                         <group string="Cloud Core API">
-                            <field name="remote_server_url" placeholder="https://cloud.example.com"/>
+                            <field name="remote_server_url" placeholder="http://cloud-web:8069 or https://cloud.example.com"/>
                             <field name="client_id"/>
                             <field name="client_secret" password="True"/>
                         </group>
@@ -60,7 +60,6 @@
                         <group>
                             <field name="connected" readonly="1"/>
                             <field name="remote_base_url" readonly="1" widget="CopyClipboardChar"/>
-                            <field name="remote_service_code" readonly="1"/>
                         </group>
                         <group>
                             <field name="last_auth_at" readonly="1"/>
