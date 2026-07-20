@@ -1,77 +1,17 @@
 # -*- coding: utf-8 -*-
-import hashlib
-import json
 import uuid
 from collections import defaultdict
 from datetime import timedelta
 
 from odoo import api, fields, models, _
-from odoo.exceptions import UserError, ValidationError
-
+from odoo.exceptions import ValidationError
 
 def _new_uid(prefix):
     return "%s-%s" % (prefix, uuid.uuid4().hex.upper())
 
-
-class NspGate(models.Model):
-    _inherit = "nsp.gate"
-
-    measurement_session_ids = fields.One2many(
-        "nsp.gate.measurement.session", "gate_id", string="Measurement Sessions"
-    )
-    measurement_session_count = fields.Integer(compute="_compute_measurement_session_count")
-    last_measurement_session_id = fields.Many2one(
-        "nsp.gate.measurement.session", compute="_compute_last_measurement_session"
-    )
-
-    @api.depends("measurement_session_ids")
-    def _compute_measurement_session_count(self):
-        for gate in self:
-            gate.measurement_session_count = len(gate.measurement_session_ids)
-
-    def _compute_last_measurement_session(self):
-        Session = self.env["nsp.gate.measurement.session"].sudo()
-        for gate in self:
-            gate.last_measurement_session_id = Session.search(
-                [("gate_id", "=", gate.id)], order="create_date desc, id desc", limit=1
-            )
-
-    def action_create_measurement_session(self):
-        self.ensure_one()
-        controller = self._controller_set()[:1]
-        if not controller:
-            raise UserError(_("Configure at least one Controller before creating a measurement session."))
-        lane = self.lane_ids.filtered("active")[:1]
-        session = self.env["nsp.gate.measurement.session"].create({
-            "gate_id": self.id,
-            "lane_id": lane.id if lane else False,
-            "controller_id": controller.id,
-            "planned_direction": "undetermined",
-        })
-        return {
-            "type": "ir.actions.act_window",
-            "name": _("Measurement Session"),
-            "res_model": "nsp.gate.measurement.session",
-            "res_id": session.id,
-            "view_mode": "form",
-            "target": "current",
-        }
-
-    def action_open_measurement_sessions(self):
-        self.ensure_one()
-        return {
-            "type": "ir.actions.act_window",
-            "name": _("Measurement Sessions"),
-            "res_model": "nsp.gate.measurement.session",
-            "view_mode": "list,form",
-            "domain": [("gate_id", "=", self.id)],
-            "context": {"default_gate_id": self.id},
-        }
-
-
-class NspGateMeasurementSession(models.Model):
-    _name = "nsp.gate.measurement.session"
-    _description = "NSP Gate Measurement Session"
+class NspMeasurementSession(models.Model):
+    _name = "nsp.measurement.session"
+    _description = "NSP Measurement Session"
     _inherit = ["mail.thread", "mail.activity.mixin"]
     _rec_name = "measurement_code"
     _order = "create_date desc, id desc"
@@ -84,27 +24,13 @@ class NspGateMeasurementSession(models.Model):
         required=True, copy=False, index=True, tracking=True,
         default=lambda self: _new_uid("MSR")[:24],
     )
-    gate_id = fields.Many2one(
-        "nsp.gate", required=True, ondelete="restrict", index=True, tracking=True,
-    )
-    branch_id = fields.Many2one(
-        "nsp.branch", related="gate_id.branch_id", readonly=True,
-    )
-    lane_id = fields.Many2one(
-        "nsp.gate.lane", ondelete="restrict", index=True, tracking=True,
-    )
     controller_id = fields.Many2one(
         "nsp.controller", required=True, ondelete="restrict", index=True, tracking=True,
-        domain="[('node_type', '=', 'controller')]",
+        help="Controller that owns all RFID readers selected for this measurement session.",
     )
-    planned_direction = fields.Selection([
-        ("entry", "Entry"),
-        ("exit", "Exit"),
-        ("undetermined", "Undetermined"),
-    ], required=True, default="undetermined", tracking=True)
     planned_start_at = fields.Datetime(tracking=True)
     planned_end_at = fields.Datetime(tracking=True)
-    objective_note = fields.Text()
+    note = fields.Text()
 
     measurement_status = fields.Selection([
         ("draft", "Draft"),
@@ -114,48 +40,27 @@ class NspGateMeasurementSession(models.Model):
         ("cancelled", "Cancelled"),
     ], required=True, default="draft", index=True, tracking=True)
 
-    config_revision = fields.Integer(default=0, readonly=True, copy=False)
-    config_hash = fields.Char(readonly=True, copy=False, index=True)
-    generated_at = fields.Datetime(readonly=True, copy=False)
-    sync_state = fields.Selection([
-        ("pending", "Pending"),
-        ("synced", "Synced"),
-        ("failed", "Failed"),
-    ], default="pending", required=True, index=True, copy=False)
-
-    apply_status = fields.Selection([
-        ("pending", "Pending"),
-        ("applying", "Applying"),
-        ("applied", "Applied"),
-        ("failed", "Failed"),
-    ], default="pending", required=True, index=True, copy=False)
-    applied_revision = fields.Integer(readonly=True, copy=False)
-    applied_hash = fields.Char(readonly=True, copy=False)
-    applied_at = fields.Datetime(readonly=True, copy=False)
-    apply_error_code = fields.Char(readonly=True, copy=False)
-    apply_error_message = fields.Text(readonly=True, copy=False)
-
     started_at = fields.Datetime(readonly=True, copy=False)
     completed_at = fields.Datetime(readonly=True, copy=False)
     cancelled_at = fields.Datetime(readonly=True, copy=False)
 
     antenna_ids = fields.One2many(
-        "nsp.gate.measurement.antenna", "session_id", string="Measurement Antennas"
+        "nsp.measurement.antenna", "session_id", string="Measurement Antennas"
     )
     run_ids = fields.One2many(
-        "nsp.gate.measurement.run", "session_id", string="Measurement Runs", readonly=True
+        "nsp.measurement.run", "session_id", string="Measurement Runs", readonly=True
     )
     command_ids = fields.One2many(
-        "nsp.gate.measurement.command", "session_id", string="Commands", readonly=True
+        "nsp.measurement.command", "session_id", string="Commands", readonly=True
     )
     event_ids = fields.One2many(
-        "nsp.gate.measurement.event", "session_id", string="Measurement Events", readonly=True
+        "nsp.measurement.event", "session_id", string="Measurement Events", readonly=True
     )
     antenna_summary_ids = fields.One2many(
-        "nsp.gate.measurement.antenna.summary", "session_id", string="Antenna Summary", readonly=True
+        "nsp.measurement.antenna.summary", "session_id", string="Antenna Summary", readonly=True
     )
     pair_summary_ids = fields.One2many(
-        "nsp.gate.measurement.pair.summary", "session_id", string="Antenna Pair Summary", readonly=True
+        "nsp.measurement.pair.summary", "session_id", string="Antenna Pair Summary", readonly=True
     )
     run_count = fields.Integer(compute="_compute_run_count")
     event_count = fields.Integer(default=0, readonly=True, copy=False)
@@ -163,31 +68,12 @@ class NspGateMeasurementSession(models.Model):
     _sql_constraints = [
         ("measurement_session_uid_unique", "unique(measurement_session_uid)", "Measurement Session UID must be unique."),
         ("measurement_code_unique", "unique(measurement_code)", "Measurement Code must be unique."),
-        ("config_revision_non_negative", "CHECK(config_revision >= 0)", "Configuration revision cannot be negative."),
     ]
 
     @api.depends("run_ids")
     def _compute_run_count(self):
         for rec in self:
             rec.run_count = len(rec.run_ids)
-
-    @api.onchange("lane_id")
-    def _onchange_lane_id(self):
-        for rec in self:
-            if rec.lane_id:
-                rec.gate_id = rec.lane_id.gate_id
-
-    @api.constrains("gate_id", "lane_id", "controller_id")
-    def _check_scope(self):
-        for rec in self:
-            if rec.lane_id and rec.lane_id.gate_id != rec.gate_id:
-                raise ValidationError(_("Measurement Lane must belong to the selected Gate."))
-            if rec.controller_id and rec.controller_id.node_type != "controller":
-                raise ValidationError(_("Measurement node must be a Controller."))
-            if rec.gate_id and rec.controller_id and rec.controller_id not in rec.gate_id.with_context(active_test=False)._controller_set():
-                raise ValidationError(_("Measurement Controller must belong to the selected Gate."))
-            if rec.gate_id.branch_id and rec.controller_id.branch_id and rec.gate_id.branch_id != rec.controller_id.branch_id:
-                raise ValidationError(_("Measurement Controller and Gate must belong to the same Branch."))
 
     @api.constrains("planned_start_at", "planned_end_at")
     def _check_planned_time(self):
@@ -204,17 +90,13 @@ class NspGateMeasurementSession(models.Model):
             vals["measurement_code"] = str(vals.get("measurement_code") or vals["measurement_session_uid"][:24]).strip().upper()
             if not self.env.context.get("measurement_sync"):
                 vals["measurement_status"] = "draft"
-                vals["config_revision"] = 0
-                vals["config_hash"] = False
-                vals["generated_at"] = False
-                vals["apply_status"] = "pending"
             prepared.append(vals)
         return super().create(prepared)
 
     def write(self, vals):
         config_fields = {
-            "measurement_code", "gate_id", "lane_id", "controller_id", "planned_direction",
-            "planned_start_at", "planned_end_at", "objective_note", "antenna_ids",
+            "measurement_code", "controller_id", "planned_start_at", "planned_end_at",
+            "note", "antenna_ids",
         }
         if config_fields.intersection(vals) and not self.env.context.get("measurement_sync"):
             blocked = self.filtered(lambda rec: rec.measurement_status != "draft")
@@ -227,30 +109,23 @@ class NspGateMeasurementSession(models.Model):
 
     def _canonical_config(self):
         self.ensure_one()
-        antennas = [
-            {
-                "serial_number": line.serial_number,
-                "antenna_no": int(line.antenna_no),
-            }
-            for line in self.antenna_ids.sorted(key=lambda rec: (rec.serial_number or "", rec.antenna_no or 0, rec.id))
-        ]
+        grouped = defaultdict(list)
+        for line in self.antenna_ids.sorted(
+            key=lambda rec: (rec.serial_number or "", rec.antenna_no or 0, rec.id)
+        ):
+            grouped[line.serial_number].append(int(line.antenna_no))
         return {
             "measurement_session_uid": self.measurement_session_uid,
             "measurement_code": self.measurement_code,
-            "branch_code": self.branch_id.code if self.branch_id else "",
-            "gate_code": self.gate_id.code,
-            "lane_code": self.lane_id.code if self.lane_id else None,
             "controller_code": self.controller_id.controller_id,
-            "planned_direction": self.planned_direction,
             "planned_start_at": fields.Datetime.to_string(self.planned_start_at) if self.planned_start_at else None,
             "planned_end_at": fields.Datetime.to_string(self.planned_end_at) if self.planned_end_at else None,
-            "measurement_antennas": antennas,
+            "note": self.note or None,
+            "measurement_antennas": [
+                {"serial_number": serial_number, "antennas": antenna_numbers}
+                for serial_number, antenna_numbers in sorted(grouped.items())
+            ],
         }
-
-    def _compute_config_hash(self):
-        self.ensure_one()
-        raw = json.dumps(self._canonical_config(), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def _validate_ready(self):
         self.ensure_one()
@@ -268,25 +143,12 @@ class NspGateMeasurementSession(models.Model):
             if rec.measurement_status == "ready":
                 continue
             rec._validate_ready()
-            now = fields.Datetime.now()
-            rec.with_context(measurement_sync=True).write({
-                "measurement_status": "ready",
-                "config_revision": rec.config_revision + 1,
-                "config_hash": rec._compute_config_hash(),
-                "generated_at": now,
-                "sync_state": "pending",
-                "apply_status": "pending",
-                "applied_revision": 0,
-                "applied_hash": False,
-                "applied_at": False,
-                "apply_error_code": False,
-                "apply_error_message": False,
-            })
+            rec.with_context(measurement_sync=True).write({"measurement_status": "ready"})
         return True
 
     def _build_summaries(self):
-        AntennaSummary = self.env["nsp.gate.measurement.antenna.summary"].sudo()
-        PairSummary = self.env["nsp.gate.measurement.pair.summary"].sudo()
+        AntennaSummary = self.env["nsp.measurement.antenna.summary"].sudo()
+        PairSummary = self.env["nsp.measurement.pair.summary"].sudo()
         for session in self:
             session.antenna_summary_ids.unlink()
             session.pair_summary_ids.unlink()
@@ -398,7 +260,7 @@ class NspGateMeasurementSession(models.Model):
         except Exception:
             retention_days = 7
         cutoff = fields.Datetime.now() - timedelta(days=retention_days)
-        events = self.env["nsp.gate.measurement.event"].sudo().search([
+        events = self.env["nsp.measurement.event"].sudo().search([
             ("session_id.measurement_status", "in", ["completed", "cancelled"]),
             ("session_id.write_date", "<", cutoff),
             ("sync_state", "=", "synced"),
@@ -407,14 +269,13 @@ class NspGateMeasurementSession(models.Model):
         events.with_context(retention_cleanup=True).unlink()
         return count
 
-
-class NspGateMeasurementAntenna(models.Model):
-    _name = "nsp.gate.measurement.antenna"
-    _description = "NSP Gate Measurement Antenna"
+class NspMeasurementAntenna(models.Model):
+    _name = "nsp.measurement.antenna"
+    _description = "NSP Measurement Antenna"
     _order = "session_id, antenna_ref_id, id"
 
     session_id = fields.Many2one(
-        "nsp.gate.measurement.session", required=True, ondelete="cascade", index=True
+        "nsp.measurement.session", required=True, ondelete="cascade", index=True
     )
     antenna_ref_id = fields.Many2one(
         "nsp.device.antenna", required=True, ondelete="restrict", index=True
@@ -432,7 +293,7 @@ class NspGateMeasurementAntenna(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        sessions = self.env["nsp.gate.measurement.session"].browse([
+        sessions = self.env["nsp.measurement.session"].browse([
             vals.get("session_id") for vals in vals_list if vals.get("session_id")
         ]).exists()
         if not self.env.context.get("measurement_sync") and sessions.filtered(lambda rec: rec.measurement_status != "draft"):
@@ -456,10 +317,9 @@ class NspGateMeasurementAntenna(models.Model):
             raise ValidationError(_("Measurement Antennas can only be removed while the session is draft."))
         return super().unlink()
 
-
-class NspGateMeasurementRun(models.Model):
-    _name = "nsp.gate.measurement.run"
-    _description = "NSP Gate Measurement Run"
+class NspMeasurementRun(models.Model):
+    _name = "nsp.measurement.run"
+    _description = "NSP Measurement Run"
     _rec_name = "measurement_run_uid"
     _order = "create_date desc, id desc"
 
@@ -468,13 +328,8 @@ class NspGateMeasurementRun(models.Model):
         default=lambda self: _new_uid("RUN"),
     )
     session_id = fields.Many2one(
-        "nsp.gate.measurement.session", required=True, ondelete="cascade", index=True
+        "nsp.measurement.session", required=True, ondelete="cascade", index=True
     )
-    actual_direction = fields.Selection([
-        ("entry", "Entry"),
-        ("exit", "Exit"),
-        ("undetermined", "Undetermined"),
-    ], required=True, default="undetermined")
     run_status = fields.Selection([
         ("pending", "Pending"),
         ("starting", "Starting"),
@@ -491,10 +346,9 @@ class NspGateMeasurementRun(models.Model):
         ("measurement_run_uid_unique", "unique(measurement_run_uid)", "Measurement Run UID must be unique."),
     ]
 
-
-class NspGateMeasurementCommand(models.Model):
-    _name = "nsp.gate.measurement.command"
-    _description = "NSP Gate Measurement Command"
+class NspMeasurementCommand(models.Model):
+    _name = "nsp.measurement.command"
+    _description = "NSP Measurement Command"
     _rec_name = "command_uid"
     _order = "create_date asc, id asc"
 
@@ -503,10 +357,10 @@ class NspGateMeasurementCommand(models.Model):
         default=lambda self: _new_uid("CMD"),
     )
     session_id = fields.Many2one(
-        "nsp.gate.measurement.session", required=True, ondelete="cascade", index=True
+        "nsp.measurement.session", required=True, ondelete="cascade", index=True
     )
     run_id = fields.Many2one(
-        "nsp.gate.measurement.run", required=True, ondelete="cascade", index=True
+        "nsp.measurement.run", required=True, ondelete="cascade", index=True
     )
     command_type = fields.Selection([
         ("start_measurement", "Start Measurement"),
@@ -532,19 +386,18 @@ class NspGateMeasurementCommand(models.Model):
             if rec.run_id.session_id != rec.session_id:
                 raise ValidationError(_("Measurement Command and Run must belong to the same Session."))
 
-
-class NspGateMeasurementEvent(models.Model):
-    _name = "nsp.gate.measurement.event"
-    _description = "NSP Gate Measurement Event"
+class NspMeasurementEvent(models.Model):
+    _name = "nsp.measurement.event"
+    _description = "NSP Measurement Event"
     _rec_name = "measurement_uid"
     _order = "read_at desc, id desc"
 
     measurement_uid = fields.Char(required=True, copy=False, index=True)
     session_id = fields.Many2one(
-        "nsp.gate.measurement.session", required=True, ondelete="cascade", index=True
+        "nsp.measurement.session", required=True, ondelete="cascade", index=True
     )
     run_id = fields.Many2one(
-        "nsp.gate.measurement.run", required=True, ondelete="cascade", index=True
+        "nsp.measurement.run", required=True, ondelete="cascade", index=True
     )
     serial_number = fields.Char(required=True, index=True)
     antenna_no = fields.Integer(required=True, index=True)
@@ -569,7 +422,7 @@ class NspGateMeasurementEvent(models.Model):
 
     @api.constrains("session_id", "run_id", "serial_number", "antenna_no")
     def _check_event_scope(self):
-        Mapping = self.env["nsp.gate.measurement.antenna"].sudo()
+        Mapping = self.env["nsp.measurement.antenna"].sudo()
         for rec in self:
             if rec.run_id.session_id != rec.session_id:
                 raise ValidationError(_("Measurement Event and Run must belong to the same Session."))
@@ -591,18 +444,18 @@ class NspGateMeasurementEvent(models.Model):
             by_run[rec.run_id.id] += 1
         for session_id, count in by_session.items():
             self.env.cr.execute(
-                "UPDATE nsp_gate_measurement_session "
+                "UPDATE nsp_measurement_session "
                 "SET event_count = COALESCE(event_count, 0) + %s WHERE id = %s",
                 (count, session_id),
             )
         for run_id, count in by_run.items():
             self.env.cr.execute(
-                "UPDATE nsp_gate_measurement_run "
+                "UPDATE nsp_measurement_run "
                 "SET measurement_count = COALESCE(measurement_count, 0) + %s WHERE id = %s",
                 (count, run_id),
             )
-        self.env["nsp.gate.measurement.session"].browse(list(by_session)).invalidate_recordset(["event_count"])
-        self.env["nsp.gate.measurement.run"].browse(list(by_run)).invalidate_recordset(["measurement_count"])
+        self.env["nsp.measurement.session"].browse(list(by_session)).invalidate_recordset(["event_count"])
+        self.env["nsp.measurement.run"].browse(list(by_run)).invalidate_recordset(["measurement_count"])
         return records
 
     def unlink(self):
@@ -616,28 +469,27 @@ class NspGateMeasurementEvent(models.Model):
         result = super().unlink()
         for session_id, count in by_session.items():
             self.env.cr.execute(
-                "UPDATE nsp_gate_measurement_session "
+                "UPDATE nsp_measurement_session "
                 "SET event_count = GREATEST(COALESCE(event_count, 0) - %s, 0) WHERE id = %s",
                 (count, session_id),
             )
         for run_id, count in by_run.items():
             self.env.cr.execute(
-                "UPDATE nsp_gate_measurement_run "
+                "UPDATE nsp_measurement_run "
                 "SET measurement_count = GREATEST(COALESCE(measurement_count, 0) - %s, 0) WHERE id = %s",
                 (count, run_id),
             )
-        self.env["nsp.gate.measurement.session"].browse(list(by_session)).invalidate_recordset(["event_count"])
-        self.env["nsp.gate.measurement.run"].browse(list(by_run)).invalidate_recordset(["measurement_count"])
+        self.env["nsp.measurement.session"].browse(list(by_session)).invalidate_recordset(["event_count"])
+        self.env["nsp.measurement.run"].browse(list(by_run)).invalidate_recordset(["measurement_count"])
         return result
 
-
-class NspGateMeasurementAntennaSummary(models.Model):
-    _name = "nsp.gate.measurement.antenna.summary"
-    _description = "NSP Gate Measurement Antenna Summary"
+class NspMeasurementAntennaSummary(models.Model):
+    _name = "nsp.measurement.antenna.summary"
+    _description = "NSP Measurement Antenna Summary"
     _order = "session_id, serial_number, antenna_no, id"
 
     session_id = fields.Many2one(
-        "nsp.gate.measurement.session", required=True, ondelete="cascade", index=True
+        "nsp.measurement.session", required=True, ondelete="cascade", index=True
     )
     serial_number = fields.Char(required=True, index=True)
     antenna_no = fields.Integer(required=True, index=True)
@@ -652,14 +504,13 @@ class NspGateMeasurementAntennaSummary(models.Model):
         ("measurement_antenna_summary_unique", "unique(session_id, serial_number, antenna_no)", "Antenna summary must be unique per Measurement Session."),
     ]
 
-
-class NspGateMeasurementPairSummary(models.Model):
-    _name = "nsp.gate.measurement.pair.summary"
-    _description = "NSP Gate Measurement Antenna Pair Summary"
+class NspMeasurementPairSummary(models.Model):
+    _name = "nsp.measurement.pair.summary"
+    _description = "NSP Measurement Antenna Pair Summary"
     _order = "session_id, from_serial_number, from_antenna_no, to_serial_number, to_antenna_no, id"
 
     session_id = fields.Many2one(
-        "nsp.gate.measurement.session", required=True, ondelete="cascade", index=True
+        "nsp.measurement.session", required=True, ondelete="cascade", index=True
     )
     from_serial_number = fields.Char(required=True, index=True)
     from_antenna_no = fields.Integer(required=True, index=True)

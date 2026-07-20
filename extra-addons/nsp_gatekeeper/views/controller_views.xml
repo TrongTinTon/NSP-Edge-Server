@@ -1,55 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <record id="view_nsp_controllers_search" model="ir.ui.view">
-        <field name="name">nsp.controller.search</field>
-        <field name="model">nsp.controller</field>
+    <record id="view_nsp_edge_servers_search" model="ir.ui.view">
+        <field name="name">nsp.edge.server.search</field>
+        <field name="model">nsp.edge.server</field>
         <field name="arch" type="xml">
             <search>
-                <field name="controller_id"/>
-                <field name="controller_name"/>
-                <field name="parent_id"/>
-                <field name="branch_id"/>
-                <field name="paired_machine_id"/>
+                <field name="edge_server_code"/>
+                <field name="name"/>
                 <filter string="Online" name="online" domain="[('status','=','online')]"/>
                 <filter string="Offline" name="offline" domain="[('status','=','offline')]"/>
-                <filter string="Not Paired" name="not_paired" domain="[('node_type','=','controller'),('paired_machine_id','=',False)]"/>
-                <group>
-                    <filter string="Edge Server" name="group_parent" context="{'group_by':'parent_id'}"/>
-                    <filter string="Branch" name="group_branch" context="{'group_by':'branch_id'}"/>
-                </group>
+                <group><filter string="Status" name="group_status" context="{'group_by':'status'}"/></group>
             </search>
         </field>
     </record>
 
     <record id="view_nsp_edge_servers_list" model="ir.ui.view">
         <field name="name">nsp.edge.server.list</field>
-        <field name="model">nsp.controller</field>
+        <field name="model">nsp.edge.server</field>
         <field name="arch" type="xml">
-            <list string="Edge Servers" default_order="controller_name, id">
-                <field name="controller_id" string="Edge Server Code"/>
-                <field name="controller_name" string="Edge Server Name"/>
-                <field name="branch_id"/>
-                <field name="core_api_application_id"/>
-                <field name="child_count" string="Controllers"/>
+            <list string="Edge Servers">
+                <field name="edge_server_code"/>
+                <field name="name"/>
+                <field name="controller_count" string="Controllers"/>
                 <field name="status" widget="badge" decoration-success="status == 'online'" decoration-danger="status in ('offline','revoked')" decoration-warning="status == 'error'"/>
-                <field name="timestamp" string="Last Heartbeat" optional="show"/>
-                <field name="active" optional="hide"/>
-            </list>
-        </field>
-    </record>
-
-    <record id="view_nsp_controllers_list" model="ir.ui.view">
-        <field name="name">nsp.controller.list</field>
-        <field name="model">nsp.controller</field>
-        <field name="arch" type="xml">
-            <list string="Controllers" default_order="parent_id, controller_name, id">
-                <field name="controller_id" string="Controller Code"/>
-                <field name="controller_name"/>
-                <field name="parent_id" string="Edge Server"/>
-                <field name="branch_id"/>
-                <field name="paired_machine_id" optional="show"/>
-                <field name="status" widget="badge" decoration-success="status == 'online'" decoration-danger="status in ('offline','revoked')" decoration-warning="status == 'error'"/>
-                <field name="timestamp" string="Last Heartbeat" optional="show"/>
+                <field name="timestamp" optional="show"/>
                 <field name="active" optional="hide"/>
             </list>
         </field>
@@ -57,55 +31,35 @@
 
     <record id="view_nsp_edge_servers_form" model="ir.ui.view">
         <field name="name">nsp.edge.server.form</field>
-        <field name="model">nsp.controller</field>
+        <field name="model">nsp.edge.server</field>
         <field name="arch" type="xml">
             <form string="Edge Server">
-                <header>
-                    <button name="action_create_core_api_application" type="object" string="Create Core API Application" class="oe_highlight" invisible="core_api_application_id" groups="nsp_core.group_nsp_it_parking,t4_coreapi.group_core_api_manager"/>
-                    <button name="action_open_core_api_application" type="object" string="Open Application" invisible="not core_api_application_id" groups="nsp_core.group_nsp_it_parking,t4_coreapi.group_core_api_manager"/>
-                    <button name="action_generate_application_routes" type="object" string="Generate API Routes" invisible="not core_api_application_id" groups="nsp_core.group_nsp_it_parking,t4_coreapi.group_core_api_manager"/>
-                    <field name="status" widget="statusbar" statusbar_visible="offline,online,error,block,revoked"/>
-                </header>
+                <header><field name="status" widget="statusbar" statusbar_visible="offline,online,error,block,revoked"/></header>
                 <sheet>
-                    <field name="node_type" invisible="1"/>
                     <div class="oe_button_box" name="button_box">
-                        <button name="action_open_child_controllers" type="object" class="oe_stat_button" icon="fa-sitemap" invisible="not id">
-                            <field name="child_count" widget="statinfo" string="Controllers"/>
+                        <button name="action_open_controllers" type="object" class="oe_stat_button" icon="fa-sitemap">
+                            <field name="controller_count" widget="statinfo" string="Controllers"/>
                         </button>
                     </div>
-                    <div class="oe_title">
-                        <label for="controller_id" string="Edge Server Code"/>
-                        <h1><field name="controller_id"/></h1>
-                    </div>
+                    <div class="oe_title"><label for="edge_server_code"/><h1><field name="edge_server_code"/></h1></div>
                     <group>
                         <group string="Configuration">
-                            <field name="controller_name" string="Edge Server Name"/>
-                            <field name="branch_id"/>
-                            <field name="url" string="Edge Server URL"/>
+                            <field name="name"/>
                             <field name="active"/>
                         </group>
-                        <group string="Core API Application">
-                            <field name="core_api_application_id" options="{'no_create': False, 'no_open': False}"/>
-                            <field name="application_client_id" readonly="1"/>
-                            <field name="application_server_code" readonly="1"/>
-                        </group>
-                        <group string="Current Status">
-                            <field name="connected" readonly="1"/>
-                            <field name="timestamp" readonly="1" string="Last Heartbeat"/>
-                            <field name="last_device_report_at" readonly="1"/>
-                            <field name="last_error" readonly="1"/>
+                        <group string="Runtime">
+                            <field name="timestamp" readonly="1"/>
                         </group>
                     </group>
                     <notebook>
                         <page string="Controllers">
-                            <field name="child_ids" context="{'default_parent_id': id, 'default_node_type': 'controller', 'default_branch_id': branch_id}">
+                            <field name="controller_ids" context="{'default_edge_server_id': id}">
                                 <list editable="bottom">
-                                    <field name="controller_id" string="Controller Code"/>
+                                    <field name="controller_id"/>
                                     <field name="controller_name"/>
-                                    <field name="branch_id"/>
-                                    <field name="paired_machine_id" readonly="1"/>
                                     <field name="status" widget="badge"/>
                                     <field name="timestamp" readonly="1"/>
+                                    <field name="active"/>
                                 </list>
                             </field>
                         </page>
@@ -116,59 +70,67 @@
         </field>
     </record>
 
+    <record id="view_nsp_controllers_search" model="ir.ui.view">
+        <field name="name">nsp.controller.search</field>
+        <field name="model">nsp.controller</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="controller_id"/>
+                <field name="controller_name"/>
+                <field name="edge_server_id"/>
+                <filter string="Online" name="online" domain="[('status','=','online')]"/>
+                <filter string="Offline" name="offline" domain="[('status','=','offline')]"/>
+                <group>
+                    <filter string="Edge Server" name="group_edge" context="{'group_by':'edge_server_id'}"/>
+                    <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_controllers_list" model="ir.ui.view">
+        <field name="name">nsp.controller.list</field>
+        <field name="model">nsp.controller</field>
+        <field name="arch" type="xml">
+            <list string="Controllers">
+                <field name="controller_id"/>
+                <field name="controller_name"/>
+                <field name="edge_server_id"/>
+                <field name="status" widget="badge" decoration-success="status == 'online'" decoration-danger="status in ('offline','revoked')" decoration-warning="status == 'error'"/>
+                <field name="timestamp" optional="show"/>
+                <field name="active" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
     <record id="view_nsp_controllers_form" model="ir.ui.view">
         <field name="name">nsp.controller.form</field>
         <field name="model">nsp.controller</field>
         <field name="arch" type="xml">
             <form string="Controller">
-                <header>
-                    <button name="action_open_pairing_requests" type="object" string="Pairing Requests" invisible="not id"/>
-                    <field name="status" widget="statusbar" statusbar_visible="offline,online,error,block,revoked"/>
-                </header>
+                <header><field name="status" widget="statusbar" statusbar_visible="offline,online,error,block,revoked"/></header>
                 <sheet>
-                    <field name="node_type" invisible="1"/>
-                    <div class="oe_title">
-                        <label for="controller_id" string="Controller Code"/>
-                        <h1><field name="controller_id"/></h1>
-                    </div>
+                    <div class="oe_title"><label for="controller_id"/><h1><field name="controller_id"/></h1></div>
                     <group>
                         <group string="Configuration">
                             <field name="controller_name"/>
-                            <field name="parent_id" string="Edge Server" domain="[('node_type','=','edge_server')]" required="1"/>
-                            <field name="branch_id"/>
-                            <field name="url" string="Controller URL"/>
+                            <field name="edge_server_id"/>
                             <field name="active"/>
                         </group>
-                        <group string="Pairing">
-                            <field name="paired_machine_id" readonly="1"/>
-                            <field name="paired_at" readonly="1"/>
-                        </group>
                         <group string="Runtime">
-                            <field name="connected" readonly="1"/>
-                            <field name="timestamp" readonly="1" string="Last Heartbeat"/>
+                            <field name="timestamp" readonly="1"/>
                             <field name="last_device_report_at" readonly="1"/>
-                            <field name="last_error" readonly="1"/>
                         </group>
                     </group>
                     <notebook>
-                        <page string="Gate Memberships">
-                            <field name="gate_m2m_ids">
-                                <list create="0" delete="0">
-                                    <field name="name"/>
-                                    <field name="code"/>
-                                    <field name="branch_id"/>
-                                    <field name="config_revision"/>
-                                    <field name="config_state"/>
-                                </list>
-                            </field>
-                        </page>
-                        <page string="RFID Readers">
-                            <field name="device_id">
+                        <page string="Managed Devices">
+                            <field name="device_ids">
                                 <list create="0">
                                     <field name="serial_number"/>
                                     <field name="device_code"/>
                                     <field name="model_number"/>
                                     <field name="status" widget="badge"/>
+                                    <field name="managed"/>
                                 </list>
                             </field>
                         </page>
@@ -181,29 +143,22 @@
 
     <record id="action_nsp_edge_servers" model="ir.actions.act_window">
         <field name="name">Edge Servers</field>
-        <field name="res_model">nsp.controller</field>
+        <field name="res_model">nsp.edge.server</field>
         <field name="view_mode">list,form</field>
-        <field name="view_ids" eval="[(5, 0, 0), (0, 0, {'view_mode': 'list', 'view_id': ref('view_nsp_edge_servers_list')}), (0, 0, {'view_mode': 'form', 'view_id': ref('view_nsp_edge_servers_form')})]"/>
-        <field name="domain">[('node_type','=','edge_server')]</field>
-        <field name="context">{'default_node_type':'edge_server'}</field>
-        <field name="search_view_id" ref="view_nsp_controllers_search"/>
+        <field name="search_view_id" ref="view_nsp_edge_servers_search"/>
     </record>
 
     <record id="action_nsp_controllers" model="ir.actions.act_window">
         <field name="name">Controllers</field>
         <field name="res_model">nsp.controller</field>
         <field name="view_mode">list,form</field>
-        <field name="view_ids" eval="[(5, 0, 0), (0, 0, {'view_mode': 'list', 'view_id': ref('view_nsp_controllers_list')}), (0, 0, {'view_mode': 'form', 'view_id': ref('view_nsp_controllers_form')})]"/>
-        <field name="domain">[('node_type','=','controller')]</field>
-        <field name="context">{'default_node_type':'controller'}</field>
         <field name="search_view_id" ref="view_nsp_controllers_search"/>
     </record>
 
-    <record id="action_nsp_controller_heartbeat" model="ir.actions.act_window">
-        <field name="name">Controller Heartbeat</field>
+    <record id="action_nsp_controllers_configuration" model="ir.actions.act_window">
+        <field name="name">Controllers</field>
         <field name="res_model">nsp.controller</field>
         <field name="view_mode">list,form</field>
-        <field name="domain">[('node_type','=','controller')]</field>
         <field name="search_view_id" ref="view_nsp_controllers_search"/>
     </record>
 </odoo>

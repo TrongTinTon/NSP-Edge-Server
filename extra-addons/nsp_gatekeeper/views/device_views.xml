@@ -29,7 +29,7 @@
                     <div class="oe_title">
                         <label for="device_name"/>
                         <h1>
-                            <field name="device_name" placeholder="RFID Reader - Gate 01"/>
+                            <field name="device_name" placeholder="RFID Reader 01"/>
                         </h1>
                     </div>
                     <group>
@@ -62,14 +62,6 @@
                             <field name="tid_addr"/>
                             <field name="tid_len"/>
                         </group>
-                    </group>
-                    <group string="Config Sync">
-                        <field name="config_revision" readonly="1"/>
-                        <field name="config_hash" readonly="1"/>
-                        <field name="config_sync_status" readonly="1"/>
-                        <field name="config_applied_status" readonly="1"/>
-                        <field name="last_config_sync_at" readonly="1"/>
-                        <field name="config_sync_message" readonly="1"/>
                     </group>
                     <notebook>
                         <page name="antennas" string="Antennas">
@@ -203,17 +195,16 @@
                         </group>
                     </group>
                     <notebook>
-                        <page string="Lane Antenna Mapping">
+                        <page string="Parking Lane Antenna Mapping">
                             <field name="lane_rule_ids" readonly="1">
-                                <list string="Lane Antenna Mapping">
-                                    <field name="gate_id"/>
+                                <list string="Parking Lane Antenna Mapping">
+                                    <field name="parking_area_id" string="Parking Area"/>
                                     <field name="lane_id"/>
-                                    <field name="lane_direction" widget="badge"/>
-                                    <field name="antenna_direction" widget="badge"/>
+                                    <field name="antenna_group_id"/>
+                                    <field name="group_direction" widget="badge"/>
+                                    <field name="detection_mode" widget="badge"/>
                                     <field name="tag_role" widget="badge"/>
-                                    <field name="effective_direction" widget="badge"/>
-                                    <field name="sequence_order"/>
-                                    <field name="required"/>
+                                    <field name="sequence_no"/>
                                     <field name="is_active" widget="boolean_toggle"/>
                                 </list>
                             </field>

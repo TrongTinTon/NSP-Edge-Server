@@ -1,49 +1,59 @@
 # -*- coding: utf-8 -*-
 import json
 import logging
-import time
-from datetime import timedelta
+import os
+from datetime import datetime, timedelta, timezone
 
 import requests
-
 
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
-
-NSP_SYNC_ALLOWED_ROUTES = (
-    "edge-server/status",
-    "devices-status/sync",
-    "branches/sync",
-    "cards/sync",
-    "employees/sync",
-    "vehicles/sync",
-    "vehicle-borrow/sync",
-    "gate-config/sync",
-    "gate-measurement/sync",
-    "parking-transactions/sync",
-    "controller-pairing-requests/sync",
-    "controller-pairing-decisions/sync",
-)
-
-
-ACTION_KINDS = {
-    "nsp_gatekeeper_edge_server_status": "edge_server_status",
-    "nsp_gatekeeper_devices_status_sync": "device_status",
-    "nsp_gatekeeper_branches_sync": "branch",
-    "nsp_gatekeeper_cards_sync": "card",
-    "nsp_gatekeeper_employees_sync": "user",
-    "nsp_gatekeeper_vehicles_sync": "vehicle",
-    "nsp_gatekeeper_gate_config_sync": "gate_config",
-    "nsp_gatekeeper_gate_measurement_sync": "measurement",
-    "nsp_gatekeeper_parking_transactions_sync": "parking_transaction",
-    "nsp_gatekeeper_vehicle_borrow_sync": "vehicle_borrow",
-    "nsp_controller_pairing_requests_sync": "pairing_request_push",
-    "nsp_controller_pairing_decisions_sync": "pairing_decision",
+SYNC_ROUTE_DIRECTIONS = {
+    "edge-server/status": "push",
+    "devices-status/sync": "push",
+    "branches/sync": "pull",
+    "cards/sync": "pull",
+    "employees/sync": "pull",
+    "vehicles/sync": "pull",
+    "vehicle-borrow/sync": "pull",
+    "parking-config/sync": "pull",
+    "measurement-config/sync": "pull",
+    "measurement-data/sync": "push",
+    "measurement-session-status/sync": "push",
+    "parking-transactions/sync": "push",
 }
-
+NSP_SYNC_ALLOWED_ROUTES = tuple(SYNC_ROUTE_DIRECTIONS)
+DEFAULT_JOB_SETTINGS = {
+    "edge-server/status": {"interval_seconds": 60, "batch_size": 1},
+    "devices-status/sync": {"interval_seconds": 60, "batch_size": 200},
+    "branches/sync": {"interval_seconds": 300, "batch_size": 500},
+    "cards/sync": {"interval_seconds": 300, "batch_size": 500},
+    "employees/sync": {"interval_seconds": 300, "batch_size": 500},
+    "vehicles/sync": {"interval_seconds": 300, "batch_size": 500},
+    "vehicle-borrow/sync": {"interval_seconds": 300, "batch_size": 500},
+    "parking-config/sync": {"interval_seconds": 300, "batch_size": 100},
+    "measurement-config/sync": {"interval_seconds": 60, "batch_size": 100},
+    "measurement-data/sync": {"interval_seconds": 30, "batch_size": 200},
+    "measurement-session-status/sync": {"interval_seconds": 30, "batch_size": 100},
+    "parking-transactions/sync": {"interval_seconds": 30, "batch_size": 200},
+}
+ACTION_KINDS = {
+    "edge-server/status": "edge_server_status",
+    "devices-status/sync": "device_status",
+    "branches/sync": "branch",
+    "cards/sync": "card",
+    "employees/sync": "user",
+    "vehicles/sync": "vehicle",
+    "vehicle-borrow/sync": "vehicle_borrow",
+    "parking-config/sync": "parking_config",
+    "measurement-config/sync": "measurement_config",
+    "measurement-data/sync": "measurement_event",
+    "measurement-session-status/sync": "measurement_status",
+    "parking-transactions/sync": "parking_transaction",
+}
 
 class NspSyncJob(models.Model):
     _name = "nsp.sync.job"
@@ -56,96 +66,90 @@ class NspSyncJob(models.Model):
     active = fields.Boolean(default=True)
 
     auth_id = fields.Many2one(
-        "nsp.sync.auth",
-        string="Authentication",
-        required=True,
-        index=True,
-        ondelete="restrict",
-        help="Shared Remote Core API Authentication. Multiple Sync Jobs can reuse one authentication record.",
+        "nsp.sync.auth", string="Cloud Connection", required=True, index=True, ondelete="restrict"
     )
     sync_action_id = fields.Many2one(
         "ir.actions.core_api",
-        string="Sync Action",
+        string="Sync API",
         required=True,
-        domain=[("endpoint_manager_id", "!=", False), ("endpoint_code", "!=", False), ("route_suffix", "in", list(NSP_SYNC_ALLOWED_ROUTES))],
+        domain=[
+            ("endpoint_manager_id", "!=", False),
+            ("endpoint_code", "!=", False),
+            ("route_suffix", "in", list(NSP_SYNC_ALLOWED_ROUTES)),
+        ],
         ondelete="restrict",
-        help="Select the action definition from Action Endpoints Management. This is not tied to a fixed Core API Application.",
-    )
-    endpoint_manager_id = fields.Many2one(
-        "action.endpoint.manager",
-        string="Endpoint Manager",
-        related="sync_action_id.endpoint_manager_id",
-        store=True,
-        readonly=True,
-        index=True,
     )
     version_id = fields.Many2one(
         "core.api.version",
         string="API Version",
         default=lambda self: self.env["core.api.version"].get_default_version(),
         required=True,
-        help="Remote API version segment used when building /<service_code>/<version>/<route>.",
     )
-    sync_action_code = fields.Char(string="Action Code", compute="_compute_action_meta", store=True, index=True)
-    sync_action_name = fields.Char(string="Action Name", compute="_compute_action_meta", store=True, index=True)
+    sync_action_code = fields.Char(compute="_compute_action_meta", store=True, index=True)
+    sync_action_name = fields.Char(compute="_compute_action_meta", store=True, index=True)
     route_suffix = fields.Char(string="Route", compute="_compute_action_meta", store=True)
-    direction = fields.Selection([
-        ("pull", "Pull"),
-        ("push", "Push"),
-    ], string="Direction", default="pull", required=True, index=True)
-    interval_seconds = fields.Integer(string="Interval Seconds", default=10, required=True)
-    batch_size = fields.Integer(string="Batch Size", default=100, required=True)
-    pull_cursor = fields.Char(string="Opaque Pull Cursor", readonly=True, copy=False)
-    last_push_at = fields.Datetime(string="Last Push At", readonly=True)
-    last_pull_at = fields.Datetime(string="Last Pull At", readonly=True)
-    next_run_at = fields.Datetime(string="Next Run At", readonly=True, index=True)
-    status = fields.Selection([
-        ("idle", "Idle"),
-        ("running", "Running"),
-        ("success", "Success"),
-        ("failed", "Failed"),
-        ("disabled", "Disabled"),
-    ], string="Status", default="idle", readonly=True, index=True)
-    last_message = fields.Text(string="Last Message", readonly=True)
-
-    # Shared remote authentication. Tokens and credentials are stored once on
-    # nsp.sync.auth, not duplicated per Sync Job. The related fields below are
-    # read-only convenience fields used for display and existing sync-record tracing.
-    edge_server_id = fields.Many2one(
-        "nsp.controller",
-        string="Edge Server Identity",
-        related="auth_id.edge_server_id",
-        readonly=True,
-        store=True,
+    direction = fields.Selection(
+        [("pull", "Pull from Cloud"), ("push", "Push to Cloud")],
+        required=True,
+        default="pull",
         index=True,
     )
-    nsp_remote_server_url = fields.Char(string="Remote Server URL", related="auth_id.remote_server_url", readonly=True)
-    nsp_remote_base_url = fields.Char(string="Resolved Remote URL", related="auth_id.remote_base_url", readonly=True)
-    nsp_remote_service_code = fields.Char(string="Resolved Remote Server Code", related="auth_id.remote_service_code", readonly=True)
-    nsp_remote_client_id = fields.Char(string="Remote Client ID", related="auth_id.client_id", readonly=True)
-    nsp_connected = fields.Boolean(string="Connected", related="auth_id.connected", readonly=True)
-    nsp_last_auth_at = fields.Datetime(string="Last Auth At", related="auth_id.last_auth_at", readonly=True)
-    nsp_last_error = fields.Text(string="Last Auth Error", related="auth_id.last_error", readonly=True)
+    interval_seconds = fields.Integer(default=60, required=True)
+    batch_size = fields.Integer(default=100, required=True)
+    sync_cursor = fields.Char(string="Next Sync Cursor", readonly=True, copy=False)
+    last_push_at = fields.Datetime(readonly=True)
+    last_push_record_id = fields.Integer(readonly=True, copy=False)
+    last_pull_at = fields.Datetime(readonly=True)
+    next_run_at = fields.Datetime(readonly=True, index=True)
+    status = fields.Selection(
+        [
+            ("idle", "Idle"),
+            ("running", "Running"),
+            ("success", "Success"),
+            ("failed", "Failed"),
+            ("disabled", "Disabled"),
+        ],
+        default="idle",
+        readonly=True,
+        index=True,
+    )
+    last_message = fields.Text(readonly=True)
+
+    edge_server_code = fields.Char(
+        related="auth_id.edge_server_code", readonly=True, store=True, index=True
+    )
+    nsp_remote_base_url = fields.Char(related="auth_id.remote_base_url", readonly=True)
+    nsp_remote_service_code = fields.Char(related="auth_id.remote_service_code", readonly=True)
+    nsp_connected = fields.Boolean(related="auth_id.connected", readonly=True)
+    nsp_last_error = fields.Text(related="auth_id.last_error", readonly=True)
 
     _sql_constraints = [
         ("interval_positive", "CHECK(interval_seconds >= 1)", "Interval Seconds must be at least 1."),
         ("batch_positive", "CHECK(batch_size >= 1)", "Batch Size must be at least 1."),
-        ("job_unique", "unique(sync_action_id, auth_id, direction)", "Only one sync job is allowed per Sync Action, Authentication, and Direction."),
+        (
+            "job_unique",
+            "unique(sync_action_id, auth_id, direction)",
+            "Only one Sync Job is allowed per API, Cloud Connection, and direction.",
+        ),
     ]
 
     @api.depends("sync_action_name", "direction", "interval_seconds", "auth_id", "auth_id.display_name")
     def _compute_display_name(self):
-        dir_labels = dict(self._fields["direction"].selection)
+        labels = dict(self._fields["direction"].selection)
         for rec in self:
-            remote = rec.auth_id.display_name or rec.nsp_remote_base_url or "remote"
             rec.display_name = "%s / %s / %s / %ss" % (
-                remote,
-                rec.sync_action_name or rec.sync_action_code or "-",
-                dir_labels.get(rec.direction, rec.direction or "-"),
+                rec.auth_id.display_name or "Cloud",
+                rec.sync_action_name or rec.route_suffix or "-",
+                labels.get(rec.direction, rec.direction or "-"),
                 rec.interval_seconds or 0,
             )
 
-    @api.depends("sync_action_id", "sync_action_id.endpoint_code", "sync_action_id.name", "sync_action_id.route_suffix")
+    @api.depends(
+        "sync_action_id",
+        "sync_action_id.endpoint_code",
+        "sync_action_id.name",
+        "sync_action_id.route_suffix",
+    )
     def _compute_action_meta(self):
         for rec in self:
             action = rec.sync_action_id
@@ -153,88 +157,139 @@ class NspSyncJob(models.Model):
             rec.sync_action_name = action.name if action else False
             rec.route_suffix = action.route_suffix if action else False
 
+    def _deployment_role(self):
+        role = (
+            self.env["ir.config_parameter"].sudo().get_param("nsp.deployment_role")
+            or os.getenv("NSP_DEPLOYMENT_ROLE")
+            or os.getenv("NSP_SERVER_ROLE")
+            or "edge_server"
+        ).strip().lower()
+        return role if role in ("cloud", "edge_server") else "edge_server"
+
+    def _ensure_edge_server_instance(self):
+        if self._deployment_role() != "edge_server":
+            raise UserError(_("Outbound Sync Jobs run only on the Edge Server."))
+
+    @api.model
+    def ensure_default_jobs(self, auth_records):
+        """Create the supported job set for each Cloud Connection exactly once."""
+        auth_records = auth_records.exists()
+        if not auth_records:
+            return self.browse()
+        self._ensure_edge_server_instance()
+        Action = self.env["ir.actions.core_api"].sudo()
+        Version = self.env["core.api.version"].sudo()
+        version = Version.get_default_version()
+        if not version:
+            raise UserError(_("A default Core API Version is required before creating Sync Jobs."))
+
+        actions = Action.search([
+            ("endpoint_manager_id", "!=", False),
+            ("endpoint_code", "!=", False),
+            ("route_suffix", "in", list(NSP_SYNC_ALLOWED_ROUTES)),
+        ])
+        action_by_route = {}
+        for action in actions.sorted(key=lambda rec: rec.id):
+            route = str(action.route_suffix or "").strip().strip("/")
+            action_by_route.setdefault(route, action)
+
+        missing_routes = [route for route in NSP_SYNC_ALLOWED_ROUTES if route not in action_by_route]
+        if missing_routes:
+            raise UserError(
+                _("Missing NSP Core API endpoint definitions: %s") % ", ".join(missing_routes)
+            )
+
+        created = self.browse()
+        now = fields.Datetime.now()
+        for auth in auth_records:
+            existing_routes = set(
+                self.search([("auth_id", "=", auth.id)]).mapped("route_suffix")
+            )
+            vals_list = []
+            for sequence, route in enumerate(NSP_SYNC_ALLOWED_ROUTES, start=1):
+                if route in existing_routes:
+                    continue
+                settings = DEFAULT_JOB_SETTINGS[route]
+                vals_list.append({
+                    "sequence": sequence * 10,
+                    "auth_id": auth.id,
+                    "sync_action_id": action_by_route[route].id,
+                    "version_id": version.id,
+                    "direction": SYNC_ROUTE_DIRECTIONS[route],
+                    "interval_seconds": settings["interval_seconds"],
+                    "batch_size": settings["batch_size"],
+                    "next_run_at": now,
+                    "active": True,
+                })
+            if vals_list:
+                created |= self.create(vals_list)
+        return created
+
     @api.onchange("sync_action_id")
     def _onchange_sync_action(self):
-        return
+        for rec in self:
+            route = (rec.sync_action_id.route_suffix or "").strip().strip("/") if rec.sync_action_id else ""
+            if route in SYNC_ROUTE_DIRECTIONS:
+                rec.direction = SYNC_ROUTE_DIRECTIONS[route]
 
-    @api.constrains("sync_action_id")
+    @api.constrains("sync_action_id", "direction")
     def _check_sync_actions(self):
         for rec in self:
-            if rec.sync_action_id and not rec.sync_action_id.endpoint_manager_id:
-                raise ValidationError(_("Sync Action must come from Action Endpoints Management."))
-            if rec.sync_action_id and not rec.sync_action_id.endpoint_code:
-                raise ValidationError(_("Sync Action must have an Action Code. Click Generate API Actions Only on the Endpoint Manager."))
-            if rec.sync_action_id and not rec.sync_action_id.route_suffix:
-                raise ValidationError(_("Sync Action must have a Route Path. Click Generate API Actions Only on the Endpoint Manager."))
-            if rec.sync_action_id and (rec.sync_action_id.route_suffix or "").strip().strip("/") not in NSP_SYNC_ALLOWED_ROUTES:
-                raise ValidationError(_("This route is a runtime Controller API, not an NSP Sync route. Use only Edge Server Status/Devices Status/Branches/Cards/Users/Vehicles/Borrow/Gate Config/Parking Transactions/Measurement/Pairing sync routes."))
+            route = (rec.route_suffix or "").strip().strip("/")
+            if route not in NSP_SYNC_ALLOWED_ROUTES:
+                raise ValidationError(_("Route %s is not supported by NSP Sync.") % (route or "-"))
+            expected = SYNC_ROUTE_DIRECTIONS[route]
+            if rec.direction != expected:
+                raise ValidationError(
+                    _("Route %(route)s must use direction %(direction)s.")
+                    % {"route": route, "direction": expected}
+                )
 
     @api.model_create_multi
     def create(self, vals_list):
-        for vals in vals_list:
-            vals.pop("sync_endpoint_id", None)
-            vals.pop("nsp_remote_base_url", None)
-            vals.pop("nsp_remote_server_url", None)
-            vals.pop("nsp_remote_client_id", None)
-            vals.pop("nsp_remote_client_secret", None)
-            vals["interval_seconds"] = max(1, int(vals.get("interval_seconds") or 10))
-            vals["batch_size"] = max(1, int(vals.get("batch_size") or 100))
+        self._ensure_edge_server_instance()
+        Action = self.env["ir.actions.core_api"].sudo()
+        prepared = []
+        for source in vals_list:
+            vals = dict(source)
+            action = Action.browse(vals.get("sync_action_id")).exists() if vals.get("sync_action_id") else Action.browse()
+            route = (action.route_suffix or "").strip().strip("/") if action else ""
+            if route in SYNC_ROUTE_DIRECTIONS:
+                vals["direction"] = SYNC_ROUTE_DIRECTIONS[route]
+            vals["interval_seconds"] = max(1, int(vals.get("interval_seconds") or 60))
+            vals["batch_size"] = max(1, min(int(vals.get("batch_size") or 100), 1000))
             vals.setdefault("next_run_at", fields.Datetime.now())
-        records = super().create(vals_list)
-        records.action_auto_select_status_endpoint(silent=True)
-        return records
+            prepared.append(vals)
+        return super().create(prepared)
 
     def write(self, vals):
-        vals = dict(vals)
-        vals.pop("sync_endpoint_id", None)
-        vals.pop("nsp_remote_base_url", None)
-        vals.pop("nsp_remote_server_url", None)
-        vals.pop("nsp_remote_client_id", None)
-        vals.pop("nsp_remote_client_secret", None)
-        if "interval_seconds" in vals:
-            vals["interval_seconds"] = max(1, int(vals.get("interval_seconds") or 1))
-        if "batch_size" in vals:
-            vals["batch_size"] = max(1, int(vals.get("batch_size") or 1))
-        return super().write(vals)
+        if {"auth_id", "sync_action_id", "direction", "active", "interval_seconds", "batch_size"}.intersection(vals):
+            self._ensure_edge_server_instance()
+        values = dict(vals)
+        if "sync_action_id" in values:
+            action = self.env["ir.actions.core_api"].sudo().browse(values["sync_action_id"]).exists()
+            route = (action.route_suffix or "").strip().strip("/") if action else ""
+            if route in SYNC_ROUTE_DIRECTIONS:
+                values["direction"] = SYNC_ROUTE_DIRECTIONS[route]
+            values["sync_cursor"] = False
+            values["last_push_at"] = False
+            values["last_push_record_id"] = 0
+        if "interval_seconds" in values:
+            values["interval_seconds"] = max(1, int(values.get("interval_seconds") or 1))
+        if "batch_size" in values:
+            values["batch_size"] = max(1, min(int(values.get("batch_size") or 1), 1000))
+        return super().write(values)
 
-    # --------------------------- shared remote auth helpers ----------------
+    # --------------------------- remote API ---------------------------
     def _auth(self):
         self.ensure_one()
         if not self.auth_id:
-            raise UserError(_("Select Authentication before running this Sync Job."))
+            raise UserError(_("Select a Cloud Connection."))
         return self.auth_id
-
-    def _nsp_normalize_remote_base_url(self):
-        self.ensure_one()
-        return self._auth()._normalize_remote_base_url()
-
-    def _nsp_effective_remote_base_url(self):
-        self.ensure_one()
-        return self._auth()._effective_remote_base_url()
-
-    def _nsp_effective_database_name(self):
-        self.ensure_one()
-        return self._auth()._effective_database_name()
-
-    def _nsp_url(self, path):
-        self.ensure_one()
-        return self._auth()._url(path)
-
-    def _nsp_remote_service_code(self):
-        self.ensure_one()
-        return self._auth()._remote_service_code()
 
     def _nsp_gateway_url(self, route_suffix, version_code="v1"):
         self.ensure_one()
         return self._auth().gateway_url(route_suffix, version_code=version_code)
-
-    def _nsp_base_headers(self):
-        self.ensure_one()
-        return self._auth().base_headers()
-
-    def nsp_sync_get_access_token(self, force=False):
-        self.ensure_one()
-        return self._auth().get_access_token(force=force)
 
     def nsp_sync_headers(self):
         self.ensure_one()
@@ -242,823 +297,418 @@ class NspSyncJob(models.Model):
 
     def action_authenticate_application(self):
         for rec in self:
-            if not rec.auth_id:
-                raise UserError(_("Select Authentication before authenticating."))
-            rec.auth_id.action_authenticate()
+            rec._auth().action_authenticate()
         return {
             "type": "ir.actions.client",
             "tag": "display_notification",
-            "params": {"title": _("NSP Sync"), "message": _("Remote Core API authentication completed."), "type": "success", "sticky": False},
+            "params": {
+                "title": _("NSP Sync"),
+                "message": _("Cloud authentication completed."),
+                "type": "success",
+                "sticky": False,
+            },
         }
 
-    def _schedule_next(self):
-        """Schedule the next run for each job.
-
-        Shared Authentication moved credentials/tokens out of the job model in v29,
-        but the scheduler still belongs to nsp.sync.job. Keep this small and
-        deterministic: no remote calls, no controller logic, only next_run_at.
-        """
+    def _schedule_next(self, immediate=False):
         now = fields.Datetime.now()
         for rec in self:
-            if not rec.active:
-                rec.write({"next_run_at": False})
-                continue
-            rec.write({"next_run_at": now + timedelta(seconds=max(1, rec.interval_seconds or 1))})
+            rec.next_run_at = (
+                now if immediate and rec.active
+                else now + timedelta(seconds=max(1, rec.interval_seconds or 1)) if rec.active
+                else False
+            )
 
     def _post_remote(self, sync_action, payload=None, timeout=60):
-        """Call a remote Core API route using the shared Authentication.
-
-        This is server-to-server NSP Sync. It only uses Core API token + route
-        permission. It must not resolve or validate nsp.controller records.
-        """
         self.ensure_one()
         if not sync_action:
-            raise UserError(_("Sync Action is required."))
-        route_suffix = (sync_action.route_suffix or "").strip().strip("/")
-        if not route_suffix:
-            raise UserError(_("Sync Action route is required. Click Generate API Actions & Routes for this action."))
-        if route_suffix not in NSP_SYNC_ALLOWED_ROUTES:
-            raise UserError(_("Route %s is not an NSP Sync route.") % route_suffix)
+            raise UserError(_("Sync API is required."))
+        route = (sync_action.route_suffix or "").strip().strip("/")
+        if route not in NSP_SYNC_ALLOWED_ROUTES:
+            raise UserError(_("Route %s is not an NSP Sync route.") % route)
         version_code = self.version_id.code if self.version_id else "v1"
-        url = self._nsp_gateway_url(route_suffix, version_code=version_code)
-        headers = self.nsp_sync_headers()
+        url = self._nsp_gateway_url(route, version_code=version_code)
         try:
-            return requests.post(url, json=payload or {}, headers=headers, timeout=timeout)
+            return requests.post(
+                url,
+                json=payload or {},
+                headers=self.nsp_sync_headers(),
+                timeout=timeout,
+            )
         except requests.exceptions.RequestException as exc:
-            message = _("Cannot call remote NSP Sync API at %(url)s. Check Authentication Remote Server URL, resolved server code, Core API route permission, and database selector. Detail: %(detail)s") % {"url": url, "detail": str(exc)}
-            self.write({"status": "failed", "last_message": message})
-            raise UserError(message) from exc
+            raise UserError(
+                _("Cannot call Cloud NSP API at %(url)s: %(detail)s")
+                % {"url": url, "detail": str(exc)}
+            ) from exc
 
     def _json_or_error(self, response):
-        """Parse Core API JSON response and raise a user-safe error when failed."""
         try:
             data = response.json()
         except Exception:
             data = {"success": False, "error": response.text}
         if not isinstance(data, dict):
-            raise UserError(_("Remote API returned an invalid response."))
+            raise UserError(_("Cloud API returned an invalid response."))
         ok = data.get("success", data.get("ok", data.get("status") == "success"))
         if response.status_code >= 400 or not ok:
             raise UserError(data.get("error") or data.get("message") or ("HTTP %s" % response.status_code))
         if isinstance(data.get("data"), dict):
-            merged = dict(data.get("data") or {})
+            merged = dict(data["data"])
             for key, value in data.items():
-                if key not in merged:
-                    merged[key] = value
-            data = merged
+                merged.setdefault(key, value)
+            return merged
         return data
 
-    # --------------------------- action helpers ---------------------------
     def _action_kind(self):
         self.ensure_one()
-        code = self.sync_action_code or ""
-        if code in ACTION_KINDS:
-            return ACTION_KINDS[code]
-        route = (self.route_suffix or "").strip().strip("/")
-        if route == "edge-server/status":
-            return "edge_server_status"
-        if route == "devices-status/sync":
-            return "device_status"
-        if route == "branches/sync":
-            return "branch"
-        if route == "cards/sync":
-            return "card"
-        if route in ("employees/sync", "users/sync"):
-            return "user"
-        if route == "vehicles/sync":
-            return "vehicle"
-        if route == "gate-config/sync":
-            return "gate_config"
-        if route == "gate-measurement/sync":
-            return "measurement"
-        if route == "parking-transactions/sync":
-            return "parking_transaction"
-        if route == "vehicle-borrow/sync":
-            return "vehicle_borrow"
-        if route == "controller-pairing-requests/sync":
-            return "pairing_request_push"
-        if route == "controller-pairing-decisions/sync":
-            return "pairing_decision"
-        return "generic"
+        return ACTION_KINDS.get((self.route_suffix or "").strip().strip("/"), "unsupported")
 
     @api.model
-    def _table_exists(self, table_name):
-        self.env.cr.execute("SELECT to_regclass(%s)", (table_name,))
-        return bool(self.env.cr.fetchone()[0])
-
     def _dt(self, value):
         return fields.Datetime.to_string(value) if value else False
 
-    def _safe_dt(self, value):
+    @api.model
+    def _iso_utc(self, value):
         if not value:
             return False
-        try:
-            return fields.Datetime.to_string(fields.Datetime.to_datetime(value))
-        except Exception:
-            return fields.Datetime.now()
+        parsed = fields.Datetime.to_datetime(value)
+        if not parsed:
+            return False
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat()
 
     @api.model
-    def _user_key(self, user):
-        return (getattr(user, "user_code", False) or user.name or str(user.id or "")).strip()
-
-    @api.model
-    def _serialize_branch(self, branch):
-        return {
-            "record_key": branch.code,
-            "branch_code": branch.code,
-            "branch_name": branch.name,
-            "timezone": branch.timezone or "Asia/Ho_Chi_Minh",
-            "status": branch.status,
-            "note": branch.note,
-            "write_date": self._dt(branch.write_date),
-        }
-
-    @api.model
-    def _serialize_card(self, card):
-        owner_type = "none"
-        owner_code = ""
-        owner_name = ""
-        assignment_state = "available"
-        if "nsp.vehicle.card" in self.env.registry.models:
-            vehicle_line = self.env["nsp.vehicle.card"].sudo().search([("card_id", "=", card.id), ("state", "=", "active")], limit=1)
+    def _remote_datetime(self, value):
+        if value in (None, ""):
+            return False
+        if isinstance(value, datetime):
+            parsed = value
         else:
-            vehicle_line = False
-        if "nsp.user.card" in self.env.registry.models:
-            user_line = self.env["nsp.user.card"].sudo().search([("card_id", "=", card.id), ("state", "=", "active")], limit=1)
-        else:
-            user_line = False
-        if vehicle_line:
-            owner_type = "vehicle"
-            owner_code = vehicle_line.vehicle_id.license_plate or str(vehicle_line.vehicle_id.id)
-            owner_name = vehicle_line.vehicle_id.display_name or vehicle_line.vehicle_id.license_plate or owner_code
-            assignment_state = vehicle_line.state or "active"
-        elif user_line:
-            owner_type = "person"
-            owner_code = getattr(user_line.user_id, "user_code", False) or str(user_line.user_id.id)
-            owner_name = user_line.user_id.display_name or user_line.user_id.name or owner_code
-            assignment_state = user_line.state or "active"
+            try:
+                parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+            except Exception as exc:
+                raise UserError(_("Invalid datetime value: %s") % value) from exc
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return fields.Datetime.to_string(parsed)
+
+    # --------------------------- local identity -----------------------
+    def _edge_server_record(self):
+        self.ensure_one()
+        return self.env["nsp.edge.server"].sudo().with_context(active_test=False).search(
+            [("edge_server_code", "=", self.edge_server_code)], limit=1
+        )
+
+    def _require_edge_server_record(self):
+        self.ensure_one()
+        edge = self._edge_server_record()
+        if not edge:
+            self.auth_id._ensure_edge_server_node()
+            edge = self._edge_server_record()
+        if not edge:
+            raise UserError(_("Edge Server Code %s is not configured.") % self.edge_server_code)
+        return edge
+
+    # --------------------------- push payloads ------------------------
+    def _serialize_edge_server_status(self):
+        self.ensure_one()
+        edge = self._require_edge_server_record()
         return {
-            "record_key": card.tid,
-            "card_id": card.id,
-            "tid": card.tid,
-            "card_type": card.card_type,
-            "active": True,
-            "usage_state": "used" if owner_type != "none" else "available",
-            "assignment_state": assignment_state,
-            "owner_type": owner_type,
-            "owner_code": owner_code,
-            "owner_name": owner_name,
-            "note": card.note,
-            "write_date": self._dt(card.write_date),
-        }
-
-    @api.model
-    def _serialize_user(self, user):
-        cards = []
-        for line in getattr(user, "user_card_ids", self.env["nsp.user.card"].browse()):
-            cards.append({"tid": line.tid, "state": line.state, "assigned_at": self._dt(line.assigned_at), "revoked_at": self._dt(line.revoked_at), "note": line.note})
-        user_code = self._user_key(user)
-        return {"record_key": user_code, "user_code": user_code, "employee_id": user_code, "name": user.name, "pin": getattr(user, "pin", False), "active": getattr(user, "active", True), "email": getattr(user, "email", False), "phone": getattr(user, "phone", False), "user_tids": (user.user_rfid_tids.split(",") if getattr(user, "user_rfid_tids", False) else []), "cards": cards, "write_date": self._dt(user.write_date)}
-
-    @api.model
-    def _serialize_vehicle(self, vehicle):
-        cards = []
-        for line in getattr(vehicle, "vehicle_card_ids", self.env["nsp.vehicle.card"].browse()):
-            cards.append({"tid": line.tid, "state": line.state, "assigned_at": self._dt(line.assigned_at), "revoked_at": self._dt(line.revoked_at), "note": line.note})
-        owner = vehicle.owner_id
-        return {"record_key": vehicle.license_plate, "license_plate": vehicle.license_plate, "state": vehicle.state, "owner_user_code": getattr(owner, "user_code", False), "owner_hr_code": getattr(owner, "user_code", False), "owner_name": owner.name if owner else False, "vehicle_type_name": vehicle.vehicle_type_id.name if vehicle.vehicle_type_id else False, "brand_name": vehicle.brand_id.name if vehicle.brand_id else False, "model_name": vehicle.model_id.name if vehicle.model_id else False, "color_name": vehicle.color_id.name if vehicle.color_id else False, "tid": vehicle.tid, "cards": cards, "write_date": self._dt(vehicle.write_date)}
-
-    @api.model
-    def _serialize_gate(self, gate):
-        payload = gate.prepare_sync_payload() if hasattr(gate, "prepare_sync_payload") else {}
-        return {
-            "record_key": gate.code,
-            "branch_code": gate.branch_id.code if gate.branch_id else False,
-            "branch_name": gate.branch_id.name if gate.branch_id else False,
-            "gate_code": gate.code,
-            "gate_name": gate.name,
-            "controller_codes": [c.controller_id for c in gate.controller_ids],
-            "gate_status": gate.gate_status,
-            "operation_state": gate.operation_state,
-            "branch_timezone": gate.branch_id.timezone if gate.branch_id else "Asia/Ho_Chi_Minh",
-            "timezone": gate.branch_id.timezone if gate.branch_id else "Asia/Ho_Chi_Minh",
-            "detection_window_ms": gate.detection_window_ms,
-            "sequence_required": gate.sequence_required,
-            "entry_requires_user_tid": gate.entry_requires_user_tid,
-            "exit_requires_user_tid": gate.exit_requires_user_tid,
-            "config_revision": gate.config_revision,
-            "config_hash": gate.config_hash,
-            "config_state": gate.config_state,
-            "applied_config_revision": gate.applied_config_revision,
-            "applied_config_hash": gate.applied_config_hash,
-            "lanes": payload.get("lanes", []),
-            "write_date": self._dt(gate.write_date),
-        }
-
-    @api.model
-    def _serialize_log(self, log):
-        return {
-            "record_key": log.transaction_uid,
-            "local_id": log.controller_local_id or log.transaction_uid,
-            "transaction_uid": log.transaction_uid,
-            "controller_code": log.controller_id.controller_id if log.controller_id else False,
-            "controller_name": log.controller_id.controller_name if log.controller_id else False,
-            "branch_code": log.branch_id.code if getattr(log, "branch_id", False) else False,
-            "gate_code": log.gate_code or (log.gate_id.code if log.gate_id else False),
-            "gate_name": log.gate_id.name if log.gate_id else False,
-            "lane_code": getattr(log, "lane_code", False),
-            "time_entered": self._dt(log.time_entered),
-            "direction": log.direction,
-            "status": log.status,
-            "error_message": log.error_message,
-            "license_plate": log.license_plate,
-            "vehicle_tid": log.vehicle_tid,
-            "user_tid": log.user_tid,
-            "device_serial": log.device_serial,
-            "antenna_id": log.antenna_id,
-            "antenna_sequence": log.antenna_sequence,
-            "effective_direction": getattr(log, "effective_direction", False),
-            "config_revision": log.config_revision,
-            "write_date": self._dt(log.write_date),
-        }
-
-    @api.model
-    def _serialize_vehicle_borrow(self, borrow):
-        if hasattr(borrow, "_controller_payload"):
-            return borrow._controller_payload()
-        return {
-            "record_key": borrow.borrow_code,
-            "borrow_code": borrow.borrow_code,
-            "vehicle_id": borrow.vehicle_id.id if borrow.vehicle_id else False,
-            "license_plate": borrow.license_plate,
-            "borrower_employee_id": borrow.borrower_code,
-            "borrower_name": borrow.borrower_name,
-            "state": borrow.state,
-            "active": bool(getattr(borrow, "active_for_controller", False)),
-            "valid_from": self._dt(borrow.valid_from),
-            "valid_to": self._dt(borrow.valid_to),
-            "returned_at": self._dt(borrow.returned_at),
-            "write_date": self._dt(borrow.write_date),
-        }
-
-
-    @api.model
-    def _serialize_edge_server_status(self, edge_server):
-        if not edge_server:
-            raise UserError(_("Select Edge Server Identity on NSP Sync Authentication before synchronizing Edge Server status."))
-        controllers_count = self.env["nsp.controller"].sudo().with_context(active_test=False).search_count([
-            ("parent_id", "=", edge_server.id),
-            ("node_type", "=", "controller"),
-        ])
-        devices_count = 0
-        if "nsp.device" in self.env.registry.models:
-            devices_count = self.env["nsp.device"].sudo().search_count([("controller_id.parent_id", "=", edge_server.id)])
-        pending_logs = 0
-        failed_logs = 0
-        if "nsp.parking.transaction" in self.env.registry.models:
-            Log = self.env["nsp.parking.transaction"].sudo()
-            if "push_status" in Log._fields:
-                pending_logs = Log.search_count([("push_status", "=", "pending")])
-                failed_logs = Log.search_count([("push_status", "=", "failed")])
-        now = fields.Datetime.now()
-        # This job is the Edge Server heartbeat. Report the caller as online
-        # and use the current time as the heartbeat timestamp.
-        heartbeat = now
-        return {
-            "record_key": edge_server.controller_id,
-            "edge_server_code": edge_server.controller_id,
-            "edge_server_name": edge_server.controller_name,
-            "branch_code": edge_server.branch_id.code if edge_server.branch_id else False,
-            "branch_name": edge_server.branch_id.name if edge_server.branch_id else False,
-            "status": "online",
-            "connected": True,
-            "timestamp": self._dt(heartbeat),
-            "last_heartbeat_at": self._dt(heartbeat),
-            "last_device_report_at": self._dt(edge_server.last_device_report_at),
-            "url": edge_server.url or False,
-            "controllers_count": controllers_count,
-            "devices_count": devices_count,
-            "pending_logs": pending_logs,
-            "failed_logs": failed_logs,
-            "write_date": self._dt(edge_server.write_date),
+            "record_key": self.edge_server_code,
+            "edge_server_code": self.edge_server_code,
+            "current_status": "online",
+            "last_seen_at": self._dt(fields.Datetime.now()),
         }
 
     @api.model
     def _serialize_device_status(self, device):
-        antennas = []
-        for ant in device.antennas_ids:
-            antennas.append({
-                "antenna_id": ant.antenna_id,
-                "antenna_no": ant.antenna_id,
-                "status": ant.status,
-                "is_active": bool(ant.is_active),
-                "power_dbm": ant.power_dbm,
-                "return_loss_db": ant.return_loss_db,
-                "scan_time": ant.scan_time,
-                "q_value": ant.q_value,
-                "session": ant.session,
-                "last_seen_at": self._dt(getattr(ant, "last_seen", False)) if "last_seen" in ant._fields else self._dt(device.last_seen),
-            })
         controller = device.controller_id
-        device_type = False
-        if "device_type" in device._fields and device.device_type:
-            device_type = device.device_type
-        elif "device_type_id" in device._fields and device.device_type_id:
-            device_type = device.device_type_id.code
+        status = str(device.status or "offline").lower()
+        device_status = status if status in ("online", "offline", "degraded") else "offline"
+        antennas = []
+        for antenna in device.antennas_ids.sorted(key=lambda rec: (rec.antenna_id, rec.id)):
+            antenna_status = str(antenna.status or "offline").strip().lower()
+            if antenna_status not in ("online", "offline", "degraded"):
+                antenna_status = "online" if antenna.is_active else "offline"
+            antennas.append({
+                "antenna_no": int(antenna.antenna_id or 0),
+                "antenna_status": antenna_status,
+                "enabled": bool(antenna.is_active),
+                **({"power_dbm": int(antenna.power_dbm)} if antenna.power_dbm not in (False, None) else {}),
+                **({"return_loss_db": int(antenna.return_loss_db)} if antenna.return_loss_db not in (False, None) else {}),
+                **({"last_seen_at": self._dt(device.last_seen)} if device.last_seen else {}),
+            })
         return {
             "record_key": device.serial_number or device.device_code,
-            "device_code": device.device_code or device.serial_number,
-            "serial_number": device.serial_number,
-            "device_name": device.device_name,
-            "device_type": device_type,
-            "model_number": device.model_number,
-            "device_vendor": device.device_vendor,
-            "ip_address": device.device_ip,
-            "port": device.device_port,
-            "status": device.status,
-            "connection_status": device.status,
-            "last_seen_at": self._dt(device.last_seen),
-            "firmware_version": device.firmware_version,
-            "controller_code": controller.controller_id if controller else False,
-            "controller_name": controller.controller_name if controller else False,
-            "controller_last_seen_at": self._dt(controller.timestamp) if controller else False,
-            "edge_server_code": controller.parent_id.controller_id if controller and controller.parent_id else False,
+            "controller_code": controller.controller_id if controller else "",
+            "serial_number": device.serial_number or "",
+            **({"device_code": device.device_code} if device.device_code else {}),
+            "device_status": device_status,
+            "last_seen_at": self._dt(device.last_seen or fields.Datetime.now()),
+            **({"firmware_version": device.firmware_version} if device.firmware_version else {}),
+            "connection": {
+                **({"ip_address": device.device_ip} if device.device_ip else {}),
+                **({"port": int(device.device_port)} if device.device_port else {}),
+            },
             "antennas": antennas,
-            "write_date": self._dt(device.write_date),
         }
 
     @api.model
-    def _serialize_measurement(self, event):
-        payload = {
-            "measurement_uid": event.measurement_uid,
-            "controller_code": event.session_id.controller_id.controller_id,
-            "serial_number": event.serial_number,
-            "antenna_no": int(event.antenna_no),
-            "tid": event.tid,
-            "read_at": self._dt(event.read_at),
-            "_measurement_session_uid": event.session_id.measurement_session_uid,
-            "_measurement_run_uid": event.run_id.measurement_run_uid,
+    def _serialize_parking_transaction(self, record):
+        decision = record.status if record.status in ("allowed", "denied") else "denied"
+        return {
+            "record_key": record.transaction_uid,
+            "transaction_uid": record.transaction_uid,
+            "controller_code": record.controller_id.controller_id if record.controller_id else "",
+            "parking_area_code": record.parking_area_code or (record.parking_area_id.code if record.parking_area_id else ""),
+            "lane_code": record.lane_code or (record.lane_id.code if record.lane_id else ""),
+            "direction": record.direction,
+            "check_time": self._dt(record.time_entered),
+            "vehicle_tid": record.vehicle_tid or "",
+            "user_tid": record.user_tid or "",
+            "vehicle_code": record.vehicle_code or "",
+            "user_code": record.user_code or "",
+            "decision": decision,
+            **({"decision_reason_code": record.error_code or "unknown"} if decision == "denied" else {}),
         }
-        if event.rssi_dbm not in (False, None):
-            payload["rssi_dbm"] = event.rssi_dbm
+
+    def _push_cursor_domain(self):
+        self.ensure_one()
+        if not self.last_push_at:
+            return []
+        return [
+            "|",
+            ("write_date", ">", self.last_push_at),
+            "&",
+            ("write_date", "=", self.last_push_at),
+            ("id", ">", int(self.last_push_record_id or 0)),
+        ]
+
+    def _serialize_push_batch(self, kind):
+        self.ensure_one()
+        limit = max(1, min(int(self.batch_size or 100), 1000))
+        if kind == "edge_server_status":
+            return {
+                "items": [self._serialize_edge_server_status()],
+                "cursor_at": fields.Datetime.now(),
+                "cursor_id": 0,
+                "has_more": False,
+            }
+        edge = self._require_edge_server_record()
+        domain = self._push_cursor_domain()
+        if kind == "device_status":
+            records = self.env["nsp.device"].sudo().search(
+                domain + [("controller_id.edge_server_id", "=", edge.id)],
+                order="write_date asc, id asc",
+                limit=limit + 1,
+            )
+            serializer = self._serialize_device_status
+        elif kind == "parking_transaction":
+            records = self.env["nsp.parking.transaction"].sudo().search(
+                domain + [("controller_id.edge_server_id", "=", edge.id)],
+                order="write_date asc, id asc",
+                limit=limit + 1,
+            )
+            serializer = self._serialize_parking_transaction
+        else:
+            raise UserError(_("Unsupported push route: %s") % self.route_suffix)
+        has_more = len(records) > limit
+        selected = records[:limit]
+        last = selected[-1:] if selected else selected
+        return {
+            "items": [serializer(record) for record in selected],
+            "cursor_at": last.write_date if last else self.last_push_at,
+            "cursor_id": last.id if last else self.last_push_record_id,
+            "has_more": has_more,
+        }
+
+    @api.model
+    def _remote_push_item(self, item):
+        payload = dict(item or {})
+        payload.pop("record_key", None)
         return payload
 
-
-    @api.model
-    def _serialize_pairing_request(self, pairing):
-        if not hasattr(pairing, "sync_payload"):
-            raise UserError(_("Controller Pairing model is not ready. Upgrade NSP Gatekeeper first."))
-        return pairing.sync_payload()
-
-    def _serialize_records_by_kind(self, kind, since=False, limit=100):
+    def _build_push_payload(self, items):
         self.ensure_one()
-        limit = max(1, min(int(limit or 100), 1000))
-        domain = []
-        if since:
-            domain.append(("write_date", ">", since))
-        if kind == "pairing_request_push":
-            edge_server = self.auth_id.edge_server_id
-            if not edge_server:
-                raise UserError(_("Select Edge Server Identity before synchronizing Controller Pairing Requests."))
-            pairing_domain = [
-                ("edge_server_id", "=", edge_server.id),
-                ("pairing_status", "in", ["pending", "delivered", "cancelled", "expired"]),
-            ]
-            if since:
-                pairing_domain.append(("write_date", ">", since))
-            records = self.env["nsp.controller.pairing.request"].sudo().search(
-                pairing_domain, order="write_date asc, id asc", limit=limit
-            )
-            return [self._serialize_pairing_request(record) for record in records]
-        if kind == "edge_server_status":
-            return [self._serialize_edge_server_status(self.auth_id.edge_server_id)]
-        if kind == "device_status":
-            edge_server = self.auth_id.edge_server_id
-            if not edge_server:
-                raise UserError(_("Select Edge Server Identity before synchronizing Device status."))
-            controller_ids = self.env["nsp.controller"].sudo().with_context(active_test=False).search([
-                ("parent_id", "=", edge_server.id),
-                ("node_type", "=", "controller"),
-            ]).ids
-            device_domain = [("controller_id", "in", controller_ids)]
-            if since:
-                device_domain.append(("write_date", ">", since))
-            records = self.env["nsp.device"].sudo().search(device_domain, order="write_date asc, id asc", limit=limit)
-            return [self._serialize_device_status(record) for record in records]
-        if kind == "branch":
-            if not self._table_exists("nsp_branch") or "nsp.branch" not in self.env.registry.models:
-                return []
-            records = self.env["nsp.branch"].sudo().search(domain, order="write_date asc, id asc", limit=limit)
-            return [self._serialize_branch(r) for r in records]
-        if kind == "gate_config":
-            records = self.env["nsp.gate"].sudo().search(domain, order="write_date asc, id asc", limit=limit)
-            return [self._serialize_gate(r) for r in records]
-        if kind == "measurement":
-            if "nsp.gate.measurement.event" not in self.env.registry.models:
-                return []
-            now = fields.Datetime.now()
-            event_domain = [
-                ("sync_state", "in", ["pending", "failed"]),
-                "|", ("next_retry_at", "=", False), ("next_retry_at", "<=", now),
-            ]
-            first = self.env["nsp.gate.measurement.event"].sudo().search(
-                event_domain, order="read_at asc, id asc", limit=1
-            )
-            if not first:
-                return []
-            event_domain += [
-                ("session_id", "=", first.session_id.id),
-                ("run_id", "=", first.run_id.id),
-            ]
-            records = self.env["nsp.gate.measurement.event"].sudo().search(
-                event_domain, order="read_at asc, id asc", limit=limit
-            )
-            return [self._serialize_measurement(record) for record in records]
-        if kind == "user":
-            records = self.env["nsp.user"].sudo().with_context(active_test=False).search(domain, order="write_date asc, id asc", limit=limit)
-            return [self._serialize_user(r) for r in records]
-        if kind == "vehicle":
-            records = self.env["nsp.vehicle"].sudo().with_context(active_test=False).search(domain, order="write_date asc, id asc", limit=limit)
-            return [self._serialize_vehicle(r) for r in records]
-        if kind == "card":
-            records = self.env["nsp.rfid.card"].sudo().search(domain, order="write_date asc, id asc", limit=limit)
-            return [self._serialize_card(r) for r in records]
-        if kind == "parking_transaction":
-            records = self.env["nsp.parking.transaction"].sudo().search(domain, order="write_date asc, id asc", limit=limit)
-            return [self._serialize_log(r) for r in records]
-        if kind == "vehicle_borrow":
-            if "nsp.vehicle.borrow.request" not in self.env.registry.models:
-                return []
-            records = self.env["nsp.vehicle.borrow.request"].sudo().search(domain, order="write_date asc, id asc", limit=limit)
-            return [self._serialize_vehicle_borrow(r) for r in records]
-        raise UserError(_("Unsupported NSP Sync action kind: %s") % kind)
+        route = (self.route_suffix or "").strip().strip("/")
+        base = {"edge_server_code": self.edge_server_code}
+        if route == "edge-server/status":
+            base.update(self._remote_push_item(items[0] if items else self._serialize_edge_server_status()))
+            return base
+        base["items"] = [self._remote_push_item(item) for item in items]
+        return base
 
-    # ------------------------------ apply -------------------------------
-    @api.model
-    def _find_or_create_controller(self, code, name=False):
-        code = str(code or "").strip() or "NSP-SYNC-CONTROLLER"
-        Controller = self.env["nsp.controller"].sudo()
-        rec = Controller.search([("controller_id", "=", code)], limit=1)
-        if rec:
-            if name and rec.controller_name != name:
-                rec.write({"controller_name": name})
-            return rec
-        return Controller.create({"controller_id": code, "controller_name": name or code, "status": "online", "connected": True})
-
-    @api.model
-    def _find_or_create_device(self, controller, item):
-        serial = str(item.get("device_serial") or "").strip()
-        code = str(item.get("device_code") or serial or "RFID-READER").strip()
-        Device = self.env["nsp.device"].sudo()
-        device = Device.search([("serial_number", "=", serial)], limit=1) if serial else Device.browse()
-        if not device:
-            device = Device.search([("device_code", "=", code)], limit=1)
-        vals = {"device_code": code, "device_name": item.get("device_name") or code, "device_type": False, "serial_number": serial or code, "controller_id": controller.id if controller else False, "status": "online", "managed": True}
-        if item.get("device_type") and hasattr(Device, "_device_type_vals_from_report"):
-            vals.update(Device._device_type_vals_from_report(item.get("device_type")))
-        if device:
-            device.write({k: v for k, v in vals.items() if v not in (False, None, "")})
-            return device
-        return Device.create(vals)
-
+    # --------------------------- pull application ---------------------
     @api.model
     def _card(self, tid, card_type):
-        tid = str(tid or "").strip()
+        tid = str(tid or "").strip().upper().replace(" ", "")
         if not tid:
             return self.env["nsp.rfid.card"].browse()
         Card = self.env["nsp.rfid.card"].sudo()
         card = Card.search([("tid", "=", tid)], limit=1)
-        if card:
-            if card.card_type != card_type:
-                card.write({"card_type": card_type})
-            return card
-        return Card.create({"tid": tid, "card_type": card_type})
-
-
-    @api.model
-    def _apply_branch(self, item):
-        if not self._table_exists("nsp_branch") or "nsp.branch" not in self.env.registry.models:
-            raise UserError(_("Branch model is not ready. Upgrade NSP Gatekeeper before running Branch sync."))
-        Branch = self.env["nsp.branch"].sudo()
-        code = str(item.get("branch_code") or item.get("code") or item.get("record_key") or item.get("key") or "").strip().upper()
-        if not code:
-            raise UserError(_("Branch Code is required."))
-        branch = Branch.search([("code", "=", code)], limit=1)
-        vals = {
-            "code": code,
-            "name": item.get("branch_name") or item.get("name") or code,
-            "timezone": item.get("timezone") or item.get("branch_timezone") or "Asia/Ho_Chi_Minh",
-            "status": item.get("status") or "active",
-            "note": item.get("note"),
-        }
-        vals = {k: v for k, v in vals.items() if v not in (None, "")}
-        return branch.write(vals) and branch if branch else Branch.create(vals)
-
-    @api.model
-    def _apply_card(self, item):
-        tid = str(item.get("tid") or item.get("record_key") or "").strip()
-        card_type = item.get("card_type") or ("vehicle_card" if item.get("owner_type") == "vehicle" else "user_card" if item.get("owner_type") == "person" else False)
-        if card_type not in ("vehicle_card", "user_card"):
-            raise UserError(_("card_type must be vehicle_card or user_card."))
-        if not tid:
-            raise UserError(_("TID is required."))
-        Card = self.env["nsp.rfid.card"].sudo()
-        card = Card.search([("tid", "=", tid)], limit=1)
-        vals = {"tid": tid, "card_type": card_type, "note": item.get("note")}
-        vals = {k: v for k, v in vals.items() if v not in (None, "")}
+        vals = {"tid": tid, "card_type": card_type}
         if card:
             card.write(vals)
             return card
         return Card.create(vals)
 
-    @api.model
-    def _apply_user(self, item):
-        User = self.env["nsp.user"].sudo().with_context(active_test=False)
-        user_code = str(item.get("user_code") or item.get("employee_id") or item.get("employee_code") or item.get("hr_code") or item.get("record_key") or item.get("key") or "").strip()
-        name = item.get("name") or item.get("employee_name") or user_code or "User"
-        user = User.search([("user_code", "=", user_code)], limit=1) if user_code else User.browse()
-        if not user:
-            user = User.search([("name", "=", name)], limit=1)
-        vals = {"name": name}
-        if user_code:
-            vals["user_code"] = user_code
-        if "active" in User._fields and item.get("active") is not None:
-            vals["active"] = bool(item.get("active"))
-        if item.get("email") or item.get("work_email"):
-            vals["email"] = item.get("email") or item.get("work_email")
-        if item.get("phone") or item.get("work_phone"):
-            vals["phone"] = item.get("phone") or item.get("work_phone")
-        if item.get("pin"):
-            vals["pin"] = item.get("pin")
-        user = user.write(vals) and user if user else User.create(vals)
-        card_items = list(item.get("cards") or [])
-        for tid in item.get("user_tids") or []:
-            if tid and not any(c.get("tid") == tid for c in card_items if isinstance(c, dict)):
-                card_items.append({"tid": tid, "state": "active"})
-        for card_item in card_items:
-            tid = card_item.get("tid") if isinstance(card_item, dict) else card_item
-            card = self._card(tid, "user_card")
-            if not card:
-                continue
-            Line = self.env["nsp.user.card"].sudo()
-            line = Line.search([("user_id", "=", user.id), ("card_id", "=", card.id)], limit=1)
-            vals = {"user_id": user.id, "card_id": card.id, "state": (card_item.get("state") if isinstance(card_item, dict) else "active") or "active", "note": card_item.get("note") if isinstance(card_item, dict) else False}
-            if line:
-                line.write(vals)
-            else:
-                Line.create(vals)
-        return user
+    def _find_or_create_controller(self, code, name=False):
+        self.ensure_one()
+        code = str(code or "").strip().upper()
+        if not code:
+            return self.env["nsp.controller"].browse()
+        edge = self._require_edge_server_record()
+        Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
+        controller = Controller.search([("controller_id", "=", code)], limit=1)
+        vals = {
+            "controller_name": name or (controller.controller_name if controller else code),
+            "edge_server_id": edge.id,
+            "active": True,
+        }
+        if controller:
+            controller.write(vals)
+            return controller
+        vals["controller_id"] = code
+        return Controller.create(vals)
 
     @api.model
-    def _get_or_create_named(self, model_name, name):
-        name = str(name or "").strip()
-        if not name:
-            return self.env[model_name].browse()
-        Model = self.env[model_name].sudo()
-        rec = Model.search([("name", "=", name)], limit=1)
-        return rec or Model.create({"name": name})
+    def _apply_branch(self, item):
+        code = str(item.get("branch_code") or "").strip().upper()
+        if not code:
+            raise UserError(_("Branch Code is required."))
+        Branch = self.env["nsp.branch"].sudo().with_context(active_test=False)
+        branch = Branch.search([("code", "=", code)], limit=1)
+        vals = {
+            "code": code,
+            "name": item.get("branch_name") or code,
+            "timezone": item.get("timezone") or "Asia/Ho_Chi_Minh",
+            "status": "active" if bool(item.get("active", True)) else "inactive",
+        }
+        if branch:
+            branch.write(vals)
+            return branch
+        return Branch.create(vals)
+
+    @api.model
+    def _apply_user(self, item):
+        code = str(item.get("user_code") or "").strip()
+        if not code:
+            raise UserError(_("User Code is required."))
+        User = self.env["nsp.user"].sudo().with_context(active_test=False)
+        user = User.search([("user_code", "=", code)], limit=1)
+        vals = {"user_code": code, "name": item.get("name") or code, "active": bool(item.get("active", True))}
+        if user:
+            user.write(vals)
+            return user
+        return User.create(vals)
+
+    @api.model
+    def _find_vehicle(self, code):
+        code = str(code or "").strip()
+        Vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False)
+        if not code:
+            return Vehicle.browse()
+        for field_name in ("vehicle_code", "code"):
+            if field_name in Vehicle._fields:
+                record = Vehicle.search([(field_name, "=", code)], limit=1)
+                if record:
+                    return record
+        return Vehicle.search([("license_plate", "=", code)], limit=1)
 
     @api.model
     def _apply_vehicle(self, item):
-        Vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False)
-        plate = str(item.get("license_plate") or item.get("record_key") or item.get("key") or "").strip()
-        if not plate:
-            raise UserError(_("Vehicle license_plate is required."))
-        owner_code = item.get("owner_user_code") or item.get("owner_hr_code") or item.get("owner_employee_id") or ("OWNER-%s" % plate)
-        owner = self._apply_user({"user_code": owner_code, "employee_id": owner_code, "name": item.get("owner_name") or owner_code, "active": True, "cards": []})
-        vehicle = Vehicle.search([("license_plate", "=", plate)], limit=1)
-        vals = {"license_plate": plate, "owner_id": owner.id, "state": item.get("state") or "approved"}
-        vehicle_type_name = item.get("vehicle_type_name") or item.get("vehicle_type")
-        if vehicle_type_name:
-            vals["vehicle_type_id"] = self._get_or_create_named("nsp.vehicle.type", vehicle_type_name).id
-        if item.get("brand_name") or item.get("brand"):
-            vals["brand_id"] = self._get_or_create_named("nsp.vehicle.brand", item.get("brand_name") or item.get("brand")).id
-        if item.get("model_name") or item.get("model"):
-            vals["model_id"] = self._get_or_create_named("nsp.vehicle.model", item.get("model_name") or item.get("model")).id
-        if item.get("color_name") or item.get("color"):
-            vals["color_id"] = self._get_or_create_named("nsp.vehicle.color", item.get("color_name") or item.get("color")).id
-        vehicle = vehicle.write({k: v for k, v in vals.items() if v not in (None, "")}) and vehicle if vehicle else Vehicle.create(vals)
-        card_items = list(item.get("cards") or [])
-        for tid in item.get("vehicle_tids") or []:
-            if tid and not any(c.get("tid") == tid for c in card_items if isinstance(c, dict)):
-                card_items.append({"tid": tid, "state": "active"})
-        if item.get("tid") and not any(c.get("tid") == item.get("tid") for c in card_items if isinstance(c, dict)):
-            card_items.append({"tid": item.get("tid"), "state": "active"})
-        for card_item in card_items:
-            tid = card_item.get("tid") if isinstance(card_item, dict) else card_item
-            card = self._card(tid, "vehicle_card")
-            if not card:
-                continue
-            Line = self.env["nsp.vehicle.card"].sudo()
-            line = Line.search([("vehicle_id", "=", vehicle.id), ("card_id", "=", card.id)], limit=1)
-            vals = {"vehicle_id": vehicle.id, "card_id": card.id, "state": (card_item.get("state") if isinstance(card_item, dict) else "active") or "active", "note": card_item.get("note") if isinstance(card_item, dict) else False}
-            if line:
-                line.write(vals)
-            else:
-                Line.create(vals)
-        return vehicle
+        code = str(item.get("vehicle_code") or item.get("license_plate") or "").strip()
+        plate = str(item.get("license_plate") or code).strip()
+        if not code or not plate:
+            raise UserError(_("Vehicle Code and License Plate are required."))
+        vehicle = self._find_vehicle(code)
+        owner_code = str(item.get("owner_user_code") or "").strip()
+        owner = self.env["nsp.user"].sudo().search([("user_code", "=", owner_code)], limit=1) if owner_code else self.env["nsp.user"].browse()
+        if not owner:
+            owner = self._apply_user({"user_code": owner_code or ("OWNER-%s" % code), "name": owner_code or code, "active": True})
+        vals = {
+            "license_plate": plate,
+            "owner_id": owner.id,
+            "state": "approved" if bool(item.get("active", True)) else "pending",
+        }
+        for field_name in ("vehicle_code", "code"):
+            if field_name in self.env["nsp.vehicle"]._fields:
+                vals[field_name] = code
+                break
+        if vehicle:
+            vehicle.write(vals)
+            return vehicle
+        return self.env["nsp.vehicle"].sudo().create(vals)
 
     @api.model
-    def _apply_gate(self, item):
-        if not self._table_exists("nsp_branch") or "nsp.branch" not in self.env.registry.models:
-            raise UserError(_("Branch model is not ready. Upgrade NSP Gatekeeper before syncing Gates."))
-        Branch = self.env["nsp.branch"].sudo()
-        branch_code = str(item.get("branch_code") or "DEFAULT").strip().upper()
-        branch = Branch.search([("code", "=", branch_code)], limit=1)
-        branch_tz = item.get("branch_timezone") or item.get("timezone")
-        if not branch:
-            branch = Branch.create({
-                "code": branch_code,
-                "name": item.get("branch_name") or branch_code,
-                "status": "active",
-                "timezone": branch_tz or "Asia/Ho_Chi_Minh",
-            })
-        else:
-            branch_vals = {}
-            if item.get("branch_name"):
-                branch_vals["name"] = item.get("branch_name")
-            if branch_tz:
-                branch_vals["timezone"] = branch_tz
-            if branch_vals:
-                branch.write(branch_vals)
-
-        Gate = self.env["nsp.gate"].sudo()
-        code = str(item.get("gate_code") or item.get("record_key") or item.get("key") or "").strip().upper()
-        if not code:
-            raise UserError(_("Gate code is required."))
-        gate = Gate.search([("code", "=", code)], limit=1)
-
-        controller_codes = []
-        controller_names = {}
-
-        def _add_controller_ref(code, name=False):
-            code = str(code or "").strip()
-            if not code:
-                return
-            if code not in controller_codes:
-                controller_codes.append(code)
-            if name and not controller_names.get(code):
-                controller_names[code] = name
-
-        for code in item.get("controller_codes") or []:
-            _add_controller_ref(code)
-        for controller_item in item.get("controllers") or []:
-            if isinstance(controller_item, dict):
-                _add_controller_ref(
-                    controller_item.get("controller_id") or controller_item.get("controller_code"),
-                    controller_item.get("controller_name") or controller_item.get("name"),
-                )
-            else:
-                _add_controller_ref(controller_item)
-        _add_controller_ref(item.get("controller_code"), item.get("controller_name"))
-
-        # Lane antenna rules may contain the only controller reference when the
-        # source server allows Cloud-side Gate/Device/Antenna pre-configuration.
-        for lane_item in item.get("lanes") or []:
-            for rule in lane_item.get("antenna_rules") or []:
-                if isinstance(rule, dict):
-                    _add_controller_ref(
-                        rule.get("controller_id") or rule.get("controller_code"),
-                        rule.get("controller_name"),
-                    )
-
-        controllers = self.env["nsp.controller"].sudo().browse()
-        for controller_code in controller_codes:
-            controller = self._find_or_create_controller(controller_code, controller_names.get(controller_code) or item.get("controller_name"))
-            controllers |= controller
-
-        vals = {
-            "code": code,
-            "name": item.get("gate_name") or code,
-            "branch_id": branch.id,
-            "gate_status": item.get("gate_status") or "active",
-            "operation_state": item.get("operation_state") or "draft",
-            "detection_window_ms": int(item.get("detection_window_ms") or 1500),
-            "sequence_required": bool(item.get("sequence_required", True)),
-            "entry_requires_user_tid": bool(item.get("entry_requires_user_tid")),
-            "exit_requires_user_tid": bool(item.get("exit_requires_user_tid", True)),
-        }
-        if controllers:
-            vals["controller_ids"] = [(6, 0, controllers.ids)]
-        gate = gate.write(vals) and gate if gate else Gate.create(vals)
-
-        lane_items = list(item.get("lanes") or [])
-        if lane_items:
-            Lane = self.env["nsp.gate.lane"].sudo()
-            Rule = self.env["nsp.gate.lane.antenna.mapping"].sudo()
-            for lane_item in lane_items:
-                lane_code = str(lane_item.get("lane_code") or lane_item.get("code") or "").strip().upper()
-                if not lane_code:
-                    continue
-                lane = Lane.search([("gate_id", "=", gate.id), ("code", "=", lane_code)], limit=1)
-                lane_vals = {
-                    "gate_id": gate.id,
-                    "code": lane_code,
-                    "name": lane_item.get("lane_name") or lane_item.get("name") or lane_code,
-                    "lane_no": int(lane_item.get("lane_no") or 1),
-                    "direction": lane_item.get("direction") if lane_item.get("direction") in ("entry", "exit", "both") else "entry",
-                    "sequence": int(lane_item.get("sequence") or 10),
-                    "required_antenna_count": int(lane_item.get("required_antenna_count") or 1),
-                    "active": bool(lane_item.get("active", True)),
-                }
-                lane = lane.write(lane_vals) and lane if lane else Lane.create(lane_vals)
-                if lane_item.get("antenna_rules"):
-                    lane.antenna_rule_ids.unlink()
-                    for rule in lane_item.get("antenna_rules") or []:
-                        controller_code = rule.get("controller_id") or rule.get("controller_code") or (controller_codes[0] if controller_codes else False)
-                        controller = self._find_or_create_controller(controller_code, rule.get("controller_name") or controller_names.get(controller_code)) if controller_code else (controllers[:1] if controllers else self.env["nsp.controller"].browse())
-                        if controller and controller not in gate.controller_ids:
-                            # Keep Gate configuration consistent before creating the
-                            # Lane/Antenna mapping. The mapping constraint requires
-                            # the physical antenna controller to be one of the Gate
-                            # Controllers; Cloud-side Gate Config Sync may infer this
-                            # controller only from the antenna rule payload.
-                            gate.write({"controller_ids": [(4, controller.id)]})
-                            controllers |= controller
-                        device = self._find_or_create_device(controller, rule) if controller else self.env["nsp.device"].browse()
-                        ant_no = int(rule.get("antenna_id") or 1)
-                        antenna = self.env["nsp.device.antenna"].sudo().search([("device_id", "=", device.id), ("antenna_id", "=", ant_no)], limit=1)
-                        if not antenna and device:
-                            antenna = self.env["nsp.device.antenna"].sudo().create({"device_id": device.id, "antenna_id": ant_no, "is_active": True})
-                        if antenna:
-                            Rule.create({
-                                "gate_id": gate.id,
-                                "lane_id": lane.id,
-                                "antenna_ref_id": antenna.id,
-                                "antenna_direction": rule.get("antenna_direction") or "auto",
-                                "tag_role": rule.get("tag_role") if rule.get("tag_role") in ("vehicle_tid", "user_tid", "both") else "vehicle_tid",
-                                "sequence_order": int(rule.get("sequence_order") or 10),
-                                "required": bool(rule.get("required", True)),
-                                "is_active": bool(rule.get("is_active", True)),
-                            })
-        preserve = {field: item.get(field) for field in ("config_revision", "config_hash", "config_state", "applied_config_revision", "applied_config_hash") if item.get(field) not in (None, "")}
-        if preserve:
-            gate.write(preserve)
-        return gate
+    def _assign_card(self, card, owner_type, owner_code, active=True):
+        UserLine = self.env["nsp.user.card"].sudo()
+        VehicleLine = self.env["nsp.vehicle.card"].sudo()
+        user_lines = UserLine.search([("card_id", "=", card.id)])
+        vehicle_lines = VehicleLine.search([("card_id", "=", card.id)])
+        user_lines.filtered(lambda line: line.state == "active").action_revoke()
+        vehicle_lines.filtered(lambda line: line.state == "active").action_revoke()
+        if not active or owner_type == "unassigned":
+            return
+        if owner_type == "user":
+            owner = self.env["nsp.user"].sudo().search([("user_code", "=", owner_code)], limit=1)
+            if not owner:
+                raise UserError(_("Card owner user %s was not found.") % (owner_code or "-"))
+            line = user_lines.filtered(lambda value: value.user_id == owner)[:1]
+            vals = {"user_id": owner.id, "card_id": card.id, "state": "active", "revoked_at": False}
+            line.write(vals) if line else UserLine.create(vals)
+            return
+        if owner_type == "vehicle":
+            owner = self._find_vehicle(owner_code)
+            if not owner:
+                raise UserError(_("Card owner vehicle %s was not found.") % (owner_code or "-"))
+            line = vehicle_lines.filtered(lambda value: value.vehicle_id == owner)[:1]
+            vals = {"vehicle_id": owner.id, "card_id": card.id, "state": "active", "revoked_at": False}
+            line.write(vals) if line else VehicleLine.create(vals)
+            return
+        raise UserError(_("Invalid card owner type: %s") % (owner_type or "-"))
 
     @api.model
-    def _apply_log(self, item):
-        controller = self._find_or_create_controller(item.get("controller_code"), item.get("controller_name"))
-        Gate = self.env["nsp.gate"].sudo()
-        gate = Gate.search([("code", "=", item.get("gate_code"))], limit=1) if item.get("gate_code") else Gate.browse()
-        vehicle = self.env["nsp.vehicle"].sudo().search([("license_plate", "=", item.get("license_plate"))], limit=1) if item.get("license_plate") else self.env["nsp.vehicle"].browse()
-        Log = self.env["nsp.parking.transaction"].sudo()
-        uid = item.get("transaction_uid") or item.get("local_id") or item.get("record_key")
-        if not uid:
-            uid = "%s:%s:%s:%s" % (controller.controller_id, item.get("gate_code") or "", item.get("time_entered") or "", item.get("vehicle_tid") or "")
-        lane = self.env["nsp.gate.lane"].sudo().search([("gate_id", "=", gate.id), ("code", "=", str(item.get("lane_code") or "").strip().upper())], limit=1) if gate and item.get("lane_code") else self.env["nsp.gate.lane"].browse()
-        vals = {
-            "controller_id": controller.id,
-            "gate_id": gate.id if gate else False,
-            "branch_id": gate.branch_id.id if gate and gate.branch_id else False,
-            "gate_code": item.get("gate_code"),
-            "lane_id": lane.id if lane else False,
-            "lane_code": item.get("lane_code"),
-            "transaction_uid": uid,
-            "controller_local_id": item.get("controller_local_id") or item.get("local_id"),
-            "time_entered": item.get("time_entered") or fields.Datetime.now(),
-            "direction": item.get("direction") or "entry",
-            "status": item.get("status") or "allowed",
-            "error_message": item.get("error_message"),
-            "vehicle_id": vehicle.id if vehicle else False,
-            "license_plate": item.get("license_plate"),
-            "vehicle_tid": item.get("vehicle_tid"),
-            "user_tid": item.get("user_tid"),
-            "device_serial": item.get("device_serial"),
-            "antenna_id": int(item.get("antenna_id") or 0) or False,
-            "antenna_sequence": item.get("antenna_sequence"),
-            "effective_direction": item.get("effective_direction"),
-            "config_revision": item.get("config_revision") or False,
-        }
-        existing = Log.search([("transaction_uid", "=", uid)], limit=1)
-        if existing:
-            existing.write(vals)
-            return existing
-        return Log.create(vals)
+    def _apply_card(self, item):
+        tid = str(item.get("card_uid") or "").strip().upper().replace(" ", "")
+        card_type = item.get("card_type")
+        if not tid:
+            raise UserError(_("Card UID is required."))
+        if card_type not in ("vehicle_card", "user_card"):
+            raise UserError(_("Invalid Card Type."))
+        card = self._card(tid, card_type)
+        self._assign_card(
+            card,
+            str(item.get("owner_type") or "unassigned").strip().lower(),
+            str(item.get("owner_code") or "").strip(),
+            active=bool(item.get("active", True)),
+        )
+        return card
 
     @api.model
     def _apply_vehicle_borrow(self, item):
-        if "nsp.vehicle.borrow.request" not in self.env.registry.models:
-            raise UserError(_("Vehicle Borrow model is not ready. Upgrade NSP Vehicle before syncing borrow requests."))
-        Borrow = self.env["nsp.vehicle.borrow.request"].sudo()
-        code = str(item.get("borrow_code") or item.get("record_key") or item.get("borrow_id") or "").strip()
+        code = str(item.get("borrow_uid") or "").strip()
         if not code:
-            raise UserError(_("Borrow code is required."))
+            raise UserError(_("Borrow UID is required."))
+        Borrow = self.env["nsp.vehicle.borrow.request"].sudo()
         borrow = Borrow.search([("borrow_code", "=", code)], limit=1)
-        Vehicle = self.env["nsp.vehicle"].sudo()
-        vehicle = Vehicle.browse(int(item.get("vehicle_id"))) if str(item.get("vehicle_id") or "").isdigit() else Vehicle.browse()
-        if not vehicle and item.get("license_plate"):
-            vehicle = Vehicle.search([("license_plate", "=", item.get("license_plate"))], limit=1)
-        borrower = self.env["nsp.user"].sudo().search([("user_code", "=", item.get("borrower_employee_id") or item.get("borrower_user_code") or item.get("borrower_user_id"))], limit=1)
+        vehicle = self._find_vehicle(item.get("vehicle_code"))
+        borrower = self.env["nsp.user"].sudo().search([("user_code", "=", item.get("borrower_user_code"))], limit=1)
         if not vehicle or not borrower:
-            raise UserError(_("Vehicle and borrower are required for borrow sync."))
+            raise UserError(_("Vehicle and borrower must exist before Vehicle Borrow sync."))
+        valid_from = self._remote_datetime(item.get("valid_from")) or fields.Datetime.now()
+        valid_to = self._remote_datetime(item.get("valid_to")) or fields.Datetime.to_string(
+            fields.Datetime.to_datetime(valid_from) + timedelta(days=1)
+        )
+        if fields.Datetime.to_datetime(valid_to) <= fields.Datetime.to_datetime(valid_from):
+            raise UserError(_("Vehicle Borrow valid_to must be later than valid_from."))
+        is_active = bool(item.get("active", True))
         vals = {
             "vehicle_id": vehicle.id,
             "borrower_id": borrower.id,
-            "valid_from": item.get("valid_from") or fields.Datetime.now(),
-            "valid_to": item.get("valid_to") or fields.Datetime.now(),
-            "state": item.get("state") or "approved",
-            "returned_at": item.get("returned_at") or False,
+            "valid_from": valid_from,
+            "valid_to": valid_to,
+            "state": "approved" if is_active else "returned",
+            "returned_at": False if is_active else fields.Datetime.now(),
         }
         if borrow:
             borrow.write(vals)
@@ -1066,281 +716,636 @@ class NspSyncJob(models.Model):
         vals["borrow_code"] = code
         return Borrow.create(vals)
 
-    @api.model
+    def _find_or_create_device(self, controller, serial_number):
+        self.ensure_one()
+        serial = str(serial_number or "").strip().upper()
+        if not serial:
+            raise UserError(_("Reader Serial Number is required."))
+        Device = self.env["nsp.device"].sudo().with_context(active_test=False)
+        device = Device.search([("serial_number", "=", serial)], limit=1)
+        reader_type = self.env.ref("nsp_gatekeeper.nsp_device_type_rfid_reader", raise_if_not_found=False)
+        if not reader_type:
+            reader_type = self.env["nsp.device.type"].sudo().search([("code", "=", "rfid_reader")], limit=1)
+        vals = {
+            "controller_id": controller.id,
+            "managed": True,
+            "device_code": serial,
+            "device_name": device.device_name if device and device.device_name else serial,
+            "device_type_id": reader_type.id if reader_type else False,
+        }
+        if device:
+            device.write(vals)
+            return device
+        vals["serial_number"] = serial
+        return Device.create(vals)
+
+    def _apply_measurement_config(self, item):
+        self.ensure_one()
+        uid = str(item.get("measurement_session_uid") or "").strip().upper()
+        code = str(item.get("measurement_code") or uid).strip().upper()
+        controller_code = str(item.get("controller_code") or "").strip().upper()
+        if not uid or not controller_code:
+            raise UserError(_("Measurement Session UID and Controller Code are required."))
+        status = str(item.get("measurement_status") or "ready").strip().lower()
+        if status not in ("ready", "measuring", "completed", "cancelled"):
+            raise UserError(_("Invalid Measurement Session status: %s") % status)
+        controller = self._find_or_create_controller(controller_code)
+        Session = self.env["nsp.measurement.session"].sudo().with_context(measurement_sync=True)
+        session = Session.search([("measurement_session_uid", "=", uid)], limit=1)
+        vals = {
+            "measurement_session_uid": uid,
+            "measurement_code": code,
+            "controller_id": controller.id,
+            "measurement_status": status,
+            "planned_start_at": self._remote_datetime(item.get("planned_start_at")),
+            "planned_end_at": self._remote_datetime(item.get("planned_end_at")),
+            "note": str(item.get("note") or "").strip() or False,
+        }
+        if session:
+            session.write(vals)
+        else:
+            session = Session.create(vals)
+
+        antenna_refs = self.env["nsp.device.antenna"].sudo().browse()
+        seen = set()
+        for device_item in item.get("measurement_antennas") or []:
+            if not isinstance(device_item, dict):
+                raise UserError(_("Measurement Antennas must contain objects."))
+            serial = str(device_item.get("serial_number") or "").strip().upper()
+            numbers = device_item.get("antennas")
+            if not serial or not isinstance(numbers, list) or not numbers:
+                raise UserError(_("Each Measurement Reader requires serial_number and antennas."))
+            device = self._find_or_create_device(controller, serial)
+            for raw_number in numbers:
+                try:
+                    antenna_no = int(raw_number)
+                except Exception as exc:
+                    raise UserError(_("Invalid Measurement Antenna number.")) from exc
+                key = (serial, antenna_no)
+                if antenna_no <= 0 or key in seen:
+                    raise UserError(_("Invalid or duplicate Measurement Antenna %s/%s.") % (serial, raw_number))
+                seen.add(key)
+                Antenna = self.env["nsp.device.antenna"].sudo()
+                antenna = Antenna.search([("device_id", "=", device.id), ("antenna_id", "=", antenna_no)], limit=1)
+                if not antenna:
+                    antenna = Antenna.create({
+                        "device_id": device.id,
+                        "antenna_id": antenna_no,
+                        "status": "offline",
+                        "is_active": True,
+                    })
+                antenna_refs |= antenna
+        if not antenna_refs:
+            raise UserError(_("Measurement Configuration has no antennas."))
+        session.antenna_ids.with_context(measurement_sync=True).unlink()
+        self.env["nsp.measurement.antenna"].sudo().with_context(measurement_sync=True).create([
+            {"session_id": session.id, "antenna_ref_id": antenna.id}
+            for antenna in antenna_refs
+        ])
+        return session
+
+    def _apply_parking_config(self, item):
+        self.ensure_one()
+        branch_code = str(item.get("branch_code") or "").strip().upper()
+        area_code = str(item.get("parking_area_code") or "").strip().upper()
+        if not branch_code or not area_code:
+            raise UserError(_("Branch Code and Parking Area Code are required."))
+        branch = self.env["nsp.branch"].sudo().search([("code", "=", branch_code)], limit=1)
+        if not branch:
+            branch = self._apply_branch({"branch_code": branch_code, "branch_name": branch_code, "active": True})
+
+        Parking = self.env["nsp.parking.area"].sudo().with_context(active_test=False)
+        parking = Parking.search([("code", "=", area_code)], limit=1)
+        vals = {
+            "code": area_code,
+            "name": item.get("parking_area_name") or area_code,
+            "branch_id": branch.id,
+            "status": "active" if bool(item.get("active", True)) else "blocked",
+            "operation_state": "operational" if bool(item.get("operational")) else "draft",
+        }
+        parking.write(vals) if parking else None
+        if not parking:
+            parking = Parking.create(vals)
+
+        Lane = self.env["nsp.parking.lane"].sudo().with_context(active_test=False)
+        Group = self.env["nsp.parking.lane.antenna.group"].sudo()
+        Mapping = self.env["nsp.parking.lane.antenna.mapping"].sudo()
+        incoming_codes = []
+        lanes_data = item.get("lanes") or []
+        if not isinstance(lanes_data, list):
+            raise UserError(_("Parking lanes must be an array."))
+        for lane_index, lane_item in enumerate(lanes_data, start=1):
+            if not isinstance(lane_item, dict):
+                raise UserError(_("Parking lanes must contain objects."))
+            lane_code = str(lane_item.get("lane_code") or "").strip().upper()
+            controller_code = str(lane_item.get("controller_code") or "").strip().upper()
+            if not lane_code or not controller_code:
+                raise UserError(_("Each Parking Lane requires lane_code and controller_code."))
+            incoming_codes.append(lane_code)
+            controller = self._find_or_create_controller(controller_code)
+            lane = Lane.search([("parking_area_id", "=", parking.id), ("code", "=", lane_code)], limit=1)
+            lane_type = lane_item.get("lane_type") if lane_item.get("lane_type") in ("one_way", "two_way") else "one_way"
+            direction = lane_item.get("direction")
+            if lane_type == "two_way":
+                direction = "both"
+            elif direction not in ("entry", "exit"):
+                direction = "entry"
+            lane_vals = {
+                "parking_area_id": parking.id,
+                "code": lane_code,
+                "name": lane_item.get("lane_name") or lane_code,
+                "controller_id": controller.id,
+                "lane_no": int(lane_item.get("lane_no") or lane_index),
+                "sequence": int(lane_item.get("sequence") or lane_index * 10),
+                "lane_type": lane_type,
+                "direction": direction,
+                "detection_window_ms": int(lane_item.get("detection_window_ms") or parking.detection_window_ms or 1500),
+                "required_vehicle_tid": bool(lane_item.get("required_vehicle_tid", True)),
+                "required_user_tid": bool(lane_item.get("required_user_tid", False)),
+                "active": True,
+            }
+            lane.write(lane_vals) if lane else None
+            if not lane:
+                lane = Lane.create(lane_vals)
+            lane.antenna_group_ids.unlink()
+
+            groups_data = lane_item.get("antenna_groups") or []
+            if not isinstance(groups_data, list):
+                raise UserError(_("Antenna groups must be an array."))
+            for group_index, group_item in enumerate(groups_data, start=1):
+                if not isinstance(group_item, dict):
+                    raise UserError(_("Antenna groups must contain objects."))
+                group_direction = str(group_item.get("direction") or "").strip().lower()
+                if group_direction not in ("entry", "exit"):
+                    raise UserError(_("Antenna Group direction must be entry or exit."))
+                detection_mode = group_item.get("detection_mode")
+                if detection_mode not in ("any", "sequential"):
+                    detection_mode = "any"
+                group = Group.create({
+                    "lane_id": lane.id,
+                    "direction": group_direction,
+                    "detection_mode": detection_mode,
+                    "sequence": int(group_item.get("sequence") or group_index * 10),
+                    "active": True,
+                })
+                antennas_data = group_item.get("antennas") or []
+                if not isinstance(antennas_data, list):
+                    raise UserError(_("Antenna mappings must be an array."))
+                for antenna_index, antenna_item in enumerate(antennas_data, start=1):
+                    if not isinstance(antenna_item, dict):
+                        raise UserError(_("Antenna mappings must contain objects."))
+                    serial = str(antenna_item.get("serial_number") or "").strip().upper()
+                    antenna_no = int(antenna_item.get("antenna_no") or 0)
+                    if not serial or antenna_no <= 0:
+                        raise UserError(_("Each antenna mapping requires serial_number and antenna_no."))
+                    device = self._find_or_create_device(controller, serial)
+                    Antenna = self.env["nsp.device.antenna"].sudo()
+                    antenna = Antenna.search([("device_id", "=", device.id), ("antenna_id", "=", antenna_no)], limit=1)
+                    if not antenna:
+                        antenna = Antenna.create({
+                            "device_id": device.id,
+                            "antenna_id": antenna_no,
+                            "status": "offline",
+                            "is_active": True,
+                        })
+                    sequence_no = int(antenna_item.get("sequence_no") or antenna_index) if detection_mode == "sequential" else 0
+                    tag_role = antenna_item.get("tag_role")
+                    if tag_role not in ("vehicle_tid", "user_tid", "both"):
+                        tag_role = "vehicle_tid"
+                    Mapping.create({
+                        "antenna_group_id": group.id,
+                        "antenna_ref_id": antenna.id,
+                        "tag_role": tag_role,
+                        "sequence_no": sequence_no,
+                        "is_active": True,
+                    })
+        stale_domain = [("parking_area_id", "=", parking.id)]
+        if incoming_codes:
+            stale_domain.append(("code", "not in", incoming_codes))
+        Lane.search(stale_domain).write({"active": False})
+        return parking
+
     def _apply_items(self, kind, items):
+        self.ensure_one()
         results, failed = [], []
         Record = self.env["nsp.sync.record"].sudo()
-        if kind == "pairing_decision":
-            edge_server = self.auth_id.edge_server_id
-            if not edge_server:
-                raise UserError(_("Select Edge Server Identity before pulling Controller Pairing Decisions."))
-            Pairing = self.env["nsp.controller.pairing.request"].sudo()
-            for idx, item in enumerate(items if isinstance(items, list) else []):
-                key = str((item or {}).get("pairing_request_uid") or "").strip() if isinstance(item, dict) else ""
-                try:
-                    if not key:
-                        raise UserError(_("pairing_request_uid is required."))
-                    pairing = Pairing.search([
-                        ("pairing_request_uid", "=", key),
-                        ("edge_server_id", "=", edge_server.id),
-                    ], limit=1)
-                    if not pairing:
-                        raise UserError(_("Pairing request was not found on this Edge Server."))
-                    pairing.apply_cloud_decision(item)
-                    Record.mark_result(
-                        sync_job=self,
-                        action_code=self.sync_action_code, action_name=self.sync_action_name,
-                        route_suffix=self.route_suffix, record=pairing, record_key=key,
-                        status="synced", message="Pairing decision applied by NSP Sync job.",
-                        operation="pull",
-                    )
-                    results.append({
-                        "index": idx, "record_key": key,
-                        "record_model": pairing._name, "record_id": pairing.id,
-                        "success": True,
-                    })
-                except Exception as exc:
-                    failed.append({"index": idx, "record_key": key, "error": str(exc)})
-            return results, failed
-        for idx, item in enumerate(items if isinstance(items, list) else []):
+        handlers = {
+            "branch": self._apply_branch,
+            "card": self._apply_card,
+            "user": self._apply_user,
+            "vehicle": self._apply_vehicle,
+            "vehicle_borrow": self._apply_vehicle_borrow,
+            "parking_config": self._apply_parking_config,
+            "measurement_config": self._apply_measurement_config,
+        }
+        handler = handlers.get(kind)
+        if not handler:
+            raise UserError(_("Unsupported pull route: %s") % self.route_suffix)
+        for index, item in enumerate(items if isinstance(items, list) else []):
+            key = self._record_key_from_item(item)
             try:
-                if kind == "branch":
-                    rec = self._apply_branch(item); key = rec.code
-                elif kind == "card":
-                    rec = self._apply_card(item); key = rec.tid
-                elif kind == "gate_config":
-                    rec = self._apply_gate(item); key = rec.code
-                elif kind == "user":
-                    rec = self._apply_user(item); key = self._user_key(rec)
-                elif kind == "vehicle":
-                    rec = self._apply_vehicle(item); key = rec.license_plate
-                elif kind == "parking_transaction":
-                    rec = self._apply_log(item); key = rec.transaction_uid
-                elif kind == "measurement":
-                    rec = self.env["nsp.gatekeeper.api.service"].sudo()._apply_measurement_sync_item(item); key = rec.measurement_uid or str(rec.id)
-                elif kind == "vehicle_borrow":
-                    rec = self._apply_vehicle_borrow(item); key = getattr(rec, "sync_record_key", False) or rec.borrow_code
-                else:
-                    raise UserError(_("Unsupported NSP Sync action kind: %s") % kind)
-                Record.mark_result(sync_job=self, action_code=self.sync_action_code, action_name=self.sync_action_name, route_suffix=self.route_suffix, record=rec, record_key=key, status="synced", message="Applied by NSP Sync job.", operation="pull")
-                results.append({"index": idx, "record_key": key, "record_model": rec._name, "record_id": rec.id, "success": True})
+                with self.env.cr.savepoint():
+                    record = handler(item)
+                key = key or record.display_name or str(record.id)
+                Record.mark_result(
+                    sync_job=self,
+                    action_code=self.sync_action_code,
+                    action_name=self.sync_action_name,
+                    route_suffix=self.route_suffix,
+                    record=record,
+                    record_key=key,
+                    status="synced",
+                    message="Applied by Edge Server.",
+                    payload=item,
+                    operation="pull",
+                )
+                results.append({
+                    "index": index,
+                    "record_key": key,
+                    "record_model": record._name,
+                    "record_id": record.id,
+                    "success": True,
+                })
             except Exception as exc:
-                failed.append({"index": idx, "record_key": item.get("record_key") if isinstance(item, dict) else False, "error": str(exc)})
+                message = str(exc)
+                Record.mark_result(
+                    sync_job=self,
+                    action_code=self.sync_action_code,
+                    action_name=self.sync_action_name,
+                    route_suffix=self.route_suffix,
+                    record_key=key or str(index),
+                    status="failed",
+                    message=message,
+                    payload=item,
+                    operation="pull",
+                )
+                failed.append({"index": index, "record_key": key, "error": message})
         return results, failed
 
-    # ---------------------- Core API payload adapters --------------------
-    def _response_payload(self, data):
-        if isinstance(data, dict) and isinstance(data.get("data"), dict):
-            payload = dict(data.get("data") or {})
-            for key, value in data.items():
-                payload.setdefault(key, value)
-            return payload
-        return data if isinstance(data, dict) else {}
-
+    # --------------------------- protocol adapters --------------------
+    @api.model
     def _items_from_response(self, data):
-        payload = self._response_payload(data)
-        kind = self._action_kind()
-        keys_by_kind = {"edge_server_status": ("edge_server", "items"), "device_status": ("devices", "items"), "branch": ("branches", "items"), "card": ("cards", "items"), "user": ("users", "employees", "items"), "vehicle": ("vehicles", "items"), "gate_config": ("gates", "items"), "parking_transaction": ("transactions", "items"), "vehicle_borrow": ("borrows", "vehicle_borrows", "items"), "measurement": ("measurements", "items"), "pairing_decision": ("items",)}
-        for key in keys_by_kind.get(kind, ("items",)):
-            items = payload.get(key)
-            if isinstance(items, dict):
-                return [items]
-            if isinstance(items, list):
-                return items
-        return []
+        items = data.get("items") if isinstance(data, dict) else []
+        if isinstance(items, dict):
+            return [items]
+        return items if isinstance(items, list) else []
 
     def _build_pull_payload(self):
         self.ensure_one()
-        edge_server = self.auth_id.edge_server_id
-        if not edge_server:
-            raise UserError(_("Select Edge Server Identity before pulling Cloud data."))
-        return {
-            "edge_server_code": edge_server.controller_id,
-            "sync_cursor": self.pull_cursor or None,
-            "limit": max(1, min(int(self.batch_size or 100), 1000)),
-        }
+        payload = {"edge_server_code": self.edge_server_code, "limit": self.batch_size}
+        if self.sync_cursor:
+            payload["sync_cursor"] = self.sync_cursor
+        return payload
 
+    @api.model
     def _record_key_from_item(self, item):
         if not isinstance(item, dict):
             return False
-        return item.get("record_key") or item.get("pairing_request_uid") or item.get("controller_code") or item.get("edge_server_code") or item.get("serial_number") or item.get("device_code") or item.get("key") or item.get("branch_code") or item.get("user_code") or item.get("employee_id") or item.get("license_plate") or item.get("borrow_code") or item.get("gate_code") or item.get("measurement_uid") or item.get("local_id") or item.get("transaction_uid") or False
+        for field_name in (
+            "record_key", "card_uid", "borrow_uid", "branch_code", "user_code",
+            "vehicle_code", "license_plate", "parking_area_code", "transaction_uid",
+            "measurement_session_uid", "measurement_uid", "serial_number",
+            "controller_code", "edge_server_code",
+        ):
+            if item.get(field_name):
+                return str(item[field_name])
+        return False
 
-    def _normalize_items_for_remote(self, items):
-        route = (self.route_suffix or "").strip().strip("/")
-        if route in ("parking/logs/push", "parking-transactions/sync"):
-            normalized = []
-            for item in items:
-                payload = dict(item or {})
-                payload.setdefault("local_id", payload.get("controller_local_id") or payload.get("transaction_uid") or payload.get("record_key"))
-                payload.setdefault("time_entered", payload.get("check_time") or payload.get("event_time"))
-                normalized.append(payload)
-            return normalized
-        return items
+    # --------------------------- measurement push ---------------------
+    @api.model
+    def _measurement_event_payload(self, event):
+        payload = {
+            "measurement_uid": event.measurement_uid,
+            "controller_code": event.session_id.controller_id.controller_id,
+            "serial_number": event.serial_number,
+            "antenna_no": int(event.antenna_no),
+            "tid": event.tid,
+            "read_at": self._iso_utc(event.read_at),
+        }
+        if event.rssi_dbm not in (False, None):
+            payload["rssi_dbm"] = float(event.rssi_dbm)
+        return payload
 
-    def _build_push_payload(self, items):
+    def _run_measurement_event_push_once(self):
         self.ensure_one()
-        edge_server = self.auth_id.edge_server_id
-        if not edge_server:
-            raise UserError(_("Select Edge Server Identity before pushing Cloud data."))
-        items = self._normalize_items_for_remote(items)
-        route = (self.route_suffix or "").strip().strip("/")
-        edge_server_code = edge_server.controller_id
-        if route == "edge-server/status":
-            payload = dict(items[0] if items else {})
-            payload["edge_server_code"] = edge_server_code
-            return payload
-        if route == "devices-status/sync":
-            return {"edge_server_code": edge_server_code, "devices": items}
-        if route == "parking-transactions/sync":
-            return {"edge_server_code": edge_server_code, "items": items}
-        if route == "gate-measurement/sync":
-            if not items:
-                return {"edge_server_code": edge_server_code, "measurements": []}
-            session_uid = items[0].get("_measurement_session_uid")
-            run_uid = items[0].get("_measurement_run_uid")
-            measurements = [
-                {key: value for key, value in item.items() if not key.startswith("_")}
-                for item in items
-            ]
-            return {
-                "edge_server_code": edge_server_code,
-                "measurement_session_uid": session_uid,
-                "measurement_run_uid": run_uid,
-                "measurements": measurements,
-            }
-        if route == "controller-pairing-requests/sync":
-            return {"edge_server_code": edge_server_code, "requests": items}
-        return {"edge_server_code": edge_server_code, "items": items}
+        edge = self._require_edge_server_record()
+        Event = self.env["nsp.measurement.event"].sudo()
+        now = fields.Datetime.now()
+        scope = [("session_id.controller_id.edge_server_id", "=", edge.id)]
+        retry_domain = [
+            ("sync_state", "in", ["pending", "failed"]),
+            "|", ("next_retry_at", "=", False), ("next_retry_at", "<=", now),
+        ]
+        first = Event.search(retry_domain + scope, order="id asc", limit=1)
+        if not first:
+            return {"pushed": 0, "failed": 0, "has_more": False, "message": "No Measurement Events to push."}
+        events = Event.search(
+            retry_domain + [("session_id", "=", first.session_id.id), ("run_id", "=", first.run_id.id)],
+            order="id asc",
+            limit=max(1, min(int(self.batch_size or 100), 1000)),
+        )
+        payload = {
+            "edge_server_code": self.edge_server_code,
+            "measurement_session_uid": first.session_id.measurement_session_uid,
+            "measurement_run_uid": first.run_id.measurement_run_uid,
+            "measurements": [self._measurement_event_payload(event) for event in events],
+        }
+        try:
+            data = self._json_or_error(self._post_remote(self.sync_action_id, payload, timeout=120))
+        except Exception:
+            for event in events:
+                retry = int(event.retry_count or 0) + 1
+                event.write({
+                    "sync_state": "failed",
+                    "retry_count": retry,
+                    "next_retry_at": now + timedelta(seconds=min(60 * (2 ** min(retry, 6)), 3600)),
+                })
+            raise
+        rejected_keys = {
+            str(result.get("record_key") or "")
+            for result in (data.get("results") or [])
+            if isinstance(result, dict) and result.get("status") in ("rejected", "failed", "error")
+        }
+        reported_failed = int(data.get("failed") or 0)
+        failed_events = events if reported_failed and not rejected_keys else events.filtered(
+            lambda event: event.measurement_uid in rejected_keys
+        )
+        accepted_events = events - failed_events
+        if accepted_events:
+            accepted_events.write({
+                "sync_state": "synced",
+                "retry_count": 0,
+                "last_sync_at": now,
+                "next_retry_at": False,
+            })
+        for event in failed_events:
+            retry = int(event.retry_count or 0) + 1
+            event.write({
+                "sync_state": "failed",
+                "retry_count": retry,
+                "next_retry_at": now + timedelta(seconds=min(60 * (2 ** min(retry, 6)), 3600)),
+            })
+        if failed_events or reported_failed:
+            raise UserError(_("Cloud rejected %s Measurement Event(s).") % max(len(failed_events), reported_failed))
+        has_more = bool(Event.search_count(retry_domain + scope))
+        self.last_push_at = now
+        return {
+            "pushed": len(accepted_events),
+            "failed": 0,
+            "has_more": has_more,
+            "message": "Pushed %s Measurement Event(s)." % len(accepted_events),
+        }
 
-    # --------------------------- execution ------------------------------
+    @api.model
+    def _measurement_status_payload(self, session):
+        runs = []
+        for run in session.run_ids.sorted(key=lambda value: (value.id,)):
+            item = {
+                "measurement_run_uid": run.measurement_run_uid,
+                "run_status": run.run_status,
+                "measurement_count": int(run.measurement_count or 0),
+            }
+            if run.started_at:
+                item["started_at"] = self._iso_utc(run.started_at)
+            if run.stopped_at:
+                item["stopped_at"] = self._iso_utc(run.stopped_at)
+            runs.append(item)
+        return {
+            "edge_server_code": self.edge_server_code,
+            "measurement_session_uid": session.measurement_session_uid,
+            "measurement_status": session.measurement_status,
+            "runs": runs,
+            "reported_at": self._iso_utc(fields.Datetime.now()),
+        }
+
+    def _run_measurement_status_push_once(self):
+        self.ensure_one()
+        edge = self._require_edge_server_record()
+        limit = max(1, min(int(self.batch_size or 100), 1000))
+        Session = self.env["nsp.measurement.session"].sudo()
+        sessions = Session.search(
+            self._push_cursor_domain() + [
+                ("controller_id.edge_server_id", "=", edge.id),
+                ("measurement_status", "!=", "draft"),
+            ],
+            order="write_date asc, id asc",
+            limit=limit + 1,
+        )
+        has_more = len(sessions) > limit
+        selected = sessions[:limit]
+        if not selected:
+            return {"pushed": 0, "failed": 0, "has_more": False, "message": "No Measurement Session status to push."}
+        Record = self.env["nsp.sync.record"].sudo()
+        for session in selected:
+            payload = self._measurement_status_payload(session)
+            try:
+                data = self._json_or_error(self._post_remote(self.sync_action_id, payload, timeout=120))
+            except Exception as exc:
+                Record.mark_result(
+                    sync_job=self,
+                    action_code=self.sync_action_code,
+                    action_name=self.sync_action_name,
+                    route_suffix=self.route_suffix,
+                    record=session,
+                    record_key=session.measurement_session_uid,
+                    status="failed",
+                    message=str(exc),
+                    payload=payload,
+                    operation="push",
+                )
+                raise
+            Record.mark_result(
+                sync_job=self,
+                action_code=self.sync_action_code,
+                action_name=self.sync_action_name,
+                route_suffix=self.route_suffix,
+                record=session,
+                record_key=session.measurement_session_uid,
+                status="synced",
+                message="Measurement Session status accepted by Cloud.",
+                payload=payload,
+                response=data,
+                operation="push",
+            )
+        last = selected[-1]
+        self.write({"last_push_at": last.write_date, "last_push_record_id": last.id})
+        return {
+            "pushed": len(selected),
+            "failed": 0,
+            "has_more": has_more,
+            "message": "Pushed %s Measurement Session status record(s)." % len(selected),
+        }
+
+    # --------------------------- execution ----------------------------
+    def _mark_push_failure(self, items, data_or_error):
+        Record = self.env["nsp.sync.record"].sudo()
+        message = str(data_or_error)
+        for item in items:
+            key = self._record_key_from_item(item)
+            if key:
+                Record.mark_result(
+                    sync_job=self,
+                    action_code=self.sync_action_code,
+                    action_name=self.sync_action_name,
+                    route_suffix=self.route_suffix,
+                    record_key=key,
+                    status="failed",
+                    message=message,
+                    payload=item,
+                    response=data_or_error if isinstance(data_or_error, dict) else False,
+                    operation="push",
+                )
+
     def run_push_once(self):
         self.ensure_one()
         kind = self._action_kind()
-        items = self._serialize_records_by_kind(kind, since=self.last_push_at, limit=self.batch_size)
+        if kind == "measurement_event":
+            return self._run_measurement_event_push_once()
+        if kind == "measurement_status":
+            return self._run_measurement_status_push_once()
+        batch = self._serialize_push_batch(kind)
+        items = batch["items"]
         if not items:
-            self.write({"last_push_at": fields.Datetime.now(), "last_message": "No changed records to push."})
-            return {"pushed": 0, "failed": 0, "message": "No changed records to push."}
+            return {"pushed": 0, "failed": 0, "has_more": False, "message": "No changed records to push."}
         Record = self.env["nsp.sync.record"].sudo()
         for item in items:
             key = self._record_key_from_item(item)
             if key:
-                Record.mark_pending(sync_job=self, action_code=self.sync_action_code, action_name=self.sync_action_name, route_suffix=self.route_suffix, record_key=key, message="Waiting for remote API acceptance.", operation="push")
-        payload = self._build_push_payload(items)
-        response = self._post_remote(self.sync_action_id, payload, timeout=120)
-        data = self._json_or_error(response)
-        response_results = data.get("results") if isinstance(data.get("results"), list) else []
-        rejected = []
-        result_by_key = {}
-        for result in response_results:
-            if not isinstance(result, dict):
-                continue
-            key = result.get("record_key") or result.get("key")
-            if key:
-                result_by_key[str(key)] = result
-            if result.get("status") == "rejected":
-                rejected.append(result)
+                Record.mark_pending(
+                    sync_job=self,
+                    action_code=self.sync_action_code,
+                    action_name=self.sync_action_name,
+                    route_suffix=self.route_suffix,
+                    record_key=key,
+                    message="Waiting for Cloud response.",
+                    payload=item,
+                    operation="push",
+                )
+        try:
+            data = self._json_or_error(self._post_remote(self.sync_action_id, self._build_push_payload(items), timeout=120))
+        except Exception as exc:
+            self._mark_push_failure(items, exc)
+            raise
+        rejected = [
+            result for result in (data.get("results") or [])
+            if isinstance(result, dict) and result.get("status") in ("rejected", "failed", "error")
+        ]
+        if rejected or int(data.get("failed") or 0):
+            rejected_by_key = {str(item.get("record_key") or ""): item for item in rejected}
+            if rejected_by_key:
+                for item in items:
+                    key = self._record_key_from_item(item)
+                    result = rejected_by_key.get(str(key or ""))
+                    if result:
+                        Record.mark_result(
+                            sync_job=self,
+                            action_code=self.sync_action_code,
+                            action_name=self.sync_action_name,
+                            route_suffix=self.route_suffix,
+                            record_key=key,
+                            status="failed",
+                            message=result.get("message") or result.get("error"),
+                            payload=item,
+                            response=data,
+                            operation="push",
+                        )
+            else:
+                self._mark_push_failure(items, data)
+            raise UserError(json.dumps(rejected or data, ensure_ascii=False))
         for item in items:
             key = self._record_key_from_item(item)
-            if not key:
-                continue
-            remote_result = result_by_key.get(str(key), {})
-            remote_status = remote_result.get("status")
-            is_failed = remote_status == "rejected"
-            Record.mark_result(
-                sync_job=self, action_code=self.sync_action_code,
-                action_name=self.sync_action_name, route_suffix=self.route_suffix,
-                record_key=key, status="failed" if is_failed else "synced",
-                message=(remote_result.get("message") or remote_result.get("error") or
-                         ("Remote API rejected the record." if is_failed else "Remote API accepted.")),
-                operation="push",
-            )
-            if kind == "measurement":
-                event = self.env["nsp.gate.measurement.event"].sudo().search([
-                    ("measurement_uid", "=", key),
-                ], limit=1)
-                if event:
-                    if is_failed:
-                        retry_count = event.retry_count + 1
-                        delay = min(300, max(5, 2 ** min(retry_count, 8)))
-                        event.write({
-                            "sync_state": "failed",
-                            "retry_count": retry_count,
-                            "next_retry_at": fields.Datetime.now() + timedelta(seconds=delay),
-                        })
-                    else:
-                        event.write({
-                            "sync_state": "synced",
-                            "last_sync_at": fields.Datetime.now(),
-                            "next_retry_at": False,
-                        })
-        if rejected or int(data.get("failed") or 0) > 0:
-            raise UserError(json.dumps(rejected or response_results or data, ensure_ascii=False))
-        self.write({"last_push_at": fields.Datetime.now(), "last_message": "Pushed %s records via %s." % (len(items), self.route_suffix)})
-        return {"pushed": len(items), "failed": 0, "message": "Pushed %s records." % len(items)}
+            if key:
+                Record.mark_result(
+                    sync_job=self,
+                    action_code=self.sync_action_code,
+                    action_name=self.sync_action_name,
+                    route_suffix=self.route_suffix,
+                    record_key=key,
+                    status="synced",
+                    message="Cloud accepted.",
+                    payload=item,
+                    response=data,
+                    operation="push",
+                )
+        self.write({
+            "last_push_at": batch.get("cursor_at") or fields.Datetime.now(),
+            "last_push_record_id": int(batch.get("cursor_id") or 0),
+        })
+        return {
+            "pushed": len(items),
+            "failed": 0,
+            "has_more": bool(batch.get("has_more")),
+            "message": "Pushed %s record(s)." % len(items),
+        }
 
     def run_pull_once(self):
         self.ensure_one()
-        payload = self._build_pull_payload()
-        response = self._post_remote(self.sync_action_id, payload, timeout=120)
-        data = self._json_or_error(response)
-        payload_data = self._response_payload(data)
+        data = self._json_or_error(self._post_remote(self.sync_action_id, self._build_pull_payload(), timeout=120))
         items = self._items_from_response(data)
-        next_cursor = payload_data.get("next_sync_cursor") or self.pull_cursor or False
+        next_cursor = data.get("next_sync_cursor") or False
+        has_more = bool(data.get("has_more"))
         if not items:
             self.write({
-                "pull_cursor": next_cursor,
                 "last_pull_at": fields.Datetime.now(),
-                "last_message": "No changed records to pull from %s." % self.route_suffix,
+                "sync_cursor": next_cursor if has_more else False,
             })
-            return {"pulled": 0, "failed": 0, "message": "No changed records to pull."}
-        kind = self._action_kind()
-        results, failed = self._apply_items(kind, items)
+            return {"pulled": 0, "failed": 0, "has_more": has_more, "message": "No changed records to pull."}
+        results, failed = self._apply_items(self._action_kind(), items)
         if failed:
             raise UserError(json.dumps(failed, ensure_ascii=False))
         self.write({
-            "pull_cursor": next_cursor,
             "last_pull_at": fields.Datetime.now(),
-            "last_message": "Pulled %s records via %s." % (len(results), self.route_suffix),
+            "sync_cursor": next_cursor if has_more else False,
         })
-        return {"pulled": len(results), "failed": 0, "message": "Pulled %s records." % len(results)}
+        return {
+            "pulled": len(results),
+            "failed": 0,
+            "has_more": has_more,
+            "message": "Pulled %s record(s)." % len(results),
+        }
 
     def run_once(self):
+        self._ensure_edge_server_instance()
         for rec in self:
-            messages = []
             if not rec.active:
-                rec.write({"status": "disabled", "last_message": "Sync job disabled."})
+                rec.write({"status": "disabled", "last_message": "Sync Job disabled."})
                 continue
             rec.write({"status": "running", "last_message": False})
+            result = {}
             try:
-                if rec.direction == "pull":
-                    messages.append(rec.run_pull_once().get("message"))
-                elif rec.direction == "push":
-                    messages.append(rec.run_push_once().get("message"))
-                rec.write({"status": "success", "last_message": " ".join([m for m in messages if m]) or "Done."})
+                result = rec.run_pull_once() if rec.direction == "pull" else rec.run_push_once()
+                rec.write({"status": "success", "last_message": result.get("message") or "Done."})
             except Exception as exc:
                 rec.write({"status": "failed", "last_message": str(exc)})
-                _logger.exception("NSP Sync job failed: %s", rec.display_name)
+                _logger.exception("NSP Sync Job failed: %s", rec.display_name)
             finally:
-                rec._schedule_next()
+                rec._schedule_next(immediate=bool(result.get("has_more")))
         return True
 
     def action_run_now(self):
         self.run_once()
-        return {"type": "ir.actions.client", "tag": "display_notification", "params": {"title": _("NSP Sync"), "message": _("Sync job run completed. Check Status / Last Message."), "type": "success", "sticky": False}}
+        return {
+            "type": "ir.actions.client",
+            "tag": "display_notification",
+            "params": {
+                "title": _("NSP Sync"),
+                "message": _("Sync Job completed. Check Status and Last Message."),
+                "type": "success",
+                "sticky": False,
+            },
+        }
 
     @api.model
     def run_due_jobs(self):
         now = fields.Datetime.now()
-        jobs = self.sudo().search(["&", ("active", "=", True), "|", ("next_run_at", "=", False), ("next_run_at", "<=", now)], order="sequence, id")
+        jobs = self.sudo().search([
+            ("active", "=", True),
+            "|", ("next_run_at", "=", False), ("next_run_at", "<=", now),
+        ], order="sequence, id")
         if jobs:
             jobs.run_once()
         return len(jobs)
 
     @api.model
     def cron_run_job_loop(self):
-        deadline = time.time() + 55
-        count = 0
-        while time.time() < deadline:
-            count += self.run_due_jobs()
-            time.sleep(1)
-        return count
+        return self.run_due_jobs()

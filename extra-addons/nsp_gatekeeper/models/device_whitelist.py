@@ -2,7 +2,6 @@
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
 
-
 class DeviceWhitelist(models.Model):
     _name = "nsp.device.whitelist"
     _description = "NSP Device Whitelist"
@@ -30,14 +29,9 @@ class DeviceWhitelist(models.Model):
         ("valid", "Valid Device"),
         ("invalid", "Invalid Device"),
     ], string="Whitelist Status", default="pending", required=True, tracking=True, index=True)
-    operational_state = fields.Selection([
-        ("valid", "Valid Device"),
-        ("invalid", "Invalid Device"),
-    ], string="Operational Status", compute="_compute_operational_state", store=True)
     note = fields.Text(string="Note")
     approved_by = fields.Many2one("res.users", string="Approved By", readonly=True)
     approved_at = fields.Datetime(string="Approved At", readonly=True)
-
 
     _sql_constraints = [
         ("serial_number_unique", "unique(serial_number)", "Serial number must be unique in Device Whitelist."),
@@ -47,11 +41,6 @@ class DeviceWhitelist(models.Model):
     def _compute_display_name(self):
         for rec in self:
             rec.display_name = rec.device_name or rec.serial_number or _("Device")
-
-    @api.depends("approval_state")
-    def _compute_operational_state(self):
-        for rec in self:
-            rec.operational_state = "valid" if rec.approval_state == "valid" else "invalid"
 
     @api.model
     def _normalize_serial(self, value):
@@ -101,7 +90,7 @@ class DeviceWhitelist(models.Model):
         return {
             "device_code": getattr(device, "device_code", False),
             "device_name": getattr(device, "device_name", False),
-            "device_type": (getattr(getattr(device, "device_type_id", False), "code", False) or getattr(device, "device_type", False) or False),
+            "device_type": getattr(getattr(device, "device_type_id", False), "code", False) or False,
             "model_number": getattr(device, "model_number", False),
             "device_vendor": getattr(device, "device_vendor", False),
             "serial_number": getattr(device, "serial_number", False),

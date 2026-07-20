@@ -9,24 +9,24 @@ export class NspParkingDisplay extends Component {
             <div class="nsp-parking-display__header">
                 <div>
                     <div class="nsp-parking-display__title">PARKING DISPLAY</div>
-                    <div class="nsp-parking-display__subtitle">Realtime Parking Notifications from Gatekeeper Transactions</div>
+                    <div class="nsp-parking-display__subtitle">Realtime Vehicle Entry / Exit from Gatekeeper Transactions</div>
                 </div>
                 <div class="nsp-parking-display__clock"><t t-esc="state.clock"/></div>
             </div>
 
             <div class="nsp-parking-display__selector">
-                <label>Gate</label>
-                <select t-on-change="onGateChange">
-                    <option value="">Select Gate before display</option>
-                    <t t-foreach="state.gates" t-as="gate" t-key="gate.id">
-                        <option t-att-value="gate.id">
-                            <t t-esc="gate.display_name || gate.name || gate.code"/>
+                <label>Parking Area</label>
+                <select t-on-change="onParkingAreaChange">
+                    <option value="">Select Parking Area</option>
+                    <t t-foreach="state.parkingAreas" t-as="area" t-key="area.id">
+                        <option t-att-value="area.id">
+                            <t t-esc="area.display_name || area.name || area.code"/>
                         </option>
                     </t>
                 </select>
             </div>
 
-            <t t-if="state.selectedGateId">
+            <t t-if="state.selectedParkingAreaId">
                 <div class="nsp-parking-display__ticker-wrap">
                     <div class="nsp-parking-display__ticker" t-att-class="state.items.length ? '' : 'is-empty'">
                         <t t-if="state.items.length">
@@ -34,7 +34,7 @@ export class NspParkingDisplay extends Component {
                                 <div class="nsp-parking-display__plate-card" t-att-class="item.status === 'denied' ? 'is-denied' : 'is-allowed'">
                                     <div class="nsp-parking-display__plate"><t t-esc="item.vehicle"/></div>
                                     <div class="nsp-parking-display__meta">
-                                        <span><t t-esc="item.gate"/></span>
+                                        <span><t t-esc="item.parking_area"/></span>
                                         <span>•</span>
                                         <span><t t-esc="item.direction_label"/></span>
                                         <span>•</span>
@@ -59,7 +59,7 @@ export class NspParkingDisplay extends Component {
                             <div class="nsp-parking-display__row" t-att-class="item.status === 'denied' ? 'is-denied' : 'is-allowed'">
                                 <div class="nsp-parking-display__row-plate"><t t-esc="item.vehicle"/></div>
                                 <div class="nsp-parking-display__row-detail">
-                                    <span><t t-esc="item.gate"/></span>
+                                    <span><t t-esc="item.parking_area"/></span>
                                     <span><t t-esc="item.direction_label"/></span>
                                     <span><t t-esc="item.status_label"/></span>
                                     <span><t t-esc="item.event_time"/></span>
@@ -73,7 +73,7 @@ export class NspParkingDisplay extends Component {
                 </div>
             </t>
             <t t-else="">
-                <div class="nsp-parking-display__choose-gate">Please select a Gate to start realtime display.</div>
+                <div class="nsp-parking-display__choose-area">Please select a Parking Area to start realtime display.</div>
             </t>
         </div>
     `;
@@ -81,17 +81,16 @@ export class NspParkingDisplay extends Component {
     setup() {
         this.state = useState({
             items: [],
-            gates: [],
-            selectedGateId: "",
+            parkingAreas: [],
+            selectedParkingAreaId: "",
             clock: "",
         });
         this.pollTimer = null;
         this.clockTimer = null;
-        this.seenIds = new Set();
 
         onMounted(() => {
             this.tickClock();
-            this.fetchGates();
+            this.fetchParkingAreas();
             this.pollTimer = setInterval(() => this.fetchEvents(), 1000);
             this.clockTimer = setInterval(() => this.tickClock(), 1000);
         });
@@ -114,11 +113,10 @@ export class NspParkingDisplay extends Component {
         }));
     }
 
-    onGateChange(ev) {
-        this.state.selectedGateId = ev.target.value || "";
+    onParkingAreaChange(ev) {
+        this.state.selectedParkingAreaId = ev.target.value || "";
         this.state.items = [];
-        this.seenIds = new Set();
-        if (this.state.selectedGateId) {
+        if (this.state.selectedParkingAreaId) {
             this.fetchEvents();
         }
     }
@@ -135,9 +133,9 @@ export class NspParkingDisplay extends Component {
         });
     }
 
-    async fetchGates() {
+    async fetchParkingAreas() {
         try {
-            const response = await fetch("/api/nsp_gatekeeper/v1/parking-display/gates", {
+            const response = await fetch("/api/nsp_gatekeeper/v1/parking-display/areas", {
                 method: "GET",
                 credentials: "same-origin",
                 headers: { "Accept": "application/json" },
@@ -146,18 +144,18 @@ export class NspParkingDisplay extends Component {
                 return;
             }
             const payload = await response.json();
-            this.state.gates = payload.gates || [];
+            this.state.parkingAreas = payload.parking_areas || [];
         } catch (error) {
-            console.warn("NSP Parking Display: unable to fetch gates", error);
+            console.warn("NSP Parking Display: unable to fetch parking areas", error);
         }
     }
 
     async fetchEvents() {
-        if (!this.state.selectedGateId) {
+        if (!this.state.selectedParkingAreaId) {
             return;
         }
         try {
-            const url = `/api/nsp_notification/v1/parking-monitor/events?limit=30&gate_id=${encodeURIComponent(this.state.selectedGateId)}`;
+            const url = `/api/nsp_gatekeeper/v1/parking-display/events?limit=30&parking_area_id=${encodeURIComponent(this.state.selectedParkingAreaId)}`;
             const response = await fetch(url, {
                 method: "GET",
                 credentials: "same-origin",

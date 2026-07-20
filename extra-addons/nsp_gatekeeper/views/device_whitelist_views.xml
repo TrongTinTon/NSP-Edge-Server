@@ -24,7 +24,6 @@
         <field name="arch" type="xml">
             <list string="Device Whitelist">
                 <field name="approval_state" widget="badge" decoration-success="approval_state == 'valid'" decoration-danger="approval_state == 'invalid'" decoration-warning="approval_state == 'pending'"/>
-                <field name="operational_state" widget="badge" decoration-success="operational_state == 'valid'" decoration-danger="operational_state == 'invalid'"/>
                 <field name="serial_number" string="Serial"/>
                 <field name="device_name" optional="show"/>
                 <field name="model_number"/>
@@ -62,7 +61,6 @@
                             <field name="antennas"/>
                         </group>
                         <group string="Whitelist Decision">
-                            <field name="operational_state" widget="badge" decoration-success="operational_state == 'valid'" decoration-danger="operational_state == 'invalid'"/>
                             <field name="controller_ref" readonly="1"/>
                             <field name="source_last_seen" readonly="1"/>
                             <field name="approved_by" readonly="1"/>

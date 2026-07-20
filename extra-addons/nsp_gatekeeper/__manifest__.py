@@ -1,1 +1,36 @@
-{'name': 'NSP Gatekeeper', 'summary': 'Main NSP Gatekeeper module', 'description': 'Main module for NSP Gatekeeper. Installing this module automatically installs the required related modules through Odoo dependencies: T4 Core API, NSP User, NSP RFID and NSP Vehicle.', 'version': '19.0.9.1.0', 'sequence': -1, 'author': 'BKU Team', 'category': 'Services', 'depends': ['base', 'nsp_core', 'bus', 'web', 'mail', 't4_coreapi', 'nsp_user', 'nsp_vehicle', 'nsp_rfid'], 'installable': True, 'application': True, 'auto_install': False, 'data': ['data/module_category.xml', 'data/controller_heartbeat_cron.xml', 'data/controller_pairing_cron.xml', 'data/device_type_data.xml', 'data/nsp_gatekeeper_action_endpoints.xml', 'security/ir.model.access.csv', 'views/controller_views.xml', 'views/controller_pairing_views.xml', 'views/core_api_application_views.xml', 'views/branch_views.xml', 'views/gate_config_views.xml', 'views/gate_measurement_views.xml', 'views/device_views.xml', 'views/parking_transaction_views.xml', 'views/parking_dashboard_views.xml', 'views/device_whitelist_views.xml', 'views/menu_views.xml'], 'assets': {'web.assets_backend': ['nsp_gatekeeper/static/src/js/parking_display.js', 'nsp_gatekeeper/static/src/scss/parking_display.scss']}, 'license': 'LGPL-3', 'post_init_hook': 'post_init_hook', 'external_dependencies': {'python': ['cryptography']}}
+{
+    'name': 'NSP Gatekeeper',
+    'summary': 'Main NSP Gatekeeper module',
+    'description': 'NSP Gatekeeper infrastructure, parking runtime, configuration and measurement APIs.',
+    'version': '19.0.15.0.0',
+    'sequence': -1,
+    'author': 'BKU Team',
+    'category': 'Services',
+    'depends': ['base', 'nsp_core', 'bus', 'web', 'mail', 't4_coreapi', 'nsp_user', 'nsp_vehicle', 'nsp_rfid'],
+    'installable': True,
+    'application': True,
+    'auto_install': False,
+    'data': [
+        'data/module_category.xml',
+        'data/controller_heartbeat_cron.xml',
+        'data/device_type_data.xml',
+        'data/nsp_gatekeeper_action_endpoints.xml',
+        'security/ir.model.access.csv',
+        'views/controller_views.xml',
+        'views/branch_views.xml',
+        'views/parking_config_views.xml',
+        'views/measurement_views.xml',
+        'views/device_views.xml',
+        'views/parking_transaction_views.xml',
+        'views/parking_dashboard_views.xml',
+        'views/device_whitelist_views.xml',
+        'views/menu_views.xml',
+    ],
+    'assets': {
+        'web.assets_backend': [
+            'nsp_gatekeeper/static/src/js/parking_display.js',
+            'nsp_gatekeeper/static/src/scss/parking_display.scss',
+        ],
+    },
+    'license': 'LGPL-3',
+}

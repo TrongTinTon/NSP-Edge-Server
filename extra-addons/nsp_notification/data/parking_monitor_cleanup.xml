@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<odoo>
-    <function model="nsp.notification.cleanup" name="cleanup_parking_monitor_artifacts"/>
-    <function model="nsp.notification.cleanup" name="repair_parking_monitor_notification_channel"/>
-</odoo>

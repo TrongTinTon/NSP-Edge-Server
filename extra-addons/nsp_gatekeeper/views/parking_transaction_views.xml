@@ -5,8 +5,8 @@
         <field name="arch" type="xml">
             <search>
                 <field name="controller_id"/>
-                <field name="gate_id"/>
-                <field name="gate_code"/>
+                <field name="parking_area_id"/>
+                <field name="parking_area_code"/>
                 <field name="lane_id"/>
                 <field name="lane_code"/>
                 <field name="vehicle_code"/>
@@ -32,7 +32,7 @@
                 <filter string="Authentication Errors" name="auth_errors" domain="[('error_category','in',['auth','borrow'])]"/>
                 <separator/>
                     <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
-                    <filter string="Gate" name="group_gate" context="{'group_by':'gate_id'}"/>
+                    <filter string="Parking Area" name="group_parking_area" context="{'group_by':'parking_area_id'}"/>
                     <filter string="Lane" name="group_lane" context="{'group_by':'lane_id'}"/>
                     <filter string="Direction" name="group_direction" context="{'group_by':'direction'}"/>
                     <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
@@ -48,7 +48,7 @@
         <field name="model">nsp.parking.transaction</field>
         <field name="arch" type="xml">
             <list string="Vehicle In/Out Logs" create="0">
-                <field name="gate_display" string="Gate Name"/>
+                <field name="parking_area_display" string="Parking Area"/>
                 <field name="lane_display" string="Lane"/>
                 <field name="vehicle_display" string="Vehicle"/>
                 <field name="direction" widget="badge" decoration-success="direction == 'entry'" decoration-info="direction == 'exit'"/>
@@ -61,7 +61,7 @@
                 <field name="vehicle_tid" optional="hide"/>
                 <field name="user_tid" optional="hide"/>
                 <field name="controller_id" optional="hide"/>
-                <field name="gate_id" optional="hide"/>
+                <field name="parking_area_id" optional="hide"/>
                 <field name="lane_id" optional="hide"/>
                 <field name="error_category" optional="hide"/>
                 <field name="error_severity" optional="hide"/>
@@ -79,7 +79,7 @@
                 <sheet>
                     <group>
                         <group string="Main Information">
-                            <field name="gate_display" string="Gate Name" readonly="1"/>
+                            <field name="parking_area_display" string="Parking Area" readonly="1"/>
                             <field name="lane_display" string="Lane" readonly="1"/>
                             <field name="vehicle_display" string="Vehicle" readonly="1"/>
                             <field name="direction" widget="badge"/>
@@ -103,8 +103,8 @@
                     <group>
                         <group string="Node / Route">
                             <field name="controller_id"/>
-                            <field name="gate_id"/>
-                            <field name="gate_code"/>
+                            <field name="parking_area_id"/>
+                            <field name="parking_area_code"/>
                             <field name="lane_id"/>
                             <field name="lane_code"/>
                             <field name="transaction_uid"/>

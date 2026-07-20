@@ -1,0 +1,279 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_nsp_parking_area_search" model="ir.ui.view">
+        <field name="name">nsp.parking.operation.search</field>
+        <field name="model">nsp.parking.area</field>
+        <field name="arch" type="xml">
+            <search string="Parking Operation Configurations">
+                <field name="name"/>
+                <field name="code"/>
+                <field name="branch_id"/>
+                <field name="controller_ids"/>
+                <filter string="Operational" name="operational" domain="[('operation_state','=','operational')]"/>
+                <filter string="Configuring" name="draft" domain="[('operation_state','=','draft')]"/>
+                <group>
+                    <filter string="Branch" name="group_branch" context="{'group_by':'branch_id'}"/>
+                    <filter string="Operation State" name="group_state" context="{'group_by':'operation_state'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_parking_area_list" model="ir.ui.view">
+        <field name="name">nsp.parking.operation.list</field>
+        <field name="model">nsp.parking.area</field>
+        <field name="arch" type="xml">
+            <list string="Parking Operation Configurations">
+                <field name="code"/>
+                <field name="name"/>
+                <field name="branch_id"/>
+                <field name="controller_count"/>
+                <field name="lane_count"/>
+                <field name="antenna_count"/>
+                <field name="status" widget="badge"/>
+                <field name="operation_state" widget="badge"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_parking_area_form" model="ir.ui.view">
+        <field name="name">nsp.parking.operation.form</field>
+        <field name="model">nsp.parking.area</field>
+        <field name="arch" type="xml">
+            <form string="Parking Operation Configuration">
+                <header>
+                    <button name="action_set_operational" type="object" string="Set Operational" class="oe_highlight" invisible="operation_state == 'operational'"/>
+                    <button name="action_reset_to_draft" type="object" string="Back to Configuration" invisible="operation_state == 'draft'"/>
+                    <field name="operation_state" widget="statusbar" statusbar_visible="draft,operational"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1><field name="name" placeholder="Parking Area A"/></h1>
+                    </div>
+                    <group>
+                        <group string="Parking Area">
+                            <field name="code" placeholder="AREA-A"/>
+                            <field name="branch_id"/>
+                            <field name="status"/>
+                            <field name="detection_window_ms"/>
+                        </group>
+                        <group string="Derived Topology">
+                            <field name="controller_ids" widget="many2many_tags" readonly="1"/>
+                            <field name="controller_count" readonly="1"/>
+                            <field name="lane_count" readonly="1"/>
+                            <field name="antenna_count" readonly="1"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Parking Lanes">
+                            <field name="lane_ids" context="{'default_parking_area_id': id}">
+                                <list editable="bottom">
+                                    <field name="sequence" widget="handle"/>
+                                    <field name="lane_no"/>
+                                    <field name="code"/>
+                                    <field name="name"/>
+                                    <field name="controller_id"/>
+                                    <field name="lane_type"/>
+                                    <field name="direction" invisible="lane_type == 'two_way'"/>
+                                    <field name="detection_window_ms"/>
+                                    <field name="required_vehicle_tid"/>
+                                    <field name="required_user_tid"/>
+                                    <field name="active" widget="boolean_toggle"/>
+                                    <field name="active_antenna_count" readonly="1"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Antenna Topology">
+                            <field name="lane_antenna_group_ids" readonly="1">
+                                <list>
+                                    <field name="lane_id"/>
+                                    <field name="direction" widget="badge"/>
+                                    <field name="detection_mode" widget="badge"/>
+                                    <field name="active" widget="boolean_toggle"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Physical Antenna Mapping">
+                            <field name="lane_antenna_rule_ids" readonly="1">
+                                <list>
+                                    <field name="lane_id"/>
+                                    <field name="antenna_group_id"/>
+                                    <field name="controller_id"/>
+                                    <field name="serial_number"/>
+                                    <field name="antenna_no"/>
+                                    <field name="tag_role" widget="badge"/>
+                                    <field name="sequence_no"/>
+                                    <field name="is_active" widget="boolean_toggle"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_nsp_parking_area" model="ir.actions.act_window">
+        <field name="name">Parking Operation Configurations</field>
+        <field name="res_model">nsp.parking.area</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_nsp_parking_area_search"/>
+    </record>
+
+    <record id="view_nsp_parking_lane_list" model="ir.ui.view">
+        <field name="name">nsp.parking.lane.list</field>
+        <field name="model">nsp.parking.lane</field>
+        <field name="arch" type="xml">
+            <list string="Parking Lanes">
+                <field name="parking_area_id"/>
+                <field name="lane_no"/>
+                <field name="code"/>
+                <field name="name"/>
+                <field name="controller_id"/>
+                <field name="lane_type"/>
+                <field name="direction"/>
+                <field name="active_antenna_count"/>
+                <field name="active" widget="boolean_toggle"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_parking_lane_form" model="ir.ui.view">
+        <field name="name">nsp.parking.lane.form</field>
+        <field name="model">nsp.parking.lane</field>
+        <field name="arch" type="xml">
+            <form string="Parking Lane">
+                <sheet>
+                    <div class="oe_title"><label for="name"/><h1><field name="name"/></h1></div>
+                    <group>
+                        <group>
+                            <field name="parking_area_id"/>
+                            <field name="controller_id"/>
+                            <field name="code"/>
+                            <field name="lane_no"/>
+                            <field name="sequence"/>
+                            <field name="active"/>
+                        </group>
+                        <group>
+                            <field name="lane_type"/>
+                            <field name="direction" invisible="lane_type == 'two_way'"/>
+                            <field name="detection_window_ms"/>
+                            <field name="required_vehicle_tid"/>
+                            <field name="required_user_tid"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Antenna Groups">
+                            <field name="antenna_group_ids" context="{'default_lane_id': id}">
+                                <list>
+                                    <field name="direction"/>
+                                    <field name="detection_mode"/>
+                                    <field name="sequence"/>
+                                    <field name="active" widget="boolean_toggle"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Mapped Antennas">
+                            <field name="antenna_rule_ids" readonly="1">
+                                <list>
+                                    <field name="antenna_group_id"/>
+                                    <field name="serial_number"/>
+                                    <field name="antenna_no"/>
+                                    <field name="tag_role"/>
+                                    <field name="sequence_no"/>
+                                    <field name="is_active" widget="boolean_toggle"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_nsp_parking_lane_antenna_group_form" model="ir.ui.view">
+        <field name="name">nsp.parking.lane.antenna.group.form</field>
+        <field name="model">nsp.parking.lane.antenna.group</field>
+        <field name="arch" type="xml">
+            <form string="Lane Antenna Group">
+                <sheet>
+                    <group>
+                        <field name="lane_id"/>
+                        <field name="direction"/>
+                        <field name="detection_mode"/>
+                        <field name="sequence"/>
+                        <field name="active"/>
+                    </group>
+                    <field name="controller_id" invisible="1"/>
+                    <field name="antenna_mapping_ids" context="{'default_antenna_group_id': id}">
+                        <list editable="bottom">
+                            <field name="lane_controller_id" column_invisible="1"/>
+                            <field name="antenna_ref_id" domain="[('device_id.controller_id','=',parent.controller_id),('device_id.device_type_id.supports_antenna_mapping','=',True)]"/>
+                            <field name="serial_number" readonly="1"/>
+                            <field name="antenna_no" readonly="1"/>
+                            <field name="tag_role"/>
+                            <field name="sequence_no"/>
+                            <field name="is_active" widget="boolean_toggle"/>
+                        </list>
+                    </field>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_nsp_parking_lane" model="ir.actions.act_window">
+        <field name="name">Parking Lanes</field>
+        <field name="res_model">nsp.parking.lane</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <record id="view_nsp_parking_lane_antenna_mapping_list" model="ir.ui.view">
+        <field name="name">nsp.parking.lane.antenna.mapping.list</field>
+        <field name="model">nsp.parking.lane.antenna.mapping</field>
+        <field name="arch" type="xml">
+            <list string="Parking Lane Antenna Mapping">
+                <field name="parking_area_id"/>
+                <field name="lane_id"/>
+                <field name="antenna_group_id"/>
+                <field name="controller_id"/>
+                <field name="serial_number"/>
+                <field name="antenna_no"/>
+                <field name="tag_role"/>
+                <field name="sequence_no"/>
+                <field name="is_active" widget="boolean_toggle"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_parking_lane_antenna_mapping_form" model="ir.ui.view">
+        <field name="name">nsp.parking.lane.antenna.mapping.form</field>
+        <field name="model">nsp.parking.lane.antenna.mapping</field>
+        <field name="arch" type="xml">
+            <form string="Parking Lane Antenna Mapping">
+                <sheet>
+                    <group>
+                        <field name="parking_area_id" readonly="1"/>
+                        <field name="lane_id" readonly="1"/>
+                        <field name="antenna_group_id"/>
+                        <field name="lane_controller_id" invisible="1"/>
+                        <field name="antenna_ref_id" domain="[('device_id.controller_id','=',lane_controller_id),('device_id.device_type_id.supports_antenna_mapping','=',True)]"/>
+                        <field name="controller_id" readonly="1"/>
+                        <field name="serial_number" readonly="1"/>
+                        <field name="antenna_no" readonly="1"/>
+                        <field name="tag_role"/>
+                        <field name="sequence_no"/>
+                        <field name="is_active"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_nsp_parking_lane_antenna_mapping" model="ir.actions.act_window">
+        <field name="name">Parking Lane Antenna Mapping</field>
+        <field name="res_model">nsp.parking.lane.antenna.mapping</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>

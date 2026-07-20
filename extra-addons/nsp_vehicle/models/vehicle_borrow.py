@@ -91,8 +91,6 @@ class NspVehicleBorrowRequest(models.Model):
 
     def write(self, vals):
         res = super().write(vals)
-        if any(key in vals for key in ("state", "valid_from", "valid_to", "returned_at", "vehicle_id", "borrower_id")):
-            self._mark_borrow_sync_pending("Borrow request updated.")
         return res
 
     def _open_overlap_domain(self):
@@ -206,24 +204,3 @@ class NspVehicleBorrowRequest(models.Model):
         if borrower:
             domain.append(("borrower_id", "=", borrower.id))
         return self.sudo().search(domain, order="valid_to asc, id desc", limit=1)
-
-    def _mark_borrow_sync_pending(self, message=False):
-        if "nsp.sync.record" not in self.env.registry.models:
-            return False
-        Controller = self.env["nsp.controller"].sudo() if "nsp.controller" in self.env.registry.models else False
-        controllers = Controller.search([("core_api_application_id", "!=", False)]) if Controller else []
-        for rec in self:
-            for controller in controllers:
-                try:
-                    self.env["nsp.sync.record"].sudo().mark_pending(
-                        controller=controller,
-                        action_code="nsp_gatekeeper_vehicle_borrow_sync",
-                        action_name="NSP Gatekeeper Vehicle Borrow Sync",
-                        record=rec,
-                        record_key=rec.sync_record_key,
-                        message=message or "Borrow request changed; waiting for Cloud synchronization.",
-                        operation="pull",
-                    )
-                except Exception:
-                    continue
-        return True

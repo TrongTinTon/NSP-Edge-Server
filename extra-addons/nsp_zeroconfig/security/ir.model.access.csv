@@ -1,3 +1,0 @@
-id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
-access_nsp_zeroconfig_config_manager,nsp.zeroconfig.config manager,model_nsp_zeroconfig_config_wizard,t4_coreapi.group_core_api_manager,1,1,1,1
-access_nsp_zeroconfig_config_it,nsp.zeroconfig.config IT,model_nsp_zeroconfig_config_wizard,nsp_core.group_nsp_it_parking,1,1,1,1

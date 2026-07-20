@@ -38,9 +38,8 @@ WITH today_tx AS (
     UNION ALL SELECT 50, 50, 'missing_vehicle_tid_today', 'Thiếu thẻ xe hôm nay', 'alert', COUNT(*)::integer, CASE WHEN COUNT(*) > 0 THEN 'critical' ELSE 'normal' END, 'Sự kiện thiếu thẻ RFID phương tiện hoặc không đọc được thẻ xe.' FROM today_tx WHERE error_code = 'missing_vehicle_tid'
     UNION ALL SELECT 60, 60, 'missing_user_tid_today', 'Thiếu thẻ nhân viên hôm nay', 'alert', COUNT(*)::integer, CASE WHEN COUNT(*) > 0 THEN 'critical' ELSE 'normal' END, 'Sự kiện thiếu thẻ RFID nhân viên khi cổng/làn yêu cầu xác thực nhân viên.' FROM today_tx WHERE error_code = 'missing_user_tid'
     UNION ALL SELECT 70, 70, 'auth_error_today', 'Lỗi xác thực hôm nay', 'alert', COUNT(*)::integer, CASE WHEN COUNT(*) > 0 THEN 'critical' ELSE 'normal' END, 'Thẻ không thuộc whitelist, thẻ chưa gán chủ sở hữu, người dùng không được phép dùng xe hoặc lỗi mượn xe.' FROM today_tx WHERE error_category IN ('auth', 'borrow')
-    UNION ALL SELECT 80, 80, 'controller_offline', 'Controller offline/error', 'device', COUNT(*)::integer, CASE WHEN COUNT(*) > 0 THEN 'critical' ELSE 'normal' END, 'Controller đang offline, blocked, revoked hoặc error.' FROM nsp_controller WHERE COALESCE(active, true) = true AND (status IS NULL OR status IN ('offline','error','block','revoked') OR COALESCE(connected, false) = false)
-    UNION ALL SELECT 90, 90, 'device_offline', 'Reader/device offline/error', 'device', COUNT(*)::integer, CASE WHEN COUNT(*) > 0 THEN 'critical' ELSE 'normal' END, 'RFID reader hoặc thiết bị đang offline/degraded/error.' FROM nsp_device WHERE status IS NULL OR status IN ('offline','degraded','error')
-    UNION ALL SELECT 100, 100, 'gate_config_not_applied', 'Gate config chưa áp dụng', 'config', COUNT(*)::integer, CASE WHEN COUNT(*) > 0 THEN 'warning' ELSE 'normal' END, 'Gate config đang Not Synced, Waiting Controller hoặc Sync Error.' FROM nsp_gate WHERE config_state IS NULL OR config_state != 'applied'
+    UNION ALL SELECT 80, 80, 'controller_offline', 'Controller offline/error', 'device', COUNT(*)::integer, CASE WHEN COUNT(*) > 0 THEN 'critical' ELSE 'normal' END, 'Controller đang offline, blocked, revoked hoặc error.' FROM nsp_controller WHERE COALESCE(active, true) = true AND (status IS NULL OR status IN ('offline','error','block','revoked'))
+    UNION ALL SELECT 90, 90, 'device_offline', 'Reader/device offline/degraded', 'device', COUNT(*)::integer, CASE WHEN COUNT(*) > 0 THEN 'critical' ELSE 'normal' END, 'RFID reader hoặc thiết bị đang offline hoặc degraded.' FROM nsp_device WHERE status IS NULL OR status IN ('offline','degraded')
 )
 SELECT id, sequence, code, name, category, value_int, severity, help_text, now()::timestamp AS generated_at FROM metric_rows
         """)
@@ -57,9 +56,8 @@ SELECT id, sequence, code, name, category, value_int, severity, help_text, now()
         if code == "missing_vehicle_tid_today": return "nsp.parking.transaction", [("time_entered", ">=", today), ("error_code", "=", "missing_vehicle_tid")]
         if code == "missing_user_tid_today": return "nsp.parking.transaction", [("time_entered", ">=", today), ("error_code", "=", "missing_user_tid")]
         if code == "auth_error_today": return "nsp.parking.transaction", [("time_entered", ">=", today), ("error_category", "in", ["auth", "borrow"])]
-        if code == "controller_offline": return "nsp.controller", ["|", "|", ("status", "in", ["offline", "error", "block", "revoked"]), ("connected", "=", False), ("active", "=", False)]
-        if code == "device_offline": return "nsp.device", [("status", "in", ["offline", "degraded", "error"])]
-        if code == "gate_config_not_applied": return "nsp.gate", [("config_state", "!=", "applied")]
+        if code == "controller_offline": return "nsp.controller", [("active", "=", True), ("status", "in", ["offline", "error", "block", "revoked"])]
+        if code == "device_offline": return "nsp.device", [("status", "in", ["offline", "degraded"])]
         return "nsp.parking.transaction", []
 
     def action_open_records(self):

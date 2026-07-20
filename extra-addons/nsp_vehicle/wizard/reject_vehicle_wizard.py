@@ -1,4 +1,4 @@
-from odoo import models, fields, api
+from odoo import fields, models
 
 class RejectVehicleWizard(models.TransientModel):
     _name = 'nsp.vehicle.reject.wizard'

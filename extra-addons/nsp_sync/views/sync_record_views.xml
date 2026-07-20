@@ -3,23 +3,22 @@
         <field name="name">nsp.sync.record.search</field>
         <field name="model">nsp.sync.record</field>
         <field name="arch" type="xml">
-            <search>
+            <search string="Sync Records">
+                <field name="source_code"/>
                 <field name="sync_job_id"/>
-                <field name="sync_action_id"/>
                 <field name="sync_action_name"/>
-                <field name="sync_action_code"/>
                 <field name="record_key"/>
-                <field name="record_display_name"/>
                 <field name="status"/>
                 <filter string="Pending" name="pending" domain="[('status','=','pending')]"/>
-                <filter string="Synced" name="synced" domain="[('status','=','synced')]"/>
                 <filter string="Failed" name="failed" domain="[('status','=','failed')]"/>
-                <separator/>
-                    <filter string="Sync Job" name="group_sync_job" context="{'group_by':'sync_job_id'}"/>
-                    <filter string="Action" name="group_action" context="{'group_by':'sync_action_name'}"/>
+                <filter string="Synced" name="synced" domain="[('status','=','synced')]"/>
+                <group>
+                    <filter string="Source" name="group_source" context="{'group_by':'source_code'}"/>
+                    <filter string="Job" name="group_job" context="{'group_by':'sync_job_id'}"/>
+                    <filter string="Action" name="group_action" context="{'group_by':'sync_action_code'}"/>
                     <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
-                    <filter string="Record Model" name="group_record_model" context="{'group_by':'record_model'}"/>
-                </search>
+                </group>
+            </search>
         </field>
     </record>
 
@@ -28,17 +27,16 @@
         <field name="model">nsp.sync.record</field>
         <field name="arch" type="xml">
             <list string="Sync Records" create="0" edit="0">
-                <field name="sync_job_id"/>
-                <field name="sync_action_id"/>
+                <field name="source_code"/>
+                <field name="sync_job_id" optional="show"/>
                 <field name="sync_action_name"/>
+                <field name="operation" widget="badge"/>
                 <field name="record_key"/>
-                <field name="record_display_name" optional="show"/>
-                <field name="status" widget="badge" decoration-warning="status == 'pending'" decoration-success="status == 'synced'" decoration-danger="status == 'failed'" decoration-muted="status == 'skipped'"/>
-                <field name="operation" optional="hide"/>
-                <field name="attempt_count" optional="show"/>
-                <field name="last_attempt_at" optional="show"/>
+                <field name="status" widget="badge" decoration-success="status == 'synced'" decoration-danger="status == 'failed'" decoration-warning="status == 'pending'"/>
+                <field name="attempts"/>
+                <field name="last_attempt_at"/>
                 <field name="last_synced_at" optional="show"/>
-                <field name="message" optional="hide"/>
+                <field name="message" optional="show"/>
             </list>
         </field>
     </record>
@@ -47,44 +45,33 @@
         <field name="name">nsp.sync.record.form</field>
         <field name="model">nsp.sync.record</field>
         <field name="arch" type="xml">
-            <form string="NSP Sync Record" create="0">
-                <header>
-                    <button name="action_open_business_record" type="object" string="Open Record" class="btn-primary" invisible="not record_model or not record_id"/>
-                    <button name="action_mark_synced" type="object" string="Mark Synced" class="btn-secondary"/>
-                    <button name="action_mark_failed" type="object" string="Mark Failed" class="btn-secondary"/>
-                    <field name="status" widget="statusbar" statusbar_visible="pending,synced,failed,skipped"/>
-                </header>
+            <form string="Sync Record" create="0" edit="0">
                 <sheet>
                     <group>
-                        <group string="Sync Identity">
-                            <field name="sync_job_id" readonly="1"/>
-                            <field name="sync_action_id" readonly="1"/>
-                            <field name="sync_action_name" readonly="1"/>
-                            <field name="sync_action_code" readonly="1"/>
-                            <field name="route_suffix" readonly="1"/>
-                            <field name="record_key" readonly="1"/>
+                        <group string="Execution">
+                            <field name="source_code"/>
+                            <field name="sync_job_id"/>
+                            <field name="sync_action_id"/>
+                            <field name="sync_action_code"/>
+                            <field name="sync_action_name"/>
+                            <field name="route_suffix"/>
+                            <field name="operation"/>
                         </group>
-                        <group string="Record Status">
-                            <field name="operation" readonly="1"/>
-                            <field name="record_model" readonly="1"/>
-                            <field name="record_id" readonly="1"/>
-                            <field name="record_display_name" readonly="1"/>
-                            <field name="attempt_count" readonly="1"/>
-                            <field name="last_attempt_at" readonly="1"/>
-                            <field name="last_synced_at" readonly="1"/>
-                        </group>
-                    </group>
-                    <group>
-                        <group>
-                            <field name="local_revision" readonly="1"/>
-                            <field name="remote_revision" readonly="1"/>
-                            <field name="checksum" readonly="1"/>
+                        <group string="Record">
+                            <field name="record_model"/>
+                            <field name="record_id"/>
+                            <field name="record_display_name"/>
+                            <field name="record_key"/>
+                            <field name="status" widget="badge"/>
+                            <field name="attempts"/>
+                            <field name="last_attempt_at"/>
+                            <field name="last_synced_at"/>
                         </group>
                     </group>
+                    <group string="Message"><field name="message" nolabel="1"/></group>
                     <notebook>
-                        <page string="Message">
-                            <field name="message" nolabel="1"/>
-                        </page>
+                        <page string="Payload"><field name="payload_json" nolabel="1" widget="text"/></page>
+                        <page string="Response"><field name="response_json" nolabel="1" widget="text"/></page>
                     </notebook>
                 </sheet>
             </form>
@@ -95,6 +82,6 @@
         <field name="name">Sync Records</field>
         <field name="res_model">nsp.sync.record</field>
         <field name="view_mode">list,form</field>
-        <field name="context">{}</field>
+        <field name="search_view_id" ref="view_nsp_sync_record_search"/>
     </record>
 </odoo>

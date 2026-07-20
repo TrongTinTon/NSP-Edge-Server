@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
-from odoo.addons.t4_coreapi.utils import endpoint, get_params, get_body
 
 
 class NspBranch(models.Model):
@@ -22,20 +21,20 @@ class NspBranch(models.Model):
         default="Asia/Ho_Chi_Minh",
         required=True,
         tracking=True,
-        help="Branch-level IANA timezone used by all gates and controllers at this branch.",
+        help="Branch-level IANA timezone used for parking operations at this branch.",
     )
     note = fields.Text(string="Note")
-    gate_ids = fields.One2many("nsp.gate", "branch_id", string="Gates", readonly=True)
-    gate_count = fields.Integer(string="Gates", compute="_compute_gate_count")
+    parking_area_ids = fields.One2many("nsp.parking.area", "branch_id", string="Parking Areas", readonly=True)
+    parking_area_count = fields.Integer(string="Parking Areas", compute="_compute_parking_area_count")
 
     _sql_constraints = [
         ("code_unique", "unique(code)", "Branch Code must be unique."),
     ]
 
-    @api.depends("gate_ids")
-    def _compute_gate_count(self):
+    @api.depends("parking_area_ids")
+    def _compute_parking_area_count(self):
         for rec in self:
-            rec.gate_count = len(rec.gate_ids)
+            rec.parking_area_count = len(rec.parking_area_ids)
 
     @api.model
     def _normalize_code(self, value):
@@ -55,12 +54,7 @@ class NspBranch(models.Model):
         vals = dict(vals)
         if vals.get("code"):
             vals["code"] = self._normalize_code(vals.get("code"))
-        res = super().write(vals)
-        if {"code", "name", "timezone"}.intersection(vals.keys()):
-            gates = self.mapped("gate_ids")
-            if gates and hasattr(gates, "_refresh_config_hash"):
-                gates._refresh_config_hash(bump_if_changed=True)
-        return res
+        return super().write(vals)
 
     @api.constrains("code")
     def _check_code(self):

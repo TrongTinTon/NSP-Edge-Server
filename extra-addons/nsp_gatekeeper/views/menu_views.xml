@@ -20,14 +20,7 @@
               parent="menu_nsp_infrastructure_root"
               action="action_nsp_controllers"
               sequence="20"/>
-
-    <menuitem id="menu_nsp_controller_pairing_requests"
-              name="Controller Pairing Requests"
-              parent="menu_nsp_infrastructure_root"
-              action="action_nsp_controller_pairing_requests"
-              sequence="30"/>
-
-    <menuitem id="nsp_device_menu"
+<menuitem id="nsp_device_menu"
               name="RFID Readers"
               parent="menu_nsp_infrastructure_root"
               action="nsp_device_action"
@@ -44,50 +37,50 @@
               action="action_nsp_device_antenna"
               sequence="10"/>
 
-    <menuitem id="menu_nsp_gate_config_root"
-              name="Gate Configuration"
+    <menuitem id="menu_nsp_parking_config_root"
+              name="Parking Configuration"
               parent="nsp_device_root"
               sequence="20"/>
 
     <menuitem id="menu_nsp_branch"
               name="Branches"
-              parent="menu_nsp_gate_config_root"
+              parent="menu_nsp_parking_config_root"
               action="action_nsp_branch"
               sequence="10"/>
 
-    <menuitem id="menu_nsp_gate"
-              name="Gates"
-              parent="menu_nsp_gate_config_root"
-              action="action_nsp_gate"
+    <menuitem id="menu_nsp_parking_area"
+              name="Parking Areas"
+              parent="menu_nsp_parking_config_root"
+              action="action_nsp_parking_area"
               sequence="20"/>
 
-    <menuitem id="menu_nsp_gate_lane"
+    <menuitem id="menu_nsp_parking_lane"
               name="Lanes"
-              parent="menu_nsp_gate_config_root"
-              action="action_nsp_gate_lane"
+              parent="menu_nsp_parking_config_root"
+              action="action_nsp_parking_lane"
               sequence="30"/>
 
-    <menuitem id="menu_nsp_gate_lane_antenna_mapping"
-              name="Lane Antenna Mapping"
-              parent="menu_nsp_gate_config_root"
-              action="action_nsp_gate_lane_antenna_mapping"
+    <menuitem id="menu_nsp_parking_lane_antenna_mapping"
+              name="Parking Lane Antennas"
+              parent="menu_nsp_parking_config_root"
+              action="action_nsp_parking_lane_antenna_mapping"
               sequence="40"/>
 
-    <menuitem id="menu_nsp_gate_measurement_root"
-              name="Gate Measurement"
+    <menuitem id="menu_nsp_measurement_root"
+              name="Measurement"
               parent="nsp_device_root"
               sequence="30"/>
 
-    <menuitem id="menu_nsp_gate_measurement"
+    <menuitem id="menu_nsp_measurement"
               name="Measurement Sessions"
-              parent="menu_nsp_gate_measurement_root"
-              action="action_nsp_gate_measurement_session"
+              parent="menu_nsp_measurement_root"
+              action="action_nsp_measurement_session"
               sequence="10"/>
 
-    <menuitem id="menu_nsp_gate_measurement_event"
+    <menuitem id="menu_nsp_measurement_event"
               name="Measurement Events"
-              parent="menu_nsp_gate_measurement_root"
-              action="action_nsp_gate_measurement_event"
+              parent="menu_nsp_measurement_root"
+              action="action_nsp_measurement_event"
               sequence="20"/>
 
     <menuitem id="menu_nsp_operations_root"

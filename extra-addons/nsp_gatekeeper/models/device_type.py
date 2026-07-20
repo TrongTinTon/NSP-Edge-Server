@@ -18,11 +18,10 @@ class NspDeviceType(models.Model):
     ], string="Category", default="other", required=True, index=True)
     supports_antenna_mapping = fields.Boolean(
         string="Supports Antenna Mapping",
-        help="Enable this for RFID readers that can be selected in Gate antenna rules.",
+        help="Enable this for RFID readers that can be selected in Parking Lane antenna mappings.",
     )
     active = fields.Boolean(default=True)
     sequence = fields.Integer(default=10)
-    note = fields.Text(string="Note")
 
     _sql_constraints = [
         ("code_unique", "unique(code)", "Device Type Code must be unique."),

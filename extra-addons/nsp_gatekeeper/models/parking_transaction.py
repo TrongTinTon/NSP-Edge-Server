@@ -11,7 +11,6 @@ from odoo.osv import expression
 
 _logger = logging.getLogger(__name__)
 
-
 class ParkingTransaction(models.Model):
     _name = "nsp.parking.transaction"
     _description = "Parking transactions received from the controller when vehicles enter/exit"
@@ -25,19 +24,18 @@ class ParkingTransaction(models.Model):
         ondelete="cascade",
         index=True,
     )
-    gate_id = fields.Many2one("nsp.gate", string="Gate", ondelete="set null", index=True)
-    branch_id = fields.Many2one("nsp.branch", string="Branch", related="gate_id.branch_id", store=True, readonly=True, index=True)
-    gate_code = fields.Char(string="Gate Code", index=True)
-    lane_id = fields.Many2one("nsp.gate.lane", string="Lane", ondelete="set null", index=True)
+    parking_area_id = fields.Many2one("nsp.parking.area", string="Parking Area", ondelete="set null", index=True)
+    branch_id = fields.Many2one("nsp.branch", string="Branch", related="parking_area_id.branch_id", store=True, readonly=True, index=True)
+    parking_area_code = fields.Char(string="Parking Area Code", index=True)
+    lane_id = fields.Many2one("nsp.parking.lane", string="Lane", ondelete="set null", index=True)
     lane_code = fields.Char(string="Lane Code", index=True)
     lane_display = fields.Char(string="Lane", compute="_compute_lane_display")
-    gate_display = fields.Char(
-        string="Gate Name",
-        compute="_compute_gate_display",
-        help="Human-readable Gate name used by Vehicle In/Out Logs and the Parking Display. Falls back to Gate Code when the related Gate record is not linked.",
+    parking_area_display = fields.Char(
+        string="Parking Area",
+        compute="_compute_parking_area_display",
+        help="Human-readable Parking Area name used by Vehicle In/Out Logs and the Parking Display.",
     )
     transaction_uid = fields.Char(string="Transaction UID", copy=False, index=True)
-    controller_local_id = fields.Char(string="Controller Local ID", copy=False, index=True)
     time_entered = fields.Datetime(string="Event Time", help="Time that the vehicle entered/exited the parking lot", required=True, index=True)
     direction = fields.Selection([
         ("entry", "Entry"),
@@ -54,11 +52,10 @@ class ParkingTransaction(models.Model):
         ("vehicle_card_unknown", "Vehicle Card Not In Master List"), ("vehicle_not_found", "Vehicle Not Found"),
         ("user_card_unknown", "Employee Card Not In Master List"), ("user_not_assigned", "Employee Card Not Assigned"),
         ("borrow_not_allowed", "Borrow Not Allowed"), ("continuity_entry_missing", "Exit Without Previous Entry"),
-        ("continuity_duplicate", "Duplicate Direction"), ("gate_missing", "Gate Missing/Ambiguous"),
-        ("gate_not_operational", "Gate Not Operational"), ("gate_config_not_applied", "Gate Config Not Applied"),
-        ("gate_config_stale", "Gate Config Stale"), ("no_antenna_rule", "No Active Antenna Rule"),
-        ("antenna_sequence_invalid", "Invalid Antenna Sequence"), ("detection_window_missed", "Detection Window Missed"),
-        ("user_tid_wrong_antenna", "Employee Card Wrong Antenna"), ("controller_reported_error", "Controller Reported Error"),
+        ("continuity_duplicate", "Duplicate Direction"),
+        ("parking_area_not_operational", "Parking Area Not Operational"),
+        ("no_antenna_rule", "No Active Antenna Rule"),
+        ("ambiguous_antenna_mapping", "Ambiguous Antenna Mapping"),
         ("unknown", "Unknown"),
     ], string="Alert Code", index=True, copy=False, help="Standardized alert/error code used by IT dashboard and reports.")
     error_codes = fields.Char(string="Alert Codes", index=True, copy=False, help="Comma-separated list of all standardized error codes detected for this event.")
@@ -78,20 +75,8 @@ class ParkingTransaction(models.Model):
     device_id = fields.Many2one("nsp.device", string="Device", ondelete="set null", index=True)
     serial_number = fields.Char(string="Reader Serial Number", index=True)
     antenna_no = fields.Integer(string="Primary Antenna No", index=True)
-    device_serial = fields.Char(string="Legacy Device Serial", index=True)
-    antenna_id = fields.Integer(string="Legacy Antenna ID", index=True)
     payload_hash = fields.Char(string="Normalized Payload Hash", copy=False, index=True)
-    antenna_sequence = fields.Char(string="Antenna Sequence", help="Detected antenna sequence for the vehicle TID")
-    lane_rule_id = fields.Many2one("nsp.gate.lane.antenna.mapping", string="Lane Antenna Rule", ondelete="set null", index=True)
-    effective_direction = fields.Selection([
-        ("entry", "Entry"),
-        ("exit", "Exit"),
-        ("both", "Both"),
-        ("unknown", "Unknown"),
-    ], string="Effective Direction", default="unknown", index=True,
-       help="Direction resolved from the Lane Antenna Mapping used for this event.")
-
-    config_revision = fields.Integer(string="Controller Config Revision", index=True)
+    lane_rule_id = fields.Many2one("nsp.parking.lane.antenna.mapping", string="Lane Antenna Rule", ondelete="set null", index=True)
 
     vehicle_card_id = fields.Many2one(
         "nsp.rfid.card",
@@ -115,22 +100,22 @@ class ParkingTransaction(models.Model):
     )
     borrower_id = fields.Many2one("nsp.user", string="Borrower", ondelete="set null")
 
-    @api.depends("gate_id", "gate_id.name", "gate_id.code", "controller_id", "gate_code")
-    def _compute_gate_display(self):
-        Gate = self.env["nsp.gate"].sudo()
+    @api.depends("parking_area_id", "parking_area_id.name", "parking_area_id.code", "controller_id", "parking_area_code")
+    def _compute_parking_area_display(self):
+        ParkingArea = self.env["nsp.parking.area"].sudo()
         for rec in self:
-            if rec.gate_id:
-                rec.gate_display = rec.gate_id.name or rec.gate_id.code or rec.gate_code or "-"
+            if rec.parking_area_id:
+                rec.parking_area_display = rec.parking_area_id.name or rec.parking_area_id.code or rec.parking_area_code or "-"
                 continue
 
-            gate_code = (rec.gate_code or "").strip()
-            gate = Gate.browse()
-            if gate_code and rec.controller_id:
-                gate = Gate.search(expression.AND([
-                    [("controller_ids", "in", [rec.controller_id.id])],
-                    ["|", ("code", "=ilike", gate_code), ("name", "=ilike", gate_code)],
+            parking_area_code = (rec.parking_area_code or "").strip()
+            parking_area = ParkingArea.browse()
+            if parking_area_code and rec.controller_id:
+                parking_area = ParkingArea.search(expression.AND([
+                    [("lane_ids.controller_id", "=", rec.controller_id.id)],
+                    ["|", ("code", "=ilike", parking_area_code), ("name", "=ilike", parking_area_code)],
                 ]), limit=1)
-            rec.gate_display = (gate.name if gate else "") or gate_code or "-"
+            rec.parking_area_display = (parking_area.name if parking_area else "") or parking_area_code or "-"
 
     @api.depends("lane_id", "lane_id.name", "lane_id.code", "lane_code")
     def _compute_lane_display(self):
@@ -140,7 +125,6 @@ class ParkingTransaction(models.Model):
             else:
                 rec.lane_display = rec.lane_code or "-"
 
-
     @api.depends("license_plate", "vehicle_tid", "vehicle_id")
     def _compute_vehicle_display(self):
         for rec in self:
@@ -148,7 +132,6 @@ class ParkingTransaction(models.Model):
             tid = (rec.vehicle_tid or "").strip()
             vehicle_name = rec.vehicle_id.display_name if rec.vehicle_id else ""
             rec.vehicle_display = plate or vehicle_name or tid or "-"
-
 
     _sql_constraints = [
         ("transaction_uid_unique", "unique(transaction_uid)", "Transaction UID must be unique."),
@@ -180,8 +163,6 @@ class ParkingTransaction(models.Model):
             return "exit"
         return "entry"
 
-
-
     @api.model
     def _error_catalog(self):
         return {
@@ -190,11 +171,10 @@ class ParkingTransaction(models.Model):
             "user_card_unknown": ("auth", "critical"), "user_not_assigned": ("auth", "critical"),
             "borrow_not_allowed": ("borrow", "critical"),
             "continuity_entry_missing": ("continuity", "warning"), "continuity_duplicate": ("continuity", "warning"),
-            "gate_missing": ("config", "critical"), "gate_not_operational": ("config", "critical"),
-            "gate_config_not_applied": ("config", "critical"), "gate_config_stale": ("config", "warning"),
-            "no_antenna_rule": ("config", "critical"), "antenna_sequence_invalid": ("config", "warning"),
-            "detection_window_missed": ("missing_tag", "warning"), "user_tid_wrong_antenna": ("missing_tag", "warning"),
-            "controller_reported_error": ("device", "warning"), "unknown": ("unknown", "warning"),
+            "parking_area_not_operational": ("config", "critical"),
+            "no_antenna_rule": ("config", "critical"),
+            "ambiguous_antenna_mapping": ("config", "critical"),
+            "unknown": ("unknown", "warning"),
         }
 
     @api.model
@@ -206,12 +186,10 @@ class ParkingTransaction(models.Model):
                    ("missing user", "missing_user_tid"), ("employee tid", "missing_user_tid"),
                    ("user tid is not defined", "user_card_unknown"), ("user tid is not assigned", "user_not_assigned"),
                    ("borrow", "borrow_not_allowed"), ("no previous entry", "continuity_entry_missing"),
-                   ("already", "continuity_duplicate"), ("gate is missing", "gate_missing"), ("gate/port is missing", "gate_missing"),
-                   ("not operational", "gate_not_operational"), ("config is not applied", "gate_config_not_applied"),
-                   ("gate config is not applied", "gate_config_not_applied"), ("gate config has changed", "gate_config_stale"),
-                   ("stale config", "gate_config_stale"), ("no active", "no_antenna_rule"),
-                   ("antenna sequence", "antenna_sequence_invalid"), ("detection window", "detection_window_missed"),
-                   ("exit-direction antenna", "user_tid_wrong_antenna"))
+                   ("already", "continuity_duplicate"),
+                   ("not operational", "parking_area_not_operational"),
+                   ("no active", "no_antenna_rule"),
+                   ("ambiguous antenna", "ambiguous_antenna_mapping"))
         for marker, code in mapping:
             if marker in text:
                 return code
@@ -258,9 +236,6 @@ class ParkingTransaction(models.Model):
             vals["error_message"] = " ".join(messages)
         return vals
 
-
-
-
     def _find_vehicle(self, payload):
         Vehicle = self.env["nsp.vehicle"].sudo()
         vehicle_code = str(payload.get("vehicle_code") or "").strip()
@@ -302,18 +277,11 @@ class ParkingTransaction(models.Model):
             pass
         return self.env["nsp.user"].browse(), user_card
 
-
-
-
-
-
-
-
     @api.model
     def _normalized_payload_hash(self, controller, vals):
         business = {
             "controller_code": controller.controller_id if controller else "",
-            "gate_code": vals.get("gate_code") or "",
+            "parking_area_code": vals.get("parking_area_code") or "",
             "lane_code": vals.get("lane_code") or "",
             "direction": vals.get("direction") or "",
             "check_time": str(vals.get("time_entered") or ""),
@@ -326,8 +294,6 @@ class ParkingTransaction(models.Model):
         }
         raw = repr(sorted(business.items())).encode("utf-8")
         return hashlib.sha256(raw).hexdigest()
-
-
 
     @api.model
     def _validate_vehicle_borrow_access(self, vehicle, user, event_time):
@@ -370,26 +336,23 @@ class ParkingTransaction(models.Model):
 
     @api.model
     def ingest_controller_log(self, controller, payload):
-        """Persist one normalized Controller detection and evaluate it at Edge Server.
+        """Persist one Controller event using only device identity.
 
-        Controller is responsible for Reader/Antenna collection and resolving
-        lane/direction/detection rule. Edge Server is responsible for card,
-        vehicle, user, borrow and continuity decisions. Raw antenna events are
-        intentionally not accepted or stored by this API.
+        The Controller reports reader serial number and antenna number. Parking
+        area, lane and direction are resolved from server-side topology. The
+        Controller therefore does not need to know branch, parking area or lane.
         """
         if not isinstance(payload, dict):
             raise ValidationError(_("invalid_payload"))
 
         allowed_fields = {
-            "transaction_uid", "controller_code", "gate_code", "lane_code",
-            "direction", "check_time", "vehicle_tid", "user_tid",
-            "vehicle_code", "config_revision", "config_hash",
+            "transaction_uid", "controller_code", "serial_number", "antenna_no",
+            "check_time", "vehicle_tid", "user_tid", "vehicle_code",
         }
         unsupported = sorted(set(payload) - allowed_fields)
         if unsupported:
             raise ValidationError(_(
-                "invalid_payload: unsupported field(s): %s",
-                ", ".join(unsupported),
+                "invalid_payload: unsupported field(s): %s", ", ".join(unsupported)
             ))
 
         controller_code = str(payload.get("controller_code") or "").strip()
@@ -397,46 +360,55 @@ class ParkingTransaction(models.Model):
             raise ValidationError(_("route_not_allowed"))
 
         transaction_uid = str(payload.get("transaction_uid") or "").strip()
+        serial_number = str(payload.get("serial_number") or "").strip().upper()
+        try:
+            antenna_no = int(payload.get("antenna_no") or 0)
+        except Exception as exc:
+            raise ValidationError(_("invalid_payload: antenna_no")) from exc
+        event_time = self._safe_datetime_value(payload.get("check_time"), default_now=False)
         if not transaction_uid:
             raise ValidationError(_("missing_transaction_uid"))
-        gate_code = str(payload.get("gate_code") or "").strip().upper()
-        lane_code = str(payload.get("lane_code") or "").strip().upper()
-        if not gate_code:
-            raise ValidationError(_("gate_code is required"))
-        if not lane_code:
-            raise ValidationError(_("lane_code is required"))
-        direction = self._normalize_direction(payload.get("direction"))
-        if direction not in ("entry", "exit"):
-            raise ValidationError(_("invalid_direction"))
-        event_time = self._safe_datetime_value(payload.get("check_time"), default_now=False)
+        if not serial_number:
+            raise ValidationError(_("serial_number is required"))
+        if antenna_no <= 0:
+            raise ValidationError(_("antenna_no is required"))
         if not event_time:
             raise ValidationError(_("check_time is required"))
-        try:
-            config_revision = int(payload.get("config_revision") or 0)
-        except Exception as exc:
-            raise ValidationError(_("invalid_payload: config_revision")) from exc
-        if config_revision <= 0:
-            raise ValidationError(_("config_revision is required"))
 
-        Gate = self.env["nsp.gate"].sudo()
-        gate = Gate.search([
-            ("code", "=", gate_code),
-            ("controller_ids", "in", [controller.id]),
+        device = self.env["nsp.device"].sudo().search([
+            ("controller_id", "=", controller.id),
+            ("serial_number", "=", serial_number),
+            ("managed", "=", True),
         ], limit=1)
-        if not gate:
-            raise ValidationError(_("gate_not_found"))
-        lane = self.env["nsp.gate.lane"].sudo().search([
-            ("gate_id", "=", gate.id),
-            ("code", "=", lane_code),
-            ("active", "=", True),
+        if not device:
+            raise ValidationError(_("device_not_found"))
+        antenna = self.env["nsp.device.antenna"].sudo().search([
+            ("device_id", "=", device.id),
+            ("antenna_id", "=", antenna_no),
+            ("is_active", "=", True),
         ], limit=1)
-        if not lane:
-            raise ValidationError(_("lane_not_found"))
-        group = lane.antenna_group_ids.filtered(
-            lambda rec: rec.active and rec.direction == direction
-        )[:1]
-        if not group:
-            raise ValidationError(_("missing_antenna_group"))
+        if not antenna:
+            raise ValidationError(_("antenna_not_found"))
+
+        Mapping = self.env["nsp.parking.lane.antenna.mapping"].sudo()
+        mappings = Mapping.search([
+            ("antenna_ref_id", "=", antenna.id),
+            ("is_active", "=", True),
+            ("antenna_group_id.active", "=", True),
+            ("lane_id.active", "=", True),
+        ])
+        if not mappings:
+            raise ValidationError(_("no_antenna_rule"))
+        if len(mappings) > 1:
+            raise ValidationError(_("ambiguous_antenna_mapping"))
+        mapping = mappings[0]
+        lane = mapping.lane_id
+        parking_area = mapping.parking_area_id
+        direction = mapping.effective_direction
+        if lane.controller_id != controller:
+            raise ValidationError(_("controller_not_in_scope"))
+        if direction not in ("entry", "exit"):
+            raise ValidationError(_("invalid_direction"))
 
         vehicle_tid = str(payload.get("vehicle_tid") or "").strip()
         user_tid = str(payload.get("user_tid") or "").strip()
@@ -463,23 +435,6 @@ class ParkingTransaction(models.Model):
         user_code = record_code(user, ("user_code", "code"))
         license_plate = str(vehicle.license_plate or "").strip() if vehicle and "license_plate" in vehicle._fields else ""
 
-        config_errors = []
-        if gate.operation_state != "operational" or gate.gate_status != "active":
-            config_errors.append(("gate_not_operational", _("Gate is not operational.")))
-        gate._refresh_config_hash(bump_if_changed=False)
-        if gate.config_state != "applied" or gate.applied_config_revision != gate.config_revision or gate.applied_config_hash != gate.config_hash:
-            config_errors.append(("gate_config_not_applied", _("Gate configuration is not applied or is stale.")))
-        if config_revision != gate.applied_config_revision:
-            config_errors.append(("gate_config_stale", _("Controller is using a stale config_revision.")))
-        config_hash = str(payload.get("config_hash") or "").strip()
-        if config_hash and config_hash != gate.applied_config_hash:
-            config_errors.append(("gate_config_stale", _("Controller is using a stale config_hash.")))
-        mappings = group.antenna_mapping_ids.filtered(
-            lambda rec: rec.is_active and rec.antenna_ref_id and rec.antenna_ref_id.is_active and rec.device_id.managed
-        )
-        if not mappings:
-            config_errors.append(("no_antenna_rule", _("No enabled antenna mapping exists for this lane direction.")))
-
         continuity_ok, continuity_error = self._validate_vehicle_continuity(vehicle, direction, event_time)
         borrow_ok, borrow_error, borrow_request = self._validate_vehicle_borrow_access(vehicle, user, event_time) if user_tid and user else (
             True,
@@ -489,14 +444,18 @@ class ParkingTransaction(models.Model):
 
         vals = {
             "controller_id": controller.id,
-            "gate_id": gate.id,
-            "gate_code": gate.code,
+            "parking_area_id": parking_area.id,
+            "parking_area_code": parking_area.code,
             "lane_id": lane.id,
             "lane_code": lane.code,
+            "lane_rule_id": mapping.id,
             "transaction_uid": transaction_uid,
             "time_entered": event_time,
             "direction": direction,
             "status": "allowed",
+            "device_id": device.id,
+            "serial_number": serial_number,
+            "antenna_no": antenna_no,
             "vehicle_id": vehicle.id if vehicle else False,
             "vehicle_code": vehicle_code or False,
             "license_plate": license_plate or False,
@@ -508,10 +467,11 @@ class ParkingTransaction(models.Model):
             "user_card_id": user_card.id if user_card else False,
             "borrow_request_id": borrow_request.id if borrow_request else False,
             "borrower_id": user.id if borrow_request and user else False,
-            "effective_direction": direction,
         }
 
-        decision_errors = list(config_errors)
+        decision_errors = []
+        if parking_area.operation_state != "operational" or parking_area.status != "active":
+            decision_errors.append(("parking_area_not_operational", _("Parking Area is not operational.")))
         if lane.required_vehicle_tid and not vehicle_tid:
             decision_errors.append(("missing_vehicle_tid", _("Vehicle RFID card/TID was not detected.")))
         elif vehicle_tid and not vehicle_card:

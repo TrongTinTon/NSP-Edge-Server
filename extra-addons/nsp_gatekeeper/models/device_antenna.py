@@ -1,5 +1,4 @@
 from odoo import api, fields, models, _
-from odoo.http import request
 from odoo.exceptions import ValidationError
 
 class DeviceAntenna(models.Model):
@@ -10,7 +9,11 @@ class DeviceAntenna(models.Model):
     _order = "device_id, antenna_id, id"
 
     antenna_id      = fields.Integer(string="Antenna No", required=True)
-    status          = fields.Char(string="Status", help="Operating status of the antenna", default="Inactive")
+    status = fields.Selection([
+        ("online", "Online"),
+        ("offline", "Offline"),
+        ("degraded", "Degraded"),
+    ], string="Status", required=True, default="offline", index=True)
     power_dbm       = fields.Integer(string="Power dBm", help="RF output power of this antenna when reported by the reader")
     return_loss_db  = fields.Integer(string="Return Loss dB", help="Antenna connection detector return loss value when available")
 
@@ -24,7 +27,7 @@ class DeviceAntenna(models.Model):
     device_id = fields.Many2one("nsp.device", string="Device", ondelete="cascade", required=True, index=True, help="Device that owns this antenna")
     device_serial = fields.Char(string="Device Serial", related="device_id.serial_number", store=True, readonly=True, index=True)
     controller_id = fields.Many2one("nsp.controller", string="Controller", related="device_id.controller_id", store=True, readonly=True, index=True)
-    lane_rule_ids = fields.One2many("nsp.gate.lane.antenna.mapping", "antenna_ref_id", string="Lane Mapping", readonly=True)
+    lane_rule_ids = fields.One2many("nsp.parking.lane.antenna.mapping", "antenna_ref_id", string="Lane Mapping", readonly=True)
     lane_count = fields.Integer(string="Mapped Lanes", compute="_compute_lane_count", store=False)
 
     _sql_constraints = [
@@ -59,18 +62,3 @@ class DeviceAntenna(models.Model):
             if record.session is not None:
                 if record.session < 0 or record.session > 3:
                     raise ValidationError(_("Session must be in the range 0 - 3!"))
-
-    @api.model
-    def create(self, vals):
-        """Create device"""
-        antennas = super().create(vals)
-        return antennas
-    
-    def write(self, vals):
-        """Update antenna and mark parent device config as not synced."""
-        result = super().write(vals)
-        config_fields = {'scan_time', 'q_value', 'session', 'power_dbm', 'return_loss_db', 'is_active', 'status'}
-        if config_fields.intersection(vals.keys()):
-            for device in self.mapped('device_id'):
-                device.write({'config_sync_status': 'not_synced', 'config_applied_status': 'not_applied'})
-        return result

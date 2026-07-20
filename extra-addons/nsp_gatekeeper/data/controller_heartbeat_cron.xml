@@ -21,9 +21,9 @@
             <field name="active" eval="True"/>
         </record>
 
-        <record id="ir_cron_nsp_gate_measurement_cleanup" model="ir.cron">
-            <field name="name">NSP Gate Measurement Retention Cleanup</field>
-            <field name="model_id" ref="nsp_gatekeeper.model_nsp_gate_measurement_session"/>
+        <record id="ir_cron_nsp_measurement_cleanup" model="ir.cron">
+            <field name="name">NSP Measurement Retention Cleanup</field>
+            <field name="model_id" ref="nsp_gatekeeper.model_nsp_measurement_session"/>
             <field name="state">code</field>
             <field name="code">model.cron_cleanup_expired_measurements()</field>
             <field name="interval_number">1</field>

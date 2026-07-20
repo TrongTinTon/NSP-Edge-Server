@@ -1,2 +1,0 @@
-zeroconf>=0.133
-psutil>=5.9

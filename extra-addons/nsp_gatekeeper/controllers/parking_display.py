@@ -4,15 +4,15 @@ import json
 from odoo import fields, http
 from odoo.http import request
 
-
 class NspParkingDisplayController(http.Controller):
     """Parking display support endpoints owned by NSP Gatekeeper.
 
-    Gatekeeper owns gate configuration and the parking transaction source of
-    truth. The realtime screen consumes parking monitor notifications from
-    nsp_notification. The events endpoint below is retained for backward
-    diagnostic comparison against nsp.parking.transaction.
+    The server owns parking operation topology and the parking transaction
+    source of truth. The screen reads directly from nsp.parking.transaction.
     """
+
+    def _has_parking_access(self):
+        return request.env.user.has_group("nsp_core.group_nsp_operator")
 
     def _json_response(self, payload, status=200):
         body = json.dumps(payload or {}, ensure_ascii=False, default=str)
@@ -34,47 +34,49 @@ class NspParkingDisplayController(http.Controller):
         return number
 
     @http.route(
-        "/api/nsp_gatekeeper/v1/parking-display/gates",
+        "/api/nsp_gatekeeper/v1/parking-display/areas",
         type="http",
         auth="user",
         methods=["GET"],
         csrf=False,
     )
-    def parking_display_gates(self, **kw):
-        Gate = request.env["nsp.gate"].sudo()
-        gates = Gate.search(
+    def parking_display_areas(self, **kw):
+        if not self._has_parking_access():
+            return self._json_response({"ok": False, "error": "forbidden"}, status=403)
+        ParkingArea = request.env["nsp.parking.area"].sudo()
+        parking_areas = ParkingArea.search(
             [
-                ("gate_status", "=", "active"),
+                ("status", "=", "active"),
                 ("operation_state", "=", "operational"),
             ],
             order="branch_id, name, code, id",
         )
         return self._json_response({
             "ok": True,
-            "gates": [
+            "parking_areas": [
                 {
-                    "id": gate.id,
-                    "code": gate.code,
-                    "name": gate.name,
+                    "id": parking_area.id,
+                    "code": parking_area.code,
+                    "name": parking_area.name,
                     "display_name": "%s%s" % (
-                        (gate.branch_id.name + " / ") if gate.branch_id else "",
-                        gate.name or gate.code or gate.id,
+                        (parking_area.branch_id.name + " / ") if parking_area.branch_id else "",
+                        parking_area.name or parking_area.code or parking_area.id,
                     ),
-                    "branch_id": gate.branch_id.id if gate.branch_id else False,
-                    "branch_name": gate.branch_id.name if gate.branch_id else "",
+                    "branch_id": parking_area.branch_id.id if parking_area.branch_id else False,
+                    "branch_name": parking_area.branch_id.name if parking_area.branch_id else "",
                     "controllers": [{
                         "id": controller.id,
                         "controller_id": controller.controller_id,
                         "controller_name": controller.controller_name or "",
-                    } for controller in gate.controller_ids],
+                    } for controller in parking_area.controller_ids],
                     "lanes": [{
                         "id": lane.id,
                         "code": lane.code,
                         "name": lane.name,
                         "direction": lane.direction,
-                    } for lane in gate.lane_ids.filtered(lambda l: l.active)],
+                    } for lane in parking_area.lane_ids.filtered(lambda l: l.active)],
                 }
-                for gate in gates
+                for parking_area in parking_areas
             ],
             "server_time": fields.Datetime.to_string(fields.Datetime.now()),
         })
@@ -87,15 +89,17 @@ class NspParkingDisplayController(http.Controller):
         csrf=False,
     )
     def parking_display_events(self, **kw):
-        gate_id = self._int_param(kw.get("gate_id"), default=0, minimum=0)
+        if not self._has_parking_access():
+            return self._json_response({"ok": False, "error": "forbidden"}, status=403)
+        parking_area_id = self._int_param(kw.get("parking_area_id"), default=0, minimum=0)
         limit = self._int_param(kw.get("limit"), default=30, minimum=1, maximum=100)
         since_id = self._int_param(kw.get("since_id"), default=0, minimum=0)
         direction = (kw.get("direction") or "").strip().lower()
         status_filter = (kw.get("status") or "").strip().lower()
 
         domain = []
-        if gate_id:
-            domain.append(("gate_id", "=", gate_id))
+        if parking_area_id:
+            domain.append(("parking_area_id", "=", parking_area_id))
         if since_id:
             domain.append(("id", ">", since_id))
         if direction in ("entry", "exit"):
@@ -109,8 +113,8 @@ class NspParkingDisplayController(http.Controller):
 
         events = []
         for rec in records:
-            gate = rec.gate_id
-            branch = gate.branch_id if gate else request.env["nsp.branch"].browse()
+            parking_area = rec.parking_area_id
+            branch = parking_area.branch_id if parking_area else request.env["nsp.branch"].browse()
             controller = rec.controller_id
             direction_label = "Vào" if rec.direction == "entry" else "Ra"
             status_label = "Được phép" if rec.status == "allowed" else "Từ chối"
@@ -125,10 +129,10 @@ class NspParkingDisplayController(http.Controller):
                 "vehicle": rec.vehicle_display or rec.license_plate or rec.vehicle_tid or "-",
                 "license_plate": rec.license_plate or "",
                 "vehicle_tid": rec.vehicle_tid or "",
-                "gate": rec.gate_display or rec.gate_code or (gate.name if gate else ""),
-                "gate_id": gate.id if gate else False,
-                "gate_code": rec.gate_code or (gate.code if gate else ""),
-                "gate_name": gate.name if gate else (rec.gate_display or ""),
+                "parking_area": rec.parking_area_display or rec.parking_area_code or (parking_area.name if parking_area else ""),
+                "parking_area_id": parking_area.id if parking_area else False,
+                "parking_area_code": rec.parking_area_code or (parking_area.code if parking_area else ""),
+                "parking_area_name": parking_area.name if parking_area else (rec.parking_area_display or ""),
                 "lane_id": rec.lane_id.id if rec.lane_id else False,
                 "lane_code": rec.lane_code or (rec.lane_id.code if rec.lane_id else ""),
                 "lane_name": rec.lane_id.name if rec.lane_id else (rec.lane_display or ""),
