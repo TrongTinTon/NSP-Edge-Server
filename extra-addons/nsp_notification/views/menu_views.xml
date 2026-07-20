@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_nsp_notifications"
+              name="Notifications"
+              parent="nsp_core.menu_nsp_operations"
+              action="action_nsp_notification"
+              sequence="5"
+              groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking"/>
+</odoo>

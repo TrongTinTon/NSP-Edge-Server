@@ -4,12 +4,16 @@
         <field name="name">nsp.edge.server.search</field>
         <field name="model">nsp.edge.server</field>
         <field name="arch" type="xml">
-            <search>
+            <search string="Edge Servers">
                 <field name="edge_server_code"/>
                 <field name="name"/>
                 <filter string="Online" name="online" domain="[('status','=','online')]"/>
                 <filter string="Offline" name="offline" domain="[('status','=','offline')]"/>
-                <group><filter string="Status" name="group_status" context="{'group_by':'status'}"/></group>
+                <filter string="Error" name="error" domain="[('status','=','error')]"/>
+                <separator/>
+                <group>
+                    <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
+                </group>
             </search>
         </field>
     </record>
@@ -19,11 +23,15 @@
         <field name="model">nsp.edge.server</field>
         <field name="arch" type="xml">
             <list string="Edge Servers">
+                <field name="status" widget="badge"
+                       decoration-success="status == 'online'"
+                       decoration-danger="status in ('offline','revoked')"
+                       decoration-warning="status in ('error','block')"/>
                 <field name="edge_server_code"/>
                 <field name="name"/>
-                <field name="controller_count" string="Controllers"/>
-                <field name="status" widget="badge" decoration-success="status == 'online'" decoration-danger="status in ('offline','revoked')" decoration-warning="status == 'error'"/>
-                <field name="timestamp" optional="show"/>
+                <field name="controller_count"/>
+                <field name="reader_count"/>
+                <field name="timestamp" string="Last Heartbeat"/>
                 <field name="active" optional="hide"/>
             </list>
         </field>
@@ -34,31 +42,48 @@
         <field name="model">nsp.edge.server</field>
         <field name="arch" type="xml">
             <form string="Edge Server">
-                <header><field name="status" widget="statusbar" statusbar_visible="offline,online,error,block,revoked"/></header>
+                <header>
+                    <field name="status" widget="statusbar" statusbar_visible="offline,online,error,block,revoked" readonly="1"/>
+                </header>
                 <sheet>
                     <div class="oe_button_box" name="button_box">
                         <button name="action_open_controllers" type="object" class="oe_stat_button" icon="fa-sitemap">
                             <field name="controller_count" widget="statinfo" string="Controllers"/>
                         </button>
+                        <button name="action_open_readers" type="object" class="oe_stat_button" icon="fa-rss">
+                            <field name="reader_count" widget="statinfo" string="Readers"/>
+                        </button>
                     </div>
-                    <div class="oe_title"><label for="edge_server_code"/><h1><field name="edge_server_code"/></h1></div>
+                    <div class="oe_title">
+                        <label for="edge_server_code"/>
+                        <h1><field name="edge_server_code" placeholder="EDGE-BD-01"/></h1>
+                    </div>
                     <group>
-                        <group string="Configuration">
+                        <group string="Edge Server Declaration">
                             <field name="name"/>
                             <field name="active"/>
                         </group>
-                        <group string="Runtime">
-                            <field name="timestamp" readonly="1"/>
+                        <group string="Runtime Status">
+                            <field name="status" widget="badge" readonly="1"
+                                   decoration-success="status == 'online'"
+                                   decoration-danger="status in ('offline','revoked')"
+                                   decoration-warning="status in ('error','block')"/>
+                            <field name="timestamp" string="Last Heartbeat" readonly="1"/>
                         </group>
                     </group>
                     <notebook>
                         <page string="Controllers">
+                            <div class="alert alert-info" role="alert">
+                                Declare the Controllers connected through this Edge Server. Each Controller manages its own Readers.
+                            </div>
                             <field name="controller_ids" context="{'default_edge_server_id': id}">
                                 <list editable="bottom">
-                                    <field name="controller_id"/>
+                                    <field name="controller_id" string="Controller Code"/>
                                     <field name="controller_name"/>
-                                    <field name="status" widget="badge"/>
-                                    <field name="timestamp" readonly="1"/>
+                                    <field name="status" widget="badge" readonly="1"/>
+                                    <field name="reader_count" readonly="1"/>
+                                    <field name="antenna_count" readonly="1"/>
+                                    <field name="timestamp" string="Last Heartbeat" readonly="1"/>
                                     <field name="active"/>
                                 </list>
                             </field>
@@ -74,12 +99,14 @@
         <field name="name">nsp.controller.search</field>
         <field name="model">nsp.controller</field>
         <field name="arch" type="xml">
-            <search>
+            <search string="Controllers">
                 <field name="controller_id"/>
                 <field name="controller_name"/>
                 <field name="edge_server_id"/>
                 <filter string="Online" name="online" domain="[('status','=','online')]"/>
                 <filter string="Offline" name="offline" domain="[('status','=','offline')]"/>
+                <filter string="Error" name="error" domain="[('status','=','error')]"/>
+                <separator/>
                 <group>
                     <filter string="Edge Server" name="group_edge" context="{'group_by':'edge_server_id'}"/>
                     <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
@@ -93,11 +120,17 @@
         <field name="model">nsp.controller</field>
         <field name="arch" type="xml">
             <list string="Controllers">
-                <field name="controller_id"/>
+                <field name="status" widget="badge"
+                       decoration-success="status == 'online'"
+                       decoration-danger="status in ('offline','revoked')"
+                       decoration-warning="status in ('error','block')"/>
+                <field name="controller_id" string="Controller Code"/>
                 <field name="controller_name"/>
                 <field name="edge_server_id"/>
-                <field name="status" widget="badge" decoration-success="status == 'online'" decoration-danger="status in ('offline','revoked')" decoration-warning="status == 'error'"/>
-                <field name="timestamp" optional="show"/>
+                <field name="reader_count"/>
+                <field name="antenna_count"/>
+                <field name="timestamp" string="Last Heartbeat"/>
+                <field name="last_device_report_at" string="Last Reader Report" optional="hide"/>
                 <field name="active" optional="hide"/>
             </list>
         </field>
@@ -108,29 +141,52 @@
         <field name="model">nsp.controller</field>
         <field name="arch" type="xml">
             <form string="Controller">
-                <header><field name="status" widget="statusbar" statusbar_visible="offline,online,error,block,revoked"/></header>
+                <header>
+                    <field name="status" widget="statusbar" statusbar_visible="offline,online,error,block,revoked" readonly="1"/>
+                </header>
                 <sheet>
-                    <div class="oe_title"><label for="controller_id"/><h1><field name="controller_id"/></h1></div>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_open_readers" type="object" class="oe_stat_button" icon="fa-rss">
+                            <field name="reader_count" widget="statinfo" string="Readers"/>
+                        </button>
+                        <button name="action_open_antennas" type="object" class="oe_stat_button" icon="fa-signal">
+                            <field name="antenna_count" widget="statinfo" string="Antennas"/>
+                        </button>
+                    </div>
+                    <div class="oe_title">
+                        <label for="controller_id"/>
+                        <h1><field name="controller_id" placeholder="CTRL-GATE-01"/></h1>
+                    </div>
                     <group>
-                        <group string="Configuration">
+                        <group string="Controller Declaration">
                             <field name="controller_name"/>
-                            <field name="edge_server_id"/>
+                            <field name="edge_server_id" options="{'no_create': False, 'no_open': False}"/>
                             <field name="active"/>
                         </group>
-                        <group string="Runtime">
-                            <field name="timestamp" readonly="1"/>
-                            <field name="last_device_report_at" readonly="1"/>
+                        <group string="Runtime Status">
+                            <field name="status" widget="badge" readonly="1"
+                                   decoration-success="status == 'online'"
+                                   decoration-danger="status in ('offline','revoked')"
+                                   decoration-warning="status in ('error','block')"/>
+                            <field name="timestamp" string="Last Heartbeat" readonly="1"/>
+                            <field name="last_device_report_at" string="Last Reader Report" readonly="1"/>
                         </group>
                     </group>
                     <notebook>
-                        <page string="Managed Devices">
-                            <field name="device_ids">
-                                <list create="0">
-                                    <field name="serial_number"/>
-                                    <field name="device_code"/>
+                        <page string="Readers">
+                            <div class="alert alert-info" role="alert">
+                                Declare only the Readers directly controlled by this Controller. Parking area and lane topology are configured on the server.
+                            </div>
+                            <field name="device_ids" context="{'default_controller_id': id}">
+                                <list editable="bottom">
+                                    <field name="serial_number" string="Serial"/>
+                                    <field name="device_code" string="Device Code"/>
                                     <field name="model_number"/>
-                                    <field name="status" widget="badge"/>
-                                    <field name="managed"/>
+                                    <field name="device_vendor" string="Vendor"/>
+                                    <field name="status" widget="badge" readonly="1"/>
+                                    <field name="device_ip" string="IP Address" readonly="1" optional="show"/>
+                                    <field name="device_port" string="Port" readonly="1" optional="show"/>
+                                    <field name="antennas" string="Antennas" readonly="1"/>
                                 </list>
                             </field>
                         </page>

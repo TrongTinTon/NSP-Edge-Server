@@ -420,27 +420,18 @@ class NspSyncJob(models.Model):
 
     @api.model
     def _serialize_device_status(self, device):
+        """Serialize Reader runtime only; antennas have no runtime status."""
         controller = device.controller_id
         status = str(device.status or "offline").lower()
         device_status = status if status in ("online", "offline", "degraded") else "offline"
-        antennas = []
-        for antenna in device.antennas_ids.sorted(key=lambda rec: (rec.antenna_id, rec.id)):
-            antenna_status = str(antenna.status or "offline").strip().lower()
-            if antenna_status not in ("online", "offline", "degraded"):
-                antenna_status = "online" if antenna.is_active else "offline"
-            antennas.append({
-                "antenna_no": int(antenna.antenna_id or 0),
-                "antenna_status": antenna_status,
-                "enabled": bool(antenna.is_active),
-                **({"power_dbm": int(antenna.power_dbm)} if antenna.power_dbm not in (False, None) else {}),
-                **({"return_loss_db": int(antenna.return_loss_db)} if antenna.return_loss_db not in (False, None) else {}),
-                **({"last_seen_at": self._dt(device.last_seen)} if device.last_seen else {}),
-            })
         return {
             "record_key": device.serial_number or device.device_code,
             "controller_code": controller.controller_id if controller else "",
             "serial_number": device.serial_number or "",
             **({"device_code": device.device_code} if device.device_code else {}),
+            **({"model_number": device.model_number} if device.model_number else {}),
+            **({"vendor": device.device_vendor} if device.device_vendor else {}),
+            "device_type": "rfid_reader",
             "device_status": device_status,
             "last_seen_at": self._dt(device.last_seen or fields.Datetime.now()),
             **({"firmware_version": device.firmware_version} if device.firmware_version else {}),
@@ -448,7 +439,6 @@ class NspSyncJob(models.Model):
                 **({"ip_address": device.device_ip} if device.device_ip else {}),
                 **({"port": int(device.device_port)} if device.device_port else {}),
             },
-            "antennas": antennas,
         }
 
     @api.model
@@ -720,17 +710,11 @@ class NspSyncJob(models.Model):
         serial = str(serial_number or "").strip().upper()
         if not serial:
             raise UserError(_("Reader Serial Number is required."))
-        Device = self.env["nsp.device"].sudo().with_context(active_test=False)
+        Device = self.env["nsp.device"].sudo()
         device = Device.search([("serial_number", "=", serial)], limit=1)
-        reader_type = self.env.ref("nsp_gatekeeper.nsp_device_type_rfid_reader", raise_if_not_found=False)
-        if not reader_type:
-            reader_type = self.env["nsp.device.type"].sudo().search([("code", "=", "rfid_reader")], limit=1)
         vals = {
             "controller_id": controller.id,
-            "managed": True,
             "device_code": serial,
-            "device_name": device.device_name if device and device.device_name else serial,
-            "device_type_id": reader_type.id if reader_type else False,
         }
         if device:
             device.write(vals)
@@ -790,8 +774,7 @@ class NspSyncJob(models.Model):
                     antenna = Antenna.create({
                         "device_id": device.id,
                         "antenna_id": antenna_no,
-                        "status": "offline",
-                        "is_active": True,
+                        "physical_antenna": "ANT-%s" % antenna_no,
                     })
                 antenna_refs |= antenna
         if not antenna_refs:
@@ -827,7 +810,7 @@ class NspSyncJob(models.Model):
             parking = Parking.create(vals)
 
         Lane = self.env["nsp.parking.lane"].sudo().with_context(active_test=False)
-        Group = self.env["nsp.parking.lane.antenna.group"].sudo()
+        Group = self.env["nsp.parking.lane.antenna.group"].sudo().with_context(active_test=False)
         Mapping = self.env["nsp.parking.lane.antenna.mapping"].sudo()
         incoming_codes = []
         lanes_data = item.get("lanes") or []
@@ -866,7 +849,7 @@ class NspSyncJob(models.Model):
             lane.write(lane_vals) if lane else None
             if not lane:
                 lane = Lane.create(lane_vals)
-            lane.antenna_group_ids.unlink()
+            Group.search([("lane_id", "=", lane.id)]).unlink()
 
             groups_data = lane_item.get("antenna_groups") or []
             if not isinstance(groups_data, list):
@@ -900,21 +883,21 @@ class NspSyncJob(models.Model):
                     device = self._find_or_create_device(controller, serial)
                     Antenna = self.env["nsp.device.antenna"].sudo()
                     antenna = Antenna.search([("device_id", "=", device.id), ("antenna_id", "=", antenna_no)], limit=1)
+                    physical_antenna = str(
+                        antenna_item.get("physical_antenna") or "ANT-%s" % antenna_no
+                    ).strip()
                     if not antenna:
                         antenna = Antenna.create({
                             "device_id": device.id,
                             "antenna_id": antenna_no,
-                            "status": "offline",
-                            "is_active": True,
+                            "physical_antenna": physical_antenna,
                         })
+                    elif physical_antenna and antenna.physical_antenna != physical_antenna:
+                        antenna.write({"physical_antenna": physical_antenna})
                     sequence_no = int(antenna_item.get("sequence_no") or antenna_index) if detection_mode == "sequential" else 0
-                    tag_role = antenna_item.get("tag_role")
-                    if tag_role not in ("vehicle_tid", "user_tid", "both"):
-                        tag_role = "vehicle_tid"
                     Mapping.create({
                         "antenna_group_id": group.id,
                         "antenna_ref_id": antenna.id,
-                        "tag_role": tag_role,
                         "sequence_no": sequence_no,
                         "is_active": True,
                     })

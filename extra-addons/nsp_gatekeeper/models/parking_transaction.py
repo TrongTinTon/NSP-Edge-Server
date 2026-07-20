@@ -375,17 +375,21 @@ class ParkingTransaction(models.Model):
         if not event_time:
             raise ValidationError(_("check_time is required"))
 
+        if not self.env["nsp.device.whitelist"].sudo().is_device_whitelisted(serial_number):
+            if "nsp.notification" in self.env.registry.models:
+                self.env["nsp.notification"].sudo().notify_device_not_whitelisted(
+                    serial_number, controller.controller_id, details={"device_type": "rfid_reader"}
+                )
+            raise ValidationError(_("device_not_whitelisted"))
         device = self.env["nsp.device"].sudo().search([
             ("controller_id", "=", controller.id),
             ("serial_number", "=", serial_number),
-            ("managed", "=", True),
         ], limit=1)
         if not device:
             raise ValidationError(_("device_not_found"))
         antenna = self.env["nsp.device.antenna"].sudo().search([
             ("device_id", "=", device.id),
             ("antenna_id", "=", antenna_no),
-            ("is_active", "=", True),
         ], limit=1)
         if not antenna:
             raise ValidationError(_("antenna_not_found"))

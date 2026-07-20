@@ -26,16 +26,18 @@ class NspEdgeServer(models.Model):
     status = fields.Selection(NODE_STATUS, default="offline", required=True, index=True, tracking=True)
     active = fields.Boolean(default=True, index=True)
     controller_ids = fields.One2many("nsp.controller", "edge_server_id", string="Controllers")
-    controller_count = fields.Integer(compute="_compute_controller_count")
+    controller_count = fields.Integer(string="Controllers", compute="_compute_controller_count")
+    reader_count = fields.Integer(string="Readers", compute="_compute_controller_count")
 
     _sql_constraints = [
         ("edge_server_code_unique", "unique(edge_server_code)", "Edge Server Code must be unique."),
     ]
 
-    @api.depends("controller_ids")
+    @api.depends("controller_ids", "controller_ids.device_ids")
     def _compute_controller_count(self):
         for record in self:
             record.controller_count = len(record.controller_ids)
+            record.reader_count = len(record.controller_ids.mapped("device_ids"))
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -63,6 +65,16 @@ class NspEdgeServer(models.Model):
         })
         return action
 
+    def action_open_readers(self):
+        self.ensure_one()
+        action = self.env.ref("nsp_gatekeeper.nsp_device_action").sudo().read()[0]
+        action.update({
+            "name": _("Readers"),
+            "domain": [("controller_id.edge_server_id", "=", self.id)],
+            "context": {},
+        })
+        return action
+
     def unlink(self):
         if self.controller_ids:
             raise UserError(_("Move or archive the Controllers assigned to this Edge Server first."))
@@ -87,11 +99,39 @@ class NspController(models.Model):
     timestamp = fields.Datetime(string="Last Heartbeat", readonly=True, copy=False, index=True)
     active = fields.Boolean(default=True, index=True)
     status = fields.Selection(NODE_STATUS, default="offline", required=True, index=True, tracking=True)
-    last_device_report_at = fields.Datetime(readonly=True, copy=False)
-    device_ids = fields.One2many("nsp.device", "controller_id", string="Managed Devices")
+    last_device_report_at = fields.Datetime(string="Last Reader Report", readonly=True, copy=False)
+    device_ids = fields.One2many("nsp.device", "controller_id", string="Readers")
+    reader_count = fields.Integer(string="Readers", compute="_compute_reader_counts")
+    antenna_count = fields.Integer(string="Antennas", compute="_compute_reader_counts")
     _sql_constraints = [
         ("controller_id_unique", "unique(controller_id)", "Controller Code must be unique."),
     ]
+
+    @api.depends("device_ids", "device_ids.antennas_ids")
+    def _compute_reader_counts(self):
+        for record in self:
+            record.reader_count = len(record.device_ids)
+            record.antenna_count = len(record.device_ids.mapped("antennas_ids"))
+
+    def action_open_readers(self):
+        self.ensure_one()
+        action = self.env.ref("nsp_gatekeeper.nsp_device_action").sudo().read()[0]
+        action.update({
+            "name": _("Readers"),
+            "domain": [("controller_id", "=", self.id)],
+            "context": {"default_controller_id": self.id},
+        })
+        return action
+
+    def action_open_antennas(self):
+        self.ensure_one()
+        action = self.env.ref("nsp_gatekeeper.action_nsp_device_antenna").sudo().read()[0]
+        action.update({
+            "name": _("Antennas"),
+            "domain": [("controller_id", "=", self.id)],
+            "context": {},
+        })
+        return action
 
     @api.model_create_multi
     def create(self, vals_list):

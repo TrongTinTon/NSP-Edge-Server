@@ -1,7 +1,6 @@
 from . import branch
 from . import device_antenna
 from . import controllers_model
-from . import device_type
 from . import device
 from . import parking_config
 from . import parking_transaction

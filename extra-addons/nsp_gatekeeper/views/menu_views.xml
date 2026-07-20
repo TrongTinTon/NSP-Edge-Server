@@ -1,8 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
 <odoo>
     <menuitem id="nsp_device_root"
               name="Gatekeeper"
               parent="nsp_core.menu_nsp_configuration"
               sequence="10"/>
+
+    <menuitem id="menu_nsp_parking_area"
+              name="Parking Operation Configurations"
+              parent="nsp_device_root"
+              action="action_nsp_parking_area"
+              sequence="5"/>
 
     <menuitem id="menu_nsp_infrastructure_root"
               name="Infrastructure"
@@ -20,25 +27,28 @@
               parent="menu_nsp_infrastructure_root"
               action="action_nsp_controllers"
               sequence="20"/>
-<menuitem id="nsp_device_menu"
-              name="RFID Readers"
+
+    <menuitem id="nsp_device_menu"
+              name="Readers"
               parent="menu_nsp_infrastructure_root"
               action="nsp_device_action"
-              sequence="40"/>
-
-    <menuitem id="menu_nsp_antenna_root"
-              name="Antennas"
-              parent="menu_nsp_infrastructure_root"
-              sequence="50"/>
+              sequence="30"/>
 
     <menuitem id="menu_nsp_device_antenna"
-              name="Device Antennas"
-              parent="menu_nsp_antenna_root"
+              name="Antennas"
+              parent="menu_nsp_infrastructure_root"
               action="action_nsp_device_antenna"
-              sequence="10"/>
+              sequence="40"/>
+
+    <menuitem id="menu_nsp_device_whitelist"
+              name="Device Whitelist"
+              parent="menu_nsp_infrastructure_root"
+              action="nsp_device_whitelist_action"
+              sequence="50"
+              groups="nsp_core.group_nsp_it_parking"/>
 
     <menuitem id="menu_nsp_parking_config_root"
-              name="Parking Configuration"
+              name="Parking Setup"
               parent="nsp_device_root"
               sequence="20"/>
 
@@ -47,24 +57,6 @@
               parent="menu_nsp_parking_config_root"
               action="action_nsp_branch"
               sequence="10"/>
-
-    <menuitem id="menu_nsp_parking_area"
-              name="Parking Areas"
-              parent="menu_nsp_parking_config_root"
-              action="action_nsp_parking_area"
-              sequence="20"/>
-
-    <menuitem id="menu_nsp_parking_lane"
-              name="Lanes"
-              parent="menu_nsp_parking_config_root"
-              action="action_nsp_parking_lane"
-              sequence="30"/>
-
-    <menuitem id="menu_nsp_parking_lane_antenna_mapping"
-              name="Parking Lane Antennas"
-              parent="menu_nsp_parking_config_root"
-              action="action_nsp_parking_lane_antenna_mapping"
-              sequence="40"/>
 
     <menuitem id="menu_nsp_measurement_root"
               name="Measurement"
@@ -93,13 +85,6 @@
               parent="menu_nsp_operations_root"
               action="action_nsp_parking_transaction"
               sequence="10"/>
-
-    <menuitem id="menu_nsp_device_whitelist"
-              name="Device Whitelist"
-              parent="menu_nsp_operations_root"
-              action="nsp_device_whitelist_action"
-              sequence="20"
-              groups="nsp_core.group_nsp_it_parking"/>
 
     <record id="action_nsp_parking_display" model="ir.actions.client">
         <field name="name">Parking Realtime</field>

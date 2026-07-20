@@ -264,7 +264,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             "controller_code": controller.controller_id,
             "current_status": "online",
             "last_seen_at": self._iso_datetime(now),
-            "managed_device_count": len(controller.device_ids),
+            "reader_count": len(self._whitelisted_devices(controller.device_ids)),
         }, message="Heartbeat accepted.")
 
     @api.model
@@ -323,17 +323,52 @@ class NspGatekeeperApiService(models.AbstractModel):
         return items if isinstance(items, list) else []
 
     @api.model
+    def _whitelisted_devices(self, devices):
+        """Return Readers whose Serial exists in Device Whitelist."""
+        serials = [str(value or "").strip().upper() for value in devices.mapped("serial_number") if value]
+        if not serials:
+            return devices.browse()
+        allowed = set(self.env["nsp.device.whitelist"].sudo().search([
+            ("serial_number", "in", serials),
+        ]).mapped("serial_number"))
+        return devices.filtered(lambda reader: reader.serial_number in allowed)
+
+    @api.model
+    def _notify_device_not_whitelisted(self, controller, item, serial_number):
+        if "nsp.notification" not in self.env.registry.models:
+            return True
+        values = item if isinstance(item, dict) else {}
+        self.env["nsp.notification"].sudo().notify_device_not_whitelisted(
+            serial_number,
+            controller.controller_id if controller else False,
+            details={
+                "model_number": values.get("model_number") or values.get("model"),
+                "vendor": values.get("vendor") or values.get("device_vendor"),
+                "device_type": values.get("device_type") or "rfid_reader",
+            },
+        )
+        return True
+
+    @api.model
     def _apply_device_status(self, controller, item):
+        """Apply Reader runtime status reported by a Controller.
+
+        Antennas do not have an independent runtime/configuration state.  Their
+        declaration is managed on the server and only contains antenna number and
+        physical label.
+        """
         if not isinstance(item, dict):
             raise ValueError("invalid_payload")
-        serial_number = str(item.get("serial_number") or "").strip()
+        serial_number = str(item.get("serial_number") or "").strip().upper()
         if not serial_number:
             raise ValueError("serial_number is required")
+        if not self.env["nsp.device.whitelist"].sudo().is_device_whitelisted(serial_number):
+            self._notify_device_not_whitelisted(controller, item, serial_number)
+            raise ValueError("device_not_whitelisted")
         Device = self.env["nsp.device"].sudo()
         device = Device.search([
             ("controller_id", "=", controller.id),
             ("serial_number", "=", serial_number),
-            ("managed", "=", True),
         ], limit=1)
         if not device:
             raise ValueError("device_not_found")
@@ -352,37 +387,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             vals["device_ip"] = str(connection.get("ip_address"))
         if connection.get("port") not in (None, ""):
             vals["device_port"] = int(connection.get("port"))
-        antennas = item.get("antennas") or []
-        if not isinstance(antennas, list):
-            raise ValueError("antennas must be an array")
-        Antenna = self.env["nsp.device.antenna"].sudo().with_context(active_test=False)
-        antenna_updates = []
-        for antenna_item in antennas:
-            if not isinstance(antenna_item, dict):
-                raise ValueError("invalid_payload")
-            try:
-                antenna_no = int(antenna_item.get("antenna_no") or 0)
-            except Exception:
-                antenna_no = 0
-            antenna = Antenna.search([("device_id", "=", device.id), ("antenna_id", "=", antenna_no)], limit=1)
-            if not antenna:
-                raise ValueError("antenna_not_found")
-            antenna_status = str(antenna_item.get("antenna_status") or "online").strip().lower()
-            if antenna_status not in ("online", "offline", "degraded"):
-                raise ValueError("invalid_payload")
-            antenna_vals = {
-                "status": antenna_status,
-                "is_active": bool(antenna_item.get("enabled", antenna.is_active)),
-            }
-            if "last_seen" in Antenna._fields:
-                antenna_vals["last_seen"] = self._safe_datetime_value(antenna_item.get("last_seen_at"), default_now=False) or last_seen_at
-            for field_name in ("power_dbm", "return_loss_db"):
-                if field_name in Antenna._fields and antenna_item.get(field_name) not in (None, ""):
-                    antenna_vals[field_name] = int(antenna_item.get(field_name))
-            antenna_updates.append((antenna, antenna_vals))
         device.write(vals)
-        for antenna, antenna_vals in antenna_updates:
-            antenna.write(antenna_vals)
         return device
 
     @endpoint("NSP Gatekeeper Edge Server Status", route_suffix="edge-server/status", methods="POST", code="nsp_gatekeeper_edge_server_status")
@@ -707,7 +712,7 @@ class NspGatekeeperApiService(models.AbstractModel):
                 error_code="invalid_payload",
                 details={"unsupported_fields": unsupported},
             )
-        devices = controller.device_ids.filtered(lambda rec: rec.managed).sorted(
+        devices = self._whitelisted_devices(controller.device_ids).sorted(
             key=lambda rec: (rec.serial_number or "", rec.id)
         )
         return self._ok({
@@ -911,13 +916,14 @@ class NspGatekeeperApiService(models.AbstractModel):
                 seen.add(key)
                 antenna = Antenna.search([
                     ("device_id.controller_id", "=", controller.id),
-                    ("device_id.managed", "=", True),
-                    ("device_id.device_type_id.supports_antenna_mapping", "=", True),
                     ("device_id.serial_number", "=", serial_number),
                     ("antenna_id", "=", antenna_no),
                 ], limit=1)
                 if not antenna:
                     raise ValueError("antenna_not_found")
+                if not antenna.device_id._is_whitelisted():
+                    antenna.device_id._notify_not_whitelisted()
+                    raise ValueError("device_not_whitelisted")
                 result.append(antenna)
         return result
 

@@ -1,81 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <record id="nsp_device_view_list" model="ir.ui.view">
-        <field name="name">nsp.device.view.list</field>
+    <record id="nsp_device_view_search" model="ir.ui.view">
+        <field name="name">nsp.reader.search</field>
         <field name="model">nsp.device</field>
         <field name="arch" type="xml">
-            <list string="RFID Reader / Device">
-                <field name="status" widget="badge" decoration-success="status == 'online'" decoration-danger="status == 'offline'" decoration-warning="status == 'degraded'"/>
-                <field name="whitelist_status" widget="badge" decoration-success="whitelist_status == 'valid'" decoration-danger="whitelist_status == 'invalid'" readonly="1"/>
-                <field name="whitelist_record_id"/>
-                <field name="serial_number" string="Serial"/>
-                <field name="device_code" string="Device Code" optional="show"/>
-                <field name="device_name" optional="show"/>
+            <search string="Readers">
+                <field name="serial_number"/>
+                <field name="device_code"/>
                 <field name="model_number"/>
-                <field name="firmware_version" readonly="1" optional="hide"/>
-                <field name="antennas" readonly="1"/>
-                <field name="device_type_id" optional="show"/>
+                <field name="device_vendor"/>
                 <field name="controller_id"/>
-                <field name="create_date" string="Created Date" readonly="1" optional="hide"/>
+                <field name="device_ip"/>
+                <filter string="Online" name="online" domain="[('status','=','online')]"/>
+                <filter string="Offline" name="offline" domain="[('status','=','offline')]"/>
+                <filter string="Degraded" name="degraded" domain="[('status','=','degraded')]"/>
+                <separator/>
+                <group>
+                    <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
+                    <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
+                    <filter string="Vendor" name="group_vendor" context="{'group_by':'device_vendor'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="nsp_device_view_list" model="ir.ui.view">
+        <field name="name">nsp.reader.list</field>
+        <field name="model">nsp.device</field>
+        <field name="arch" type="xml">
+            <list string="Readers">
+                <field name="status" widget="badge"
+                       decoration-success="status == 'online'"
+                       decoration-danger="status == 'offline'"
+                       decoration-warning="status == 'degraded'"/>
+                <field name="serial_number" string="Serial"/>
+                <field name="device_code" string="Device Code"/>
+                <field name="model_number"/>
+                <field name="device_vendor" string="Vendor"/>
+                <field name="controller_id"/>
+                <field name="device_ip" string="IP Address" optional="show"/>
+                <field name="device_port" string="Port" optional="show"/>
+                <field name="last_seen" readonly="1" optional="show"/>
+                <field name="firmware_version" readonly="1" optional="hide"/>
+                <field name="antennas" string="Antennas" readonly="1"/>
             </list>
         </field>
     </record>
 
     <record id="nsp_device_view_form" model="ir.ui.view">
-        <field name="name">nsp.device.view.form</field>
+        <field name="name">nsp.reader.form</field>
         <field name="model">nsp.device</field>
         <field name="arch" type="xml">
-            <form string="RFID Reader / Device">
+            <form string="Reader">
+                <header>
+                    <field name="status" widget="statusbar" statusbar_visible="offline,online,degraded" readonly="1"/>
+                </header>
                 <sheet>
                     <div class="oe_title">
-                        <label for="device_name"/>
-                        <h1>
-                            <field name="device_name" placeholder="RFID Reader 01"/>
-                        </h1>
+                        <label for="serial_number" string="Reader Serial"/>
+                        <h1><field name="serial_number" placeholder="24113001"/></h1>
                     </div>
                     <group>
                         <group string="Device Declaration">
-                            <field name="whitelist_record_id" options="{'no_create': False, 'no_open': False}"/>
-                            <field name="whitelist_status" widget="badge" decoration-success="whitelist_status == 'valid'" decoration-danger="whitelist_status == 'invalid'" readonly="1"/>
-                            <field name="serial_number" string="Serial"/>
                             <field name="device_code" string="Device Code"/>
-                            <field name="device_type_id" options="{'no_create': False, 'no_open': False}"/>
                             <field name="model_number"/>
-                            <field name="device_vendor"/>
+                            <field name="device_vendor" string="Vendor"/>
                             <field name="controller_id" options="{'no_create': False, 'no_open': False}"/>
-                            <field name="managed"/>
                         </group>
                         <group string="Runtime Status">
-                            <field name="status" readonly="1"/>
+                            <field name="status" widget="badge" readonly="1"
+                                   decoration-success="status == 'online'"
+                                   decoration-danger="status == 'offline'"
+                                   decoration-warning="status == 'degraded'"/>
                             <field name="last_seen" readonly="1"/>
                             <field name="firmware_version" readonly="1"/>
-                            <field name="device_ip" readonly="1"/>
-                            <field name="device_port" readonly="1"/>
+                            <field name="device_ip" string="IP Address" readonly="1"/>
+                            <field name="device_port" string="Port" readonly="1"/>
                         </group>
                     </group>
                     <group string="Reader Parameters">
                         <group>
-                            <field name="power_dbm"/>
-                            <field name="read_interval_ms"/>
-                            <field name="check_antenna_enabled"/>
+                            <field name="power_dbm" string="Power dBm"/>
+                            <field name="read_interval_ms" string="Read Interval ms"/>
                         </group>
                         <group>
-                            <field name="tid_addr"/>
-                            <field name="tid_len"/>
+                            <field name="tid_addr" string="TID Start Address"/>
+                            <field name="tid_len" string="TID Length"/>
                         </group>
                     </group>
                     <notebook>
                         <page name="antennas" string="Antennas">
-                            <field name="antennas_ids">
+                            <div class="alert alert-info" role="alert">
+                                Declare only the physical antenna ports available on this Reader. RFID read parameters are configured at Reader level.
+                            </div>
+                            <field name="antennas_ids" context="{'default_device_id': id}">
                                 <list string="Antennas" editable="bottom">
-                                    <field name="antenna_id"/>
-                                    <field name="status"/>
-                                    <field name="is_active" widget="boolean_toggle"/>
-                                    <field name="lane_count" readonly="1"/>
-                                    <field name="power_dbm"/>
-                                    <field name="return_loss_db"/>
-                                    <field name="scan_time" optional="hide"/>
-                                    <field name="q_value" optional="hide"/>
-                                    <field name="session" optional="hide"/>
+                                    <field name="antenna_id" string="Antenna No"/>
+                                    <field name="physical_antenna" string="Physical Antenna"/>
+                                    <field name="lane_count" string="Mapped Lanes" readonly="1"/>
                                 </list>
                             </field>
                         </page>
@@ -86,112 +108,98 @@
     </record>
 
     <record id="nsp_device_action" model="ir.actions.act_window">
-        <field name="name">Manage Devices</field>
+        <field name="name">Readers</field>
         <field name="res_model">nsp.device</field>
         <field name="view_mode">list,form</field>
-        <field name="domain">[]</field>
-        <field name="context">{}</field>
+        <field name="search_view_id" ref="nsp_device_view_search"/>
         <field name="view_ids" eval="[(5,0,0),
-        (0,0, {'view_mode': 'list', 'view_id': ref('nsp_device_view_list')}),
-        (0,0, {'view_mode': 'form', 'view_id': ref('nsp_device_view_form')})]"/>
+            (0,0, {'view_mode': 'list', 'view_id': ref('nsp_device_view_list')}),
+            (0,0, {'view_mode': 'form', 'view_id': ref('nsp_device_view_form')})]"/>
     </record>
 
-
     <record id="nsp_device_heartbeat_view_list" model="ir.ui.view">
-        <field name="name">nsp.device.heartbeat.view.list</field>
+        <field name="name">nsp.reader.runtime.list</field>
         <field name="model">nsp.device</field>
         <field name="arch" type="xml">
-            <list string="Device Heartbeat" create="0">
-                <field name="status" widget="badge" decoration-success="status == 'online'" decoration-danger="status == 'offline'" decoration-warning="status == 'degraded'"/>
-                <field name="whitelist_status" widget="badge" decoration-success="whitelist_status == 'valid'" decoration-danger="whitelist_status == 'invalid'" readonly="1"/>
-                <field name="whitelist_record_id" readonly="1"/>
-                <field name="serial_number" readonly="1"/>
-                <field name="device_name" readonly="1" optional="show"/>
-                <field name="model_number" readonly="1" optional="show"/>
-                <field name="device_type_id" optional="show" readonly="1"/>
-                <field name="controller_id" readonly="1"/>
-                <field name="last_seen" readonly="1" string="Last Device Report"/>
-                <field name="firmware_version" readonly="1" optional="hide"/>
-                <field name="device_ip" readonly="1" optional="hide"/>
+            <list string="Reader Runtime Status" create="0" edit="0">
+                <field name="status" widget="badge"
+                       decoration-success="status == 'online'"
+                       decoration-danger="status == 'offline'"
+                       decoration-warning="status == 'degraded'"/>
+                <field name="serial_number"/>
+                <field name="device_code"/>
+                <field name="controller_id"/>
+                <field name="last_seen"/>
+                <field name="firmware_version"/>
+                <field name="device_ip" string="IP Address"/>
+                <field name="device_port" string="Port"/>
             </list>
         </field>
     </record>
 
     <record id="action_nsp_device_heartbeat" model="ir.actions.act_window">
-        <field name="name">Device Heartbeat</field>
+        <field name="name">Reader Runtime Status</field>
         <field name="res_model">nsp.device</field>
         <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="nsp_device_view_search"/>
         <field name="view_ids" eval="[(5,0,0),
-        (0,0, {'view_mode': 'list', 'view_id': ref('nsp_device_heartbeat_view_list')}),
-        (0,0, {'view_mode': 'form', 'view_id': ref('nsp_device_view_form')})]"/>
+            (0,0, {'view_mode': 'list', 'view_id': ref('nsp_device_heartbeat_view_list')}),
+            (0,0, {'view_mode': 'form', 'view_id': ref('nsp_device_view_form')})]"/>
     </record>
 
     <record id="view_nsp_device_antenna_search" model="ir.ui.view">
-        <field name="name">view.nsp.device.antenna.search</field>
+        <field name="name">nsp.reader.antenna.search</field>
         <field name="model">nsp.device.antenna</field>
         <field name="arch" type="xml">
-            <search string="Antenna">
-                <field name="antenna_id"/>
-                <field name="device_id"/>
-                <field name="device_serial"/>
+            <search string="Antennas">
+                <field name="antenna_id" string="Antenna No"/>
+                <field name="physical_antenna"/>
+                <field name="device_id" string="Reader"/>
+                <field name="device_serial" string="Reader Serial"/>
                 <field name="controller_id"/>
-                <filter string="Active" name="active_antennas" domain="[('is_active','=',True)]"/>
                 <filter string="Mapped to Lane" name="mapped" domain="[('lane_rule_ids','!=',False)]"/>
                 <separator/>
-                <filter string="Device" name="group_device" context="{'group_by':'device_id'}"/>
-                <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
-                <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
+                <group>
+                    <filter string="Reader" name="group_device" context="{'group_by':'device_id'}"/>
+                    <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
+                </group>
             </search>
         </field>
     </record>
 
     <record id="view_nsp_device_antenna_list" model="ir.ui.view">
-        <field name="name">view.nsp.device.antenna.list</field>
+        <field name="name">nsp.reader.antenna.list</field>
         <field name="model">nsp.device.antenna</field>
         <field name="arch" type="xml">
-            <list string="Antenna">
+            <list string="Antennas">
                 <field name="controller_id" readonly="1"/>
-                <field name="device_id"/>
-                <field name="device_serial" readonly="1"/>
-                <field name="antenna_id"/>
-                <field name="status"/>
-                <field name="is_active" widget="boolean_toggle"/>
-                <field name="lane_count" readonly="1"/>
-                <field name="power_dbm" optional="show"/>
-                <field name="return_loss_db" optional="show"/>
-                <field name="scan_time" optional="hide"/>
-                <field name="q_value" optional="hide"/>
-                <field name="session" optional="hide"/>
+                <field name="device_id" string="Reader"/>
+                <field name="antenna_id" string="Antenna No"/>
+                <field name="physical_antenna"/>
+                <field name="lane_count" string="Mapped Lanes" readonly="1"/>
             </list>
         </field>
     </record>
 
     <record id="view_nsp_device_antenna_form" model="ir.ui.view">
-        <field name="name">view.nsp.device.antenna.form</field>
+        <field name="name">nsp.reader.antenna.form</field>
         <field name="model">nsp.device.antenna</field>
         <field name="arch" type="xml">
             <form string="Antenna">
                 <sheet>
                     <div class="oe_title">
-                        <label for="antenna_id"/>
-                        <h1><field name="antenna_id"/></h1>
+                        <label for="physical_antenna"/>
+                        <h1><field name="physical_antenna" placeholder="Entry Left"/></h1>
                     </div>
                     <group>
                         <group string="Physical Antenna">
-                            <field name="device_id" options="{'no_create': False, 'no_open': False}"/>
-                            <field name="controller_id" readonly="1"/>
-                            <field name="device_serial" readonly="1"/>
-                            <field name="antenna_id"/>
-                            <field name="status"/>
-                            <field name="is_active" widget="boolean_toggle"/>
-                            <field name="lane_count" readonly="1"/>
+                            <field name="device_id" string="Reader" options="{'no_create': False, 'no_open': False}"/>
+                            <field name="antenna_id" string="Antenna No"/>
                         </group>
-                        <group string="Reader Parameters">
-                            <field name="power_dbm"/>
-                            <field name="return_loss_db"/>
-                            <field name="scan_time"/>
-                            <field name="q_value"/>
-                            <field name="session"/>
+                        <group string="Ownership">
+                            <field name="controller_id" readonly="1"/>
+                            <field name="device_serial" string="Reader Serial" readonly="1"/>
+                            <field name="lane_count" string="Mapped Lanes" readonly="1"/>
                         </group>
                     </group>
                     <notebook>
@@ -200,10 +208,8 @@
                                 <list string="Parking Lane Antenna Mapping">
                                     <field name="parking_area_id" string="Parking Area"/>
                                     <field name="lane_id"/>
-                                    <field name="antenna_group_id"/>
-                                    <field name="group_direction" widget="badge"/>
+                                    <field name="group_direction" string="Direction" widget="badge"/>
                                     <field name="detection_mode" widget="badge"/>
-                                    <field name="tag_role" widget="badge"/>
                                     <field name="sequence_no"/>
                                     <field name="is_active" widget="boolean_toggle"/>
                                 </list>
@@ -216,14 +222,12 @@
     </record>
 
     <record id="action_nsp_device_antenna" model="ir.actions.act_window">
-        <field name="name">Antenna</field>
+        <field name="name">Antennas</field>
         <field name="res_model">nsp.device.antenna</field>
         <field name="view_mode">list,form</field>
         <field name="view_ids" eval="[(5,0,0),
             (0,0, {'view_mode': 'list', 'view_id': ref('view_nsp_device_antenna_list')}),
             (0,0, {'view_mode': 'form', 'view_id': ref('view_nsp_device_antenna_form')})]"/>
         <field name="search_view_id" ref="view_nsp_device_antenna_search"/>
-        <field name="context">{}</field>
     </record>
-
 </odoo>

@@ -68,7 +68,7 @@
                         <page string="Devices and Antennas">
                             <field name="antenna_ids">
                                 <list editable="bottom">
-                                    <field name="antenna_ref_id" domain="[('device_id.controller_id','=',parent.controller_id),('device_id.managed','=',True),('device_id.device_type_id.supports_antenna_mapping','=',True)]"/>
+                                    <field name="antenna_ref_id" domain="[('device_id.controller_id','=',parent.controller_id)]"/>
                                     <field name="serial_number" readonly="1"/>
                                     <field name="antenna_no" readonly="1"/>
                                 </list>

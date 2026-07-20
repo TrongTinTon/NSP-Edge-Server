@@ -1,75 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
 <odoo>
     <record id="nsp_device_whitelist_search_view" model="ir.ui.view">
         <field name="name">nsp.device.whitelist.search</field>
         <field name="model">nsp.device.whitelist</field>
         <field name="arch" type="xml">
-            <search>
+            <search string="Device Whitelist">
                 <field name="serial_number"/>
-                <field name="device_name"/>
                 <field name="model_number"/>
-                <field name="approval_state"/>
-                <filter name="valid" string="Valid" domain="[('approval_state','=','valid')]"/>
-                <filter name="invalid" string="Invalid" domain="[('approval_state','=','invalid')]"/>
-                <filter name="pending" string="Pending" domain="[('approval_state','=','pending')]"/>
-                <separator/>
-                    <filter string="Whitelist Status" name="group_approval" context="{'group_by':'approval_state'}"/>
+                <field name="device_vendor"/>
+                <field name="device_type"/>
+                <group>
                     <filter string="Device Type" name="group_type" context="{'group_by':'device_type'}"/>
-                </search>
+                    <filter string="Vendor" name="group_vendor" context="{'group_by':'device_vendor'}"/>
+                </group>
+            </search>
         </field>
     </record>
 
     <record id="nsp_device_whitelist_list_view" model="ir.ui.view">
-        <field name="name">nsp.device.whitelist.list.view</field>
+        <field name="name">nsp.device.whitelist.list</field>
         <field name="model">nsp.device.whitelist</field>
         <field name="arch" type="xml">
-            <list string="Device Whitelist">
-                <field name="approval_state" widget="badge" decoration-success="approval_state == 'valid'" decoration-danger="approval_state == 'invalid'" decoration-warning="approval_state == 'pending'"/>
+            <list string="Device Whitelist" editable="bottom">
                 <field name="serial_number" string="Serial"/>
-                <field name="device_name" optional="show"/>
-                <field name="model_number"/>
+                <field name="model_number" string="Model"/>
+                <field name="device_vendor" string="Vendor"/>
                 <field name="device_type"/>
-                <field name="antennas" optional="hide"/>
-                <field name="controller_ref" optional="show"/>
-                <field name="source_last_seen" optional="hide"/>
             </list>
         </field>
     </record>
 
     <record id="nsp_device_whitelist_form_view" model="ir.ui.view">
-        <field name="name">nsp.device.whitelist.form.view</field>
+        <field name="name">nsp.device.whitelist.form</field>
         <field name="model">nsp.device.whitelist</field>
         <field name="arch" type="xml">
             <form string="Device Whitelist">
-                <header>
-                    <button name="action_mark_valid" string="Approve Valid Device" type="object" class="btn-primary" invisible="approval_state == 'valid'"/>
-                    <button name="action_mark_invalid" string="Mark Invalid" type="object" class="btn-secondary" invisible="approval_state == 'invalid'"/>
-                    <button name="action_reset_pending" string="Reset Pending" type="object" class="btn-secondary" invisible="approval_state == 'pending'"/>
-                    <field name="approval_state" widget="statusbar" statusbar_visible="pending,valid,invalid"/>
-                </header>
                 <sheet>
                     <div class="oe_title">
-                        <label for="serial_number" string="Serial"/>
-                        <h1><field name="serial_number" placeholder="Reader serial number"/></h1>
+                        <label for="serial_number"/>
+                        <h1><field name="serial_number" placeholder="24113001"/></h1>
                     </div>
-                    <group>
-                        <group string="Device Identity">
-                                        <field name="device_code"/>
-                            <field name="device_name"/>
+                    <div class="alert alert-info" role="alert">
+                        A Serial is allowed as soon as it exists in this list. Devices not listed here are rejected and generate an NSP Notification.
+                    </div>
+                    <group string="Whitelist Entry">
+                        <group>
+                            <field name="model_number" string="Model"/>
+                            <field name="device_vendor" string="Vendor"/>
+                        </group>
+                        <group>
                             <field name="device_type"/>
-                            <field name="model_number"/>
-                            <field name="device_vendor"/>
-                            <field name="antennas"/>
                         </group>
-                        <group string="Whitelist Decision">
-                            <field name="controller_ref" readonly="1"/>
-                            <field name="source_last_seen" readonly="1"/>
-                            <field name="approved_by" readonly="1"/>
-                            <field name="approved_at" readonly="1"/>
-                            <field name="imported_from_gatekeeper" readonly="1"/>
-                        </group>
-                    </group>
-                    <group>
-                        <field name="note"/>
                     </group>
                 </sheet>
             </form>
