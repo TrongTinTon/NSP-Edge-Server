@@ -9,6 +9,10 @@
                 <field name="sync_action_name"/>
                 <field name="record_key"/>
                 <field name="status"/>
+                <field name="operation"/>
+                <filter string="Pull Responses" name="pull_responses" domain="[('operation','=','pull')]"/>
+                <filter string="Push Requests" name="push_requests" domain="[('operation','=','push')]"/>
+                <separator/>
                 <filter string="Pending" name="pending" domain="[('status','=','pending')]"/>
                 <filter string="Failed" name="failed" domain="[('status','=','failed')]"/>
                 <filter string="Synced" name="synced" domain="[('status','=','synced')]"/>
@@ -16,6 +20,7 @@
                     <filter string="Source" name="group_source" context="{'group_by':'source_code'}"/>
                     <filter string="Job" name="group_job" context="{'group_by':'sync_job_id'}"/>
                     <filter string="Action" name="group_action" context="{'group_by':'sync_action_code'}"/>
+                    <filter string="Operation" name="group_operation" context="{'group_by':'operation'}"/>
                     <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
                 </group>
             </search>
@@ -33,8 +38,8 @@
                 <field name="operation" widget="badge"/>
                 <field name="record_key"/>
                 <field name="status" widget="badge" decoration-success="status == 'synced'" decoration-danger="status == 'failed'" decoration-warning="status == 'pending'"/>
-                <field name="attempts"/>
-                <field name="last_attempt_at"/>
+                <field name="attempts" optional="hide"/>
+                <field name="last_attempt_at" optional="hide"/>
                 <field name="last_synced_at" optional="show"/>
                 <field name="message" optional="show"/>
             </list>
@@ -63,15 +68,15 @@
                             <field name="record_display_name"/>
                             <field name="record_key"/>
                             <field name="status" widget="badge"/>
-                            <field name="attempts"/>
-                            <field name="last_attempt_at"/>
+                            <field name="attempts" invisible="operation != 'push'"/>
+                            <field name="last_attempt_at" invisible="operation != 'push'"/>
                             <field name="last_synced_at"/>
                         </group>
                     </group>
                     <group string="Message"><field name="message" nolabel="1"/></group>
                     <notebook>
-                        <page string="Payload"><field name="payload_json" nolabel="1" widget="text"/></page>
-                        <page string="Response"><field name="response_json" nolabel="1" widget="text"/></page>
+                        <page string="Request Payload"><field name="payload_json" nolabel="1" widget="text"/></page>
+                        <page string="Response Payload"><field name="response_json" nolabel="1" widget="text"/></page>
                     </notebook>
                 </sheet>
             </form>

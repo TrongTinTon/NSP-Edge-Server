@@ -5,11 +5,11 @@ from odoo import api, fields, models
 
 
 class NspSyncRecord(models.Model):
-    """Execution ledger for outbound Cloud synchronization and retry visibility."""
+    """Per-record synchronization ledger and outbound retry history."""
 
     _name = "nsp.sync.record"
     _description = "NSP Sync Record"
-    _order = "last_attempt_at desc, id desc"
+    _order = "last_attempt_at desc, last_synced_at desc, id desc"
     _rec_name = "display_name"
 
     display_name = fields.Char(compute="_compute_display_name", store=True)
@@ -21,7 +21,9 @@ class NspSyncRecord(models.Model):
     route_suffix = fields.Char(index=True)
     sync_action_code = fields.Char(string="Action Code", required=True, index=True)
     sync_action_name = fields.Char(string="Action", index=True)
-    operation = fields.Selection([("pull", "Pull"), ("push", "Push")], required=True, default="pull", index=True)
+    operation = fields.Selection(
+        [("pull", "Pull Response"), ("push", "Push Request")], required=True, default="pull", index=True
+    )
 
     record_model = fields.Char(index=True)
     record_id = fields.Integer(index=True)
@@ -34,18 +36,46 @@ class NspSyncRecord(models.Model):
         ("failed", "Failed"),
         ("skipped", "Skipped"),
     ], required=True, default="pending", index=True)
-    attempts = fields.Integer(default=0, readonly=True)
+    attempts = fields.Integer(
+        string="Current Send Attempts",
+        default=0,
+        readonly=True,
+        help="Number of attempts in the current outbound delivery cycle. It increases once when a Push request starts and resets when a new payload is sent after the previous cycle completed.",
+    )
     message = fields.Text()
-    payload_json = fields.Text()
-    response_json = fields.Text()
-    last_attempt_at = fields.Datetime(index=True)
-    last_synced_at = fields.Datetime(index=True)
+    payload_json = fields.Text(
+        string="Request Payload",
+        readonly=True,
+        help="Payload sent to the remote API. For Pull records, this is the shared request that produced the response item.",
+    )
+    response_json = fields.Text(
+        string="Response Payload",
+        readonly=True,
+        help="Payload returned by the remote API. For Pull records, this is the individual response item applied on Edge.",
+    )
+    last_attempt_at = fields.Datetime(
+        string="Last Send Attempt",
+        index=True,
+        readonly=True,
+        help="Time when the most recent outbound Push request started.",
+    )
+    last_synced_at = fields.Datetime(
+        string="Successfully Synced At",
+        index=True,
+        readonly=True,
+        help="Time when the current record was most recently accepted or applied successfully.",
+    )
 
     _sql_constraints = [
         (
             "nsp_sync_record_unique",
             "unique(source_code, sync_action_code, record_key, operation)",
             "A Sync Record already exists for this source, action, key, and operation.",
+        ),
+        (
+            "nsp_sync_record_attempts_nonnegative",
+            "CHECK(attempts >= 0)",
+            "Send Attempts cannot be negative.",
         ),
     ]
 
@@ -88,57 +118,108 @@ class NspSyncRecord(models.Model):
         }
 
     @api.model
-    def upsert_record(
+    def _record_identity(
         self, sync_job, action_code=False, action_name=False, route_suffix=False,
-        record=False, record_key=False, status="pending", message=False,
-        payload=False, response=False, operation="pull", last_synced_at=False,
+        record=False, record_key=False, operation="pull",
     ):
-        action_code = str(
-            action_code
-            or sync_job.sync_action_code
-            or "unknown"
+        normalized_action_code = str(
+            action_code or sync_job.sync_action_code or "unknown"
         ).strip()
         source_code = self._source_code(sync_job)
         meta = self._record_meta(record=record, record_key=record_key)
         domain = [
             ("source_code", "=", source_code),
-            ("sync_action_code", "=", action_code),
+            ("sync_action_code", "=", normalized_action_code),
             ("record_key", "=", meta["record_key"]),
             ("operation", "=", operation),
         ]
-        current = self.sudo().search(domain, limit=1)
-        now = fields.Datetime.now()
         vals = {
             "sync_job_id": sync_job.id,
             "source_code": source_code,
             "route_suffix": route_suffix or sync_job.route_suffix,
-            "sync_action_code": action_code,
-            "sync_action_name": action_name or sync_job.sync_action_name or action_code,
+            "sync_action_code": normalized_action_code,
+            "sync_action_name": action_name or sync_job.sync_action_name or normalized_action_code,
             "operation": operation,
-            "status": status,
-            "message": str(message or "") or False,
-            "payload_json": self._json_text(payload),
-            "response_json": self._json_text(response),
-            "last_attempt_at": now,
             **meta,
         }
-        if status == "synced":
-            vals["last_synced_at"] = last_synced_at or now
-        elif status == "pending":
-            vals["last_synced_at"] = False
+        return domain, vals
+
+    @api.model
+    def mark_pending(
+        self, sync_job, action_code=False, action_name=False, route_suffix=False,
+        record=False, record_key=False, message=False, payload=False,
+        operation="push",
+    ):
+        """Start one actual outbound request and increment the attempt counter once."""
+        domain, vals = self._record_identity(
+            sync_job=sync_job,
+            action_code=action_code,
+            action_name=action_name,
+            route_suffix=route_suffix,
+            record=record,
+            record_key=record_key,
+            operation=operation,
+        )
+        current = self.sudo().search(domain, limit=1)
+        request_payload = self._json_text(payload)
+        is_retry = bool(
+            current
+            and current.status in ("pending", "failed")
+            and current.payload_json == request_payload
+        )
+        vals.update({
+            "status": "pending",
+            "message": str(message or "") or False,
+            "payload_json": request_payload,
+            "response_json": False,
+            "last_attempt_at": fields.Datetime.now(),
+            "attempts": int(current.attempts or 0) + 1 if is_retry else 1,
+        })
         if current:
-            vals["attempts"] = int(current.attempts or 0) + 1
             current.write(vals)
             return current
-        vals["attempts"] = 1
         return self.sudo().create(vals)
 
     @api.model
-    def mark_pending(self, **kwargs):
-        kwargs["status"] = "pending"
-        return self.upsert_record(**kwargs)
+    def mark_result(
+        self, sync_job, action_code=False, action_name=False, route_suffix=False,
+        record=False, record_key=False, status="synced", message=False,
+        payload=False, response=False, operation="pull", last_synced_at=False,
+    ):
+        """Finish an attempt or record a Pull result without incrementing Attempts."""
+        normalized_status = status if status in ("synced", "failed", "skipped") else "failed"
+        domain, vals = self._record_identity(
+            sync_job=sync_job,
+            action_code=action_code,
+            action_name=action_name,
+            route_suffix=route_suffix,
+            record=record,
+            record_key=record_key,
+            operation=operation,
+        )
+        current = self.sudo().search(domain, limit=1)
+        now = fields.Datetime.now()
+        vals.update({
+            "status": normalized_status,
+            "message": str(message or "") or False,
+            "payload_json": self._json_text(payload),
+            "response_json": self._json_text(response),
+        })
+        if normalized_status == "synced":
+            vals["last_synced_at"] = last_synced_at or now
 
-    @api.model
-    def mark_result(self, status="synced", **kwargs):
-        kwargs["status"] = status if status in ("synced", "failed", "skipped") else "failed"
-        return self.upsert_record(**kwargs)
+        # Defensive fallback: a Push result should normally follow mark_pending().
+        # If it does not, count exactly one observed request rather than creating
+        # a misleading zero-attempt Push record.
+        if not current and operation == "push":
+            vals.update({
+                "attempts": 1,
+                "last_attempt_at": now,
+            })
+        elif not current:
+            vals["attempts"] = 0
+
+        if current:
+            current.write(vals)
+            return current
+        return self.sudo().create(vals)

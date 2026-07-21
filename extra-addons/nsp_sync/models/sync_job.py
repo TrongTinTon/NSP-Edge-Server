@@ -685,7 +685,7 @@ class NspSyncJob(models.Model):
             stale_active.write({"active": False})
         return len(stale_active)
 
-    def _apply_vehicle_config_snapshot(self, data):
+    def _apply_vehicle_config_snapshot(self, data, request_payload=False):
         self.ensure_one()
         if not isinstance(data, dict):
             raise UserError(_("Vehicle Configuration response must be an object."))
@@ -751,7 +751,8 @@ class NspSyncJob(models.Model):
                 record_key="%s:%s" % (group_name, record.code),
                 status="synced",
                 message="Applied Vehicle Configuration snapshot.",
-                payload=item,
+                payload=request_payload,
+                response=item,
                 operation="pull",
             )
         return results, removed
@@ -957,7 +958,7 @@ class NspSyncJob(models.Model):
             return line
         return VehicleLine.create(vals)
 
-    def _apply_card_snapshot(self, data):
+    def _apply_card_snapshot(self, data, request_payload=False):
         """Apply the complete Card snapshot atomically in two phases.
 
         Phase 1 creates/updates every Master Card. Phase 2 creates the concrete
@@ -1019,7 +1020,8 @@ class NspSyncJob(models.Model):
                     else "Created/updated Vehicle Card assignment." if assignment_type == "vehicle"
                     else "Master Card synchronized without an active assignment."
                 ),
-                payload=item,
+                payload=request_payload,
+                response=item,
                 operation="pull",
             )
         return counts, removed
@@ -1255,7 +1257,7 @@ class NspSyncJob(models.Model):
         Lane.search(stale_domain).write({"active": False})
         return parking
 
-    def _apply_items(self, kind, items):
+    def _apply_items(self, kind, items, request_payload=False):
         self.ensure_one()
         results, failed = [], []
         Record = self.env["nsp.sync.record"].sudo()
@@ -1286,7 +1288,8 @@ class NspSyncJob(models.Model):
                     record_key=key,
                     status="synced",
                     message="Applied by Edge Server.",
-                    payload=item,
+                    payload=request_payload,
+                    response=item,
                     operation="pull",
                 )
                 results.append({
@@ -1306,7 +1309,8 @@ class NspSyncJob(models.Model):
                     record_key=key or str(index),
                     status="failed",
                     message=message,
-                    payload=item,
+                    payload=request_payload,
+                    response=item,
                     operation="pull",
                 )
                 failed.append({"index": index, "record_key": key, "error": message})
@@ -1720,11 +1724,16 @@ class NspSyncJob(models.Model):
 
     def run_pull_once(self):
         self.ensure_one()
-        data = self._json_or_error(self._post_remote(self.sync_action_id, self._build_pull_payload(), timeout=120))
+        request_payload = self._build_pull_payload()
+        data = self._json_or_error(
+            self._post_remote(self.sync_action_id, request_payload, timeout=120)
+        )
         kind = self._action_kind()
 
         if kind == "vehicle_config":
-            records, removed = self._apply_vehicle_config_snapshot(data)
+            records, removed = self._apply_vehicle_config_snapshot(
+                data, request_payload=request_payload
+            )
             self.write({"last_pull_at": fields.Datetime.now(), "sync_cursor": False})
             return {
                 "pulled": len(records),
@@ -1743,7 +1752,7 @@ class NspSyncJob(models.Model):
             }
 
         if kind == "card":
-            counts, removed = self._apply_card_snapshot(data)
+            counts, removed = self._apply_card_snapshot(data, request_payload=request_payload)
             self.write({"last_pull_at": fields.Datetime.now(), "sync_cursor": False})
             return {
                 "pulled": counts["master_cards"],
@@ -1783,7 +1792,7 @@ class NspSyncJob(models.Model):
                 "has_more": False if full_snapshot else has_more,
                 "message": message,
             }
-        results, failed = self._apply_items(kind, items)
+        results, failed = self._apply_items(kind, items, request_payload=request_payload)
         if failed:
             raise UserError(json.dumps(failed, ensure_ascii=False))
         removed = 0
