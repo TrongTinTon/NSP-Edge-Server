@@ -791,10 +791,19 @@ class NspSyncJob(models.Model):
         if not code or not plate:
             raise UserError(_("Vehicle Code and License Plate are required."))
         vehicle = self._find_vehicle(code)
-        owner_code = str(item.get("owner_user_code") or "").strip()
-        owner = self.env["nsp.user"].sudo().search([("user_code", "=", owner_code)], limit=1) if owner_code else self.env["nsp.user"].browse()
+        owner_user_code = str(item.get("owner_user_code") or "").strip()
+        owner = (
+            self.env["nsp.user"].sudo().search(
+                [("user_code", "=", owner_user_code)], limit=1
+            )
+            if owner_user_code else self.env["nsp.user"].browse()
+        )
         if not owner:
-            owner = self._apply_user({"user_code": owner_code or ("OWNER-%s" % code), "name": owner_code or code, "active": True})
+            owner = self._apply_user({
+                "user_code": owner_user_code or ("OWNER-%s" % code),
+                "name": owner_user_code or code,
+                "active": True,
+            })
         vehicle_type = self._vehicle_master_by_code("nsp.vehicle.type", item.get("vehicle_type_code"), _("Vehicle Type"))
         brand = self._vehicle_master_by_code("nsp.vehicle.brand", item.get("brand_code"), _("Vehicle Brand"))
         vehicle_model = self._vehicle_master_by_code("nsp.vehicle.model", item.get("model_code"), _("Vehicle Model"))
@@ -823,63 +832,197 @@ class NspSyncJob(models.Model):
         return self.env["nsp.vehicle"].sudo().create(vals)
 
     @api.model
-    def _assign_card(self, card, owner_type, owner_code, active=True):
-        UserLine = self.env["nsp.user.card"].sudo()
-        VehicleLine = self.env["nsp.vehicle.card"].sudo()
-        user_lines = UserLine.search([("card_id", "=", card.id)])
-        vehicle_lines = VehicleLine.search([("card_id", "=", card.id)])
-        user_lines.filtered(lambda line: line.state == "active").action_revoke()
-        vehicle_lines.filtered(lambda line: line.state == "active").action_revoke()
-        if not active or owner_type == "unassigned":
-            return
-        if owner_type == "user":
-            owner = self.env["nsp.user"].sudo().search([("user_code", "=", owner_code)], limit=1)
-            if not owner:
-                raise UserError(_("Card owner user %s was not found.") % (owner_code or "-"))
-            line = user_lines.filtered(lambda value: value.user_id == owner)[:1]
-            vals = {"user_id": owner.id, "card_id": card.id, "state": "active", "revoked_at": False}
-            line.write(vals) if line else UserLine.create(vals)
-            return
-        if owner_type == "vehicle":
-            owner = self._find_vehicle(owner_code)
-            if not owner:
-                raise UserError(_("Card owner vehicle %s was not found.") % (owner_code or "-"))
-            line = vehicle_lines.filtered(lambda value: value.vehicle_id == owner)[:1]
-            vals = {"vehicle_id": owner.id, "card_id": card.id, "state": "active", "revoked_at": False}
-            line.write(vals) if line else VehicleLine.create(vals)
-            return
-        raise UserError(_("Invalid card owner type: %s") % (owner_type or "-"))
+    def _card_assignment_values(self, item):
+        assignment = item.get("assignment")
+        if not isinstance(assignment, dict):
+            raise UserError(_("Card assignment must be an object."))
+        assignment_type = str(assignment.get("type") or "unassigned").strip().lower()
+        assignment_code = str(assignment.get("code") or "").strip()
+        if assignment_type not in ("unassigned", "user", "vehicle"):
+            raise UserError(
+                _("Invalid Card assignment type: %s") % (assignment_type or "-")
+            )
+        if assignment_type != "unassigned" and not assignment_code:
+            raise UserError(_("Assigned Card requires assignment.code."))
+        assigned_at = (
+            self._remote_datetime(item.get("assigned_at"))
+            if item.get("assigned_at") else False
+        )
+        return assignment_type, assignment_code, assigned_at
 
     @api.model
-    def _apply_card(self, item):
+    def _apply_card_master(self, item):
+        if not isinstance(item, dict):
+            raise UserError(_("Cards snapshot items must be objects."))
+        supported_fields = {
+            "card_uid", "card_type", "active", "assigned", "assignment", "assigned_at",
+        }
+        unsupported_fields = sorted(set(item) - supported_fields)
+        if unsupported_fields:
+            raise UserError(
+                _("Unsupported Card field(s): %s") % ", ".join(unsupported_fields)
+            )
         tid = str(item.get("card_uid") or "").strip().upper().replace(" ", "")
-        card_type = item.get("card_type")
+        card_type = str(item.get("card_type") or "").strip().lower()
         if not tid:
             raise UserError(_("Card UID is required."))
         if card_type not in ("vehicle_card", "user_card"):
-            raise UserError(_("Invalid Card Type."))
-        card = self._card(tid, card_type)
-        self._assign_card(
-            card,
-            str(item.get("owner_type") or "unassigned").strip().lower(),
-            str(item.get("owner_code") or "").strip(),
-            active=bool(item.get("active", True)),
-        )
-        return card
+            raise UserError(_("Invalid Card Type for %s.") % tid)
+        assignment_type, _assignment_code, _assigned_at = self._card_assignment_values(item)
+        expected_type = {
+            "user": "user_card",
+            "vehicle": "vehicle_card",
+        }.get(assignment_type)
+        if expected_type and card_type != expected_type:
+            raise UserError(
+                _("Card %(tid)s type %(card_type)s does not match %(assignment_type)s assignment.")
+                % {"tid": tid, "card_type": card_type, "assignment_type": assignment_type}
+            )
+        return self._card(tid, card_type)
 
     @api.model
-    def _reconcile_card_snapshot(self, items):
-        tids = {
-            str(item.get("card_uid") or "").strip().upper().replace(" ", "")
-            for item in (items or [])
-            if isinstance(item, dict) and str(item.get("card_uid") or "").strip()
+    def _apply_card_assignment(self, card, item):
+        """Create the concrete User Card or Vehicle Card assignment on Edge."""
+        assignment_type, assignment_code, assigned_at = self._card_assignment_values(item)
+        UserLine = self.env["nsp.user.card"].sudo().with_context(active_test=False)
+        VehicleLine = self.env["nsp.vehicle.card"].sudo().with_context(active_test=False)
+        user_lines = UserLine.search([("card_id", "=", card.id)])
+        vehicle_lines = VehicleLine.search([("card_id", "=", card.id)])
+
+        if not bool(item.get("active", True)) or assignment_type == "unassigned":
+            active_user = user_lines.filtered(lambda line: line.state == "active")
+            active_vehicle = vehicle_lines.filtered(lambda line: line.state == "active")
+            if active_user:
+                active_user.action_revoke()
+            if active_vehicle:
+                active_vehicle.action_revoke()
+            return card
+
+        if assignment_type == "user":
+            owner = self.env["nsp.user"].sudo().with_context(active_test=False).search(
+                [("user_code", "=", assignment_code)], limit=1
+            )
+            if not owner:
+                raise UserError(
+                    _("Card %(tid)s owner User %(code)s was not found. Run employees/sync first.")
+                    % {"tid": card.tid, "code": assignment_code}
+                )
+            other_active = user_lines.filtered(
+                lambda line: line.state == "active" and line.user_id != owner
+            )
+            if other_active:
+                other_active.action_revoke()
+            active_vehicle = vehicle_lines.filtered(lambda line: line.state == "active")
+            if active_vehicle:
+                active_vehicle.action_revoke()
+            line = user_lines.filtered(lambda value: value.user_id == owner)[:1]
+            vals = {
+                "user_id": owner.id,
+                "card_id": card.id,
+                "state": "active",
+                "revoked_at": False,
+            }
+            if assigned_at:
+                vals["assigned_at"] = assigned_at
+            if line:
+                line.write(vals)
+                return line
+            return UserLine.create(vals)
+
+        owner = self._find_vehicle(assignment_code)
+        if not owner:
+            raise UserError(
+                _("Card %(tid)s owner Vehicle %(code)s was not found. Run vehicles/sync first.")
+                % {"tid": card.tid, "code": assignment_code}
+            )
+        other_active = vehicle_lines.filtered(
+            lambda line: line.state == "active" and line.vehicle_id != owner
+        )
+        if other_active:
+            other_active.action_revoke()
+        active_user = user_lines.filtered(lambda line: line.state == "active")
+        if active_user:
+            active_user.action_revoke()
+        line = vehicle_lines.filtered(lambda value: value.vehicle_id == owner)[:1]
+        vals = {
+            "vehicle_id": owner.id,
+            "card_id": card.id,
+            "state": "active",
+            "revoked_at": False,
         }
-        Card = self.env["nsp.rfid.card"].sudo()
-        stale = Card.search([("tid", "not in", list(tids))]) if tids else Card.search([])
-        count = len(stale)
-        if stale:
-            stale.unlink()
-        return count
+        if assigned_at:
+            vals["assigned_at"] = assigned_at
+        if line:
+            line.write(vals)
+            return line
+        return VehicleLine.create(vals)
+
+    def _apply_card_snapshot(self, data):
+        """Apply the complete Card snapshot atomically in two phases.
+
+        Phase 1 creates/updates every Master Card. Phase 2 creates the concrete
+        User Card / Vehicle Card records. A missing owner rolls back the whole
+        snapshot, so Edge never exposes a partially assigned card set.
+        """
+        self.ensure_one()
+        items = self._items_from_response(data)
+        if not isinstance(items, list):
+            raise UserError(_("Cards snapshot must contain an items array."))
+        normalized_tids = []
+        seen = set()
+        master_by_tid = {}
+        assignment_records = []
+        counts = {"master_cards": 0, "user_cards": 0, "vehicle_cards": 0, "unassigned_cards": 0}
+
+        with self.env.cr.savepoint():
+            for item in items:
+                card = self._apply_card_master(item)
+                if card.tid in seen:
+                    raise UserError(_("Duplicate Card UID in snapshot: %s") % card.tid)
+                seen.add(card.tid)
+                normalized_tids.append(card.tid)
+                master_by_tid[card.tid] = (card, item)
+
+            for tid in normalized_tids:
+                card, item = master_by_tid[tid]
+                assignment_record = self._apply_card_assignment(card, item)
+                assignment_type, _assignment_code, _assigned_at = self._card_assignment_values(item)
+                if not bool(item.get("active", True)):
+                    assignment_type = "unassigned"
+                counts["master_cards"] += 1
+                counts[{
+                    "user": "user_cards",
+                    "vehicle": "vehicle_cards",
+                    "unassigned": "unassigned_cards",
+                }[assignment_type]] += 1
+                assignment_records.append((card, assignment_record, item, assignment_type))
+
+            Card = self.env["nsp.rfid.card"].sudo()
+            stale = Card.search([("tid", "not in", normalized_tids)]) if normalized_tids else Card.search([])
+            removed = len(stale)
+            if stale:
+                stale.unlink()
+
+        Record = self.env["nsp.sync.record"].sudo()
+        for card, assignment_record, item, assignment_type in assignment_records:
+            record = assignment_record if assignment_record._name in ("nsp.user.card", "nsp.vehicle.card") else card
+            Record.mark_result(
+                sync_job=self,
+                action_code=self.sync_action_code,
+                action_name=self.sync_action_name,
+                route_suffix=self.route_suffix,
+                record=record,
+                record_key=card.tid,
+                status="synced",
+                message=(
+                    "Created/updated User Card assignment." if assignment_type == "user"
+                    else "Created/updated Vehicle Card assignment." if assignment_type == "vehicle"
+                    else "Master Card synchronized without an active assignment."
+                ),
+                payload=item,
+                operation="pull",
+            )
+        return counts, removed
 
     @api.model
     def _apply_vehicle_borrow(self, item):
@@ -1119,7 +1262,6 @@ class NspSyncJob(models.Model):
         handlers = {
             "device_whitelist": self._apply_device_whitelist,
             "branch": self._apply_branch,
-            "card": self._apply_card,
             "user": self._apply_user,
             "vehicle": self._apply_vehicle,
             "vehicle_borrow": self._apply_vehicle_borrow,
@@ -1600,24 +1742,39 @@ class NspSyncJob(models.Model):
                 },
             }
 
+        if kind == "card":
+            counts, removed = self._apply_card_snapshot(data)
+            self.write({"last_pull_at": fields.Datetime.now(), "sync_cursor": False})
+            return {
+                "pulled": counts["master_cards"],
+                "failed": 0,
+                "has_more": False,
+                "message": (
+                    "Cards snapshot applied: %(master)s Master Card(s), %(users)s User Card(s), "
+                    "%(vehicles)s Vehicle Card(s), %(unassigned)s unassigned; removed %(removed)s stale Card(s)."
+                ) % {
+                    "master": counts["master_cards"],
+                    "users": counts["user_cards"],
+                    "vehicles": counts["vehicle_cards"],
+                    "unassigned": counts["unassigned_cards"],
+                    "removed": removed,
+                },
+            }
+
         items = self._items_from_response(data)
         next_cursor = data.get("next_sync_cursor") or False
         has_more = bool(data.get("has_more"))
-        full_snapshot = kind in ("device_whitelist", "card")
+        full_snapshot = kind == "device_whitelist"
         if not items:
             removed = 0
             if kind == "device_whitelist":
                 removed = self._reconcile_device_whitelist_snapshot([])
-            elif kind == "card":
-                removed = self._reconcile_card_snapshot([])
             self.write({
                 "last_pull_at": fields.Datetime.now(),
                 "sync_cursor": False if full_snapshot else (next_cursor or self.sync_cursor),
             })
             if kind == "device_whitelist":
                 message = "Device Whitelist snapshot is empty; removed %s stale record(s)." % removed
-            elif kind == "card":
-                message = "Cards snapshot is empty; removed %s stale card(s)." % removed
             else:
                 message = "No changed records to pull."
             return {
@@ -1632,16 +1789,12 @@ class NspSyncJob(models.Model):
         removed = 0
         if kind == "device_whitelist":
             removed = self._reconcile_device_whitelist_snapshot(items)
-        elif kind == "card":
-            removed = self._reconcile_card_snapshot(items)
         self.write({
             "last_pull_at": fields.Datetime.now(),
             "sync_cursor": False if full_snapshot else (next_cursor or self.sync_cursor),
         })
         if kind == "device_whitelist":
             message = "Pulled %s Device Whitelist record(s); removed %s stale record(s)." % (len(results), removed)
-        elif kind == "card":
-            message = "Pulled %s Card record(s); removed %s stale card(s)." % (len(results), removed)
         else:
             message = "Pulled %s record(s)." % len(results)
         return {

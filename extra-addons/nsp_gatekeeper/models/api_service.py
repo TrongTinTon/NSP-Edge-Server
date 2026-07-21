@@ -508,32 +508,69 @@ class NspGatekeeperApiService(models.AbstractModel):
         return page_records, next_cursor, has_more, fields.Datetime.now()
 
     def _card_sync_payload(self, card):
-        UserCard = self.env["nsp.user.card"].sudo() if "nsp.user.card" in self.env.registry.models else False
-        VehicleCard = self.env["nsp.vehicle.card"].sudo() if "nsp.vehicle.card" in self.env.registry.models else False
-        user_line = UserCard.search([("card_id", "=", card.id), ("state", "=", "active")], limit=1) if UserCard else False
-        vehicle_line = VehicleCard.search([("card_id", "=", card.id), ("state", "=", "active")], limit=1) if VehicleCard else False
-        payload = {
-            "card_uid": card.tid,
-            "card_type": card.card_type,
-            "owner_type": "unassigned",
-            "active": bool(getattr(card, "active", True)),
-        }
+        """Serialize one Master Card together with its active assignment.
+
+        The assignment relation is the source of truth. ``assigned_to`` on the
+        Master Card is only a computed display field and must never be parsed.
+        The API contract exposes assignment only through the nested
+        ``assignment`` object.
+        """
+        UserCard = self.env["nsp.user.card"].sudo().with_context(active_test=False)
+        VehicleCard = self.env["nsp.vehicle.card"].sudo().with_context(active_test=False)
+        user_line = UserCard.search(
+            [("card_id", "=", card.id), ("state", "=", "active")],
+            order="assigned_at desc, id desc",
+            limit=1,
+        )
+        vehicle_line = VehicleCard.search(
+            [("card_id", "=", card.id), ("state", "=", "active")],
+            order="assigned_at desc, id desc",
+            limit=1,
+        )
+
+        if user_line and vehicle_line:
+            _logger.error(
+                "Card %s has simultaneous active User and Vehicle assignments; "
+                "Vehicle assignment is selected for sync.", card.tid,
+            )
+
+        assignment = {"type": "unassigned", "code": False, "name": False}
+        card_type = card.card_type
+        assigned_at = False
         if vehicle_line:
             vehicle = vehicle_line.vehicle_id
-            owner_code = ""
+            assignment_code = ""
             for field_name in ("vehicle_code", "code"):
                 if field_name in vehicle._fields and vehicle[field_name]:
-                    owner_code = str(vehicle[field_name]).strip()
+                    assignment_code = str(vehicle[field_name]).strip()
                     break
-            owner_code = owner_code or str(vehicle.license_plate or "").strip()
-            payload["owner_type"] = "vehicle"
-            if owner_code:
-                payload["owner_code"] = owner_code
+            assignment_code = assignment_code or str(vehicle.license_plate or "").strip()
+            assignment = {
+                "type": "vehicle",
+                "code": assignment_code,
+                "name": vehicle.license_plate or vehicle.display_name,
+            }
+            card_type = "vehicle_card"
+            assigned_at = vehicle_line.assigned_at
         elif user_line:
-            owner_code = self._employee_code(user_line.user_id)
-            payload["owner_type"] = "user"
-            if owner_code:
-                payload["owner_code"] = owner_code
+            user = user_line.user_id
+            assignment = {
+                "type": "user",
+                "code": self._employee_code(user),
+                "name": user.display_name or user.name,
+            }
+            card_type = "user_card"
+            assigned_at = user_line.assigned_at
+
+        payload = {
+            "card_uid": card.tid,
+            "card_type": card_type,
+            "active": bool(getattr(card, "active", True)),
+            "assigned": assignment["type"] != "unassigned",
+            "assignment": assignment,
+        }
+        if assigned_at:
+            payload["assigned_at"] = self._iso_datetime(assigned_at)
         return payload
 
     @endpoint("NSP Device Whitelist Sync", route_suffix="device-whitelist/sync", methods="POST", code="nsp_device_whitelist_sync")
@@ -630,8 +667,23 @@ class NspGatekeeperApiService(models.AbstractModel):
             )
         cards = self.env["nsp.rfid.card"].sudo().search([], order="tid asc, id asc")
         items = [self._card_sync_payload(card) for card in cards]
+        user_card_count = sum(
+            1 for item in items
+            if (item.get("assignment") or {}).get("type") == "user"
+        )
+        vehicle_card_count = sum(
+            1 for item in items
+            if (item.get("assignment") or {}).get("type") == "vehicle"
+        )
+        unassigned_count = len(items) - user_card_count - vehicle_card_count
         return self._ok({
             "items": items,
+            "summary": {
+                "master_cards": len(items),
+                "user_cards": user_card_count,
+                "vehicle_cards": vehicle_card_count,
+                "unassigned_cards": unassigned_count,
+            },
             "next_sync_cursor": False,
             "has_more": False,
             "server_time": self._iso_datetime(fields.Datetime.now()),
