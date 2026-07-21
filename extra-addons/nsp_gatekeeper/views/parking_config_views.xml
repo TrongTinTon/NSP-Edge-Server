@@ -116,7 +116,7 @@
                                     <field name="code" string="Lane Code"/>
                                     <field name="name" string="Lane Name"/>
                                     <field name="controller_id" options="{'no_create': False, 'no_open': False}"/>
-                                    <field name="direction" widget="badge"/>
+                                    <field name="direction"/>
                                     <field name="required_vehicle_tid" optional="hide"/>
                                     <field name="required_user_tid" optional="hide"/>
                                     <field name="active" widget="boolean_toggle"/>
@@ -134,7 +134,7 @@
                             <field name="lane_antenna_mapping_ids" readonly="1">
                                 <list create="0" delete="0">
                                     <field name="lane_id"/>
-                                    <field name="direction" widget="badge"/>
+                                    <field name="direction"/>
                                     <field name="controller_id"/>
                                     <field name="device_id" string="Reader"/>
                                     <field name="serial_number" string="Reader Serial" optional="hide"/>
@@ -166,7 +166,7 @@
                 <field name="code" string="Lane Code"/>
                 <field name="name" string="Lane Name"/>
                 <field name="controller_id"/>
-                <field name="direction" widget="badge"/>
+                <field name="direction"/>
                 <field name="antenna_count" string="Antennas"/>
                 <field name="active" widget="boolean_toggle"/>
             </list>
@@ -206,7 +206,7 @@
                             <field name="antenna_mapping_ids" context="{'default_lane_id': id}">
                                 <list editable="bottom">
                                     <field name="lane_controller_id" column_invisible="1"/>
-                                    <field name="direction" widget="badge"/>
+                                    <field name="direction"/>
                                     <field name="antenna_ref_id" string="Antenna"
                                            domain="[('device_id.controller_id','=',parent.controller_id)]"/>
                                     <field name="device_id" string="Reader" readonly="1"/>
@@ -236,7 +236,7 @@
                 <field name="lane_controller_id" column_invisible="1"/>
                 <field name="parking_area_id" readonly="1"/>
                 <field name="lane_id"/>
-                <field name="direction" widget="badge"/>
+                <field name="direction"/>
                 <field name="antenna_ref_id" string="Antenna"
                        domain="[('device_id.controller_id','=',lane_controller_id)]"/>
                 <field name="controller_id" readonly="1"/>

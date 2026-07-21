@@ -130,7 +130,6 @@
                 <field name="reader_count"/>
                 <field name="antenna_count"/>
                 <field name="timestamp" string="Last Heartbeat"/>
-                <field name="last_device_report_at" string="Last Reader Report" optional="hide"/>
                 <field name="active" optional="hide"/>
             </list>
         </field>
@@ -169,7 +168,6 @@
                                    decoration-danger="status in ('offline','revoked')"
                                    decoration-warning="status in ('error','block')"/>
                             <field name="timestamp" string="Last Heartbeat" readonly="1"/>
-                            <field name="last_device_report_at" string="Last Reader Report" readonly="1"/>
                         </group>
                     </group>
                     <notebook>

@@ -556,7 +556,6 @@ class NspGatekeeperApiService(models.AbstractModel):
             except Exception as exc:
                 failed += 1
                 results.append({"index": index, "record_key": key, "status": "rejected", "message": str(exc)})
-        controller.write({"last_device_report_at": fields.Datetime.now()})
         return self._ok({"received": len(items), "processed": processed, "failed": failed, "results": results}, message="Device report processed.")
 
     @api.model

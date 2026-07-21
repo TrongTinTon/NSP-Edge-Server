@@ -104,7 +104,6 @@ class NspController(models.Model):
     timestamp = fields.Datetime(string="Last Heartbeat", readonly=True, copy=False, index=True)
     active = fields.Boolean(default=True, index=True)
     status = fields.Selection(NODE_STATUS, default="offline", required=True, index=True, tracking=True)
-    last_device_report_at = fields.Datetime(string="Last Reader Report", readonly=True, copy=False)
     device_ids = fields.One2many("nsp.device", "controller_id", string="Readers")
     reader_count = fields.Integer(string="Readers", compute="_compute_reader_counts")
     antenna_count = fields.Integer(string="Antennas", compute="_compute_reader_counts")
