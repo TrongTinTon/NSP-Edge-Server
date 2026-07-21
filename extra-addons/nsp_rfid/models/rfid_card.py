@@ -117,9 +117,6 @@ class RfidCard(models.Model):
             self.env["nsp.user.card"].sudo().search([("card_id", "in", ids)]).unlink()
         if self._model_ready("nsp.vehicle.card"):
             self.env["nsp.vehicle.card"].sudo().search([("card_id", "in", ids)]).unlink()
-        if self._model_ready("nsp.parking.transaction"):
-            self.env["nsp.parking.transaction"].sudo().search([("vehicle_card_id", "in", ids)]).write({"vehicle_card_id": False})
-            self.env["nsp.parking.transaction"].sudo().search([("user_card_id", "in", ids)]).write({"user_card_id": False})
 
     def unlink(self):
         self._clear_references_before_unlink()

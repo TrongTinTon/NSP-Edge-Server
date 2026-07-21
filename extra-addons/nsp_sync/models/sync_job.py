@@ -470,21 +470,28 @@ class NspSyncJob(models.Model):
     @api.model
     def _serialize_parking_transaction(self, record):
         decision = record.status if record.status in ("allowed", "denied") else "denied"
-        return {
+        antenna = record.antenna_id
+        device = antenna.device_id if antenna else self.env["nsp.device"].browse()
+        parking_area = record.lane_id.parking_area_id if record.lane_id else self.env["nsp.parking.area"].browse()
+        payload = {
             "record_key": record.transaction_uid,
             "transaction_uid": record.transaction_uid,
             "controller_code": record.controller_id.controller_id if record.controller_id else "",
-            "parking_area_code": record.parking_area_code or (record.parking_area_id.code if record.parking_area_id else ""),
-            "lane_code": record.lane_code or (record.lane_id.code if record.lane_id else ""),
+            "parking_area_code": parking_area.code if parking_area else "",
+            "lane_code": record.lane_id.code if record.lane_id else "",
+            "serial_number": device.serial_number if device else "",
+            "antenna_no": int(antenna.antenna_id) if antenna else 0,
             "direction": record.direction,
             "check_time": self._dt(record.time_entered),
             "vehicle_tid": record.vehicle_tid or "",
             "user_tid": record.user_tid or "",
-            "vehicle_code": record.vehicle_code or "",
-            "user_code": record.user_code or "",
             "decision": decision,
-            **({"decision_reason_code": record.error_code or "unknown"} if decision == "denied" else {}),
         }
+        if decision == "denied":
+            payload["decision_reason_code"] = record.error_code or "unknown"
+            if record.error_message:
+                payload["decision_message"] = record.error_message
+        return payload
 
     def _push_cursor_domain(self):
         self.ensure_one()

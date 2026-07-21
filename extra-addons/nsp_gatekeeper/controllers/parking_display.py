@@ -99,7 +99,7 @@ class NspParkingDisplayController(http.Controller):
 
         domain = []
         if parking_area_id:
-            domain.append(("parking_area_id", "=", parking_area_id))
+            domain.append(("lane_id.parking_area_id", "=", parking_area_id))
         if since_id:
             domain.append(("id", ">", since_id))
         if direction in ("entry", "exit"):
@@ -129,19 +129,21 @@ class NspParkingDisplayController(http.Controller):
                 "vehicle": rec.vehicle_display or rec.license_plate or rec.vehicle_tid or "-",
                 "license_plate": rec.license_plate or "",
                 "vehicle_tid": rec.vehicle_tid or "",
-                "parking_area": rec.parking_area_display or rec.parking_area_code or (parking_area.name if parking_area else ""),
+                "parking_area": rec.parking_area_display or (parking_area.name if parking_area else ""),
                 "parking_area_id": parking_area.id if parking_area else False,
-                "parking_area_code": rec.parking_area_code or (parking_area.code if parking_area else ""),
+                "parking_area_code": parking_area.code if parking_area else "",
                 "parking_area_name": parking_area.name if parking_area else (rec.parking_area_display or ""),
                 "lane_id": rec.lane_id.id if rec.lane_id else False,
-                "lane_code": rec.lane_code or (rec.lane_id.code if rec.lane_id else ""),
-                "lane_name": rec.lane_id.name if rec.lane_id else (rec.lane_display or ""),
-                "lane": rec.lane_display or rec.lane_code or "",
+                "lane_code": rec.lane_id.code if rec.lane_id else "",
+                "lane_name": rec.lane_id.name if rec.lane_id else "",
+                "lane": rec.lane_display or "",
                 "branch_id": branch.id if branch else False,
                 "branch_name": branch.name if branch else "",
                 "controller_id": controller.id if controller else False,
                 "controller_code": controller.controller_id if controller else "",
                 "message": rec.error_message or "",
+                "reader_serial_number": rec.serial_number or "",
+                "antenna_no": int(rec.antenna_no or 0),
             })
 
         return self._json_response({

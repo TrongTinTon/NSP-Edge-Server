@@ -2,7 +2,7 @@
     'name': 'NSP Sync',
     'summary': 'Edge Server synchronization with NSP Cloud',
     'description': 'Configures one Cloud connection using the assigned Edge Server Code and runs supported Cloud pull/push jobs.',
-    'version': '19.0.15.2.1',
+    'version': '19.0.16.0.0',
     'sequence': 2,
     'author': 'BKU Team',
     'category': 'Services',

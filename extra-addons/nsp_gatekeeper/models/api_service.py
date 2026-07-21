@@ -1478,27 +1478,44 @@ class NspGatekeeperApiService(models.AbstractModel):
             raise ValueError("invalid_payload")
         allowed_fields = {
             "transaction_uid", "controller_code", "parking_area_code", "lane_code",
-            "direction", "check_time", "vehicle_tid", "user_tid",
-            "vehicle_code", "user_code", "decision", "decision_reason_code",
+            "serial_number", "antenna_no", "direction", "check_time",
+            "vehicle_tid", "user_tid", "decision", "decision_reason_code",
+            "decision_message",
         }
         unsupported = sorted(set(item) - allowed_fields)
         if unsupported:
-            raise ValueError("invalid_payload: unsupported field(s): %s" % ", ".join(unsupported))
+            raise ValueError(
+                "invalid_payload: unsupported field(s): %s" % ", ".join(unsupported)
+            )
+
         uid = str(item.get("transaction_uid") or "").strip()
+        controller_code = str(item.get("controller_code") or "").strip()
+        parking_area_code = str(item.get("parking_area_code") or "").strip().upper()
+        lane_code = str(item.get("lane_code") or "").strip().upper()
+        serial_number = str(item.get("serial_number") or "").strip().upper()
         if not uid:
             raise ValueError("missing_transaction_uid")
-        controller_code = str(item.get("controller_code") or "").strip()
         if not controller_code:
             raise ValueError("missing_controller_code")
-        Controller = self.env["nsp.controller"].sudo()
-        controller = Controller.search([
+        if not parking_area_code:
+            raise ValueError("missing_parking_area_code")
+        if not lane_code:
+            raise ValueError("missing_lane_code")
+        if not serial_number:
+            raise ValueError("missing_serial_number")
+        try:
+            antenna_no = int(item.get("antenna_no") or 0)
+        except Exception as exc:
+            raise ValueError("invalid_antenna_no") from exc
+        if antenna_no <= 0:
+            raise ValueError("invalid_antenna_no")
+
+        controller = self.env["nsp.controller"].sudo().search([
             ("controller_id", "=", controller_code),
             ("edge_server_id", "=", edge_server.id),
         ], limit=1)
         if not controller:
             raise ValueError("route_not_allowed")
-        parking_area_code = str(item.get("parking_area_code") or "").strip().upper()
-        lane_code = str(item.get("lane_code") or "").strip().upper()
         parking_area = self.env["nsp.parking.area"].sudo().search([
             ("code", "=", parking_area_code),
             ("lane_ids.controller_id", "=", controller.id),
@@ -1513,6 +1530,19 @@ class NspGatekeeperApiService(models.AbstractModel):
         ], limit=1)
         if not lane:
             raise ValueError("lane_not_found")
+        device = self.env["nsp.device"].sudo().search([
+            ("controller_id", "=", controller.id),
+            ("serial_number", "=", serial_number),
+        ], limit=1)
+        if not device:
+            raise ValueError("device_not_found")
+        antenna = self.env["nsp.device.antenna"].sudo().search([
+            ("device_id", "=", device.id),
+            ("antenna_id", "=", antenna_no),
+        ], limit=1)
+        if not antenna:
+            raise ValueError("antenna_not_found")
+
         check_time = self._safe_datetime_value(item.get("check_time"), default_now=False)
         if not check_time:
             raise ValueError("check_time is required")
@@ -1523,61 +1553,38 @@ class NspGatekeeperApiService(models.AbstractModel):
             raise ValueError("invalid_direction")
         decision = str(item.get("decision") or "").strip().lower()
         if decision not in ("allowed", "denied"):
-            raise ValueError("invalid_payload")
+            raise ValueError("invalid_decision")
         Log = self.env["nsp.parking.transaction"].sudo()
         vehicle_tid = str(item.get("vehicle_tid") or "").strip()
         user_tid = str(item.get("user_tid") or "").strip()
-        vehicle_code = str(item.get("vehicle_code") or "").strip()
-        user_code = str(item.get("user_code") or "").strip()
-        vehicle = Log._find_vehicle({"vehicle_code": vehicle_code, "vehicle_tid": vehicle_tid})
-        User = self.env["nsp.user"].sudo()
-        user = User.search([("user_code", "=", user_code)], limit=1) if user_code and "user_code" in User._fields else User.browse()
-        reason_code = Log._normalize_error_code(item.get("decision_reason_code"))
+        vehicle = Log._find_vehicle(vehicle_tid)
+        user, _user_card = Log._user_from_user_tid(user_tid) if user_tid else (
+            self.env["nsp.user"].browse(), self.env["nsp.rfid.card"].browse()
+        )
+        reason_code = Log._normalize_error_code(
+            item.get("decision_reason_code"), item.get("decision_message")
+        )
         if decision == "denied" and not reason_code:
             reason_code = "unknown"
-        if decision == "allowed" and item.get("decision_reason_code"):
-            raise ValueError("invalid_payload")
+        if decision == "allowed" and (item.get("decision_reason_code") or item.get("decision_message")):
+            raise ValueError("allowed_event_cannot_have_decision_reason")
+
         vals = {
-            "controller_id": controller.id,
-            "parking_area_id": parking_area.id,
-            "parking_area_code": parking_area.code,
-            "lane_id": lane.id,
-            "lane_code": lane.code,
             "transaction_uid": uid,
             "time_entered": check_time,
+            "controller_id": controller.id,
+            "lane_id": lane.id,
+            "antenna_id": antenna.id,
             "direction": direction,
             "status": decision,
+            "error_code": reason_code or False,
+            "error_message": str(item.get("decision_message") or "").strip() or False,
             "vehicle_id": vehicle.id if vehicle else False,
-            "vehicle_code": vehicle_code or False,
-            "license_plate": (vehicle.license_plate if vehicle and "license_plate" in vehicle._fields else False),
             "vehicle_tid": vehicle_tid or False,
             "user_id": user.id if user else False,
-            "user_code": user_code or False,
             "user_tid": user_tid or False,
-            "error_code": reason_code or False,
         }
-        payload_hash = Log._normalized_payload_hash(controller, vals)
-        vals["payload_hash"] = payload_hash
-        existing = Log.search([("transaction_uid", "=", uid)], limit=1)
-        if existing:
-            if existing.payload_hash and existing.payload_hash != payload_hash:
-                raise ValueError("sync_uid_conflict")
-            if not existing.payload_hash:
-                existing.write({"payload_hash": payload_hash})
-            return existing, True
-        try:
-            with self.env.cr.savepoint():
-                record = Log.create(vals)
-            return record, False
-        except IntegrityError:
-            existing = Log.search([("transaction_uid", "=", uid)], limit=1)
-            if not existing:
-                raise
-            if existing.payload_hash and existing.payload_hash != payload_hash:
-                raise ValueError("sync_uid_conflict")
-            if not existing.payload_hash:
-                existing.write({"payload_hash": payload_hash})
-            return existing, True
+        return Log.create_idempotent(vals)
 
     @endpoint("NSP Gatekeeper Parking Transactions Sync", route_suffix="parking-transactions/sync", methods="POST", code="nsp_gatekeeper_parking_transactions_sync")
     def api_parking_transactions_sync(self):

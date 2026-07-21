@@ -4,42 +4,37 @@
         <field name="model">nsp.parking.transaction</field>
         <field name="arch" type="xml">
             <search>
+                <field name="transaction_uid"/>
                 <field name="controller_id"/>
                 <field name="parking_area_id"/>
-                <field name="parking_area_code"/>
                 <field name="lane_id"/>
-                <field name="lane_code"/>
-                <field name="vehicle_code"/>
+                <field name="device_id"/>
+                <field name="antenna_id"/>
+                <field name="vehicle_id"/>
                 <field name="license_plate"/>
                 <field name="vehicle_tid"/>
                 <field name="user_id"/>
-                <field name="user_code"/>
                 <field name="user_tid"/>
                 <field name="borrow_request_id"/>
-                <field name="borrower_id"/>
                 <field name="direction"/>
                 <field name="status"/>
                 <field name="error_code"/>
-                <field name="error_category"/>
-                <field name="error_severity"/>
                 <filter string="Entry" name="entry" domain="[('direction','=','entry')]"/>
                 <filter string="Exit" name="exit" domain="[('direction','=','exit')]"/>
                 <filter string="Allowed" name="allowed" domain="[('status','=','allowed')]"/>
                 <filter string="Denied" name="denied" domain="[('status','=','denied')]"/>
-                <filter string="Requires Attention" name="alert_required" domain="[('alert_required','=',True)]"/>
                 <filter string="Missing Vehicle Card" name="missing_vehicle_tid" domain="[('error_code','=','missing_vehicle_tid')]"/>
-                <filter string="Missing Employee Card" name="missing_user_tid" domain="[('error_code','=','missing_user_tid')]"/>
-                <filter string="Authentication Errors" name="auth_errors" domain="[('error_category','in',['auth','borrow'])]"/>
+                <filter string="Missing User Card" name="missing_user_tid" domain="[('error_code','=','missing_user_tid')]"/>
+                <filter string="Authentication Errors" name="auth_errors"
+                        domain="[('error_code','in',['vehicle_card_unknown','vehicle_not_found','user_card_unknown','user_not_assigned','borrow_not_allowed'])]"/>
                 <separator/>
-                    <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
-                    <filter string="Parking Area" name="group_parking_area" context="{'group_by':'parking_area_id'}"/>
-                    <filter string="Lane" name="group_lane" context="{'group_by':'lane_id'}"/>
-                    <filter string="Direction" name="group_direction" context="{'group_by':'direction'}"/>
-                    <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
-                    <filter string="Alert Code" name="group_error_code" context="{'group_by':'error_code'}"/>
-                    <filter string="Alert Category" name="group_error_category" context="{'group_by':'error_category'}"/>
-                    <filter string="Vehicle" name="group_vehicle" context="{'group_by':'vehicle_id'}"/>
-                </search>
+                <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
+                <filter string="Lane" name="group_lane" context="{'group_by':'lane_id'}"/>
+                <filter string="Direction" name="group_direction" context="{'group_by':'direction'}"/>
+                <filter string="Decision" name="group_status" context="{'group_by':'status'}"/>
+                <filter string="Decision Reason" name="group_error_code" context="{'group_by':'error_code'}"/>
+                <filter string="Vehicle" name="group_vehicle" context="{'group_by':'vehicle_id'}"/>
+            </search>
         </field>
     </record>
 
@@ -47,26 +42,25 @@
         <field name="name">view.nsp.parking.transaction.list</field>
         <field name="model">nsp.parking.transaction</field>
         <field name="arch" type="xml">
-            <list string="Vehicle In/Out Logs" create="0">
+            <list string="Parking Logs" create="0" edit="0" delete="0">
+                <field name="time_entered" string="Event Time"/>
                 <field name="parking_area_display" string="Parking Area"/>
                 <field name="lane_display" string="Lane"/>
                 <field name="vehicle_display" string="Vehicle"/>
-                <field name="direction" widget="badge" decoration-success="direction == 'entry'" decoration-info="direction == 'exit'"/>
-                <field name="status" widget="badge" decoration-success="status == 'allowed'" decoration-danger="status == 'denied'"/>
-                <field name="error_code" widget="badge" decoration-danger="error_severity == 'critical'" decoration-warning="error_severity == 'warning'" optional="show"/>
-                <field name="time_entered" string="Event Time"/>
-                <field name="vehicle_code" optional="hide"/>
-                <field name="user_code" optional="hide"/>
-                <field name="license_plate" optional="hide"/>
+                <field name="user_id" optional="show"/>
+                <field name="direction" widget="badge"
+                       decoration-success="direction == 'entry'"
+                       decoration-info="direction == 'exit'"/>
+                <field name="status" string="Decision" widget="badge"
+                       decoration-success="status == 'allowed'"
+                       decoration-danger="status == 'denied'"/>
+                <field name="error_code" string="Reason" widget="badge" optional="show"/>
+                <field name="controller_id" optional="hide"/>
+                <field name="device_id" optional="hide"/>
+                <field name="antenna_no" optional="hide"/>
                 <field name="vehicle_tid" optional="hide"/>
                 <field name="user_tid" optional="hide"/>
-                <field name="controller_id" optional="hide"/>
-                <field name="parking_area_id" optional="hide"/>
-                <field name="lane_id" optional="hide"/>
-                <field name="error_category" optional="hide"/>
-                <field name="error_severity" optional="hide"/>
-                <field name="alert_required" optional="hide"/>
-                <field name="error_message" optional="hide"/>
+                <field name="transaction_uid" optional="hide"/>
             </list>
         </field>
     </record>
@@ -75,47 +69,37 @@
         <field name="name">view.nsp.parking.transaction.form</field>
         <field name="model">nsp.parking.transaction</field>
         <field name="arch" type="xml">
-            <form string="Vehicle In/Out Log" create="0">
+            <form string="Parking Log" create="0" edit="0" delete="0">
                 <sheet>
                     <group>
-                        <group string="Main Information">
-                            <field name="parking_area_display" string="Parking Area" readonly="1"/>
-                            <field name="lane_display" string="Lane" readonly="1"/>
-                            <field name="vehicle_display" string="Vehicle" readonly="1"/>
+                        <group string="Event">
+                            <field name="transaction_uid"/>
+                            <field name="time_entered"/>
                             <field name="direction" widget="badge"/>
-                            <field name="status" widget="badge"/>
-                            <field name="time_entered" string="Event Time"/>
+                            <field name="status" string="Decision" widget="badge"/>
+                            <field name="error_code" string="Decision Reason"/>
+                            <field name="error_message" string="Decision Message"/>
                         </group>
-                        <group string="Vehicle / Card">
-                            <field name="vehicle_id"/>
-                            <field name="vehicle_code"/>
-                            <field name="license_plate"/>
-                            <field name="vehicle_tid"/>
-                            <field name="vehicle_card_id"/>
-                            <field name="user_id"/>
-                            <field name="user_code"/>
-                            <field name="user_tid"/>
-                <field name="borrow_request_id"/>
-                <field name="borrower_id"/>
-                            <field name="user_card_id"/>
+                        <group string="Location and Device">
+                            <field name="controller_id"/>
+                            <field name="parking_area_id"/>
+                            <field name="lane_id"/>
+                            <field name="device_id"/>
+                            <field name="antenna_id"/>
+                            <field name="serial_number"/>
+                            <field name="antenna_no"/>
                         </group>
                     </group>
                     <group>
-                        <group string="Node / Route">
-                            <field name="controller_id"/>
-                            <field name="parking_area_id"/>
-                            <field name="parking_area_code"/>
-                            <field name="lane_id"/>
-                            <field name="lane_code"/>
-                            <field name="transaction_uid"/>
-                                                </group>
-                        <group string="Alert / Error">
-                            <field name="alert_required"/>
-                            <field name="error_code"/>
-                            <field name="error_codes"/>
-                            <field name="error_category"/>
-                            <field name="error_severity"/>
-                            <field name="error_message"/>
+                        <group string="Vehicle">
+                            <field name="vehicle_id"/>
+                            <field name="license_plate"/>
+                            <field name="vehicle_tid"/>
+                        </group>
+                        <group string="User and Borrow">
+                            <field name="user_id"/>
+                            <field name="user_tid"/>
+                            <field name="borrow_request_id"/>
                         </group>
                     </group>
                 </sheet>
@@ -124,7 +108,7 @@
     </record>
 
     <record id="action_nsp_parking_transaction" model="ir.actions.act_window">
-        <field name="name">Vehicle In/Out Logs</field>
+        <field name="name">Parking Logs</field>
         <field name="res_model">nsp.parking.transaction</field>
         <field name="view_mode">list,form</field>
     </record>

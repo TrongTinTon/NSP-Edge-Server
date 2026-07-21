@@ -13,7 +13,7 @@ access_nsp_device_it,nsp.device IT,nsp_gatekeeper.model_nsp_device,nsp_core.grou
 access_nsp_device_operator,nsp.device Operator,nsp_gatekeeper.model_nsp_device,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_device_antenna_it,nsp.device.antenna IT,nsp_gatekeeper.model_nsp_device_antenna,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_device_antenna_operator,nsp.device.antenna Operator,nsp_gatekeeper.model_nsp_device_antenna,nsp_core.group_nsp_operator,1,0,0,0
-access_nsp_parking_transaction_it,nsp.parking.transaction IT,nsp_gatekeeper.model_nsp_parking_transaction,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_parking_transaction_it,nsp.parking.transaction IT,nsp_gatekeeper.model_nsp_parking_transaction,nsp_core.group_nsp_it_parking,1,0,0,0
 access_nsp_parking_transaction_operator,nsp.parking.transaction Operator,nsp_gatekeeper.model_nsp_parking_transaction,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_edge_server_it,nsp.edge.server IT,nsp_gatekeeper.model_nsp_edge_server,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_edge_server_operator,nsp.edge.server Operator,nsp_gatekeeper.model_nsp_edge_server,nsp_core.group_nsp_operator,1,0,0,0
