@@ -416,8 +416,6 @@ class ParkingTransaction(models.Model):
 
         mappings = self.env["nsp.parking.lane.antenna.mapping"].sudo().search([
             ("antenna_ref_id", "=", antenna.id),
-            ("is_active", "=", True),
-            ("antenna_group_id.active", "=", True),
             ("lane_id.active", "=", True),
         ])
         if not mappings:
@@ -427,7 +425,7 @@ class ParkingTransaction(models.Model):
         mapping = mappings[0]
         lane = mapping.lane_id
         parking_area = lane.parking_area_id
-        direction = mapping.effective_direction
+        direction = mapping.direction
         if lane.controller_id != controller:
             raise ValidationError(_("controller_not_in_scope"))
         if direction not in ("entry", "exit"):
@@ -451,7 +449,7 @@ class ParkingTransaction(models.Model):
         )
 
         errors = []
-        if parking_area.operation_state != "operational" or parking_area.status != "active":
+        if parking_area.state != "operational":
             errors.append(("parking_area_not_operational", _("Parking Area is not operational.")))
         if lane.required_vehicle_tid and not vehicle_tid:
             errors.append(("missing_vehicle_tid", _("Vehicle RFID card/TID was not detected.")))

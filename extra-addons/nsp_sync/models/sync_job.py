@@ -1145,114 +1145,214 @@ class NspSyncJob(models.Model):
         area_code = str(item.get("parking_area_code") or "").strip().upper()
         if not branch_code or not area_code:
             raise UserError(_("Branch Code and Parking Area Code are required."))
+
+        state = str(item.get("state") or "draft").strip().lower()
+        if state not in ("draft", "operational", "maintenance", "blocked"):
+            raise UserError(_("Invalid Parking Area state: %s") % state)
+
         branch = self.env["nsp.branch"].sudo().search([("code", "=", branch_code)], limit=1)
         if not branch:
-            branch = self._apply_branch({"branch_code": branch_code, "branch_name": branch_code, "active": True})
+            branch = self._apply_branch({
+                "branch_code": branch_code,
+                "branch_name": branch_code,
+                "active": True,
+            })
 
-        Parking = self.env["nsp.parking.area"].sudo().with_context(active_test=False)
+        Parking = self.env["nsp.parking.area"].sudo()
         parking = Parking.search([("code", "=", area_code)], limit=1)
-        vals = {
+        parking_vals = {
             "code": area_code,
             "name": item.get("parking_area_name") or area_code,
             "branch_id": branch.id,
-            "status": "active" if bool(item.get("active", True)) else "blocked",
-            "operation_state": "operational" if bool(item.get("operational")) else "draft",
+            "state": state,
         }
-        parking.write(vals) if parking else None
-        if not parking:
-            parking = Parking.create(vals)
+        if parking:
+            parking.write(parking_vals)
+        else:
+            parking = Parking.create(parking_vals)
+
+        Controller = self.env["nsp.controller"].sudo()
+        Device = self.env["nsp.device"].sudo()
+        Antenna = self.env["nsp.device.antenna"].sudo()
+        configured_controllers = {}
+
+        controllers_data = item.get("controllers") or []
+        if not isinstance(controllers_data, list):
+            raise UserError(_("Parking controllers must be an array."))
+        for controller_item in controllers_data:
+            if not isinstance(controller_item, dict):
+                raise UserError(_("Parking controllers must contain objects."))
+            controller_code = str(controller_item.get("controller_code") or "").strip().upper()
+            if not controller_code:
+                raise UserError(_("Each Parking Controller requires controller_code."))
+            controller = self._find_or_create_controller(controller_code)
+            configured_controllers[controller_code] = controller
+
+            devices_data = controller_item.get("devices") or []
+            if not isinstance(devices_data, list):
+                raise UserError(_("Controller devices must be an array."))
+            for device_item in devices_data:
+                if not isinstance(device_item, dict):
+                    raise UserError(_("Controller devices must contain objects."))
+                serial = str(device_item.get("serial_number") or "").strip().upper()
+                if not serial:
+                    raise UserError(_("Each Reader requires serial_number."))
+                device = self._find_or_create_device(controller, serial)
+                reader_parameters = device_item.get("reader_parameters") or {}
+                if not isinstance(reader_parameters, dict):
+                    raise UserError(_("reader_parameters must be an object."))
+                connection_type = device_item.get("physical_connection") or False
+                allowed_connections = {
+                    key for key, _label in Device._fields["connection_type"].selection
+                }
+                if connection_type and connection_type not in allowed_connections:
+                    raise UserError(_("Invalid Physical Connection for Reader %s.") % serial)
+                device.write({
+                    "model_number": str(device_item.get("model_number") or "").strip() or False,
+                    "device_vendor": str(device_item.get("vendor") or "").strip() or False,
+                    "connection_type": connection_type,
+                    "power_dbm": int(
+                        reader_parameters.get("power_dbm")
+                        if reader_parameters.get("power_dbm") is not None
+                        else 30
+                    ),
+                    "read_interval_ms": int(reader_parameters.get("read_interval_ms") or 200),
+                    "tid_addr": int(reader_parameters.get("tid_start_address") or 0),
+                    "tid_len": int(reader_parameters.get("tid_length") or 4),
+                })
+
+                antennas_data = device_item.get("antennas") or []
+                if not isinstance(antennas_data, list):
+                    raise UserError(_("Reader antennas must be an array."))
+                seen_numbers = set()
+                for antenna_item in antennas_data:
+                    if not isinstance(antenna_item, dict):
+                        raise UserError(_("Reader antennas must contain objects."))
+                    antenna_no = int(antenna_item.get("antenna_no") or 0)
+                    if antenna_no <= 0 or antenna_no in seen_numbers:
+                        raise UserError(_("Invalid or duplicate Antenna No for Reader %s.") % serial)
+                    seen_numbers.add(antenna_no)
+                    antenna = Antenna.search([
+                        ("device_id", "=", device.id),
+                        ("antenna_no", "=", antenna_no),
+                    ], limit=1)
+                    antenna_vals = {
+                        "device_id": device.id,
+                        "antenna_no": antenna_no,
+                        "minimum_rssi_dbm": float(
+                            antenna_item.get("minimum_rssi_dbm")
+                            if antenna_item.get("minimum_rssi_dbm") is not None
+                            else -65.0
+                        ),
+                    }
+                    if antenna:
+                        antenna.write(antenna_vals)
+                    else:
+                        Antenna.create(antenna_vals)
 
         Lane = self.env["nsp.parking.lane"].sudo().with_context(active_test=False)
-        Group = self.env["nsp.parking.lane.antenna.group"].sudo().with_context(active_test=False)
         Mapping = self.env["nsp.parking.lane.antenna.mapping"].sudo()
         incoming_codes = []
         lanes_data = item.get("lanes") or []
         if not isinstance(lanes_data, list):
             raise UserError(_("Parking lanes must be an array."))
+
         for lane_index, lane_item in enumerate(lanes_data, start=1):
             if not isinstance(lane_item, dict):
                 raise UserError(_("Parking lanes must contain objects."))
             lane_code = str(lane_item.get("lane_code") or "").strip().upper()
             controller_code = str(lane_item.get("controller_code") or "").strip().upper()
+            direction = str(lane_item.get("direction") or "").strip().lower()
             if not lane_code or not controller_code:
                 raise UserError(_("Each Parking Lane requires lane_code and controller_code."))
+            if direction not in ("entry", "exit", "both"):
+                raise UserError(_("Parking Lane direction must be entry, exit or both."))
+            controller = configured_controllers.get(controller_code)
+            if not controller:
+                controller = Controller.search([("controller_id", "=", controller_code)], limit=1)
+            if not controller:
+                raise UserError(_("Controller %s is missing from Parking controller configuration.") % controller_code)
+
             incoming_codes.append(lane_code)
-            controller = self._find_or_create_controller(controller_code)
-            lane = Lane.search([("parking_area_id", "=", parking.id), ("code", "=", lane_code)], limit=1)
-            lane_type = lane_item.get("lane_type") if lane_item.get("lane_type") in ("one_way", "two_way") else "one_way"
-            direction = lane_item.get("direction")
-            if lane_type == "two_way":
-                direction = "both"
-            elif direction not in ("entry", "exit"):
-                direction = "entry"
+            lane = Lane.search([
+                ("parking_area_id", "=", parking.id),
+                ("code", "=", lane_code),
+            ], limit=1)
             lane_vals = {
                 "parking_area_id": parking.id,
                 "code": lane_code,
                 "name": lane_item.get("lane_name") or lane_code,
                 "controller_id": controller.id,
                 "lane_no": int(lane_item.get("lane_no") or lane_index),
-                "sequence": int(lane_item.get("sequence") or lane_index * 10),
-                "lane_type": lane_type,
                 "direction": direction,
-                "detection_window_ms": int(lane_item.get("detection_window_ms") or parking.detection_window_ms or 1500),
                 "required_vehicle_tid": bool(lane_item.get("required_vehicle_tid", True)),
                 "required_user_tid": bool(lane_item.get("required_user_tid", False)),
                 "active": True,
             }
-            lane.write(lane_vals) if lane else None
-            if not lane:
+            if lane:
+                lane.write(lane_vals)
+            else:
                 lane = Lane.create(lane_vals)
-            Group.search([("lane_id", "=", lane.id)]).unlink()
 
-            groups_data = lane_item.get("antenna_groups") or []
-            if not isinstance(groups_data, list):
-                raise UserError(_("Antenna groups must be an array."))
-            for group_index, group_item in enumerate(groups_data, start=1):
-                if not isinstance(group_item, dict):
-                    raise UserError(_("Antenna groups must contain objects."))
-                group_direction = str(group_item.get("direction") or "").strip().lower()
-                if group_direction not in ("entry", "exit"):
-                    raise UserError(_("Antenna Group direction must be entry or exit."))
-                detection_mode = group_item.get("detection_mode")
-                if detection_mode not in ("any", "sequential"):
-                    detection_mode = "any"
-                group = Group.create({
+            Mapping.search([("lane_id", "=", lane.id)]).unlink()
+            mappings_data = lane_item.get("antenna_mappings") or []
+            if not isinstance(mappings_data, list):
+                raise UserError(_("Antenna mappings must be an array."))
+            for mapping_item in mappings_data:
+                if not isinstance(mapping_item, dict):
+                    raise UserError(_("Antenna mappings must contain objects."))
+                serial = str(mapping_item.get("serial_number") or "").strip().upper()
+                antenna_no = int(mapping_item.get("antenna_no") or 0)
+                mapping_direction = str(mapping_item.get("direction") or "").strip().lower()
+                if not serial or antenna_no <= 0:
+                    raise UserError(_("Each antenna mapping requires serial_number and antenna_no."))
+                if mapping_direction not in ("entry", "exit"):
+                    raise UserError(_("Antenna mapping direction must be entry or exit."))
+                if direction != "both" and mapping_direction != direction:
+                    raise UserError(_("A one-way Lane antenna mapping must match the Lane direction."))
+                device = Device.search([
+                    ("controller_id", "=", controller.id),
+                    ("serial_number", "=", serial),
+                ], limit=1)
+                if not device:
+                    raise UserError(_("Reader %s is missing from Parking controller configuration.") % serial)
+                antenna = Antenna.search([
+                    ("device_id", "=", device.id),
+                    ("antenna_no", "=", antenna_no),
+                ], limit=1)
+                if not antenna:
+                    raise UserError(_("Antenna %s/%s is missing from Reader configuration.") % (serial, antenna_no))
+                Mapping.create({
                     "lane_id": lane.id,
-                    "direction": group_direction,
-                    "detection_mode": detection_mode,
-                    "sequence": int(group_item.get("sequence") or group_index * 10),
-                    "active": True,
+                    "direction": mapping_direction,
+                    "antenna_ref_id": antenna.id,
                 })
-                antennas_data = group_item.get("antennas") or []
-                if not isinstance(antennas_data, list):
-                    raise UserError(_("Antenna mappings must be an array."))
-                for antenna_index, antenna_item in enumerate(antennas_data, start=1):
-                    if not isinstance(antenna_item, dict):
-                        raise UserError(_("Antenna mappings must contain objects."))
-                    serial = str(antenna_item.get("serial_number") or "").strip().upper()
-                    antenna_no = int(antenna_item.get("antenna_no") or 0)
-                    if not serial or antenna_no <= 0:
-                        raise UserError(_("Each antenna mapping requires serial_number and antenna_no."))
-                    device = self._find_or_create_device(controller, serial)
-                    Antenna = self.env["nsp.device.antenna"].sudo()
-                    antenna = Antenna.search([("device_id", "=", device.id), ("antenna_no", "=", antenna_no)], limit=1)
-                    if not antenna:
-                        antenna = Antenna.create({
-                            "device_id": device.id,
-                            "antenna_no": antenna_no,
-                        })
-                    sequence_no = int(antenna_item.get("sequence_no") or antenna_index) if detection_mode == "sequential" else 0
-                    Mapping.create({
-                        "antenna_group_id": group.id,
-                        "antenna_ref_id": antenna.id,
-                        "sequence_no": sequence_no,
-                        "is_active": True,
-                    })
+
         stale_domain = [("parking_area_id", "=", parking.id)]
         if incoming_codes:
             stale_domain.append(("code", "not in", incoming_codes))
-        Lane.search(stale_domain).write({"active": False})
+        stale_lanes = Lane.search(stale_domain)
+        if stale_lanes:
+            stale_lanes.mapped("antenna_mapping_ids").unlink()
+            stale_lanes.write({"active": False})
         return parking
+
+    def _reconcile_parking_config_snapshot(self, items):
+        self.ensure_one()
+        incoming_codes = {
+            str(item.get("parking_area_code") or "").strip().upper()
+            for item in (items or [])
+            if isinstance(item, dict) and item.get("parking_area_code")
+        }
+        Parking = self.env["nsp.parking.area"].sudo()
+        stale = Parking.search([])
+        if incoming_codes:
+            stale = stale.filtered(lambda record: record.code not in incoming_codes)
+        if stale:
+            stale.mapped("lane_ids.antenna_mapping_ids").unlink()
+            stale.mapped("lane_ids").write({"active": False})
+            stale.write({"state": "blocked"})
+        return len(stale)
 
     def _apply_items(self, kind, items, request_payload=False):
         self.ensure_one()
@@ -1325,7 +1425,7 @@ class NspSyncJob(models.Model):
         self.ensure_one()
         # Full snapshots do not use incremental cursors. This guarantees that
         # deletions, revocations and assignment changes are reflected on Edge.
-        if self._action_kind() in ("device_whitelist", "vehicle_config", "card"):
+        if self._action_kind() in ("device_whitelist", "vehicle_config", "card", "parking_config"):
             return {"edge_server_code": self.edge_server_code}
         payload = {"edge_server_code": self.edge_server_code, "limit": self.batch_size}
         if self.sync_cursor:
@@ -1770,17 +1870,21 @@ class NspSyncJob(models.Model):
         items = self._items_from_response(data)
         next_cursor = data.get("next_sync_cursor") or False
         has_more = bool(data.get("has_more"))
-        full_snapshot = kind == "device_whitelist"
+        full_snapshot = kind in ("device_whitelist", "parking_config")
         if not items:
             removed = 0
             if kind == "device_whitelist":
                 removed = self._reconcile_device_whitelist_snapshot([])
+            elif kind == "parking_config":
+                removed = self._reconcile_parking_config_snapshot([])
             self.write({
                 "last_pull_at": fields.Datetime.now(),
                 "sync_cursor": False if full_snapshot else (next_cursor or self.sync_cursor),
             })
             if kind == "device_whitelist":
                 message = "Device Whitelist snapshot is empty; removed %s stale record(s)." % removed
+            elif kind == "parking_config":
+                message = "Parking Configuration snapshot is empty; blocked %s stale area(s)." % removed
             else:
                 message = "No changed records to pull."
             return {
@@ -1795,12 +1899,16 @@ class NspSyncJob(models.Model):
         removed = 0
         if kind == "device_whitelist":
             removed = self._reconcile_device_whitelist_snapshot(items)
+        elif kind == "parking_config":
+            removed = self._reconcile_parking_config_snapshot(items)
         self.write({
             "last_pull_at": fields.Datetime.now(),
             "sync_cursor": False if full_snapshot else (next_cursor or self.sync_cursor),
         })
         if kind == "device_whitelist":
             message = "Pulled %s Device Whitelist record(s); removed %s stale record(s)." % (len(results), removed)
+        elif kind == "parking_config":
+            message = "Applied %s Parking Configuration record(s); blocked %s stale area(s)." % (len(results), removed)
         else:
             message = "Pulled %s record(s)." % len(results)
         return {

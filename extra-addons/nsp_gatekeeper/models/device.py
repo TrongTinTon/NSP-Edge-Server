@@ -49,7 +49,12 @@ class Device(models.Model):
     ], string="Physical Connection", index=True)
 
     # Reader parameters controlled by the server
-    power_dbm = fields.Integer(string="Power dBm", default=30)
+    power_dbm = fields.Integer(
+        string="Power (dBm)",
+        required=True,
+        default=30,
+        help="Transmit power applied uniformly to all antenna ports of this Reader.",
+    )
     read_interval_ms = fields.Integer(string="Read Interval ms", default=200)
     tid_addr = fields.Integer(string="TID Start Address", default=2)
     tid_len = fields.Integer(string="TID Length", default=4)
@@ -64,6 +69,7 @@ class Device(models.Model):
     _sql_constraints = [
         ("serial_number_unique", "unique(serial_number)", "Reader Serial must be unique."),
         ("device_code_controller_unique", "unique(controller_id, device_code)", "Device Code must be unique per Controller."),
+        ("reader_power_range", "CHECK(power_dbm >= 0 AND power_dbm <= 40)", "Power must be between 0 and 40 dBm."),
         ("read_interval_positive", "CHECK(read_interval_ms > 0)", "Read Interval must be greater than zero."),
         ("tid_addr_non_negative", "CHECK(tid_addr >= 0)", "TID Start Address cannot be negative."),
         ("tid_len_positive", "CHECK(tid_len > 0)", "TID Length must be greater than zero."),
@@ -150,11 +156,22 @@ class Device(models.Model):
         for record in self:
             record.antennas = len(record.antennas_ids)
 
-    def _build_config_payload(self):
-        """Return Reader configuration owned by the Controller.
+    def _antenna_config_payload(self):
+        self.ensure_one()
+        return [
+            {
+                "antenna_no": int(antenna.antenna_no),
+                "minimum_rssi_dbm": float(antenna.minimum_rssi_dbm),
+            }
+            for antenna in self.antennas_ids.sorted(key=lambda item: (item.antenna_no, item.id))
+        ]
 
-        Device Code, physical connection inventory and parking topology are
-        server-only. Antennas are identified solely by their numeric ports.
+    def _build_config_payload(self):
+        """Return technical Reader configuration for the Controller.
+
+        Device Code, model, vendor, physical connection and parking topology
+        remain server-owned. Transmit power is common to the Reader; each
+        antenna port may use its own RSSI acceptance threshold.
         """
         self.ensure_one()
         return {
@@ -165,12 +182,19 @@ class Device(models.Model):
                 "tid_start_address": int(self.tid_addr or 0),
                 "tid_length": int(self.tid_len or 0),
             },
-            "antennas": sorted(
-                int(antenna.antenna_no)
-                for antenna in self.antennas_ids
-                if int(antenna.antenna_no or 0) > 0
-            ),
+            "antennas": self._antenna_config_payload(),
         }
+
+    def _build_edge_config_payload(self):
+        """Return Cloud-to-Edge Reader declaration and technical settings."""
+        self.ensure_one()
+        payload = self._build_config_payload()
+        payload.update({
+            "model_number": self.model_number or False,
+            "vendor": self.device_vendor or False,
+            "physical_connection": self.connection_type or False,
+        })
+        return payload
 
     @api.model
     def cron_mark_offline_devices(self):

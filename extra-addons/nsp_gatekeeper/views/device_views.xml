@@ -79,8 +79,7 @@
                     </group>
                     <group string="Reader Parameters">
                         <group>
-                            <field name="power_dbm" string="Power dBm"/>
-                            <field name="read_interval_ms" string="Read Interval ms"/>
+                                        <field name="read_interval_ms" string="Read Interval ms"/>
                         </group>
                         <group>
                             <field name="tid_addr" string="TID Start Address"/>
@@ -90,11 +89,12 @@
                     <notebook>
                         <page name="antennas" string="Antennas">
                             <div class="alert alert-info" role="alert">
-                                Declare only the numbered antenna ports available on this Reader. RFID read parameters are configured at Reader level.
+                                Power is configured once on the Reader and applies to all antenna ports. Minimum RSSI can be tuned per antenna to reject weak detections from farther or adjacent lanes.
                             </div>
                             <field name="antennas_ids" context="{'default_device_id': id}">
                                 <list string="Antennas" editable="bottom">
                                     <field name="antenna_no" string="Antenna No"/>
+                                    <field name="minimum_rssi_dbm" string="Minimum RSSI dBm"/>
                                     <field name="lane_count" string="Mapped Lanes" readonly="1"/>
                                 </list>
                             </field>
@@ -171,6 +171,7 @@
                 <field name="controller_id" readonly="1"/>
                 <field name="device_id" string="Reader"/>
                 <field name="antenna_no" string="Antenna No"/>
+                <field name="minimum_rssi_dbm" string="Minimum RSSI dBm"/>
                 <field name="lane_count" string="Mapped Lanes" readonly="1"/>
             </list>
         </field>
@@ -186,9 +187,10 @@
                         <h1><field name="display_name" readonly="1"/></h1>
                     </div>
                     <group>
-                        <group string="Antenna">
+                        <group string="Antenna Configuration">
                             <field name="device_id" string="Reader" options="{'no_create': False, 'no_open': False}"/>
                             <field name="antenna_no" string="Antenna No"/>
+                            <field name="minimum_rssi_dbm" string="Minimum RSSI dBm"/>
                         </group>
                         <group string="Ownership">
                             <field name="controller_id" readonly="1"/>
@@ -202,10 +204,7 @@
                                 <list string="Parking Lane Antenna Mapping">
                                     <field name="parking_area_id" string="Parking Area"/>
                                     <field name="lane_id"/>
-                                    <field name="group_direction" string="Direction" widget="badge"/>
-                                    <field name="detection_mode" widget="badge"/>
-                                    <field name="sequence_no"/>
-                                    <field name="is_active" widget="boolean_toggle"/>
+                                    <field name="direction" widget="badge"/>
                                 </list>
                             </field>
                         </page>

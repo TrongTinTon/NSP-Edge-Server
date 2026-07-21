@@ -924,18 +924,22 @@ class NspGatekeeperApiService(models.AbstractModel):
         _application, _actor_kind, _edge_server, error = self._auth_edge_server_sync(data)
         if error:
             return error
-        ParkingOperation = self.env["nsp.parking.area"].sudo().with_context(active_test=False)
-        domain = []
-        parking_area_code = str(data.get("parking_area_code") or "").strip().upper()
-        if parking_area_code:
-            domain.append(("code", "=", parking_area_code))
-        records, next_cursor, has_more, server_time = self._cursor_page(ParkingOperation, data, domain=domain)
+        unsupported = sorted(set(data) - {"edge_server_code"})
+        if unsupported:
+            return self._error(
+                "Unsupported field(s): %s" % ", ".join(unsupported),
+                400,
+                error_code="invalid_payload",
+                details={"unsupported_fields": unsupported},
+            )
+        ParkingOperation = self.env["nsp.parking.area"].sudo()
+        records = ParkingOperation.search([], order="branch_id, code, id")
         return self._ok({
             "items": [record.prepare_sync_payload() for record in records],
-            "next_sync_cursor": next_cursor,
-            "has_more": has_more,
-            "server_time": self._iso_datetime(server_time),
-        }, message="Parking operation configuration sync loaded.")
+            "next_sync_cursor": False,
+            "has_more": False,
+            "server_time": self._iso_datetime(fields.Datetime.now()),
+        }, message="Parking operation configuration snapshot loaded.")
 
     @endpoint("NSP Controller Device Configuration Pull", route_suffix="controller/device-config/pull", methods="POST", code="nsp_controller_device_config_pull")
     def api_controller_device_config_pull(self):
@@ -1645,8 +1649,15 @@ class NspGatekeeperApiService(models.AbstractModel):
         direction = str(item.get("direction") or "").strip().lower()
         if direction not in ("entry", "exit"):
             raise ValueError("invalid_direction")
-        if lane.lane_type == "one_way" and direction != lane.direction:
+        if lane.direction != "both" and direction != lane.direction:
             raise ValueError("invalid_direction")
+        mapping = self.env["nsp.parking.lane.antenna.mapping"].sudo().search([
+            ("lane_id", "=", lane.id),
+            ("antenna_ref_id", "=", antenna.id),
+            ("direction", "=", direction),
+        ], limit=1)
+        if not mapping:
+            raise ValueError("no_antenna_rule")
         decision = str(item.get("decision") or "").strip().lower()
         if decision not in ("allowed", "denied"):
             raise ValueError("invalid_decision")

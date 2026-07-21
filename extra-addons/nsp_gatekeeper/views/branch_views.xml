@@ -51,8 +51,7 @@
                                     <field name="code"/>
                                     <field name="name"/>
                                     <field name="controller_ids" widget="many2many_tags"/>
-                                    <field name="status"/>
-                                    <field name="operation_state"/>
+                                    <field name="state" widget="badge"/>
                                 </list>
                             </field>
                         </page>

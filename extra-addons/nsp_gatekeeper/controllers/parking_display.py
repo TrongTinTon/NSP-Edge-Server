@@ -45,10 +45,7 @@ class NspParkingDisplayController(http.Controller):
             return self._json_response({"ok": False, "error": "forbidden"}, status=403)
         ParkingArea = request.env["nsp.parking.area"].sudo()
         parking_areas = ParkingArea.search(
-            [
-                ("status", "=", "active"),
-                ("operation_state", "=", "operational"),
-            ],
+            [("state", "=", "operational")],
             order="branch_id, name, code, id",
         )
         return self._json_response({

@@ -5,8 +5,6 @@ access_nsp_parking_area_it,nsp.parking.area IT,nsp_gatekeeper.model_nsp_parking_
 access_nsp_parking_area_operator,nsp.parking.area Operator,nsp_gatekeeper.model_nsp_parking_area,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_parking_lane_it,nsp.parking.lane IT,nsp_gatekeeper.model_nsp_parking_lane,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_parking_lane_operator,nsp.parking.lane Operator,nsp_gatekeeper.model_nsp_parking_lane,nsp_core.group_nsp_operator,1,0,0,0
-access_nsp_parking_lane_antenna_group_it,nsp.parking.lane.antenna.group IT,nsp_gatekeeper.model_nsp_parking_lane_antenna_group,nsp_core.group_nsp_it_parking,1,1,1,1
-access_nsp_parking_lane_antenna_group_operator,nsp.parking.lane.antenna.group Operator,nsp_gatekeeper.model_nsp_parking_lane_antenna_group,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_parking_lane_antenna_mapping_it,nsp.parking.lane.antenna.mapping IT,nsp_gatekeeper.model_nsp_parking_lane_antenna_mapping,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_parking_lane_antenna_mapping_operator,nsp.parking.lane.antenna.mapping Operator,nsp_gatekeeper.model_nsp_parking_lane_antenna_mapping,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_device_it,nsp.device IT,nsp_gatekeeper.model_nsp_device,nsp_core.group_nsp_it_parking,1,1,1,1
