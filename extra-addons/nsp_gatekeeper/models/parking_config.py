@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError, UserError
+from odoo.addons.nsp_core.utils import new_management_code
 
 class NspParkingArea(models.Model):
     """Server-owned parking topology and operational configuration.
@@ -16,7 +17,10 @@ class NspParkingArea(models.Model):
     _order = "branch_id, name, id"
 
     name = fields.Char(string="Parking Area Name", required=True, tracking=True)
-    code = fields.Char(string="Parking Area Code", required=True, tracking=True, copy=False, index=True)
+    code = fields.Char(
+        string="Parking Area Code", required=True, tracking=True, copy=False, index=True,
+        default=lambda self: new_management_code("PARK"),
+    )
     branch_id = fields.Many2one(
         "nsp.branch", string="Branch", required=True, ondelete="restrict", tracking=True, index=True
     )
@@ -122,7 +126,9 @@ class NspParkingArea(models.Model):
             vals = dict(source)
             if not vals.get("branch_id") and default_branch:
                 vals["branch_id"] = default_branch.id
-            vals["code"] = self._normalize_code(vals.get("code"))
+            vals["code"] = self._normalize_code(
+                vals.get("code") or new_management_code("PARK")
+            )
             prepared.append(vals)
         return super().create(prepared)
 
@@ -313,7 +319,10 @@ class NspParkingLane(models.Model):
     _rec_name = "display_name"
 
     name = fields.Char(string="Lane Name", required=True, default="Lane")
-    code = fields.Char(string="Lane Code", required=True, copy=False, index=True)
+    code = fields.Char(
+        string="Lane Code", required=True, copy=False, index=True,
+        default=lambda self: new_management_code("LANE"),
+    )
     display_name = fields.Char(string="Display Name", compute="_compute_display_name", store=True)
     parking_area_id = fields.Many2one("nsp.parking.area", string="Parking Area", required=True, ondelete="cascade", index=True)
     branch_id = fields.Many2one("nsp.branch", related="parking_area_id.branch_id", store=True, readonly=True, index=True)
@@ -364,7 +373,9 @@ class NspParkingLane(models.Model):
     @api.model_create_multi
     def create(self, vals_list):
         for vals in vals_list:
-            vals["code"] = self._normalize_code(vals.get("code") or vals.get("name") or "LANE")
+            vals["code"] = self._normalize_code(
+                vals.get("code") or new_management_code("LANE")
+            )
             if vals.get("lane_type") == "two_way":
                 vals["direction"] = "both"
             elif vals.get("direction") not in ("entry", "exit"):

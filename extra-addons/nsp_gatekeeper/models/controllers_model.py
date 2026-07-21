@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError
+from odoo.addons.nsp_core.utils import new_management_code
 
 NODE_STATUS = [
     ("online", "Online"),
@@ -19,6 +20,7 @@ class NspEdgeServer(models.Model):
 
     edge_server_code = fields.Char(
         string="Edge Server Code", required=True, copy=False, index=True, tracking=True,
+        default=lambda self: new_management_code("EDGE"),
         help="Stable code assigned to this Edge Server by the Cloud Server.",
     )
     name = fields.Char(string="Edge Server Name", required=True, default="NSP Edge Server", tracking=True)
@@ -44,7 +46,9 @@ class NspEdgeServer(models.Model):
         prepared = []
         for source in vals_list:
             vals = dict(source)
-            vals["edge_server_code"] = str(vals.get("edge_server_code") or "").strip().upper()
+            vals["edge_server_code"] = str(
+                vals.get("edge_server_code") or new_management_code("EDGE")
+            ).strip().upper()
             vals["name"] = str(vals.get("name") or vals["edge_server_code"] or "NSP Edge Server").strip()
             prepared.append(vals)
         return super().create(prepared)
@@ -89,6 +93,7 @@ class NspController(models.Model):
 
     controller_id = fields.Char(
         string="Controller Code", required=True, copy=False, index=True, tracking=True,
+        default=lambda self: new_management_code("CTRL"),
         help="Stable Controller Code provisioned by the server.",
     )
     controller_name = fields.Char(string="Controller Name", required=True, default="NSP Gatekeeper Controller", tracking=True)
@@ -138,7 +143,9 @@ class NspController(models.Model):
         prepared = []
         for source in vals_list:
             vals = dict(source)
-            vals["controller_id"] = str(vals.get("controller_id") or "").strip().upper()
+            vals["controller_id"] = str(
+                vals.get("controller_id") or new_management_code("CTRL")
+            ).strip().upper()
             vals["controller_name"] = str(vals.get("controller_name") or vals["controller_id"] or "NSP Controller").strip()
             prepared.append(vals)
         return super().create(prepared)

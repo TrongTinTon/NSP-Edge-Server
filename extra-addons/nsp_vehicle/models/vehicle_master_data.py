@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from odoo import fields, models
+from odoo.addons.nsp_core.utils import new_management_code
 
 
 class VehicleCloudSyncMixin(models.AbstractModel):
@@ -15,7 +16,10 @@ class VehicleType(models.Model):
     _order = 'name'
 
     name = fields.Char(required=True, tracking=True)
-    code = fields.Char(tracking=True)
+    code = fields.Char(
+        tracking=True, copy=False, index=True,
+        default=lambda self: new_management_code("VTYPE"),
+    )
     active = fields.Boolean(default=True)
 
     _sql_constraints = [
@@ -31,7 +35,10 @@ class VehicleBrand(models.Model):
     _order = 'name'
 
     name = fields.Char(required=True, tracking=True)
-    code = fields.Char(tracking=True)
+    code = fields.Char(
+        tracking=True, copy=False, index=True,
+        default=lambda self: new_management_code("BRAND"),
+    )
     active = fields.Boolean(default=True)
 
     _sql_constraints = [
@@ -48,7 +55,10 @@ class VehicleModel(models.Model):
 
     name = fields.Char(required=True, tracking=True)
     brand_id = fields.Many2one('nsp.vehicle.brand', string='Brand', ondelete='set null', tracking=True)
-    code = fields.Char(tracking=True)
+    code = fields.Char(
+        tracking=True, copy=False, index=True,
+        default=lambda self: new_management_code("VMODEL"),
+    )
     active = fields.Boolean(default=True)
 
     _sql_constraints = [
@@ -64,7 +74,10 @@ class VehicleColor(models.Model):
     _order = 'name'
 
     name = fields.Char(required=True, tracking=True)
-    code = fields.Char(tracking=True)
+    code = fields.Char(
+        tracking=True, copy=False, index=True,
+        default=lambda self: new_management_code("COLOR"),
+    )
     active = fields.Boolean(default=True)
 
     _sql_constraints = [

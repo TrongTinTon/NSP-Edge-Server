@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
+from odoo.addons.nsp_core.utils import new_management_code
 
 
 class Device(models.Model):
@@ -11,7 +12,10 @@ class Device(models.Model):
 
     # Device declaration
     serial_number = fields.Char(string="Serial", required=True, copy=False, index=True)
-    device_code = fields.Char(string="Device Code", required=True, index=True)
+    device_code = fields.Char(
+        string="Device Code", required=True, copy=False, index=True,
+        default=lambda self: new_management_code("DEV"),
+    )
     model_number = fields.Char(string="Model Number")
     device_vendor = fields.Char(string="Vendor")
     controller_id = fields.Many2one(
@@ -98,7 +102,9 @@ class Device(models.Model):
             vals = dict(source)
             serial = self._normalize_serial(vals.get("serial_number"))
             vals["serial_number"] = serial
-            vals["device_code"] = self._normalize_code(vals.get("device_code") or serial)
+            vals["device_code"] = self._normalize_code(
+                vals.get("device_code") or new_management_code("DEV")
+            )
             vals["model_number"] = str(vals.get("model_number") or "").strip() or False
             vals["device_vendor"] = str(vals.get("device_vendor") or "").strip() or False
             prepared.append(vals)

@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-import uuid
-
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
+from odoo.addons.nsp_core.utils import new_management_code
 
 
 class NspUser(models.Model):
@@ -13,7 +12,11 @@ class NspUser(models.Model):
     _order = "user_code, name, id"
 
     display_name = fields.Char(string="Display Name", compute="_compute_display_name", store=True)
-    user_code = fields.Char(string="User Code", required=True, copy=False, index=True, tracking=True, help="Stable user code synced to Controller. This replaces HR Code and does not depend on Odoo HR.")
+    user_code = fields.Char(
+        string="User Code", required=True, copy=False, index=True, tracking=True,
+        default=lambda self: new_management_code("USER"),
+        help="Stable user code synced to Controller. This replaces HR Code and does not depend on Odoo HR.",
+    )
     name = fields.Char(string="User Name", required=True, tracking=True)
     active = fields.Boolean(default=True, tracking=True, index=True)
     pin = fields.Char(string="PIN", copy=False, tracking=True)
@@ -50,20 +53,13 @@ class NspUser(models.Model):
     @api.model_create_multi
     def create(self, vals_list):
         prepared = []
-        generated_indexes = set()
-        for idx, vals in enumerate(vals_list):
-            vals = dict(vals)
-            if vals.get("user_code"):
-                vals["user_code"] = self._normalize_code(vals.get("user_code"))
-            else:
-                vals["user_code"] = "USER-TMP-%s" % uuid.uuid4().hex[:12].upper()
-                generated_indexes.add(idx)
+        for source in vals_list:
+            vals = dict(source)
+            vals["user_code"] = self._normalize_code(
+                vals.get("user_code") or new_management_code("USER")
+            )
             prepared.append(vals)
-        records = super().create(prepared)
-        for idx, rec in enumerate(records):
-            if idx in generated_indexes:
-                rec.user_code = "USER-%06d" % rec.id
-        return records
+        return super().create(prepared)
 
     def write(self, vals):
         if vals.get("user_code"):

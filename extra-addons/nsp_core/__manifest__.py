@@ -2,7 +2,7 @@
     'name': 'NSP Core',
     'summary': 'Shared NSP security groups and menus',
     'description': 'Base module for Non Stop Parking. Owns shared role groups, menu roots and fresh-install access bootstrap.',
-    'version': '19.0.2.0.0',
+    'version': '19.0.2.0.1',
     'sequence': 5,
     'author': 'BKU Team',
     'category': 'Services',

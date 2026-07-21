@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
+from odoo.addons.nsp_core.utils import new_management_code
 
 
 class NspBranch(models.Model):
@@ -11,7 +12,10 @@ class NspBranch(models.Model):
     _order = "code, name, id"
 
     name = fields.Char(string="Branch Name", required=True, tracking=True)
-    code = fields.Char(string="Branch Code", required=True, index=True, tracking=True, copy=False)
+    code = fields.Char(
+        string="Branch Code", required=True, index=True, tracking=True, copy=False,
+        default=lambda self: new_management_code("BRN"),
+    )
     status = fields.Selection([
         ("active", "Active"),
         ("inactive", "Inactive"),
@@ -43,8 +47,9 @@ class NspBranch(models.Model):
     @api.model_create_multi
     def create(self, vals_list):
         for vals in vals_list:
-            if vals.get("code"):
-                vals["code"] = self._normalize_code(vals.get("code"))
+            vals["code"] = self._normalize_code(
+                vals.get("code") or new_management_code("BRN")
+            )
             if not vals.get("timezone"):
                 vals["timezone"] = "Asia/Ho_Chi_Minh"
         records = super().create(vals_list)
