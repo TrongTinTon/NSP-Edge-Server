@@ -7,7 +7,6 @@ Action Endpoints instead of direct @http.route aliases.
 
 import base64
 import json
-import hashlib
 import logging
 from datetime import datetime, timezone
 
@@ -722,7 +721,7 @@ class NspGatekeeperApiService(models.AbstractModel):
         }, message="Controller device configuration loaded.")
 
     # ------------------------------------------------------------------
-    # Measurement Session / Configuration / Run / Event APIs
+    # Measurement Session / Event APIs
     # ------------------------------------------------------------------
     @api.model
     def _measurement_input(self):
@@ -774,29 +773,16 @@ class NspGatekeeperApiService(models.AbstractModel):
         return fields.Datetime.to_string(parsed)
 
     @api.model
-    def _measurement_session(self, uid):
-        value = str(uid or "").strip().upper()
-        if not value:
-            raise ValueError("missing_measurement_session_uid")
-        session = self.env["nsp.measurement.session"].sudo().search([
-            ("measurement_session_uid", "=", value),
-        ], limit=1)
+    def _measurement_session(self, measurement_code):
+        code = str(measurement_code or "").strip().upper()
+        if not code:
+            raise ValueError("missing_measurement_code")
+        session = self.env["nsp.measurement.session"].sudo().search(
+            [("measurement_code", "=", code)], limit=1
+        )
         if not session:
             raise ValueError("measurement_session_not_found")
         return session
-
-    @api.model
-    def _measurement_run(self, uid, session=False):
-        value = str(uid or "").strip().upper()
-        if not value:
-            raise ValueError("missing_measurement_run_uid")
-        domain = [("measurement_run_uid", "=", value)]
-        if session:
-            domain.append(("session_id", "=", session.id))
-        run = self.env["nsp.measurement.run"].sudo().search(domain, limit=1)
-        if not run:
-            raise ValueError("measurement_run_not_found")
-        return run
 
     @api.model
     def _measurement_session_in_local_scope(self, session, edge_server):
@@ -805,22 +791,26 @@ class NspGatekeeperApiService(models.AbstractModel):
     @api.model
     def _measurement_antenna_payload(self, session):
         grouped = {}
-        for line in session.antenna_ids.sorted(
-            key=lambda item: (item.serial_number or "", item.antenna_no or 0, item.id)
+        for antenna in session.antenna_ids.sorted(
+            key=lambda item: (
+                item.device_id.serial_number or "",
+                item.antenna_id or 0,
+                item.id,
+            )
         ):
-            grouped.setdefault(line.serial_number, []).append(int(line.antenna_no))
+            grouped.setdefault(antenna.device_id.serial_number, []).append(int(antenna.antenna_id))
         return [
-            {"serial_number": serial_number, "antennas": sorted(set(antenna_numbers))}
-            for serial_number, antenna_numbers in sorted(grouped.items())
+            {"serial_number": serial_number, "antennas": sorted(set(numbers))}
+            for serial_number, numbers in sorted(grouped.items())
         ]
 
     @api.model
     def _measurement_config_payload(self, session):
         payload = {
-            "measurement_session_uid": session.measurement_session_uid,
             "measurement_code": session.measurement_code,
             "controller_code": session.controller_id.controller_id,
-            "measurement_status": session.measurement_status,
+            "status": session.status,
+            "desired_state": "running" if session.status in ("ready", "running") else "stopped",
             "measurement_antennas": self._measurement_antenna_payload(session),
         }
         if session.planned_start_at:
@@ -835,44 +825,23 @@ class NspGatekeeperApiService(models.AbstractModel):
     def _measurement_session_payload(self, session, include_detail=False):
         payload = self._measurement_config_payload(session)
         payload.update({
-            "run_count": int(session.run_count or 0),
-            "measurement_event_count": int(session.event_count or 0),
+            "event_count": int(session.event_count or 0),
             "created_at": self._iso_datetime(session.create_date),
         })
         if session.started_at:
             payload["started_at"] = self._iso_datetime(session.started_at)
-        if session.completed_at:
-            payload["completed_at"] = self._iso_datetime(session.completed_at)
-        if session.cancelled_at:
-            payload["cancelled_at"] = self._iso_datetime(session.cancelled_at)
+        if session.ended_at:
+            payload["ended_at"] = self._iso_datetime(session.ended_at)
         if include_detail:
-            payload["runs"] = [{
-                "measurement_run_uid": run.measurement_run_uid,
-                "run_status": run.run_status,
-                "measurement_count": int(run.measurement_count or 0),
-                **({"started_at": self._iso_datetime(run.started_at)} if run.started_at else {}),
-                **({"stopped_at": self._iso_datetime(run.stopped_at)} if run.stopped_at else {}),
-            } for run in session.run_ids.sorted(key=lambda item: (item.create_date, item.id))]
-            payload["antenna_summaries"] = [{
-                "serial_number": row.serial_number,
-                "antenna_no": int(row.antenna_no),
-                "read_count": int(row.read_count or 0),
-                "min_rssi_dbm": row.min_rssi_dbm,
-                "max_rssi_dbm": row.max_rssi_dbm,
-                "average_rssi_dbm": row.average_rssi_dbm,
-                "first_read_at": self._iso_datetime(row.first_read_at),
-                "last_read_at": self._iso_datetime(row.last_read_at),
-            } for row in session.antenna_summary_ids]
-            payload["pair_summaries"] = [{
-                "from_serial_number": row.from_serial_number,
-                "from_antenna_no": int(row.from_antenna_no),
-                "to_serial_number": row.to_serial_number,
-                "to_antenna_no": int(row.to_antenna_no),
-                "sample_count": int(row.sample_count or 0),
-                "min_interval_ms": int(row.min_interval_ms or 0),
-                "max_interval_ms": int(row.max_interval_ms or 0),
-                "average_interval_ms": int(row.average_interval_ms or 0),
-            } for row in session.pair_summary_ids]
+            payload["antenna_summary"] = [
+                {
+                    **row,
+                    "first_read_at": self._iso_datetime(row.get("first_read_at")),
+                    "last_read_at": self._iso_datetime(row.get("last_read_at")),
+                }
+                for row in session._antenna_summary()
+            ]
+            payload["transition_summary"] = session._transition_summary()
         return payload
 
     @api.model
@@ -882,9 +851,9 @@ class NspGatekeeperApiService(models.AbstractModel):
             or (current_session.controller_id.controller_id if current_session else "")
         ).strip()
         self._measurement_require_fields({"controller_code": controller_code}, ["controller_code"])
-        controller = self.env["nsp.controller"].sudo().with_context(active_test=False).search([
-            ("controller_id", "=", controller_code),
-        ], limit=1)
+        controller = self.env["nsp.controller"].sudo().with_context(active_test=False).search(
+            [("controller_id", "=", controller_code)], limit=1
+        )
         if not controller:
             raise ValueError("controller_not_found")
         return controller
@@ -894,7 +863,7 @@ class NspGatekeeperApiService(models.AbstractModel):
         if not isinstance(values, list) or not values:
             raise ValueError("missing_measurement_antennas")
         Antenna = self.env["nsp.device.antenna"].sudo()
-        result, seen = [], set()
+        result, seen = self.env["nsp.device.antenna"].browse(), set()
         for item in values:
             if not isinstance(item, dict):
                 raise ValueError("invalid_payload")
@@ -924,7 +893,7 @@ class NspGatekeeperApiService(models.AbstractModel):
                 if not antenna.device_id._is_whitelisted():
                     antenna.device_id._notify_not_whitelisted()
                     raise ValueError("device_not_whitelisted")
-                result.append(antenna)
+                result |= antenna
         return result
 
     @api.model
@@ -936,18 +905,42 @@ class NspGatekeeperApiService(models.AbstractModel):
             status = 404
         elif code in {"controller_not_in_scope", "edge_server_not_in_scope", "route_not_allowed"}:
             status = 403
-        elif code == "controller_offline":
-            status = 503
         elif code in {
-            "measurement_session_conflict", "measurement_session_not_editable",
-            "measurement_session_completed", "measurement_session_cancelled",
-            "sync_uid_conflict", "invalid_status_transition",
-            "measurement_run_already_running", "measurement_run_not_running",
-            "measurement_run_not_stopped", "measurement_sync_pending",
-            "measurement_command_status_conflict", "measurement_not_running",
+            "measurement_session_not_editable",
+            "invalid_status_transition",
+            "event_uid_conflict",
+            "measurement_not_running",
         }:
             status = 409
         return self._error(text.replace("_", " "), status, error_code=code, details={})
+
+    @api.model
+    def _measurement_set_status(self, session, status, occurred_at=False, message=False):
+        target = str(status or "").strip().lower()
+        allowed_statuses = {"draft", "ready", "running", "completed", "failed", "cancelled"}
+        if target not in allowed_statuses:
+            raise ValueError("invalid_measurement_status")
+        current = session.status
+        transitions = {
+            "draft": {"ready", "cancelled"},
+            "ready": {"running", "completed", "failed", "cancelled"},
+            "running": {"completed", "failed", "cancelled"},
+            "completed": set(),
+            "failed": set(),
+            "cancelled": set(),
+        }
+        if target != current and target not in transitions.get(current, set()):
+            raise ValueError("invalid_status_transition")
+        when = occurred_at or fields.Datetime.now()
+        vals = {"status": target}
+        if target == "running":
+            vals["started_at"] = session.started_at or when
+        if target in ("completed", "failed", "cancelled"):
+            vals["ended_at"] = session.ended_at or when
+        session.with_context(measurement_sync=True).write(vals)
+        if message:
+            session.message_post(body=str(message))
+        return session
 
     @endpoint("NSP Measurement Session Create", route_suffix="measurement-sessions", methods="POST", code="nsp_measurement_session_create")
     def api_measurement_session_create(self):
@@ -968,23 +961,15 @@ class NspGatekeeperApiService(models.AbstractModel):
             planned_end = self._measurement_datetime(data.get("planned_end_at"))
             if planned_start and planned_end and planned_end <= planned_start:
                 raise ValueError("invalid_planned_time_range")
-            with self.env.cr.savepoint():
-                session = self.env["nsp.measurement.session"].sudo().create({
-                    "measurement_code": str(data.get("measurement_code") or "").strip().upper(),
-                    "controller_id": controller.id,
-                    "planned_start_at": planned_start,
-                    "planned_end_at": planned_end,
-                    "note": str(data.get("note") or "").strip() or False,
-                })
-                self.env["nsp.measurement.antenna"].sudo().create([
-                    {"session_id": session.id, "antenna_ref_id": antenna.id}
-                    for antenna in antennas
-                ])
-            return self._ok(
-                {"data": self._measurement_session_payload(session, include_detail=True)},
-                status_code=201,
-                message="Measurement Session created.",
-            )
+            session = self.env["nsp.measurement.session"].sudo().create({
+                "measurement_code": str(data.get("measurement_code") or "").strip().upper(),
+                "controller_id": controller.id,
+                "planned_start_at": planned_start,
+                "planned_end_at": planned_end,
+                "note": str(data.get("note") or "").strip() or False,
+                "antenna_ids": [(6, 0, antennas.ids)],
+            })
+            return self._ok({"data": self._measurement_session_payload(session, include_detail=True)}, status_code=201, message="Measurement Session created.")
         except Exception as exc:
             return self._measurement_error_response(exc)
 
@@ -996,44 +981,29 @@ class NspGatekeeperApiService(models.AbstractModel):
             return error
         try:
             allowed = {
-                "measurement_session_uid", "measurement_code", "controller_code",
-                "planned_start_at", "planned_end_at", "note", "measurement_antennas",
+                "measurement_code", "controller_code", "planned_start_at", "planned_end_at",
+                "note", "measurement_antennas",
             }
             self._measurement_reject_unknown_fields(data, allowed)
-            session = self._measurement_session(data.get("measurement_session_uid"))
-            if session.measurement_status != "draft":
+            self._measurement_require_fields(data, ["measurement_code"])
+            session = self._measurement_session(data.get("measurement_code"))
+            if session.status != "draft":
                 raise ValueError("measurement_session_not_editable")
             controller = self._measurement_resolve_controller(data, current_session=session)
-            vals = {"controller_id": controller.id}
-            if "measurement_code" in data:
-                code = str(data.get("measurement_code") or "").strip().upper()
-                if not code:
-                    raise ValueError("invalid_payload")
-                vals["measurement_code"] = code
+            vals = {}
+            if "controller_code" in data:
+                vals["controller_id"] = controller.id
             if "planned_start_at" in data:
                 vals["planned_start_at"] = self._measurement_datetime(data.get("planned_start_at"))
             if "planned_end_at" in data:
                 vals["planned_end_at"] = self._measurement_datetime(data.get("planned_end_at"))
             if "note" in data:
                 vals["note"] = str(data.get("note") or "").strip() or False
-            effective_start = vals.get("planned_start_at", session.planned_start_at)
-            effective_end = vals.get("planned_end_at", session.planned_end_at)
-            if effective_start and effective_end and effective_end <= effective_start:
-                raise ValueError("invalid_planned_time_range")
-            controller_changed = controller != session.controller_id
-            if controller_changed and "measurement_antennas" not in data:
-                raise ValueError("missing_measurement_antennas")
-            antennas = None
             if "measurement_antennas" in data:
                 antennas = self._measurement_resolve_antennas(controller, data.get("measurement_antennas"))
-            with self.env.cr.savepoint():
+                vals["antenna_ids"] = [(6, 0, antennas.ids)]
+            if vals:
                 session.write(vals)
-                if antennas is not None:
-                    session.antenna_ids.unlink()
-                    self.env["nsp.measurement.antenna"].sudo().create([
-                        {"session_id": session.id, "antenna_ref_id": antenna.id}
-                        for antenna in antennas
-                    ])
             return self._ok({"data": self._measurement_session_payload(session, include_detail=True)}, message="Measurement Session updated.")
         except Exception as exc:
             return self._measurement_error_response(exc)
@@ -1045,55 +1015,30 @@ class NspGatekeeperApiService(models.AbstractModel):
         if error:
             return error
         try:
-            self._measurement_reject_unknown_fields(data, {"measurement_session_uid"})
-            session = self._measurement_session(data.get("measurement_session_uid"))
+            self._measurement_reject_unknown_fields(data, {"measurement_code"})
+            session = self._measurement_session(data.get("measurement_code"))
             return self._ok({"data": self._measurement_session_payload(session, include_detail=True)}, message="Measurement Session loaded.")
         except Exception as exc:
             return self._measurement_error_response(exc)
 
-    @endpoint("NSP Measurement Session Ready", route_suffix="measurement-sessions/ready", methods="POST", code="nsp_measurement_session_ready")
-    def api_measurement_session_ready(self):
+    @endpoint("NSP Measurement Session State", route_suffix="measurement-sessions/state", methods="POST", code="nsp_measurement_session_state")
+    def api_measurement_session_state(self):
         data = self._payload()
         _application, _actor, error = self._auth_sync_application(data)
         if error:
             return error
         try:
-            self._measurement_reject_unknown_fields(data, {"measurement_session_uid"})
-            session = self._measurement_session(data.get("measurement_session_uid"))
-            session.action_ready()
-            return self._ok({"data": self._measurement_session_payload(session)}, message="Measurement Session is ready.")
-        except Exception as exc:
-            return self._measurement_error_response(exc)
-
-    @endpoint("NSP Measurement Session Complete", route_suffix="measurement-sessions/complete", methods="POST", code="nsp_measurement_session_complete")
-    def api_measurement_session_complete(self):
-        data = self._payload()
-        _application, _actor, error = self._auth_sync_application(data)
-        if error:
-            return error
-        try:
-            self._measurement_reject_unknown_fields(data, {"measurement_session_uid"})
-            session = self._measurement_session(data.get("measurement_session_uid"))
-            if session.event_ids.filtered(lambda item: item.sync_state != "synced"):
-                raise ValueError("measurement_sync_pending")
-            if session.run_ids.filtered(lambda item: item.run_status != "stopped"):
-                raise ValueError("measurement_run_not_stopped")
-            session.action_complete()
-            return self._ok({"data": self._measurement_session_payload(session, include_detail=True)}, message="Measurement Session completed.")
-        except Exception as exc:
-            return self._measurement_error_response(exc)
-
-    @endpoint("NSP Measurement Session Cancel", route_suffix="measurement-sessions/cancel", methods="POST", code="nsp_measurement_session_cancel")
-    def api_measurement_session_cancel(self):
-        data = self._payload()
-        _application, _actor, error = self._auth_sync_application(data)
-        if error:
-            return error
-        try:
-            self._measurement_reject_unknown_fields(data, {"measurement_session_uid"})
-            session = self._measurement_session(data.get("measurement_session_uid"))
-            session.action_cancel()
-            return self._ok({"data": self._measurement_session_payload(session)}, message="Measurement Session cancelled.")
+            self._measurement_reject_unknown_fields(data, {"measurement_code", "status", "occurred_at", "message"})
+            self._measurement_require_fields(data, ["measurement_code", "status"])
+            session = self._measurement_session(data.get("measurement_code"))
+            target = str(data.get("status") or "").strip().lower()
+            occurred_at = self._measurement_datetime(data.get("occurred_at"), default_now=True)
+            if target == "ready":
+                if not session.antenna_ids:
+                    raise ValueError("missing_measurement_antennas")
+                session._check_antenna_scope()
+            self._measurement_set_status(session, target, occurred_at, data.get("message"))
+            return self._ok({"data": self._measurement_session_payload(session)}, message="Measurement Session state updated.")
         except Exception as exc:
             return self._measurement_error_response(exc)
 
@@ -1106,290 +1051,71 @@ class NspGatekeeperApiService(models.AbstractModel):
         try:
             self._measurement_reject_unknown_fields(data, {"edge_server_code", "sync_cursor", "limit"})
             Session = self.env["nsp.measurement.session"].sudo()
-            sessions, next_cursor, has_more, server_time = self._cursor_page(Session, data, domain=[
-                ("controller_id.edge_server_id", "=", edge_server.id),
-                ("measurement_status", "!=", "draft"),
-            ], max_limit=100)
+            records, next_cursor, has_more, server_time = self._cursor_page(
+                Session,
+                data,
+                domain=[
+                    ("status", "!=", "draft"),
+                    ("controller_id.edge_server_id", "=", edge_server.id),
+                ],
+            )
             return self._ok({
-                "items": [self._measurement_config_payload(session) for session in sessions],
+                "items": [self._measurement_config_payload(session) for session in records],
                 "next_sync_cursor": next_cursor,
                 "has_more": has_more,
                 "server_time": self._iso_datetime(server_time),
-            }, message="Measurement Configuration sync loaded.")
+            }, message="Measurement configuration sync loaded.")
         except Exception as exc:
             return self._measurement_error_response(exc)
 
-    @endpoint("NSP Controller Measurement Configuration Pull", route_suffix="controller/measurement-config/pull", methods="POST", code="nsp_controller_measurement_config_pull")
-    def api_controller_measurement_config_pull(self):
+    @endpoint("NSP Controller Measurement Pull", route_suffix="controller/measurement/pull", methods="POST", code="nsp_controller_measurement_pull")
+    def api_controller_measurement_pull(self):
         data = self._payload()
         controller, error = self._auth_controller(data)
         if error:
             return error
         try:
-            self._measurement_reject_unknown_fields(data, {"controller_code", "current_measurement_session_uid"})
-            session = self.env["nsp.measurement.session"].sudo().search([
-                ("controller_id", "=", controller.id),
-                ("measurement_status", "in", ["ready", "measuring"]),
-            ], order="write_date desc, id desc", limit=1)
+            self._measurement_reject_unknown_fields(data, {"controller_code", "current_measurement_code"})
+            current_code = str(data.get("current_measurement_code") or "").strip().upper()
+            session = self.env["nsp.measurement.session"].sudo().browse()
+            if current_code:
+                current = self.env["nsp.measurement.session"].sudo().search([
+                    ("measurement_code", "=", current_code),
+                    ("controller_id", "=", controller.id),
+                ], limit=1)
+                if current and current.status in ("completed", "failed", "cancelled"):
+                    session = current
             if not session:
-                return self._ok({"data": {"update_available": False}}, message="No Measurement Configuration is available.")
-            current_uid = str(data.get("current_measurement_session_uid") or "").strip().upper()
-            if current_uid == session.measurement_session_uid:
-                return self._ok({"data": {"update_available": False}}, message="Measurement Configuration is current.")
-            payload = self._measurement_config_payload(session)
-            payload["update_available"] = True
-            return self._ok({"data": payload}, message="Measurement Configuration loaded.")
-        except Exception as exc:
-            return self._measurement_error_response(exc)
-
-    @endpoint("NSP Edge Measurement Session Start", route_suffix="edge/measurement-sessions/start", methods="POST", code="nsp_edge_measurement_session_start")
-    def api_edge_measurement_session_start(self):
-        data = self._payload()
-        _application, _actor, edge_server, error = self._auth_edge_server_sync(data)
-        if error:
-            return error
-        try:
-            allowed = {"edge_server_code", "controller_code", "measurement_session_uid", "requested_at"}
-            self._measurement_reject_unknown_fields(data, allowed)
-            self._measurement_require_fields(data, ["controller_code", "measurement_session_uid", "requested_at"])
-            session = self._measurement_session(data.get("measurement_session_uid"))
-            if not self._measurement_session_in_local_scope(session, edge_server):
-                raise ValueError("edge_server_not_in_scope")
-            if str(data.get("controller_code") or "").strip() != session.controller_id.controller_id:
-                raise ValueError("controller_not_in_scope")
-            if session.measurement_status not in ("ready", "measuring"):
-                raise ValueError("invalid_status_transition")
-            if session.controller_id.status != "online":
-                raise ValueError("controller_offline")
-            requested_at = self._measurement_datetime(data.get("requested_at"), required=True)
-            Run = self.env["nsp.measurement.run"].sudo()
-            Command = self.env["nsp.measurement.command"].sudo()
-            with self.env.cr.savepoint():
-                active = Run.search([
-                    ("session_id.controller_id", "=", session.controller_id.id),
-                    ("run_status", "in", ["pending", "starting", "running", "stopping"]),
-                ], order="id desc", limit=1)
-                if active:
-                    raise ValueError("measurement_run_already_running")
-                run = Run.create({
-                    "session_id": session.id,
-                    "run_status": "pending",
-                })
-                command = Command.create({
-                    "session_id": session.id,
-                    "run_id": run.id,
-                    "command_type": "start_measurement",
-                    "command_status": "pending",
-                    "requested_at": requested_at,
-                })
-            return self._ok({"data": {
-                "measurement_session_uid": session.measurement_session_uid,
-                "measurement_run_uid": run.measurement_run_uid,
-                "run_status": run.run_status,
-                "command_status": command.command_status,
-            }}, message="Measurement start command created.")
-        except Exception as exc:
-            return self._measurement_error_response(exc)
-
-    @endpoint("NSP Edge Measurement Session Stop", route_suffix="edge/measurement-sessions/stop", methods="POST", code="nsp_edge_measurement_session_stop")
-    def api_edge_measurement_session_stop(self):
-        data = self._payload()
-        _application, _actor, edge_server, error = self._auth_edge_server_sync(data)
-        if error:
-            return error
-        try:
-            allowed = {"edge_server_code", "controller_code", "measurement_session_uid", "measurement_run_uid", "requested_at"}
-            self._measurement_reject_unknown_fields(data, allowed)
-            self._measurement_require_fields(data, ["controller_code", "measurement_session_uid", "measurement_run_uid", "requested_at"])
-            session = self._measurement_session(data.get("measurement_session_uid"))
-            if not self._measurement_session_in_local_scope(session, edge_server):
-                raise ValueError("edge_server_not_in_scope")
-            if str(data.get("controller_code") or "").strip() != session.controller_id.controller_id:
-                raise ValueError("controller_not_in_scope")
-            run = self._measurement_run(data.get("measurement_run_uid"), session=session)
-            requested_at = self._measurement_datetime(data.get("requested_at"), required=True)
-            Command = self.env["nsp.measurement.command"].sudo()
-            if run.run_status == "stopped":
-                return self._ok({"data": {
-                    "measurement_session_uid": session.measurement_session_uid,
-                    "measurement_run_uid": run.measurement_run_uid,
-                    "run_status": "stopped",
-                    "command_status": "succeeded",
-                }}, message="Measurement Run already stopped.")
-            if run.run_status == "stopping":
-                command = Command.search([
-                    ("run_id", "=", run.id),
-                    ("command_type", "=", "stop_measurement"),
-                    ("command_status", "=", "pending"),
-                ], order="id desc", limit=1)
-                return self._ok({"data": {
-                    "measurement_session_uid": session.measurement_session_uid,
-                    "measurement_run_uid": run.measurement_run_uid,
-                    "run_status": "stopping",
-                    "command_status": command.command_status if command else "pending",
-                }}, message="Measurement stop command already exists.")
-            if run.run_status != "running":
-                raise ValueError("measurement_run_not_running")
-            run.write({"run_status": "stopping"})
-            command = Command.create({
-                "session_id": session.id,
-                "run_id": run.id,
-                "command_type": "stop_measurement",
-                "command_status": "pending",
-                "requested_at": requested_at,
-            })
-            return self._ok({"data": {
-                "measurement_session_uid": session.measurement_session_uid,
-                "measurement_run_uid": run.measurement_run_uid,
-                "run_status": run.run_status,
-                "command_status": command.command_status,
-            }}, message="Measurement stop command created.")
-        except Exception as exc:
-            return self._measurement_error_response(exc)
-
-    @endpoint("NSP Edge Measurement Session Detail", route_suffix="edge/measurement-sessions/detail", methods="GET,POST", code="nsp_edge_measurement_session_detail")
-    def api_edge_measurement_session_detail(self):
-        data = self._measurement_input()
-        _application, _actor, edge_server, error = self._auth_edge_server_sync(data)
-        if error:
-            return error
-        try:
-            self._measurement_reject_unknown_fields(data, {"edge_server_code", "measurement_session_uid"})
-            session = self._measurement_session(data.get("measurement_session_uid"))
-            if not self._measurement_session_in_local_scope(session, edge_server):
-                raise ValueError("edge_server_not_in_scope")
-            return self._ok({"data": self._measurement_session_payload(session, include_detail=True)}, message="Edge Measurement Session loaded.")
-        except Exception as exc:
-            return self._measurement_error_response(exc)
-
-    @endpoint("NSP Controller Measurement Command Pull", route_suffix="controller/measurement-command/pull", methods="POST", code="nsp_controller_measurement_command_pull")
-    def api_controller_measurement_command_pull(self):
-        data = self._payload()
-        controller, error = self._auth_controller(data)
-        if error:
-            return error
-        try:
-            self._measurement_reject_unknown_fields(data, {"controller_code"})
-            command = self.env["nsp.measurement.command"].sudo().search([
-                ("session_id.controller_id", "=", controller.id),
-                ("session_id.measurement_status", "in", ["ready", "measuring"]),
-                ("command_status", "=", "pending"),
-            ], order="requested_at asc, id asc", limit=1)
-            if not command:
-                return self._ok({"data": {"command_available": False}}, message="No Measurement command is available.")
-            if command.command_type == "start_measurement" and command.run_id.run_status == "pending":
-                command.run_id.write({"run_status": "starting"})
-            payload = {
-                "command_available": True,
-                "command_uid": command.command_uid,
-                "command_type": command.command_type,
-                "measurement_session_uid": command.session_id.measurement_session_uid,
-                "measurement_run_uid": command.run_id.measurement_run_uid,
-                "requested_at": self._iso_datetime(command.requested_at),
-            }
-            return self._ok({"data": payload}, message="Measurement command loaded.")
-        except Exception as exc:
-            return self._measurement_error_response(exc)
-
-    @endpoint("NSP Controller Measurement Command Status", route_suffix="controller/measurement-command/status", methods="POST", code="nsp_controller_measurement_command_status")
-    def api_controller_measurement_command_status(self):
-        data = self._payload()
-        controller, error = self._auth_controller(data)
-        if error:
-            return error
-        try:
-            allowed = {
-                "controller_code", "command_uid", "command_type", "measurement_session_uid",
-                "measurement_run_uid", "command_status", "effective_at", "error_code", "error_message",
-            }
-            self._measurement_reject_unknown_fields(data, allowed)
-            self._measurement_require_fields(data, [
-                "command_uid", "command_type", "measurement_session_uid",
-                "measurement_run_uid", "command_status", "effective_at",
-            ])
-            command = self.env["nsp.measurement.command"].sudo().search([
-                ("command_uid", "=", str(data.get("command_uid") or "").strip().upper()),
-            ], limit=1)
-            if not command:
-                raise ValueError("measurement_command_not_found")
-            session, run = command.session_id, command.run_id
-            if session.controller_id != controller:
-                raise ValueError("controller_not_in_scope")
-            if str(data.get("measurement_session_uid") or "").strip().upper() != session.measurement_session_uid:
-                raise ValueError("measurement_session_conflict")
-            if str(data.get("measurement_run_uid") or "").strip().upper() != run.measurement_run_uid:
-                raise ValueError("measurement_session_conflict")
-            if str(data.get("command_type") or "").strip() != command.command_type:
-                raise ValueError("measurement_session_conflict")
-            status = str(data.get("command_status") or "").strip().lower()
-            if status not in ("succeeded", "failed"):
-                raise ValueError("invalid_payload")
-            effective_at = self._measurement_datetime(data.get("effective_at"), required=True)
-            if status == "succeeded":
-                if data.get("error_code") or data.get("error_message"):
-                    raise ValueError("invalid_payload")
-                error_code = error_message = False
-            else:
-                self._measurement_require_fields(data, ["error_code", "error_message"])
-                error_code = str(data.get("error_code") or "").strip()
-                error_message = str(data.get("error_message") or "").strip()
-            if command.command_status in ("succeeded", "failed"):
-                if command.command_status == status:
-                    return self._ok(message="Measurement command status already recorded.")
-                raise ValueError("measurement_command_status_conflict")
-            command.write({
-                "command_status": status,
-                "effective_at": effective_at,
-                "error_code": error_code,
-                "error_message": error_message,
-            })
-            if status == "succeeded" and command.command_type == "start_measurement":
-                run.write({"run_status": "running", "started_at": effective_at})
-                session.with_context(measurement_sync=True).write({
-                    "measurement_status": "measuring",
-                    "started_at": session.started_at or effective_at,
-                })
-            elif status == "succeeded":
-                run.write({"run_status": "stopped", "stopped_at": effective_at})
-            elif command.command_type == "start_measurement":
-                run.write({"run_status": "failed"})
-            else:
-                run.write({"run_status": "running"})
-            return self._ok(message="Measurement command status recorded.")
+                session = self.env["nsp.measurement.session"].sudo().search([
+                    ("controller_id", "=", controller.id),
+                    ("status", "in", ["ready", "running"]),
+                ], order="planned_start_at asc, id asc", limit=1)
+            if not session:
+                return self._ok({"data": {"measurement_available": False}}, message="No Measurement Session is available.")
+            return self._ok({"data": {"measurement_available": True, **self._measurement_config_payload(session)}}, message="Measurement configuration loaded.")
         except Exception as exc:
             return self._measurement_error_response(exc)
 
     @api.model
-    def _measurement_event_canonical(self, session, run, controller_code, item, allow_controller_code=False):
-        allowed = {"measurement_uid", "serial_number", "antenna_no", "tid", "read_at", "rssi_dbm"}
-        if allow_controller_code:
-            allowed.add("controller_code")
+    def _measurement_event_values(self, session, item):
+        allowed = {"event_uid", "serial_number", "antenna_no", "tid", "read_at", "rssi_dbm"}
         self._measurement_reject_unknown_fields(item, allowed)
-        required = ["measurement_uid", "serial_number", "antenna_no", "tid", "read_at"]
-        if allow_controller_code:
-            required.append("controller_code")
-        self._measurement_require_fields(item, required)
-        if allow_controller_code and str(item.get("controller_code") or "").strip() != controller_code:
-            raise ValueError("controller_not_in_scope")
-        measurement_uid = str(item.get("measurement_uid") or "").strip()
+        self._measurement_require_fields(item, ["event_uid", "serial_number", "antenna_no", "tid", "read_at"])
+        event_uid = str(item.get("event_uid") or "").strip()
         serial_number = str(item.get("serial_number") or "").strip().upper()
+        tid = str(item.get("tid") or "").strip().upper()
         try:
             antenna_no = int(item.get("antenna_no") or 0)
         except Exception:
             antenna_no = 0
         if antenna_no <= 0:
             raise ValueError("antenna_not_found")
-        tid = str(item.get("tid") or "").strip()
-        if not tid:
-            raise ValueError("invalid_tid")
-        read_at = self._measurement_datetime(item.get("read_at"), required=True)
-        mapping = self.env["nsp.measurement.antenna"].sudo().search([
-            ("session_id", "=", session.id),
-            ("antenna_ref_id.device_id.serial_number", "=", serial_number),
-            ("antenna_ref_id.antenna_id", "=", antenna_no),
-        ], limit=1)
-        if not mapping:
+        matched = session.antenna_ids.filtered(
+            lambda antenna: antenna.device_id.serial_number == serial_number and antenna.antenna_id == antenna_no
+        )
+        if not matched:
             raise ValueError("antenna_not_found")
+        read_at = self._measurement_datetime(item.get("read_at"), required=True)
         if item.get("rssi_dbm") in (None, ""):
             rssi = False
         else:
@@ -1397,65 +1123,81 @@ class NspGatekeeperApiService(models.AbstractModel):
                 rssi = float(item.get("rssi_dbm"))
             except Exception:
                 raise ValueError("invalid_rssi")
-        canonical = {
-            "measurement_uid": measurement_uid,
-            "measurement_session_uid": session.measurement_session_uid,
-            "measurement_run_uid": run.measurement_run_uid,
-            "controller_code": controller_code,
+        return {
+            "event_uid": event_uid,
+            "session_id": session.id,
             "serial_number": serial_number,
             "antenna_no": antenna_no,
             "tid": tid,
-            "read_at": self._iso_datetime(read_at),
+            "read_at": read_at,
+            "rssi_dbm": rssi,
         }
-        if rssi is not False:
-            canonical["rssi_dbm"] = rssi
-        payload_hash = hashlib.sha256(
-            json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
-        ).hexdigest()
-        return canonical, read_at, rssi, payload_hash
 
     @api.model
-    def _measurement_store_event(self, session, run, controller_code, item, sync_state, allow_controller_code=False):
-        canonical, read_at, rssi, payload_hash = self._measurement_event_canonical(
-            session, run, controller_code, item, allow_controller_code=allow_controller_code
-        )
+    def _measurement_store_event(self, session, item, allow_final=False):
         Event = self.env["nsp.measurement.event"].sudo()
-        existing = Event.search([("measurement_uid", "=", canonical["measurement_uid"])], limit=1)
+        values = self._measurement_event_values(session, item)
+        existing = Event.search([("event_uid", "=", values["event_uid"])], limit=1)
         if existing:
-            if existing.payload_hash != payload_hash:
-                raise ValueError("sync_uid_conflict")
+            comparable = (
+                existing.session_id.id,
+                existing.serial_number,
+                int(existing.antenna_no or 0),
+                existing.tid,
+                fields.Datetime.to_string(existing.read_at),
+                False if existing.rssi_dbm in (False, None) else float(existing.rssi_dbm),
+            )
+            expected = (
+                session.id,
+                values["serial_number"],
+                int(values["antenna_no"]),
+                values["tid"],
+                fields.Datetime.to_string(values["read_at"]),
+                False if values["rssi_dbm"] in (False, None) else float(values["rssi_dbm"]),
+            )
+            if comparable != expected:
+                raise ValueError("event_uid_conflict")
             return existing, True
+        if not allow_final and session.status in ("completed", "failed", "cancelled"):
+            raise ValueError("measurement_not_running")
         try:
             with self.env.cr.savepoint():
-                event = Event.create({
-                    "measurement_uid": canonical["measurement_uid"],
-                    "session_id": session.id,
-                    "run_id": run.id,
-                    "serial_number": canonical["serial_number"],
-                    "antenna_no": canonical["antenna_no"],
-                    "tid": canonical["tid"],
-                    "read_at": read_at,
-                    "rssi_dbm": rssi,
-                    "payload_hash": payload_hash,
-                    "sync_state": sync_state,
-                    "last_sync_at": fields.Datetime.now() if sync_state == "synced" else False,
-                })
-            return event, False
+                return Event.create(values), False
         except IntegrityError:
-            existing = Event.search([("measurement_uid", "=", canonical["measurement_uid"])], limit=1)
-            if not existing or existing.payload_hash != payload_hash:
-                raise ValueError("sync_uid_conflict")
+            existing = Event.search([("event_uid", "=", values["event_uid"])], limit=1)
+            if not existing:
+                raise
+            comparable = (
+                existing.session_id.id,
+                existing.serial_number,
+                int(existing.antenna_no or 0),
+                existing.tid,
+                fields.Datetime.to_string(existing.read_at),
+                False if existing.rssi_dbm in (False, None) else float(existing.rssi_dbm),
+            )
+            expected = (
+                session.id,
+                values["serial_number"],
+                int(values["antenna_no"]),
+                values["tid"],
+                fields.Datetime.to_string(values["read_at"]),
+                False if values["rssi_dbm"] in (False, None) else float(values["rssi_dbm"]),
+            )
+            if comparable != expected:
+                raise ValueError("event_uid_conflict")
             return existing, True
 
     @api.model
     def _measurement_batch_result(self, items, handler):
-        results, processed, failed = [], 0, 0
+        results, created_records, processed, failed = [], self.env["nsp.measurement.event"].browse(), 0, 0
         for index, item in enumerate(items):
-            key = str(item.get("measurement_uid") or "") if isinstance(item, dict) else ""
+            key = str(item.get("event_uid") or "") if isinstance(item, dict) else ""
             try:
                 if not isinstance(item, dict):
                     raise ValueError("invalid_payload")
-                duplicate = handler(item)
+                event, duplicate = handler(item)
+                if not duplicate:
+                    created_records |= event
                 processed += 1
                 results.append({
                     "index": index,
@@ -1473,131 +1215,116 @@ class NspGatekeeperApiService(models.AbstractModel):
                     "message": str(exc),
                 })
         return {
-            "received": len(items), "processed": processed, "failed": failed, "results": results,
-        }
+            "received": len(items),
+            "processed": processed,
+            "failed": failed,
+            "results": results,
+        }, created_records
 
-    @endpoint("NSP Controller Measurement Data Report", route_suffix="controller/measurement-data/report", methods="POST", code="nsp_controller_measurement_data_report")
-    def api_controller_measurement_data_report(self):
+    @api.model
+    def _forward_measurement_events_now(self, events):
+        if not events or "nsp.sync.job" not in self.env.registry.models:
+            return False
+        try:
+            return self.env["nsp.sync.job"].sudo().push_measurement_events_now(events)
+        except Exception:
+            _logger.exception("Immediate Measurement Event forwarding failed; fallback retry will handle it.")
+            return False
+
+    @api.model
+    def _forward_measurement_status_now(self, session):
+        if not session or "nsp.sync.job" not in self.env.registry.models:
+            return False
+        try:
+            return self.env["nsp.sync.job"].sudo().push_measurement_status_now(session)
+        except Exception:
+            _logger.exception("Immediate Measurement status forwarding failed; fallback retry will handle it.")
+            return False
+
+    @endpoint("NSP Controller Measurement Events", route_suffix="controller/measurement/events", methods="POST", code="nsp_controller_measurement_events")
+    def api_controller_measurement_events(self):
         data = self._payload()
         controller, error = self._auth_controller(data)
         if error:
             return error
         try:
-            allowed = {"controller_code", "measurement_session_uid", "measurement_run_uid", "measurements"}
-            self._measurement_reject_unknown_fields(data, allowed)
-            self._measurement_require_fields(data, ["measurement_session_uid", "measurement_run_uid", "measurements"])
-            session = self._measurement_session(data.get("measurement_session_uid"))
+            self._measurement_reject_unknown_fields(data, {"controller_code", "measurement_code", "events"})
+            self._measurement_require_fields(data, ["measurement_code", "events"])
+            session = self._measurement_session(data.get("measurement_code"))
             if session.controller_id != controller:
                 raise ValueError("controller_not_in_scope")
-            run = self._measurement_run(data.get("measurement_run_uid"), session=session)
-            if session.measurement_status != "measuring" or run.run_status != "running":
-                raise ValueError("measurement_not_running")
-            items = data.get("measurements")
-            if not isinstance(items, list) or not items:
+            items = data.get("events")
+            if not isinstance(items, list) or not items or len(items) > 100:
                 raise ValueError("invalid_payload")
-            result = self._measurement_batch_result(items, lambda item: self._measurement_store_event(
-                session, run, controller.controller_id, item, sync_state="pending"
-            )[1])
-            return self._ok(result, message="Measurement data processed.")
+            result, records = self._measurement_batch_result(
+                items, lambda item: self._measurement_store_event(session, item)
+            )
+            if result["processed"] and session.status == "ready":
+                self._measurement_set_status(session, "running", fields.Datetime.now())
+                self._forward_measurement_status_now(session)
+            self._forward_measurement_events_now(records)
+            return self._ok(result, message="Measurement Events processed.")
         except Exception as exc:
             return self._measurement_error_response(exc)
 
-    @endpoint("NSP Measurement Data Sync", route_suffix="measurement-data/sync", methods="POST", code="nsp_measurement_data_sync")
-    def api_measurement_data_sync(self):
+    @endpoint("NSP Controller Measurement Status", route_suffix="controller/measurement/status", methods="POST", code="nsp_controller_measurement_status")
+    def api_controller_measurement_status(self):
+        data = self._payload()
+        controller, error = self._auth_controller(data)
+        if error:
+            return error
+        try:
+            self._measurement_reject_unknown_fields(data, {"controller_code", "measurement_code", "status", "occurred_at", "message"})
+            self._measurement_require_fields(data, ["measurement_code", "status", "occurred_at"])
+            session = self._measurement_session(data.get("measurement_code"))
+            if session.controller_id != controller:
+                raise ValueError("controller_not_in_scope")
+            occurred_at = self._measurement_datetime(data.get("occurred_at"), required=True)
+            self._measurement_set_status(session, data.get("status"), occurred_at, data.get("message"))
+            self._forward_measurement_status_now(session)
+            return self._ok({"data": self._measurement_session_payload(session)}, message="Measurement status recorded.")
+        except Exception as exc:
+            return self._measurement_error_response(exc)
+
+    @endpoint("NSP Measurement Events Sync", route_suffix="measurement-events/sync", methods="POST", code="nsp_measurement_events_sync")
+    def api_measurement_events_sync(self):
         data = self._payload()
         _application, _actor, edge_server, error = self._auth_edge_server_sync(data)
         if error:
             return error
         try:
-            allowed = {"edge_server_code", "measurement_session_uid", "measurement_run_uid", "measurements"}
-            self._measurement_reject_unknown_fields(data, allowed)
-            self._measurement_require_fields(data, ["measurement_session_uid", "measurement_run_uid", "measurements"])
-            session = self._measurement_session(data.get("measurement_session_uid"))
+            self._measurement_reject_unknown_fields(data, {"edge_server_code", "measurement_code", "events"})
+            self._measurement_require_fields(data, ["measurement_code", "events"])
+            session = self._measurement_session(data.get("measurement_code"))
             if not self._measurement_session_in_local_scope(session, edge_server):
                 raise ValueError("edge_server_not_in_scope")
-            run = self._measurement_run(data.get("measurement_run_uid"), session=session)
-            items = data.get("measurements")
-            if not isinstance(items, list) or not items:
+            items = data.get("events")
+            if not isinstance(items, list) or not items or len(items) > 100:
                 raise ValueError("invalid_payload")
-
-            def store(item):
-                controller_code = str(item.get("controller_code") or "").strip()
-                if controller_code != session.controller_id.controller_id:
-                    raise ValueError("controller_not_in_scope")
-                existing = self.env["nsp.measurement.event"].sudo().search([
-                    ("measurement_uid", "=", str(item.get("measurement_uid") or "")),
-                ], limit=1)
-                if not existing and session.measurement_status in ("completed", "cancelled"):
-                    raise ValueError("measurement_session_completed")
-                return self._measurement_store_event(
-                    session, run, controller_code, item, sync_state="synced", allow_controller_code=True
-                )[1]
-
-            return self._ok(self._measurement_batch_result(items, store), message="Measurement sync processed.")
+            result, _records = self._measurement_batch_result(
+                items, lambda item: self._measurement_store_event(session, item, allow_final=True)
+            )
+            return self._ok(result, message="Measurement Events synchronized.")
         except Exception as exc:
             return self._measurement_error_response(exc)
 
-    @endpoint("NSP Measurement Session Status Sync", route_suffix="measurement-session-status/sync", methods="POST", code="nsp_measurement_session_status_sync")
-    def api_measurement_session_status_sync(self):
+    @endpoint("NSP Measurement Status Sync", route_suffix="measurement-status/sync", methods="POST", code="nsp_measurement_status_sync")
+    def api_measurement_status_sync(self):
         data = self._payload()
         _application, _actor, edge_server, error = self._auth_edge_server_sync(data)
         if error:
             return error
         try:
-            allowed = {"edge_server_code", "measurement_session_uid", "measurement_status", "runs", "reported_at"}
-            self._measurement_reject_unknown_fields(data, allowed)
-            self._measurement_require_fields(data, ["measurement_session_uid", "measurement_status", "runs", "reported_at"])
-            reported_at = self._measurement_datetime(data.get("reported_at"), required=True)
-            session = self._measurement_session(data.get("measurement_session_uid"))
+            self._measurement_reject_unknown_fields(data, {"edge_server_code", "measurement_code", "status", "occurred_at", "message"})
+            self._measurement_require_fields(data, ["measurement_code", "status", "occurred_at"])
+            session = self._measurement_session(data.get("measurement_code"))
             if not self._measurement_session_in_local_scope(session, edge_server):
                 raise ValueError("edge_server_not_in_scope")
-            measurement_status = str(data.get("measurement_status") or "").strip().lower()
-            if measurement_status not in ("ready", "measuring", "completed", "cancelled"):
-                raise ValueError("invalid_measurement_status")
-            if session.measurement_status not in ("completed", "cancelled"):
-                vals = {"measurement_status": measurement_status}
-                if measurement_status == "measuring":
-                    vals["started_at"] = session.started_at or reported_at
-                elif measurement_status == "completed":
-                    vals["completed_at"] = reported_at
-                elif measurement_status == "cancelled":
-                    vals["cancelled_at"] = reported_at
-                session.with_context(measurement_sync=True).write(vals)
-            runs = data.get("runs")
-            if not isinstance(runs, list):
-                raise ValueError("invalid_payload")
-            Run = self.env["nsp.measurement.run"].sudo()
-            for item in runs:
-                if not isinstance(item, dict):
-                    raise ValueError("invalid_payload")
-                self._measurement_reject_unknown_fields(item, {
-                    "measurement_run_uid", "run_status",
-                    "started_at", "stopped_at", "measurement_count",
-                })
-                self._measurement_require_fields(item, [
-                    "measurement_run_uid", "run_status", "measurement_count",
-                ])
-                uid = str(item.get("measurement_run_uid") or "").strip().upper()
-                run = Run.search([("measurement_run_uid", "=", uid), ("session_id", "=", session.id)], limit=1)
-                status = str(item.get("run_status") or "").strip().lower()
-                if status not in ("pending", "starting", "running", "stopping", "stopped", "failed"):
-                    raise ValueError("invalid_payload")
-                try:
-                    count = max(int(item.get("measurement_count") or 0), 0)
-                except Exception:
-                    raise ValueError("invalid_payload")
-                vals = {"run_status": status, "measurement_count": count}
-                if item.get("started_at"):
-                    vals["started_at"] = self._measurement_datetime(item.get("started_at"), required=True)
-                if item.get("stopped_at"):
-                    vals["stopped_at"] = self._measurement_datetime(item.get("stopped_at"), required=True)
-                if run:
-                    vals["measurement_count"] = max(count, int(run.measurement_count or 0))
-                    run.write(vals)
-                else:
-                    vals.update({"measurement_run_uid": uid, "session_id": session.id})
-                    Run.with_context(measurement_sync=True).create(vals)
-            return self._ok(message="Measurement Session status synchronized.")
+            occurred_at = self._measurement_datetime(data.get("occurred_at"), required=True)
+            self._measurement_set_status(
+                session, data.get("status"), occurred_at, data.get("message")
+            )
+            return self._ok({"data": self._measurement_session_payload(session)}, message="Measurement status synchronized.")
         except Exception as exc:
             return self._measurement_error_response(exc)
 

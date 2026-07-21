@@ -69,12 +69,6 @@
               action="action_nsp_measurement_session"
               sequence="10"/>
 
-    <menuitem id="menu_nsp_measurement_event"
-              name="Measurement Events"
-              parent="menu_nsp_measurement_root"
-              action="action_nsp_measurement_event"
-              sequence="20"/>
-
     <menuitem id="menu_nsp_operations_root"
               name="Operations"
               parent="nsp_device_root"

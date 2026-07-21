@@ -21,24 +21,24 @@ SYNC_ROUTE_DIRECTIONS = {
     "vehicle-borrow/sync": "pull",
     "parking-config/sync": "pull",
     "measurement-config/sync": "pull",
-    "measurement-data/sync": "push",
-    "measurement-session-status/sync": "push",
+    "measurement-events/sync": "push",
+    "measurement-status/sync": "push",
     "parking-transactions/sync": "push",
 }
 NSP_SYNC_ALLOWED_ROUTES = tuple(SYNC_ROUTE_DIRECTIONS)
 DEFAULT_JOB_SETTINGS = {
-    "edge-server/status": {"interval_seconds": 60, "batch_size": 1},
-    "devices-status/sync": {"interval_seconds": 60, "batch_size": 200},
-    "branches/sync": {"interval_seconds": 300, "batch_size": 500},
-    "cards/sync": {"interval_seconds": 300, "batch_size": 500},
-    "employees/sync": {"interval_seconds": 300, "batch_size": 500},
-    "vehicles/sync": {"interval_seconds": 300, "batch_size": 500},
-    "vehicle-borrow/sync": {"interval_seconds": 300, "batch_size": 500},
-    "parking-config/sync": {"interval_seconds": 300, "batch_size": 100},
-    "measurement-config/sync": {"interval_seconds": 60, "batch_size": 100},
-    "measurement-data/sync": {"interval_seconds": 30, "batch_size": 200},
-    "measurement-session-status/sync": {"interval_seconds": 30, "batch_size": 100},
-    "parking-transactions/sync": {"interval_seconds": 30, "batch_size": 200},
+    "edge-server/status": {"schedule_interval_minutes": 1, "batch_size": 1},
+    "devices-status/sync": {"schedule_interval_minutes": 1, "batch_size": 200},
+    "branches/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
+    "cards/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
+    "employees/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
+    "vehicles/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
+    "vehicle-borrow/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
+    "parking-config/sync": {"schedule_interval_minutes": 5, "batch_size": 100},
+    "measurement-config/sync": {"schedule_interval_minutes": 1, "batch_size": 100},
+    "measurement-events/sync": {"schedule_interval_minutes": 1, "batch_size": 100},
+    "measurement-status/sync": {"schedule_interval_minutes": 1, "batch_size": 100},
+    "parking-transactions/sync": {"schedule_interval_minutes": 1, "batch_size": 200},
 }
 ACTION_KINDS = {
     "edge-server/status": "edge_server_status",
@@ -50,8 +50,8 @@ ACTION_KINDS = {
     "vehicle-borrow/sync": "vehicle_borrow",
     "parking-config/sync": "parking_config",
     "measurement-config/sync": "measurement_config",
-    "measurement-data/sync": "measurement_event",
-    "measurement-session-status/sync": "measurement_status",
+    "measurement-events/sync": "measurement_event",
+    "measurement-status/sync": "measurement_status",
     "parking-transactions/sync": "parking_transaction",
 }
 
@@ -94,7 +94,7 @@ class NspSyncJob(models.Model):
         default="pull",
         index=True,
     )
-    interval_seconds = fields.Integer(default=60, required=True)
+    schedule_interval_minutes = fields.Integer(default=1, required=True, string="Schedule Interval (Minutes)", help="Fallback retry interval. Measurement Events and status are forwarded immediately; this schedule is used only when immediate forwarding fails.")
     batch_size = fields.Integer(default=100, required=True)
     sync_cursor = fields.Char(string="Next Sync Cursor", readonly=True, copy=False)
     last_push_at = fields.Datetime(readonly=True)
@@ -123,7 +123,7 @@ class NspSyncJob(models.Model):
     nsp_last_error = fields.Text(related="auth_id.last_error", readonly=True)
 
     _sql_constraints = [
-        ("interval_positive", "CHECK(interval_seconds >= 1)", "Interval Seconds must be at least 1."),
+        ("interval_positive", "CHECK(schedule_interval_minutes >= 1)", "Schedule Interval (Minutes) must be at least 1."),
         ("batch_positive", "CHECK(batch_size >= 1)", "Batch Size must be at least 1."),
         (
             "job_unique",
@@ -132,15 +132,15 @@ class NspSyncJob(models.Model):
         ),
     ]
 
-    @api.depends("sync_action_name", "direction", "interval_seconds", "auth_id", "auth_id.display_name")
+    @api.depends("sync_action_name", "direction", "schedule_interval_minutes", "auth_id", "auth_id.display_name")
     def _compute_display_name(self):
         labels = dict(self._fields["direction"].selection)
         for rec in self:
-            rec.display_name = "%s / %s / %s / %ss" % (
+            rec.display_name = "%s / %s / %s / %s min" % (
                 rec.auth_id.display_name or "Cloud",
                 rec.sync_action_name or rec.route_suffix or "-",
                 labels.get(rec.direction, rec.direction or "-"),
-                rec.interval_seconds or 0,
+                rec.schedule_interval_minutes or 0,
             )
 
     @api.depends(
@@ -215,7 +215,7 @@ class NspSyncJob(models.Model):
                     "sync_action_id": action_by_route[route].id,
                     "version_id": version.id,
                     "direction": SYNC_ROUTE_DIRECTIONS[route],
-                    "interval_seconds": settings["interval_seconds"],
+                    "schedule_interval_minutes": settings["schedule_interval_minutes"],
                     "batch_size": settings["batch_size"],
                     "next_run_at": now,
                     "active": True,
@@ -255,14 +255,14 @@ class NspSyncJob(models.Model):
             route = (action.route_suffix or "").strip().strip("/") if action else ""
             if route in SYNC_ROUTE_DIRECTIONS:
                 vals["direction"] = SYNC_ROUTE_DIRECTIONS[route]
-            vals["interval_seconds"] = max(1, int(vals.get("interval_seconds") or 60))
+            vals["schedule_interval_minutes"] = max(1, int(vals.get("schedule_interval_minutes") or 1))
             vals["batch_size"] = max(1, min(int(vals.get("batch_size") or 100), 1000))
             vals.setdefault("next_run_at", fields.Datetime.now())
             prepared.append(vals)
         return super().create(prepared)
 
     def write(self, vals):
-        if {"auth_id", "sync_action_id", "direction", "active", "interval_seconds", "batch_size"}.intersection(vals):
+        if {"auth_id", "sync_action_id", "direction", "active", "schedule_interval_minutes", "batch_size"}.intersection(vals):
             self._ensure_edge_server_instance()
         values = dict(vals)
         if "sync_action_id" in values:
@@ -273,8 +273,8 @@ class NspSyncJob(models.Model):
             values["sync_cursor"] = False
             values["last_push_at"] = False
             values["last_push_record_id"] = 0
-        if "interval_seconds" in values:
-            values["interval_seconds"] = max(1, int(values.get("interval_seconds") or 1))
+        if "schedule_interval_minutes" in values:
+            values["schedule_interval_minutes"] = max(1, int(values.get("schedule_interval_minutes") or 1))
         if "batch_size" in values:
             values["batch_size"] = max(1, min(int(values.get("batch_size") or 1), 1000))
         return super().write(values)
@@ -313,7 +313,7 @@ class NspSyncJob(models.Model):
         for rec in self:
             rec.next_run_at = (
                 now if immediate and rec.active
-                else now + timedelta(seconds=max(1, rec.interval_seconds or 1)) if rec.active
+                else now + timedelta(minutes=max(1, rec.schedule_interval_minutes or 1)) if rec.active
                 else False
             )
 
@@ -724,30 +724,24 @@ class NspSyncJob(models.Model):
 
     def _apply_measurement_config(self, item):
         self.ensure_one()
-        uid = str(item.get("measurement_session_uid") or "").strip().upper()
-        code = str(item.get("measurement_code") or uid).strip().upper()
+        code = str(item.get("measurement_code") or "").strip().upper()
         controller_code = str(item.get("controller_code") or "").strip().upper()
-        if not uid or not controller_code:
-            raise UserError(_("Measurement Session UID and Controller Code are required."))
-        status = str(item.get("measurement_status") or "ready").strip().lower()
-        if status not in ("ready", "measuring", "completed", "cancelled"):
+        if not code or not controller_code:
+            raise UserError(_("Measurement Code and Controller Code are required."))
+        status = str(item.get("status") or "ready").strip().lower()
+        if status not in ("ready", "running", "completed", "failed", "cancelled"):
             raise UserError(_("Invalid Measurement Session status: %s") % status)
         controller = self._find_or_create_controller(controller_code)
         Session = self.env["nsp.measurement.session"].sudo().with_context(measurement_sync=True)
-        session = Session.search([("measurement_session_uid", "=", uid)], limit=1)
+        session = Session.search([("measurement_code", "=", code)], limit=1)
         vals = {
-            "measurement_session_uid": uid,
             "measurement_code": code,
             "controller_id": controller.id,
-            "measurement_status": status,
+            "status": status,
             "planned_start_at": self._remote_datetime(item.get("planned_start_at")),
             "planned_end_at": self._remote_datetime(item.get("planned_end_at")),
             "note": str(item.get("note") or "").strip() or False,
         }
-        if session:
-            session.write(vals)
-        else:
-            session = Session.create(vals)
 
         antenna_refs = self.env["nsp.device.antenna"].sudo().browse()
         seen = set()
@@ -769,7 +763,10 @@ class NspSyncJob(models.Model):
                     raise UserError(_("Invalid or duplicate Measurement Antenna %s/%s.") % (serial, raw_number))
                 seen.add(key)
                 Antenna = self.env["nsp.device.antenna"].sudo()
-                antenna = Antenna.search([("device_id", "=", device.id), ("antenna_id", "=", antenna_no)], limit=1)
+                antenna = Antenna.search([
+                    ("device_id", "=", device.id),
+                    ("antenna_id", "=", antenna_no),
+                ], limit=1)
                 if not antenna:
                     antenna = Antenna.create({
                         "device_id": device.id,
@@ -779,11 +776,11 @@ class NspSyncJob(models.Model):
                 antenna_refs |= antenna
         if not antenna_refs:
             raise UserError(_("Measurement Configuration has no antennas."))
-        session.antenna_ids.with_context(measurement_sync=True).unlink()
-        self.env["nsp.measurement.antenna"].sudo().with_context(measurement_sync=True).create([
-            {"session_id": session.id, "antenna_ref_id": antenna.id}
-            for antenna in antenna_refs
-        ])
+        vals["antenna_ids"] = [(6, 0, antenna_refs.ids)]
+        if session:
+            session.write(vals)
+        else:
+            session = Session.create(vals)
         return session
 
     def _apply_parking_config(self, item):
@@ -986,7 +983,7 @@ class NspSyncJob(models.Model):
         for field_name in (
             "record_key", "card_uid", "borrow_uid", "branch_code", "user_code",
             "vehicle_code", "license_plate", "parking_area_code", "transaction_uid",
-            "measurement_session_uid", "measurement_uid", "serial_number",
+            "measurement_code", "event_uid", "serial_number",
             "controller_code", "edge_server_code",
         ):
             if item.get(field_name):
@@ -997,8 +994,7 @@ class NspSyncJob(models.Model):
     @api.model
     def _measurement_event_payload(self, event):
         payload = {
-            "measurement_uid": event.measurement_uid,
-            "controller_code": event.session_id.controller_id.controller_id,
+            "event_uid": event.event_uid,
             "serial_number": event.serial_number,
             "antenna_no": int(event.antenna_no),
             "tid": event.tid,
@@ -1008,120 +1004,204 @@ class NspSyncJob(models.Model):
             payload["rssi_dbm"] = float(event.rssi_dbm)
         return payload
 
-    def _run_measurement_event_push_once(self):
+    def _pending_measurement_events(self, limit):
         self.ensure_one()
         edge = self._require_edge_server_record()
-        Event = self.env["nsp.measurement.event"].sudo()
-        now = fields.Datetime.now()
-        scope = [("session_id.controller_id.edge_server_id", "=", edge.id)]
-        retry_domain = [
-            ("sync_state", "in", ["pending", "failed"]),
-            "|", ("next_retry_at", "=", False), ("next_retry_at", "<=", now),
-        ]
-        first = Event.search(retry_domain + scope, order="id asc", limit=1)
-        if not first:
-            return {"pushed": 0, "failed": 0, "has_more": False, "message": "No Measurement Events to push."}
-        events = Event.search(
-            retry_domain + [("session_id", "=", first.session_id.id), ("run_id", "=", first.run_id.id)],
-            order="id asc",
-            limit=max(1, min(int(self.batch_size or 100), 1000)),
+        source_code = str(self.edge_server_code or "NSP").strip() or "NSP"
+        action_code = str(self.sync_action_code or "").strip()
+        self.env.cr.execute(
+            """
+            SELECT event.id
+              FROM nsp_measurement_event event
+              JOIN nsp_measurement_session session ON session.id = event.session_id
+              JOIN nsp_controller controller ON controller.id = session.controller_id
+             WHERE controller.edge_server_id = %s
+               AND NOT EXISTS (
+                    SELECT 1
+                      FROM nsp_sync_record record
+                     WHERE record.source_code = %s
+                       AND record.sync_action_code = %s
+                       AND record.operation = 'push'
+                       AND record.record_key = event.event_uid
+                       AND record.status = 'synced'
+               )
+             ORDER BY event.id
+             LIMIT %s
+            """,
+            (edge.id, source_code, action_code, max(1, int(limit or 1))),
         )
+        ids = [row[0] for row in self.env.cr.fetchall()]
+        if not ids:
+            return self.env["nsp.measurement.event"].browse()
+        first = self.env["nsp.measurement.event"].sudo().browse(ids[0])
+        return self.env["nsp.measurement.event"].sudo().browse(ids).filtered(
+            lambda event: event.session_id == first.session_id
+        )
+
+    def _push_measurement_event_records(self, events, timeout=120):
+        self.ensure_one()
+        events = events.sudo().exists().sorted(key=lambda event: event.id)
+        if not events:
+            return {"pushed": 0, "failed": 0, "has_more": False, "message": "No Measurement Events to push."}
+        session = events[0].session_id
+        events = events.filtered(lambda event: event.session_id == session)
+        Record = self.env["nsp.sync.record"].sudo()
         payload = {
             "edge_server_code": self.edge_server_code,
-            "measurement_session_uid": first.session_id.measurement_session_uid,
-            "measurement_run_uid": first.run_id.measurement_run_uid,
-            "measurements": [self._measurement_event_payload(event) for event in events],
+            "measurement_code": session.measurement_code,
+            "events": [self._measurement_event_payload(event) for event in events],
         }
+        for event in events:
+            Record.mark_pending(
+                sync_job=self,
+                action_code=self.sync_action_code,
+                action_name=self.sync_action_name,
+                route_suffix=self.route_suffix,
+                record=event,
+                record_key=event.event_uid,
+                message="Waiting for Cloud response.",
+                payload=self._measurement_event_payload(event),
+                operation="push",
+            )
         try:
-            data = self._json_or_error(self._post_remote(self.sync_action_id, payload, timeout=120))
-        except Exception:
+            data = self._json_or_error(self._post_remote(self.sync_action_id, payload, timeout=timeout))
+        except Exception as exc:
             for event in events:
-                retry = int(event.retry_count or 0) + 1
-                event.write({
-                    "sync_state": "failed",
-                    "retry_count": retry,
-                    "next_retry_at": now + timedelta(seconds=min(60 * (2 ** min(retry, 6)), 3600)),
-                })
+                Record.mark_result(
+                    sync_job=self,
+                    action_code=self.sync_action_code,
+                    action_name=self.sync_action_name,
+                    route_suffix=self.route_suffix,
+                    record=event,
+                    record_key=event.event_uid,
+                    status="failed",
+                    message=str(exc),
+                    payload=self._measurement_event_payload(event),
+                    operation="push",
+                )
             raise
-        rejected_keys = {
-            str(result.get("record_key") or "")
+        result_by_key = {
+            str(result.get("record_key") or ""): result
             for result in (data.get("results") or [])
-            if isinstance(result, dict) and result.get("status") in ("rejected", "failed", "error")
+            if isinstance(result, dict)
         }
         reported_failed = int(data.get("failed") or 0)
-        failed_events = events if reported_failed and not rejected_keys else events.filtered(
-            lambda event: event.measurement_uid in rejected_keys
-        )
-        accepted_events = events - failed_events
-        if accepted_events:
-            accepted_events.write({
-                "sync_state": "synced",
-                "retry_count": 0,
-                "last_sync_at": now,
-                "next_retry_at": False,
-            })
-        for event in failed_events:
-            retry = int(event.retry_count or 0) + 1
-            event.write({
-                "sync_state": "failed",
-                "retry_count": retry,
-                "next_retry_at": now + timedelta(seconds=min(60 * (2 ** min(retry, 6)), 3600)),
-            })
-        if failed_events or reported_failed:
-            raise UserError(_("Cloud rejected %s Measurement Event(s).") % max(len(failed_events), reported_failed))
-        has_more = bool(Event.search_count(retry_domain + scope))
-        self.last_push_at = now
+        failed = 0
+        for event in events:
+            result = result_by_key.get(event.event_uid)
+            rejected = bool(result and result.get("status") in ("rejected", "failed", "error"))
+            if not result_by_key and reported_failed:
+                rejected = True
+            Record.mark_result(
+                sync_job=self,
+                action_code=self.sync_action_code,
+                action_name=self.sync_action_name,
+                route_suffix=self.route_suffix,
+                record=event,
+                record_key=event.event_uid,
+                status="failed" if rejected else "synced",
+                message=(result or {}).get("message") or ("Rejected by Cloud." if rejected else "Accepted by Cloud."),
+                payload=self._measurement_event_payload(event),
+                response=result or data,
+                operation="push",
+            )
+            failed += int(rejected)
+        if failed:
+            raise UserError(_("Cloud rejected %s Measurement Event(s).") % failed)
+        self.last_push_at = fields.Datetime.now()
         return {
-            "pushed": len(accepted_events),
+            "pushed": len(events),
             "failed": 0,
-            "has_more": has_more,
-            "message": "Pushed %s Measurement Event(s)." % len(accepted_events),
+            "has_more": bool(self._pending_measurement_events(1)),
+            "message": "Pushed %s Measurement Event(s)." % len(events),
         }
+
+    def _run_measurement_event_push_once(self):
+        self.ensure_one()
+        events = self._pending_measurement_events(
+            max(1, min(int(self.batch_size or 100), 100))
+        )
+        return self._push_measurement_event_records(events)
+
+    @api.model
+    def push_measurement_events_now(self, events):
+        job = self.sudo().search([
+            ("active", "=", True),
+            ("route_suffix", "=", "measurement-events/sync"),
+            ("direction", "=", "push"),
+        ], order="sequence, id", limit=1)
+        if not job:
+            return False
+        try:
+            job._push_measurement_event_records(events, timeout=3)
+            return True
+        except Exception:
+            _logger.exception("Immediate Measurement Event forwarding failed; fallback retry remains pending.")
+            return False
 
     @api.model
     def _measurement_status_payload(self, session):
-        runs = []
-        for run in session.run_ids.sorted(key=lambda value: (value.id,)):
-            item = {
-                "measurement_run_uid": run.measurement_run_uid,
-                "run_status": run.run_status,
-                "measurement_count": int(run.measurement_count or 0),
-            }
-            if run.started_at:
-                item["started_at"] = self._iso_utc(run.started_at)
-            if run.stopped_at:
-                item["stopped_at"] = self._iso_utc(run.stopped_at)
-            runs.append(item)
+        occurred_at = session.ended_at or session.started_at or session.write_date or fields.Datetime.now()
         return {
             "edge_server_code": self.edge_server_code,
-            "measurement_session_uid": session.measurement_session_uid,
-            "measurement_status": session.measurement_status,
-            "runs": runs,
-            "reported_at": self._iso_utc(fields.Datetime.now()),
+            "measurement_code": session.measurement_code,
+            "status": session.status,
+            "occurred_at": self._iso_utc(occurred_at),
         }
 
-    def _run_measurement_status_push_once(self):
+    def _pending_measurement_status_sessions(self, limit):
         self.ensure_one()
         edge = self._require_edge_server_record()
-        limit = max(1, min(int(self.batch_size or 100), 1000))
-        Session = self.env["nsp.measurement.session"].sudo()
-        sessions = Session.search(
-            self._push_cursor_domain() + [
-                ("controller_id.edge_server_id", "=", edge.id),
-                ("measurement_status", "!=", "draft"),
-            ],
-            order="write_date asc, id asc",
-            limit=limit + 1,
+        source_code = str(self.edge_server_code or "NSP").strip() or "NSP"
+        action_code = str(self.sync_action_code or "").strip()
+        self.env.cr.execute(
+            """
+            SELECT session.id
+              FROM nsp_measurement_session session
+              JOIN nsp_controller controller ON controller.id = session.controller_id
+             WHERE controller.edge_server_id = %s
+               AND session.status != 'draft'
+               AND NOT EXISTS (
+                    SELECT 1
+                      FROM nsp_sync_record record
+                     WHERE record.source_code = %s
+                       AND record.sync_action_code = %s
+                       AND record.operation = 'push'
+                       AND record.record_key = session.measurement_code
+                       AND record.status = 'synced'
+                       AND record.last_synced_at >= session.write_date
+               )
+             ORDER BY session.write_date, session.id
+             LIMIT %s
+            """,
+            (edge.id, source_code, action_code, max(1, int(limit or 1))),
         )
-        has_more = len(sessions) > limit
-        selected = sessions[:limit]
-        if not selected:
-            return {"pushed": 0, "failed": 0, "has_more": False, "message": "No Measurement Session status to push."}
+        return self.env["nsp.measurement.session"].sudo().browse(
+            [row[0] for row in self.env.cr.fetchall()]
+        )
+
+    def _push_measurement_status_records(self, sessions, timeout=120):
+        self.ensure_one()
+        sessions = sessions.sudo().exists().sorted(key=lambda session: (session.write_date, session.id))
+        if not sessions:
+            return {"pushed": 0, "failed": 0, "has_more": False, "message": "No Measurement status to push."}
         Record = self.env["nsp.sync.record"].sudo()
-        for session in selected:
+        pushed = 0
+        for session in sessions:
             payload = self._measurement_status_payload(session)
+            Record.mark_pending(
+                sync_job=self,
+                action_code=self.sync_action_code,
+                action_name=self.sync_action_name,
+                route_suffix=self.route_suffix,
+                record=session,
+                record_key=session.measurement_code,
+                message="Waiting for Cloud response.",
+                payload=payload,
+                operation="push",
+            )
             try:
-                data = self._json_or_error(self._post_remote(self.sync_action_id, payload, timeout=120))
+                data = self._json_or_error(self._post_remote(self.sync_action_id, payload, timeout=timeout))
             except Exception as exc:
                 Record.mark_result(
                     sync_job=self,
@@ -1129,7 +1209,7 @@ class NspSyncJob(models.Model):
                     action_name=self.sync_action_name,
                     route_suffix=self.route_suffix,
                     record=session,
-                    record_key=session.measurement_session_uid,
+                    record_key=session.measurement_code,
                     status="failed",
                     message=str(exc),
                     payload=payload,
@@ -1142,21 +1222,44 @@ class NspSyncJob(models.Model):
                 action_name=self.sync_action_name,
                 route_suffix=self.route_suffix,
                 record=session,
-                record_key=session.measurement_session_uid,
+                record_key=session.measurement_code,
                 status="synced",
-                message="Measurement Session status accepted by Cloud.",
+                message="Measurement status accepted by Cloud.",
                 payload=payload,
                 response=data,
                 operation="push",
             )
-        last = selected[-1]
-        self.write({"last_push_at": last.write_date, "last_push_record_id": last.id})
+            pushed += 1
+        self.last_push_at = fields.Datetime.now()
         return {
-            "pushed": len(selected),
+            "pushed": pushed,
             "failed": 0,
-            "has_more": has_more,
-            "message": "Pushed %s Measurement Session status record(s)." % len(selected),
+            "has_more": bool(self._pending_measurement_status_sessions(1)),
+            "message": "Pushed %s Measurement status record(s)." % pushed,
         }
+
+    def _run_measurement_status_push_once(self):
+        self.ensure_one()
+        sessions = self._pending_measurement_status_sessions(
+            max(1, min(int(self.batch_size or 100), 1000))
+        )
+        return self._push_measurement_status_records(sessions)
+
+    @api.model
+    def push_measurement_status_now(self, session):
+        job = self.sudo().search([
+            ("active", "=", True),
+            ("route_suffix", "=", "measurement-status/sync"),
+            ("direction", "=", "push"),
+        ], order="sequence, id", limit=1)
+        if not job:
+            return False
+        try:
+            job._push_measurement_status_records(session, timeout=3)
+            return True
+        except Exception:
+            _logger.exception("Immediate Measurement status forwarding failed; fallback retry remains pending.")
+            return False
 
     # --------------------------- execution ----------------------------
     def _mark_push_failure(self, items, data_or_error):

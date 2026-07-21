@@ -32,7 +32,7 @@
                 <field name="sync_action_id" string="Sync API"/>
                 <field name="route_suffix" optional="show"/>
                 <field name="direction" widget="badge"/>
-                <field name="interval_seconds"/>
+                <field name="schedule_interval_minutes"/>
                 <field name="batch_size"/>
                 <field name="status" widget="badge"
                        decoration-info="status == 'running'"
@@ -75,7 +75,7 @@
                     </group>
                     <group>
                         <group string="Schedule">
-                            <field name="interval_seconds"/>
+                            <field name="schedule_interval_minutes"/>
                             <field name="batch_size"/>
                         </group>
                         <group string="Run State">
@@ -85,6 +85,11 @@
                             <field name="next_run_at" readonly="1"/>
                         </group>
                     </group>
+                    <div class="alert alert-info" role="alert"
+                         invisible="route_suffix not in ('measurement-events/sync', 'measurement-status/sync')">
+                        Measurement Events and Measurement Status are forwarded to Cloud immediately.
+                        Schedule Interval (Minutes) is only the fallback retry interval when immediate forwarding fails.
+                    </div>
                     <group string="Last Message">
                         <field name="last_message" nolabel="1" readonly="1"/>
                     </group>

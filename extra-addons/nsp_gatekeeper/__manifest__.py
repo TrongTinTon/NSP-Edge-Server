@@ -2,7 +2,7 @@
     'name': 'NSP Gatekeeper',
     'summary': 'Main NSP Gatekeeper module',
     'description': 'NSP Gatekeeper infrastructure, parking runtime, configuration and measurement APIs.',
-    'version': '19.0.16.0.1',
+    'version': '19.0.17.0.1',
     'sequence': -1,
     'author': 'BKU Team',
     'category': 'Services',
@@ -28,7 +28,9 @@
     'assets': {
         'web.assets_backend': [
             'nsp_gatekeeper/static/src/js/parking_display.js',
+            'nsp_gatekeeper/static/src/js/measurement_live.js',
             'nsp_gatekeeper/static/src/scss/parking_display.scss',
+            'nsp_gatekeeper/static/src/scss/measurement_live.scss',
         ],
     },
     'license': 'LGPL-3',

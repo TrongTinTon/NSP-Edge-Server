@@ -7,13 +7,14 @@
             <search>
                 <field name="measurement_code"/>
                 <field name="controller_id"/>
-                <filter string="Draft" name="draft" domain="[('measurement_status','=','draft')]"/>
-                <filter string="Ready" name="ready" domain="[('measurement_status','=','ready')]"/>
-                <filter string="Measuring" name="measuring" domain="[('measurement_status','=','measuring')]"/>
-                <filter string="Completed" name="completed" domain="[('measurement_status','=','completed')]"/>
+                <filter string="Draft" name="draft" domain="[('status','=','draft')]"/>
+                <filter string="Ready" name="ready" domain="[('status','=','ready')]"/>
+                <filter string="Running" name="running" domain="[('status','=','running')]"/>
+                <filter string="Completed" name="completed" domain="[('status','=','completed')]"/>
+                <filter string="Failed" name="failed" domain="[('status','=','failed')]"/>
                 <group>
                     <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
-                    <filter string="Status" name="group_status" context="{'group_by':'measurement_status'}"/>
+                    <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
                 </group>
             </search>
         </field>
@@ -23,13 +24,15 @@
         <field name="name">nsp.measurement.session.list</field>
         <field name="model">nsp.measurement.session</field>
         <field name="arch" type="xml">
-            <list string="Measurement Sessions">
+            <list string="Measurement Sessions"
+                  decoration-info="status == 'running'"
+                  decoration-success="status == 'completed'"
+                  decoration-danger="status == 'failed'">
                 <field name="measurement_code"/>
                 <field name="controller_id"/>
                 <field name="planned_start_at"/>
                 <field name="planned_end_at"/>
-                <field name="measurement_status" widget="badge"/>
-                <field name="run_count"/>
+                <field name="status" widget="badge"/>
                 <field name="event_count"/>
             </list>
         </field>
@@ -41,75 +44,63 @@
         <field name="arch" type="xml">
             <form string="Measurement Session">
                 <header>
-                    <button name="action_ready" type="object" string="Ready" class="oe_highlight" invisible="measurement_status != 'draft'"/>
-                    <button name="action_complete" type="object" string="Complete" class="oe_highlight" invisible="measurement_status != 'measuring'"/>
-                    <button name="action_cancel" type="object" string="Cancel" invisible="measurement_status in ('completed','cancelled')"/>
-                    <field name="measurement_status" widget="statusbar" statusbar_visible="draft,ready,measuring,completed,cancelled"/>
+                    <button name="action_ready" type="object" string="Release to Controller"
+                            class="oe_highlight" invisible="status != 'draft'"/>
+                    <button name="action_complete" type="object" string="Complete"
+                            class="oe_highlight" invisible="status != 'running'"/>
+                    <button name="action_cancel" type="object" string="Cancel"
+                            invisible="status in ('completed','failed','cancelled')"/>
+                    <field name="status" widget="statusbar"
+                           statusbar_visible="draft,ready,running,completed,failed,cancelled"/>
                 </header>
                 <sheet>
-                    <div class="oe_title"><label for="measurement_code"/><h1><field name="measurement_code"/></h1></div>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_open_live" type="object" class="oe_stat_button" icon="fa-line-chart"
+                                invisible="status == 'draft'">
+                            <span class="o_stat_text">Live Measurement</span>
+                        </button>
+                        <button name="action_view_events" type="object" class="oe_stat_button" icon="fa-list">
+                            <field name="event_count" widget="statinfo" string="Events"/>
+                        </button>
+                    </div>
+                    <div class="oe_title">
+                        <label for="measurement_code"/>
+                        <h1><field name="measurement_code" placeholder="MSR-BD-GATE01-001"/></h1>
+                    </div>
                     <group>
-                        <group string="Measurement Scope">
-                            <field name="measurement_session_uid" readonly="1"/>
+                        <group string="Measurement Plan">
                             <field name="controller_id"/>
                             <field name="planned_start_at"/>
                             <field name="planned_end_at"/>
                         </group>
                         <group string="Runtime">
                             <field name="started_at" readonly="1"/>
-                            <field name="completed_at" readonly="1"/>
-                            <field name="cancelled_at" readonly="1"/>
-                            <field name="run_count" readonly="1"/>
+                            <field name="ended_at" readonly="1"/>
                             <field name="event_count" readonly="1"/>
                         </group>
                     </group>
-                    <group><field name="note" placeholder="Measurement purpose or notes"/></group>
+                    <group>
+                        <field name="note" placeholder="Measurement purpose or notes"/>
+                    </group>
                     <notebook>
                         <page string="Devices and Antennas">
-                            <field name="antenna_ids">
-                                <list editable="bottom">
-                                    <field name="antenna_ref_id" domain="[('device_id.controller_id','=',parent.controller_id)]"/>
-                                    <field name="serial_number" readonly="1"/>
-                                    <field name="antenna_no" readonly="1"/>
+                            <field name="antenna_ids" domain="[('device_id.controller_id','=',controller_id)]">
+                                <list create="0" delete="1">
+                                    <field name="device_serial" string="Reader Serial"/>
+                                    <field name="device_id" string="Reader"/>
+                                    <field name="antenna_id" string="Antenna No"/>
+                                    <field name="physical_antenna"/>
                                 </list>
                             </field>
                         </page>
-                        <page string="Runs">
-                            <field name="run_ids" readonly="1">
-                                <list>
-                                    <field name="measurement_run_uid"/>
-                                    <field name="run_status" widget="badge"/>
-                                    <field name="started_at"/>
-                                    <field name="stopped_at"/>
-                                    <field name="measurement_count"/>
-                                </list>
-                            </field>
-                        </page>
-                        <page string="Antenna Summary">
-                            <field name="antenna_summary_ids" readonly="1">
-                                <list>
+                        <page string="Recent Events">
+                            <field name="event_ids" readonly="1">
+                                <list create="0" delete="0" default_order="read_at desc" limit="100">
+                                    <field name="read_at"/>
                                     <field name="serial_number"/>
                                     <field name="antenna_no"/>
-                                    <field name="read_count"/>
-                                    <field name="min_rssi_dbm"/>
-                                    <field name="max_rssi_dbm"/>
-                                    <field name="average_rssi_dbm"/>
-                                    <field name="first_read_at"/>
-                                    <field name="last_read_at"/>
-                                </list>
-                            </field>
-                        </page>
-                        <page string="Pair Summary">
-                            <field name="pair_summary_ids" readonly="1">
-                                <list>
-                                    <field name="from_serial_number"/>
-                                    <field name="from_antenna_no"/>
-                                    <field name="to_serial_number"/>
-                                    <field name="to_antenna_no"/>
-                                    <field name="sample_count"/>
-                                    <field name="min_interval_ms"/>
-                                    <field name="max_interval_ms"/>
-                                    <field name="average_interval_ms"/>
+                                    <field name="tid"/>
+                                    <field name="rssi_dbm"/>
                                 </list>
                             </field>
                         </page>
@@ -125,12 +116,14 @@
         <field name="model">nsp.measurement.event</field>
         <field name="arch" type="xml">
             <search>
-                <field name="measurement_uid"/>
+                <field name="event_uid"/>
                 <field name="session_id"/>
                 <field name="serial_number"/>
+                <field name="antenna_no"/>
                 <field name="tid"/>
-                <filter string="Pending Sync" name="pending" domain="[('sync_state','=','pending')]"/>
-                <filter string="Failed" name="failed" domain="[('sync_state','=','failed')]"/>
+                <filter string="Session" name="group_session" context="{'group_by':'session_id'}"/>
+                <filter string="Reader" name="group_reader" context="{'group_by':'serial_number'}"/>
+                <filter string="Antenna" name="group_antenna" context="{'group_by':'antenna_no'}"/>
             </search>
         </field>
     </record>
@@ -139,17 +132,14 @@
         <field name="name">nsp.measurement.event.list</field>
         <field name="model">nsp.measurement.event</field>
         <field name="arch" type="xml">
-            <list string="Measurement Events" create="0" delete="0">
-                <field name="measurement_uid"/>
+            <list string="Measurement Events" create="0" edit="0" delete="0">
+                <field name="read_at"/>
+                <field name="event_uid" optional="hide"/>
                 <field name="session_id"/>
-                <field name="run_id"/>
                 <field name="serial_number"/>
                 <field name="antenna_no"/>
                 <field name="tid"/>
-                <field name="read_at"/>
                 <field name="rssi_dbm"/>
-                <field name="sync_state" widget="badge"/>
-                <field name="retry_count" optional="hide"/>
             </list>
         </field>
     </record>
@@ -159,20 +149,17 @@
         <field name="model">nsp.measurement.event</field>
         <field name="arch" type="xml">
             <form string="Measurement Event" create="0" edit="0" delete="0">
-                <sheet><group>
-                    <field name="measurement_uid"/>
-                    <field name="session_id"/>
-                    <field name="run_id"/>
-                    <field name="serial_number"/>
-                    <field name="antenna_no"/>
-                    <field name="tid"/>
-                    <field name="read_at"/>
-                    <field name="rssi_dbm"/>
-                    <field name="sync_state"/>
-                    <field name="retry_count"/>
-                    <field name="next_retry_at"/>
-                    <field name="last_sync_at"/>
-                </group></sheet>
+                <sheet>
+                    <group>
+                        <field name="event_uid"/>
+                        <field name="session_id"/>
+                        <field name="serial_number"/>
+                        <field name="antenna_no"/>
+                        <field name="tid"/>
+                        <field name="read_at"/>
+                        <field name="rssi_dbm"/>
+                    </group>
+                </sheet>
             </form>
         </field>
     </record>
@@ -189,30 +176,5 @@
         <field name="res_model">nsp.measurement.event</field>
         <field name="view_mode">list,form</field>
         <field name="search_view_id" ref="view_nsp_measurement_event_search"/>
-    </record>
-
-    <record id="view_nsp_measurement_pair_summary_search" model="ir.ui.view">
-        <field name="name">nsp.measurement.pair.summary.search</field>
-        <field name="model">nsp.measurement.pair.summary</field>
-        <field name="arch" type="xml"><search><field name="session_id"/><field name="from_serial_number"/><field name="to_serial_number"/></search></field>
-    </record>
-
-    <record id="view_nsp_measurement_pair_summary_list" model="ir.ui.view">
-        <field name="name">nsp.measurement.pair.summary.list</field>
-        <field name="model">nsp.measurement.pair.summary</field>
-        <field name="arch" type="xml"><list create="0" delete="0"><field name="session_id"/><field name="from_serial_number"/><field name="from_antenna_no"/><field name="to_serial_number"/><field name="to_antenna_no"/><field name="sample_count"/><field name="average_interval_ms"/></list></field>
-    </record>
-
-    <record id="view_nsp_measurement_pair_summary_form" model="ir.ui.view">
-        <field name="name">nsp.measurement.pair.summary.form</field>
-        <field name="model">nsp.measurement.pair.summary</field>
-        <field name="arch" type="xml"><form create="0" edit="0" delete="0"><sheet><group><field name="session_id"/><field name="from_serial_number"/><field name="from_antenna_no"/><field name="to_serial_number"/><field name="to_antenna_no"/><field name="sample_count"/><field name="min_interval_ms"/><field name="max_interval_ms"/><field name="average_interval_ms"/></group></sheet></form></field>
-    </record>
-
-    <record id="action_nsp_measurement_pair_summary" model="ir.actions.act_window">
-        <field name="name">Measurement Pair Summary</field>
-        <field name="res_model">nsp.measurement.pair.summary</field>
-        <field name="view_mode">list,form</field>
-        <field name="search_view_id" ref="view_nsp_measurement_pair_summary_search"/>
     </record>
 </odoo>

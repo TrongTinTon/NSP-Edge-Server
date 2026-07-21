@@ -1,0 +1,29 @@
+.nsp-measurement-live {
+    padding: 20px;
+
+    &__header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 16px;
+    }
+
+    &__status {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+    }
+
+    &__summary,
+    &__events {
+        background: var(--o-view-background-color, #fff);
+        border: 1px solid var(--border-color, #ddd);
+        border-radius: 6px;
+        overflow: auto;
+        margin-bottom: 20px;
+    }
+
+    &__events {
+        max-height: 460px;
+    }
+}

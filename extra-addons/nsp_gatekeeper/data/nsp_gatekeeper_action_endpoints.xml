@@ -158,29 +158,11 @@
         <field name="model_id" ref="model_nsp_gatekeeper_api_service"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_gatekeeper"/>
     </record>
-    <record id="action_core_api_nsp_measurement_session_ready" model="ir.actions.core_api">
-        <field name="name">NSP Measurement Session Ready</field>
-        <field name="code">model.api_measurement_session_ready()</field>
-        <field name="endpoint_code">nsp_measurement_session_ready</field>
-        <field name="route_suffix">measurement-sessions/ready</field>
-        <field name="http_methods">POST</field>
-        <field name="model_id" ref="model_nsp_gatekeeper_api_service"/>
-        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_gatekeeper"/>
-    </record>
-    <record id="action_core_api_nsp_measurement_session_complete" model="ir.actions.core_api">
-        <field name="name">NSP Measurement Session Complete</field>
-        <field name="code">model.api_measurement_session_complete()</field>
-        <field name="endpoint_code">nsp_measurement_session_complete</field>
-        <field name="route_suffix">measurement-sessions/complete</field>
-        <field name="http_methods">POST</field>
-        <field name="model_id" ref="model_nsp_gatekeeper_api_service"/>
-        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_gatekeeper"/>
-    </record>
-    <record id="action_core_api_nsp_measurement_session_cancel" model="ir.actions.core_api">
-        <field name="name">NSP Measurement Session Cancel</field>
-        <field name="code">model.api_measurement_session_cancel()</field>
-        <field name="endpoint_code">nsp_measurement_session_cancel</field>
-        <field name="route_suffix">measurement-sessions/cancel</field>
+    <record id="action_core_api_nsp_measurement_session_state" model="ir.actions.core_api">
+        <field name="name">NSP Measurement Session State</field>
+        <field name="code">model.api_measurement_session_state()</field>
+        <field name="endpoint_code">nsp_measurement_session_state</field>
+        <field name="route_suffix">measurement-sessions/state</field>
         <field name="http_methods">POST</field>
         <field name="model_id" ref="model_nsp_gatekeeper_api_service"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_gatekeeper"/>
@@ -194,83 +176,47 @@
         <field name="model_id" ref="model_nsp_gatekeeper_api_service"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_gatekeeper"/>
     </record>
-    <record id="action_core_api_nsp_controller_measurement_config_pull" model="ir.actions.core_api">
-        <field name="name">NSP Controller Measurement Configuration Pull</field>
-        <field name="code">model.api_controller_measurement_config_pull()</field>
-        <field name="endpoint_code">nsp_controller_measurement_config_pull</field>
-        <field name="route_suffix">controller/measurement-config/pull</field>
+    <record id="action_core_api_nsp_controller_measurement_pull" model="ir.actions.core_api">
+        <field name="name">NSP Controller Measurement Pull</field>
+        <field name="code">model.api_controller_measurement_pull()</field>
+        <field name="endpoint_code">nsp_controller_measurement_pull</field>
+        <field name="route_suffix">controller/measurement/pull</field>
         <field name="http_methods">POST</field>
         <field name="model_id" ref="model_nsp_gatekeeper_api_service"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_gatekeeper"/>
     </record>
-    <record id="action_core_api_nsp_edge_measurement_session_start" model="ir.actions.core_api">
-        <field name="name">NSP Edge Measurement Session Start</field>
-        <field name="code">model.api_edge_measurement_session_start()</field>
-        <field name="endpoint_code">nsp_edge_measurement_session_start</field>
-        <field name="route_suffix">edge/measurement-sessions/start</field>
+    <record id="action_core_api_nsp_controller_measurement_events" model="ir.actions.core_api">
+        <field name="name">NSP Controller Measurement Events</field>
+        <field name="code">model.api_controller_measurement_events()</field>
+        <field name="endpoint_code">nsp_controller_measurement_events</field>
+        <field name="route_suffix">controller/measurement/events</field>
         <field name="http_methods">POST</field>
         <field name="model_id" ref="model_nsp_gatekeeper_api_service"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_gatekeeper"/>
     </record>
-    <record id="action_core_api_nsp_edge_measurement_session_stop" model="ir.actions.core_api">
-        <field name="name">NSP Edge Measurement Session Stop</field>
-        <field name="code">model.api_edge_measurement_session_stop()</field>
-        <field name="endpoint_code">nsp_edge_measurement_session_stop</field>
-        <field name="route_suffix">edge/measurement-sessions/stop</field>
+    <record id="action_core_api_nsp_controller_measurement_status" model="ir.actions.core_api">
+        <field name="name">NSP Controller Measurement Status</field>
+        <field name="code">model.api_controller_measurement_status()</field>
+        <field name="endpoint_code">nsp_controller_measurement_status</field>
+        <field name="route_suffix">controller/measurement/status</field>
         <field name="http_methods">POST</field>
         <field name="model_id" ref="model_nsp_gatekeeper_api_service"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_gatekeeper"/>
     </record>
-    <record id="action_core_api_nsp_edge_measurement_session_detail" model="ir.actions.core_api">
-        <field name="name">NSP Edge Measurement Session Detail</field>
-        <field name="code">model.api_edge_measurement_session_detail()</field>
-        <field name="endpoint_code">nsp_edge_measurement_session_detail</field>
-        <field name="route_suffix">edge/measurement-sessions/detail</field>
-        <field name="http_methods">GET,POST</field>
-        <field name="model_id" ref="model_nsp_gatekeeper_api_service"/>
-        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_gatekeeper"/>
-    </record>
-    <record id="action_core_api_nsp_controller_measurement_command_pull" model="ir.actions.core_api">
-        <field name="name">NSP Controller Measurement Command Pull</field>
-        <field name="code">model.api_controller_measurement_command_pull()</field>
-        <field name="endpoint_code">nsp_controller_measurement_command_pull</field>
-        <field name="route_suffix">controller/measurement-command/pull</field>
+    <record id="action_core_api_nsp_measurement_events_sync" model="ir.actions.core_api">
+        <field name="name">NSP Measurement Events Sync</field>
+        <field name="code">model.api_measurement_events_sync()</field>
+        <field name="endpoint_code">nsp_measurement_events_sync</field>
+        <field name="route_suffix">measurement-events/sync</field>
         <field name="http_methods">POST</field>
         <field name="model_id" ref="model_nsp_gatekeeper_api_service"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_gatekeeper"/>
     </record>
-    <record id="action_core_api_nsp_controller_measurement_command_status" model="ir.actions.core_api">
-        <field name="name">NSP Controller Measurement Command Status</field>
-        <field name="code">model.api_controller_measurement_command_status()</field>
-        <field name="endpoint_code">nsp_controller_measurement_command_status</field>
-        <field name="route_suffix">controller/measurement-command/status</field>
-        <field name="http_methods">POST</field>
-        <field name="model_id" ref="model_nsp_gatekeeper_api_service"/>
-        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_gatekeeper"/>
-    </record>
-    <record id="action_core_api_nsp_controller_measurement_data_report" model="ir.actions.core_api">
-        <field name="name">NSP Controller Measurement Data Report</field>
-        <field name="code">model.api_controller_measurement_data_report()</field>
-        <field name="endpoint_code">nsp_controller_measurement_data_report</field>
-        <field name="route_suffix">controller/measurement-data/report</field>
-        <field name="http_methods">POST</field>
-        <field name="model_id" ref="model_nsp_gatekeeper_api_service"/>
-        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_gatekeeper"/>
-    </record>
-    <record id="action_core_api_nsp_measurement_data_sync" model="ir.actions.core_api">
-        <field name="name">NSP Measurement Data Sync</field>
-        <field name="code">model.api_measurement_data_sync()</field>
-        <field name="endpoint_code">nsp_measurement_data_sync</field>
-        <field name="route_suffix">measurement-data/sync</field>
-        <field name="http_methods">POST</field>
-        <field name="model_id" ref="model_nsp_gatekeeper_api_service"/>
-        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_gatekeeper"/>
-    </record>
-    <record id="action_core_api_nsp_measurement_session_status_sync" model="ir.actions.core_api">
-        <field name="name">NSP Measurement Session Status Sync</field>
-        <field name="code">model.api_measurement_session_status_sync()</field>
-        <field name="endpoint_code">nsp_measurement_session_status_sync</field>
-        <field name="route_suffix">measurement-session-status/sync</field>
+    <record id="action_core_api_nsp_measurement_status_sync" model="ir.actions.core_api">
+        <field name="name">NSP Measurement Status Sync</field>
+        <field name="code">model.api_measurement_status_sync()</field>
+        <field name="endpoint_code">nsp_measurement_status_sync</field>
+        <field name="route_suffix">measurement-status/sync</field>
         <field name="http_methods">POST</field>
         <field name="model_id" ref="model_nsp_gatekeeper_api_service"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_gatekeeper"/>
