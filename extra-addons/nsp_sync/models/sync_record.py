@@ -37,10 +37,10 @@ class NspSyncRecord(models.Model):
         ("skipped", "Skipped"),
     ], required=True, default="pending", index=True)
     attempts = fields.Integer(
-        string="Current Send Attempts",
+        string="Attempts",
         default=0,
         readonly=True,
-        help="Number of attempts in the current outbound delivery cycle. It increases once when a Push request starts and resets when a new payload is sent after the previous cycle completed.",
+        help="Number of consecutive outbound attempts for the current delivery cycle. It increases once whenever the same Sync Record is retried while Pending or Failed, and resets to 1 only after the previous cycle was Synced or Skipped.",
     )
     message = fields.Text()
     payload_json = fields.Text(
@@ -162,11 +162,12 @@ class NspSyncRecord(models.Model):
         )
         current = self.sudo().search(domain, limit=1)
         request_payload = self._json_text(payload)
-        is_retry = bool(
-            current
-            and current.status in ("pending", "failed")
-            and current.payload_json == request_payload
-        )
+        # A retry cycle is identified by the stable Sync Record identity
+        # (source + action + record key + operation), not by byte-for-byte
+        # payload equality. Runtime timestamps such as last_seen_at or
+        # occurred_at may legitimately change between attempts while the
+        # previous delivery is still Pending/Failed.
+        is_retry = bool(current and current.status in ("pending", "failed"))
         vals.update({
             "status": "pending",
             "message": str(message or "") or False,

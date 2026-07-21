@@ -38,8 +38,8 @@
                 <field name="operation" widget="badge"/>
                 <field name="record_key"/>
                 <field name="status" widget="badge" decoration-success="status == 'synced'" decoration-danger="status == 'failed'" decoration-warning="status == 'pending'"/>
-                <field name="attempts" optional="hide"/>
-                <field name="last_attempt_at" optional="hide"/>
+                <field name="attempts" optional="show"/>
+                <field name="last_attempt_at" optional="show"/>
                 <field name="last_synced_at" optional="show"/>
                 <field name="message" optional="show"/>
             </list>
