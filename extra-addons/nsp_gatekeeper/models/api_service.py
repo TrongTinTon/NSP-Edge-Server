@@ -535,6 +535,35 @@ class NspGatekeeperApiService(models.AbstractModel):
                 payload["owner_code"] = owner_code
         return payload
 
+    @endpoint("NSP Device Whitelist Sync", route_suffix="device-whitelist/sync", methods="POST", code="nsp_device_whitelist_sync")
+    def api_device_whitelist_sync(self):
+        data = self._payload()
+        _application, _actor_kind, _edge_server, error = self._auth_edge_server_sync(data)
+        if error:
+            return error
+        unsupported = sorted(set(data) - {"edge_server_code"})
+        if unsupported:
+            return self._error(
+                "Unsupported field(s): %s" % ", ".join(unsupported),
+                400,
+                error_code="invalid_payload",
+                details={"unsupported_fields": unsupported},
+            )
+        Whitelist = self.env["nsp.device.whitelist"].sudo()
+        records = Whitelist.search([], order="serial_number asc, id asc")
+        items = [{
+            "serial_number": record.serial_number,
+            "model_number": record.model_number or "",
+            "vendor": record.device_vendor or "",
+            "device_type": record.device_type,
+        } for record in records]
+        return self._ok({
+            "items": items,
+            "next_sync_cursor": False,
+            "has_more": False,
+            "server_time": self._iso_datetime(fields.Datetime.now()),
+        }, message="Device Whitelist snapshot loaded.")
+
     @endpoint("NSP Gatekeeper Cards Sync", route_suffix="cards/sync", methods="POST", code="nsp_gatekeeper_cards_sync")
     def api_cards_sync(self):
         data = self._payload()

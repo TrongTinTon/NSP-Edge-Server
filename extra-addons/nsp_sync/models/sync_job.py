@@ -14,6 +14,7 @@ _logger = logging.getLogger(__name__)
 SYNC_ROUTE_DIRECTIONS = {
     "edge-server/status": "push",
     "devices-status/sync": "push",
+    "device-whitelist/sync": "pull",
     "branches/sync": "pull",
     "cards/sync": "pull",
     "employees/sync": "pull",
@@ -29,6 +30,7 @@ NSP_SYNC_ALLOWED_ROUTES = tuple(SYNC_ROUTE_DIRECTIONS)
 DEFAULT_JOB_SETTINGS = {
     "edge-server/status": {"schedule_interval_minutes": 1, "batch_size": 1},
     "devices-status/sync": {"schedule_interval_minutes": 1, "batch_size": 200},
+    "device-whitelist/sync": {"schedule_interval_minutes": 1, "batch_size": 1000},
     "branches/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
     "cards/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
     "employees/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
@@ -43,6 +45,7 @@ DEFAULT_JOB_SETTINGS = {
 ACTION_KINDS = {
     "edge-server/status": "edge_server_status",
     "devices-status/sync": "device_status",
+    "device-whitelist/sync": "device_whitelist",
     "branches/sync": "branch",
     "cards/sync": "card",
     "employees/sync": "user",
@@ -96,7 +99,12 @@ class NspSyncJob(models.Model):
     )
     schedule_interval_minutes = fields.Integer(default=1, required=True, string="Schedule Interval (Minutes)", help="Fallback retry interval. Measurement Events and status are forwarded immediately; this schedule is used only when immediate forwarding fails.")
     batch_size = fields.Integer(default=100, required=True)
-    sync_cursor = fields.Char(string="Next Sync Cursor", readonly=True, copy=False)
+    sync_cursor = fields.Char(
+        string="Pull Cursor",
+        readonly=True,
+        copy=False,
+        help="Internal cursor for incremental Pull jobs. It is preserved after the last page and is not user-managed.",
+    )
     last_push_at = fields.Datetime(readonly=True)
     last_push_record_id = fields.Integer(readonly=True, copy=False)
     last_pull_at = fields.Datetime(readonly=True)
@@ -560,6 +568,42 @@ class NspSyncJob(models.Model):
         return Controller.create(vals)
 
     @api.model
+    def _apply_device_whitelist(self, item):
+        serial = str(item.get("serial_number") or "").strip().upper()
+        if not serial:
+            raise UserError(_("Device Whitelist Serial is required."))
+        device_type = str(item.get("device_type") or "rfid_reader").strip().lower()
+        if device_type not in ("rfid_reader", "camera", "other"):
+            raise UserError(_("Invalid Device Type: %s") % device_type)
+        Whitelist = self.env["nsp.device.whitelist"].sudo()
+        record = Whitelist.search([("serial_number", "=", serial)], limit=1)
+        vals = {
+            "serial_number": serial,
+            "model_number": str(item.get("model_number") or "").strip() or False,
+            "device_vendor": str(item.get("vendor") or item.get("device_vendor") or "").strip() or False,
+            "device_type": device_type,
+        }
+        if record:
+            changed = {name: value for name, value in vals.items() if record[name] != value}
+            if changed:
+                record.write(changed)
+            return record
+        return Whitelist.create(vals)
+
+    @api.model
+    def _reconcile_device_whitelist_snapshot(self, items):
+        serials = {
+            str(item.get("serial_number") or "").strip().upper()
+            for item in (items or [])
+            if isinstance(item, dict) and str(item.get("serial_number") or "").strip()
+        }
+        Whitelist = self.env["nsp.device.whitelist"].sudo()
+        stale = Whitelist.search([("serial_number", "not in", list(serials))]) if serials else Whitelist.search([])
+        if stale:
+            stale.unlink()
+        return len(stale)
+
+    @api.model
     def _apply_branch(self, item):
         code = str(item.get("branch_code") or "").strip().upper()
         if not code:
@@ -909,6 +953,7 @@ class NspSyncJob(models.Model):
         results, failed = [], []
         Record = self.env["nsp.sync.record"].sudo()
         handlers = {
+            "device_whitelist": self._apply_device_whitelist,
             "branch": self._apply_branch,
             "card": self._apply_card,
             "user": self._apply_user,
@@ -971,6 +1016,10 @@ class NspSyncJob(models.Model):
 
     def _build_pull_payload(self):
         self.ensure_one()
+        # Device Whitelist is synchronized as a complete snapshot so removals on
+        # Cloud are also removed on Edge. It does not use an incremental cursor.
+        if self._action_kind() == "device_whitelist":
+            return {"edge_server_code": self.edge_server_code}
         payload = {"edge_server_code": self.edge_server_code, "limit": self.batch_size}
         if self.sync_cursor:
             payload["sync_cursor"] = self.sync_cursor
@@ -1369,24 +1418,40 @@ class NspSyncJob(models.Model):
         items = self._items_from_response(data)
         next_cursor = data.get("next_sync_cursor") or False
         has_more = bool(data.get("has_more"))
+        kind = self._action_kind()
         if not items:
+            removed = self._reconcile_device_whitelist_snapshot([]) if kind == "device_whitelist" else 0
             self.write({
                 "last_pull_at": fields.Datetime.now(),
-                "sync_cursor": next_cursor if has_more else False,
+                "sync_cursor": False if kind == "device_whitelist" else (next_cursor or self.sync_cursor),
             })
-            return {"pulled": 0, "failed": 0, "has_more": has_more, "message": "No changed records to pull."}
-        results, failed = self._apply_items(self._action_kind(), items)
+            return {
+                "pulled": 0,
+                "failed": 0,
+                "has_more": False if kind == "device_whitelist" else has_more,
+                "message": (
+                    "Device Whitelist snapshot is empty; removed %s stale record(s)." % removed
+                    if kind == "device_whitelist"
+                    else "No changed records to pull."
+                ),
+            }
+        results, failed = self._apply_items(kind, items)
         if failed:
             raise UserError(json.dumps(failed, ensure_ascii=False))
+        removed = self._reconcile_device_whitelist_snapshot(items) if kind == "device_whitelist" else 0
         self.write({
             "last_pull_at": fields.Datetime.now(),
-            "sync_cursor": next_cursor if has_more else False,
+            "sync_cursor": False if kind == "device_whitelist" else (next_cursor or self.sync_cursor),
         })
         return {
             "pulled": len(results),
             "failed": 0,
             "has_more": has_more,
-            "message": "Pulled %s record(s)." % len(results),
+            "message": (
+                "Pulled %s Device Whitelist record(s); removed %s stale record(s)." % (len(results), removed)
+                if kind == "device_whitelist"
+                else "Pulled %s record(s)." % len(results)
+            ),
         }
 
     def run_once(self):
