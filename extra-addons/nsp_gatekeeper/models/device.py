@@ -152,7 +152,6 @@ class Device(models.Model):
         ]
         return {
             "serial_number": self.serial_number or "",
-            "device_code": self.device_code or self.serial_number or "",
             "model_number": self.model_number or "",
             "vendor": self.device_vendor or "",
             "connection": {

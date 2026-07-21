@@ -315,13 +315,6 @@ class NspGatekeeperApiService(models.AbstractModel):
         return parent
 
     @api.model
-    def _device_status_payloads_from_data(self, data):
-        items = data.get("devices") if "devices" in data else data.get("items")
-        if isinstance(items, dict):
-            items = [items]
-        return items if isinstance(items, list) else []
-
-    @api.model
     def _whitelisted_devices(self, devices):
         """Return Readers whose Serial exists in Device Whitelist."""
         serials = [str(value or "").strip().upper() for value in devices.mapped("serial_number") if value]
@@ -350,14 +343,17 @@ class NspGatekeeperApiService(models.AbstractModel):
 
     @api.model
     def _apply_device_status(self, controller, item):
-        """Apply Reader runtime status reported by a Controller.
+        """Apply Reader runtime status using Serial Number as the only device identity.
 
-        Antennas do not have an independent runtime/configuration state.  Their
-        declaration is managed on the server and only contains antenna number and
-        physical label.
+        ``device_code`` is a server-side management code and is never accepted
+        from Controllers or Edge Server runtime reports. Antenna declarations are
+        server-managed; a runtime report may include antenna numbers only as an
+        inventory assertion.
         """
         if not isinstance(item, dict):
             raise ValueError("invalid_payload")
+        if "device_code" in item:
+            raise ValueError("unsupported_field:device_code")
         serial_number = str(item.get("serial_number") or "").strip().upper()
         if not serial_number:
             raise ValueError("serial_number is required")
@@ -371,15 +367,31 @@ class NspGatekeeperApiService(models.AbstractModel):
         ], limit=1)
         if not device:
             raise ValueError("device_not_found")
-        device_code = str(item.get("device_code") or "").strip()
-        if device_code and device.device_code and device_code != device.device_code:
-            raise ValueError("device_not_found")
         status = str(item.get("device_status") or "online").strip().lower()
         if status not in ("online", "offline", "degraded"):
             raise ValueError("invalid_payload")
-        last_seen_at = self._safe_datetime_value(item.get("last_seen_at"), default_now=False) or fields.Datetime.now()
+
+        reported_antennas = item.get("antennas")
+        if reported_antennas is not None:
+            if not isinstance(reported_antennas, list):
+                raise ValueError("antennas must be an array")
+            try:
+                reported_numbers = {int(value) for value in reported_antennas}
+            except Exception as exc:
+                raise ValueError("invalid_antenna_number") from exc
+            if any(number <= 0 for number in reported_numbers):
+                raise ValueError("invalid_antenna_number")
+            declared_numbers = set(device.antennas_ids.mapped("antenna_id"))
+            if reported_numbers != declared_numbers:
+                raise ValueError("antenna_inventory_mismatch")
+
+        last_seen_at = self._safe_datetime_value(item.get("last_seen_at"), default_now=False)
         connection = item.get("connection") if isinstance(item.get("connection"), dict) else {}
-        vals = {"status": status, "last_seen": last_seen_at}
+        vals = {"status": status}
+        if last_seen_at:
+            vals["last_seen"] = last_seen_at
+        elif status == "online":
+            vals["last_seen"] = fields.Datetime.now()
         if item.get("firmware_version") not in (None, ""):
             vals["firmware_version"] = str(item.get("firmware_version"))
         if connection.get("ip_address") not in (None, ""):
@@ -391,37 +403,34 @@ class NspGatekeeperApiService(models.AbstractModel):
 
     @endpoint("NSP Gatekeeper Edge Server Status", route_suffix="edge-server/status", methods="POST", code="nsp_gatekeeper_edge_server_status")
     def api_edge_server_status(self):
+        """Accept one Edge heartbeat including its Controllers and Reader runtime inventory."""
         data = self._payload()
-        application, _actor, edge_server, error = self._auth_edge_server_sync(data)
+        _application, _actor, edge_server, error = self._auth_edge_server_sync(data)
         if error:
             return error
         heartbeat_data = dict(data)
         heartbeat_data["_heartbeat_received"] = True
         heartbeat_data.setdefault("current_status", "online")
         self._update_edge_server_status_from_payload(edge_server, heartbeat_data)
-        return self._ok({
-            "edge_server_code": edge_server.edge_server_code,
-            "current_status": edge_server.status,
-            "last_seen_at": self._iso_datetime(edge_server.timestamp),
-            "server_time": self._iso_datetime(fields.Datetime.now()),
-        }, message="Edge Server status accepted.")
 
-    @endpoint("NSP Gatekeeper Devices Status Sync", route_suffix="devices-status/sync", methods="POST", code="nsp_gatekeeper_devices_status_sync")
-    def api_devices_status_sync(self):
-        data = self._payload()
-        _application, _actor, edge_server, error = self._auth_edge_server_sync(data)
-        if error:
-            return error
-        items = self._device_status_payloads_from_data(data)
+        controller_items = data.get("controllers") or []
+        if not isinstance(controller_items, list):
+            return self._error(
+                "controllers must be an array", 400, error_code="invalid_payload",
+                details={"field": "controllers"},
+            )
+
+        Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
         results = []
-        processed = failed = 0
-        Controller = self.env["nsp.controller"].sudo()
-        for index, item in enumerate(items):
-            key = str(item.get("serial_number") or item.get("device_code") or "").strip() if isinstance(item, dict) else ""
+        reported_controller_ids = set()
+        controller_count = device_count = failed = 0
+        controllers_marked_offline = devices_marked_offline = 0
+        for controller_index, controller_item in enumerate(controller_items):
+            controller_code = ""
             try:
-                if not isinstance(item, dict):
-                    raise ValueError("invalid_payload")
-                controller_code = str(item.get("controller_code") or "").strip()
+                if not isinstance(controller_item, dict):
+                    raise ValueError("invalid_controller_payload")
+                controller_code = str(controller_item.get("controller_code") or "").strip().upper()
                 if not controller_code:
                     raise ValueError("missing_controller_code")
                 controller = Controller.search([
@@ -429,14 +438,101 @@ class NspGatekeeperApiService(models.AbstractModel):
                     ("edge_server_id", "=", edge_server.id),
                 ], limit=1)
                 if not controller:
-                    raise ValueError("route_not_allowed")
-                device = self._apply_device_status(controller, item)
-                processed += 1
-                results.append({"index": index, "record_key": device.serial_number, "status": "processed", "message": "Processed"})
+                    raise ValueError("controller_not_found")
+
+                controller_status = str(controller_item.get("current_status") or "online").strip().lower()
+                if controller_status not in ("online", "offline", "error", "block", "revoked"):
+                    raise ValueError("invalid_controller_status")
+                controller_seen = self._safe_datetime_value(
+                    controller_item.get("last_seen_at"), default_now=False
+                )
+                controller_values = {"status": controller_status}
+                if controller_seen:
+                    controller_values["timestamp"] = controller_seen
+                elif controller_status == "online":
+                    controller_values["timestamp"] = fields.Datetime.now()
+                controller.write(controller_values)
+                reported_controller_ids.add(controller.id)
+                controller_count += 1
+
+                devices = controller_item.get("devices") or []
+                if not isinstance(devices, list):
+                    raise ValueError("devices must be an array")
+                reported_serials = {
+                    str(item.get("serial_number") or "").strip().upper()
+                    for item in devices if isinstance(item, dict)
+                    and str(item.get("serial_number") or "").strip()
+                }
+                for device_index, device_item in enumerate(devices):
+                    serial_number = str(
+                        device_item.get("serial_number") or ""
+                    ).strip().upper() if isinstance(device_item, dict) else ""
+                    try:
+                        device = self._apply_device_status(controller, device_item)
+                        device_count += 1
+                        results.append({
+                            "controller_index": controller_index,
+                            "device_index": device_index,
+                            "controller_code": controller_code,
+                            "record_key": device.serial_number,
+                            "status": "processed",
+                            "message": "Processed",
+                        })
+                    except Exception as exc:
+                        failed += 1
+                        results.append({
+                            "controller_index": controller_index,
+                            "device_index": device_index,
+                            "controller_code": controller_code,
+                            "record_key": serial_number,
+                            "status": "rejected",
+                            "message": str(exc),
+                        })
+
+                missing_devices = controller.device_ids.filtered(
+                    lambda record: record.serial_number not in reported_serials
+                    and record.status != "offline"
+                )
+                if missing_devices:
+                    devices_marked_offline += len(missing_devices)
+                    missing_devices.write({"status": "offline"})
             except Exception as exc:
                 failed += 1
-                results.append({"index": index, "record_key": key, "status": "rejected", "message": str(exc)})
-        return self._ok({"received": len(items), "processed": processed, "failed": failed, "results": results}, message="Device status synchronized.")
+                results.append({
+                    "controller_index": controller_index,
+                    "controller_code": controller_code,
+                    "record_key": controller_code,
+                    "status": "rejected",
+                    "message": str(exc),
+                })
+
+        missing_controllers = edge_server.controller_ids.filtered(
+            lambda record: record.active
+            and record.id not in reported_controller_ids
+            and record.status not in ("offline", "block", "revoked")
+        )
+        if missing_controllers:
+            controllers_marked_offline = len(missing_controllers)
+            missing_controllers.write({"status": "offline"})
+            missing_devices = missing_controllers.mapped("device_ids").filtered(
+                lambda record: record.status != "offline"
+            )
+            if missing_devices:
+                devices_marked_offline += len(missing_devices)
+                missing_devices.write({"status": "offline"})
+
+        return self._ok({
+            "edge_server_code": edge_server.edge_server_code,
+            "current_status": edge_server.status,
+            "last_seen_at": self._iso_datetime(edge_server.timestamp),
+            "controllers_processed": controller_count,
+            "devices_processed": device_count,
+            "controllers_marked_offline": controllers_marked_offline,
+            "devices_marked_offline": devices_marked_offline,
+            "failed": failed,
+            "results": results,
+            "server_time": self._iso_datetime(fields.Datetime.now()),
+        }, message="Edge Server status and managed device runtime accepted.")
 
     @endpoint("NSP Gatekeeper Devices Report", route_suffix="devices/report", methods="POST", code="nsp_gatekeeper_devices_report")
     def api_devices_report(self):
@@ -452,7 +548,7 @@ class NspGatekeeperApiService(models.AbstractModel):
         results = []
         processed = failed = 0
         for index, item in enumerate(items):
-            key = str(item.get("serial_number") or item.get("device_code") or "").strip() if isinstance(item, dict) else ""
+            key = str(item.get("serial_number") or "").strip() if isinstance(item, dict) else ""
             try:
                 device = self._apply_device_status(controller, item)
                 processed += 1

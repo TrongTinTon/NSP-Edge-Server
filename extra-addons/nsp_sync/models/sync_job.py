@@ -13,7 +13,6 @@ _logger = logging.getLogger(__name__)
 
 SYNC_ROUTE_DIRECTIONS = {
     "edge-server/status": "push",
-    "devices-status/sync": "push",
     "device-whitelist/sync": "pull",
     "branches/sync": "pull",
     "employees/sync": "pull",
@@ -31,7 +30,6 @@ NSP_SYNC_ALLOWED_ROUTES = tuple(SYNC_ROUTE_DIRECTIONS)
 JOB_SEQUENCE = {route: sequence * 10 for sequence, route in enumerate(NSP_SYNC_ALLOWED_ROUTES, start=1)}
 DEFAULT_JOB_SETTINGS = {
     "edge-server/status": {"schedule_interval_minutes": 1, "batch_size": 1},
-    "devices-status/sync": {"schedule_interval_minutes": 1, "batch_size": 200},
     "device-whitelist/sync": {"schedule_interval_minutes": 1, "batch_size": 1000},
     "branches/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
     "employees/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
@@ -47,7 +45,6 @@ DEFAULT_JOB_SETTINGS = {
 }
 ACTION_KINDS = {
     "edge-server/status": "edge_server_status",
-    "devices-status/sync": "device_status",
     "device-whitelist/sync": "device_whitelist",
     "branches/sync": "branch",
     "employees/sync": "user",
@@ -188,6 +185,12 @@ class NspSyncJob(models.Model):
         if not auth_records:
             return self.browse()
         self._ensure_edge_server_instance()
+        obsolete_jobs = self.search([
+            ("auth_id", "in", auth_records.ids),
+            ("sync_action_id.route_suffix", "=", "devices-status/sync"),
+        ])
+        if obsolete_jobs:
+            obsolete_jobs.unlink()
         Action = self.env["ir.actions.core_api"].sudo()
         Version = self.env["core.api.version"].sudo()
         version = Version.get_default_version()
@@ -435,36 +438,42 @@ class NspSyncJob(models.Model):
 
     # --------------------------- push payloads ------------------------
     def _serialize_edge_server_status(self):
+        """Serialize one complete Edge runtime snapshot without server management codes."""
         self.ensure_one()
         edge = self._require_edge_server_record()
+        controllers = []
+        for controller in edge.controller_ids.filtered("active").sorted(
+            key=lambda record: (record.controller_id or "", record.id)
+        ):
+            devices = []
+            for device in controller.device_ids.sorted(
+                key=lambda record: (record.serial_number or "", record.id)
+            ):
+                status = str(device.status or "offline").lower()
+                devices.append({
+                    "serial_number": device.serial_number or "",
+                    "antennas": sorted(int(number) for number in device.antennas_ids.mapped("antenna_id")),
+                    "device_status": status if status in ("online", "offline", "degraded") else "offline",
+                    "last_seen_at": self._dt(device.last_seen) if device.last_seen else False,
+                    **({"firmware_version": device.firmware_version} if device.firmware_version else {}),
+                    "connection": {
+                        **({"ip_address": device.device_ip} if device.device_ip else {}),
+                        **({"port": int(device.device_port)} if device.device_port else {}),
+                    },
+                })
+            controller_status = str(controller.status or "offline").lower()
+            controllers.append({
+                "controller_code": controller.controller_id or "",
+                "current_status": controller_status,
+                "last_seen_at": self._dt(controller.timestamp) if controller.timestamp else False,
+                "devices": devices,
+            })
         return {
             "record_key": self.edge_server_code,
             "edge_server_code": self.edge_server_code,
             "current_status": "online",
             "last_seen_at": self._dt(fields.Datetime.now()),
-        }
-
-    @api.model
-    def _serialize_device_status(self, device):
-        """Serialize Reader runtime only; antennas have no runtime status."""
-        controller = device.controller_id
-        status = str(device.status or "offline").lower()
-        device_status = status if status in ("online", "offline", "degraded") else "offline"
-        return {
-            "record_key": device.serial_number or device.device_code,
-            "controller_code": controller.controller_id if controller else "",
-            "serial_number": device.serial_number or "",
-            **({"device_code": device.device_code} if device.device_code else {}),
-            **({"model_number": device.model_number} if device.model_number else {}),
-            **({"vendor": device.device_vendor} if device.device_vendor else {}),
-            "device_type": "rfid_reader",
-            "device_status": device_status,
-            "last_seen_at": self._dt(device.last_seen or fields.Datetime.now()),
-            **({"firmware_version": device.firmware_version} if device.firmware_version else {}),
-            "connection": {
-                **({"ip_address": device.device_ip} if device.device_ip else {}),
-                **({"port": int(device.device_port)} if device.device_port else {}),
-            },
+            "controllers": controllers,
         }
 
     @api.model
@@ -517,14 +526,7 @@ class NspSyncJob(models.Model):
             }
         edge = self._require_edge_server_record()
         domain = self._push_cursor_domain()
-        if kind == "device_status":
-            records = self.env["nsp.device"].sudo().search(
-                domain + [("controller_id.edge_server_id", "=", edge.id)],
-                order="write_date asc, id asc",
-                limit=limit + 1,
-            )
-            serializer = self._serialize_device_status
-        elif kind == "parking_transaction":
+        if kind == "parking_transaction":
             records = self.env["nsp.parking.transaction"].sudo().search(
                 domain + [("controller_id.edge_server_id", "=", edge.id)],
                 order="write_date asc, id asc",
@@ -1074,7 +1076,6 @@ class NspSyncJob(models.Model):
         device = Device.search([("serial_number", "=", serial)], limit=1)
         vals = {
             "controller_id": controller.id,
-            "device_code": serial,
         }
         if device:
             device.write(vals)
