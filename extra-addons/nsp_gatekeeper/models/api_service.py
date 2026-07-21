@@ -525,6 +525,7 @@ class NspGatekeeperApiService(models.AbstractModel):
                 if field_name in vehicle._fields and vehicle[field_name]:
                     owner_code = str(vehicle[field_name]).strip()
                     break
+            owner_code = owner_code or str(vehicle.license_plate or "").strip()
             payload["owner_type"] = "vehicle"
             if owner_code:
                 payload["owner_code"] = owner_code
@@ -564,19 +565,77 @@ class NspGatekeeperApiService(models.AbstractModel):
             "server_time": self._iso_datetime(fields.Datetime.now()),
         }, message="Device Whitelist snapshot loaded.")
 
+    @endpoint("NSP Vehicle Configuration Sync", route_suffix="vehicle-config/sync", methods="POST", code="nsp_vehicle_config_sync")
+    def api_vehicle_config_sync(self):
+        data = self._payload()
+        _application, _actor_kind, _edge_server, error = self._auth_edge_server_sync(data)
+        if error:
+            return error
+        unsupported = sorted(set(data) - {"edge_server_code"})
+        if unsupported:
+            return self._error(
+                "Unsupported field(s): %s" % ", ".join(unsupported),
+                400,
+                error_code="invalid_payload",
+                details={"unsupported_fields": unsupported},
+            )
+        VehicleType = self.env["nsp.vehicle.type"].sudo().with_context(active_test=False)
+        VehicleBrand = self.env["nsp.vehicle.brand"].sudo().with_context(active_test=False)
+        VehicleModel = self.env["nsp.vehicle.model"].sudo().with_context(active_test=False)
+        VehicleColor = self.env["nsp.vehicle.color"].sudo().with_context(active_test=False)
+        vehicle_types = VehicleType.search([], order="code asc, id asc")
+        brands = VehicleBrand.search([], order="code asc, id asc")
+        models_data = VehicleModel.search([], order="code asc, id asc")
+        colors = VehicleColor.search([], order="code asc, id asc")
+        return self._ok({
+            "vehicle_types": [{
+                "code": record.code,
+                "name": record.name,
+                "active": bool(record.active),
+            } for record in vehicle_types],
+            "brands": [{
+                "code": record.code,
+                "name": record.name,
+                "active": bool(record.active),
+            } for record in brands],
+            "models": [{
+                "code": record.code,
+                "name": record.name,
+                "brand_code": record.brand_id.code if record.brand_id else False,
+                "active": bool(record.active),
+            } for record in models_data],
+            "colors": [{
+                "code": record.code,
+                "name": record.name,
+                "active": bool(record.active),
+            } for record in colors],
+            "next_sync_cursor": False,
+            "has_more": False,
+            "server_time": self._iso_datetime(fields.Datetime.now()),
+        }, message="Vehicle Configuration snapshot loaded.")
+
     @endpoint("NSP Gatekeeper Cards Sync", route_suffix="cards/sync", methods="POST", code="nsp_gatekeeper_cards_sync")
     def api_cards_sync(self):
         data = self._payload()
-        application, actor_kind, edge_server, error = self._auth_edge_server_sync(data)
+        _application, _actor_kind, _edge_server, error = self._auth_edge_server_sync(data)
         if error:
             return error
-        Card = self.env["nsp.rfid.card"].sudo()
-        cards, next_cursor, has_more, server_time = self._cursor_page(Card, data)
+        unsupported = sorted(set(data) - {"edge_server_code"})
+        if unsupported:
+            return self._error(
+                "Unsupported field(s): %s" % ", ".join(unsupported),
+                400,
+                error_code="invalid_payload",
+                details={"unsupported_fields": unsupported},
+            )
+        cards = self.env["nsp.rfid.card"].sudo().search([], order="tid asc, id asc")
         items = [self._card_sync_payload(card) for card in cards]
         return self._ok({
-            "items": items, "next_sync_cursor": next_cursor, "has_more": has_more,
-            "server_time": self._iso_datetime(server_time),
-        }, message="Cards sync loaded.")
+            "items": items,
+            "next_sync_cursor": False,
+            "has_more": False,
+            "server_time": self._iso_datetime(fields.Datetime.now()),
+        }, message="Cards snapshot loaded.")
 
     @endpoint("NSP Gatekeeper Users Sync", route_suffix="employees/sync", methods="POST", code="nsp_gatekeeper_employees_sync")
     def api_employees_sync(self):
@@ -641,6 +700,10 @@ class NspGatekeeperApiService(models.AbstractModel):
             item = {
                 "vehicle_code": vehicle_code,
                 "license_plate": vehicle.license_plate or "",
+                "vehicle_type_code": vehicle.vehicle_type_id.code if vehicle.vehicle_type_id else False,
+                "brand_code": vehicle.brand_id.code if vehicle.brand_id else False,
+                "model_code": vehicle.model_id.code if vehicle.model_id else False,
+                "color_code": vehicle.color_id.code if vehicle.color_id else False,
                 "active": vehicle.state == "approved",
             }
             owner_user_code = self._user_access_code(owner)

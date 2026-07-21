@@ -16,9 +16,10 @@ SYNC_ROUTE_DIRECTIONS = {
     "devices-status/sync": "push",
     "device-whitelist/sync": "pull",
     "branches/sync": "pull",
-    "cards/sync": "pull",
     "employees/sync": "pull",
+    "vehicle-config/sync": "pull",
     "vehicles/sync": "pull",
+    "cards/sync": "pull",
     "vehicle-borrow/sync": "pull",
     "parking-config/sync": "pull",
     "measurement-config/sync": "pull",
@@ -27,14 +28,16 @@ SYNC_ROUTE_DIRECTIONS = {
     "parking-transactions/sync": "push",
 }
 NSP_SYNC_ALLOWED_ROUTES = tuple(SYNC_ROUTE_DIRECTIONS)
+JOB_SEQUENCE = {route: sequence * 10 for sequence, route in enumerate(NSP_SYNC_ALLOWED_ROUTES, start=1)}
 DEFAULT_JOB_SETTINGS = {
     "edge-server/status": {"schedule_interval_minutes": 1, "batch_size": 1},
     "devices-status/sync": {"schedule_interval_minutes": 1, "batch_size": 200},
     "device-whitelist/sync": {"schedule_interval_minutes": 1, "batch_size": 1000},
     "branches/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
-    "cards/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
     "employees/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
+    "vehicle-config/sync": {"schedule_interval_minutes": 5, "batch_size": 1000},
     "vehicles/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
+    "cards/sync": {"schedule_interval_minutes": 5, "batch_size": 1000},
     "vehicle-borrow/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
     "parking-config/sync": {"schedule_interval_minutes": 5, "batch_size": 100},
     "measurement-config/sync": {"schedule_interval_minutes": 1, "batch_size": 100},
@@ -47,9 +50,10 @@ ACTION_KINDS = {
     "devices-status/sync": "device_status",
     "device-whitelist/sync": "device_whitelist",
     "branches/sync": "branch",
-    "cards/sync": "card",
     "employees/sync": "user",
+    "vehicle-config/sync": "vehicle_config",
     "vehicles/sync": "vehicle",
+    "cards/sync": "card",
     "vehicle-borrow/sync": "vehicle_borrow",
     "parking-config/sync": "parking_config",
     "measurement-config/sync": "measurement_config",
@@ -213,12 +217,12 @@ class NspSyncJob(models.Model):
                 self.search([("auth_id", "=", auth.id)]).mapped("route_suffix")
             )
             vals_list = []
-            for sequence, route in enumerate(NSP_SYNC_ALLOWED_ROUTES, start=1):
+            for route in NSP_SYNC_ALLOWED_ROUTES:
                 if route in existing_routes:
                     continue
                 settings = DEFAULT_JOB_SETTINGS[route]
                 vals_list.append({
-                    "sequence": sequence * 10,
+                    "sequence": JOB_SEQUENCE[route],
                     "auth_id": auth.id,
                     "sync_action_id": action_by_route[route].id,
                     "version_id": version.id,
@@ -230,6 +234,20 @@ class NspSyncJob(models.Model):
                 })
             if vals_list:
                 created |= self.create(vals_list)
+            existing_jobs = self.search([("auth_id", "=", auth.id)])
+            for job in existing_jobs:
+                route = (job.route_suffix or "").strip().strip("/")
+                values = {}
+                if route in JOB_SEQUENCE and job.sequence != JOB_SEQUENCE[route]:
+                    values["sequence"] = JOB_SEQUENCE[route]
+                if route in DEFAULT_JOB_SETTINGS:
+                    settings = DEFAULT_JOB_SETTINGS[route]
+                    if job.schedule_interval_minutes < 1:
+                        values["schedule_interval_minutes"] = settings["schedule_interval_minutes"]
+                    if job.batch_size < 1:
+                        values["batch_size"] = settings["batch_size"]
+                if values:
+                    job.write(values)
         return created
 
     @api.onchange("sync_action_id")
@@ -635,6 +653,125 @@ class NspSyncJob(models.Model):
         return User.create(vals)
 
     @api.model
+    def _upsert_vehicle_master(self, model_name, item, extra_vals=None):
+        if not isinstance(item, dict):
+            raise UserError(_("Vehicle Configuration items must be objects."))
+        code = str(item.get("code") or "").strip().upper()
+        name = str(item.get("name") or "").strip()
+        if not code or not name:
+            raise UserError(_("Vehicle Configuration Code and Name are required."))
+        Model = self.env[model_name].sudo().with_context(active_test=False)
+        record = Model.search([("code", "=", code)], limit=1)
+        vals = {
+            "code": code,
+            "name": name,
+            "active": bool(item.get("active", True)),
+        }
+        vals.update(extra_vals or {})
+        if record:
+            changed = {field_name: value for field_name, value in vals.items() if record[field_name] != value}
+            if changed:
+                record.write(changed)
+            return record
+        return Model.create(vals)
+
+    @api.model
+    def _reconcile_vehicle_master_snapshot(self, model_name, incoming_codes):
+        Model = self.env[model_name].sudo().with_context(active_test=False)
+        codes = [str(code).strip().upper() for code in incoming_codes if str(code or "").strip()]
+        domain = [("code", "not in", codes)] if codes else []
+        stale_active = Model.search(domain + [("active", "=", True)])
+        if stale_active:
+            stale_active.write({"active": False})
+        return len(stale_active)
+
+    def _apply_vehicle_config_snapshot(self, data):
+        self.ensure_one()
+        if not isinstance(data, dict):
+            raise UserError(_("Vehicle Configuration response must be an object."))
+        groups = {
+            "vehicle_types": data.get("vehicle_types") or [],
+            "brands": data.get("brands") or [],
+            "models": data.get("models") or [],
+            "colors": data.get("colors") or [],
+        }
+        for group_name, values in groups.items():
+            if not isinstance(values, list):
+                raise UserError(_("Vehicle Configuration field %s must be an array.") % group_name)
+
+        results = []
+        applied = []
+        codes = {key: [] for key in groups}
+        with self.env.cr.savepoint():
+            for item in groups["vehicle_types"]:
+                record = self._upsert_vehicle_master("nsp.vehicle.type", item)
+                codes["vehicle_types"].append(record.code)
+                results.append(record)
+                applied.append(("vehicle_type", item, record))
+            for item in groups["brands"]:
+                record = self._upsert_vehicle_master("nsp.vehicle.brand", item)
+                codes["brands"].append(record.code)
+                results.append(record)
+                applied.append(("brand", item, record))
+            Brand = self.env["nsp.vehicle.brand"].sudo().with_context(active_test=False)
+            for item in groups["models"]:
+                brand_code = str(item.get("brand_code") or "").strip().upper()
+                brand = Brand.search([("code", "=", brand_code)], limit=1) if brand_code else Brand.browse()
+                if brand_code and not brand:
+                    raise UserError(_("Vehicle Brand %s was not found for Vehicle Model %s.") % (brand_code, item.get("code") or "-"))
+                record = self._upsert_vehicle_master(
+                    "nsp.vehicle.model",
+                    item,
+                    extra_vals={"brand_id": brand.id if brand else False},
+                )
+                codes["models"].append(record.code)
+                results.append(record)
+                applied.append(("model", item, record))
+            for item in groups["colors"]:
+                record = self._upsert_vehicle_master("nsp.vehicle.color", item)
+                codes["colors"].append(record.code)
+                results.append(record)
+                applied.append(("color", item, record))
+
+            removed = {
+                "vehicle_types": self._reconcile_vehicle_master_snapshot("nsp.vehicle.type", codes["vehicle_types"]),
+                "brands": self._reconcile_vehicle_master_snapshot("nsp.vehicle.brand", codes["brands"]),
+                "models": self._reconcile_vehicle_master_snapshot("nsp.vehicle.model", codes["models"]),
+                "colors": self._reconcile_vehicle_master_snapshot("nsp.vehicle.color", codes["colors"]),
+            }
+
+        Record = self.env["nsp.sync.record"].sudo()
+        for group_name, item, record in applied:
+            Record.mark_result(
+                sync_job=self,
+                action_code=self.sync_action_code,
+                action_name=self.sync_action_name,
+                route_suffix=self.route_suffix,
+                record=record,
+                record_key="%s:%s" % (group_name, record.code),
+                status="synced",
+                message="Applied Vehicle Configuration snapshot.",
+                payload=item,
+                operation="pull",
+            )
+        return results, removed
+
+    @api.model
+    def _vehicle_master_by_code(self, model_name, code, label):
+        normalized = str(code or "").strip().upper()
+        if not normalized:
+            return self.env[model_name].browse()
+        record = self.env[model_name].sudo().with_context(active_test=False).search(
+            [("code", "=", normalized)], limit=1
+        )
+        if not record:
+            raise UserError(_("%(label)s %(code)s was not found. Run vehicle-config/sync first.") % {
+                "label": label,
+                "code": normalized,
+            })
+        return record
+
+    @api.model
     def _find_vehicle(self, code):
         code = str(code or "").strip()
         Vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False)
@@ -658,9 +795,22 @@ class NspSyncJob(models.Model):
         owner = self.env["nsp.user"].sudo().search([("user_code", "=", owner_code)], limit=1) if owner_code else self.env["nsp.user"].browse()
         if not owner:
             owner = self._apply_user({"user_code": owner_code or ("OWNER-%s" % code), "name": owner_code or code, "active": True})
+        vehicle_type = self._vehicle_master_by_code("nsp.vehicle.type", item.get("vehicle_type_code"), _("Vehicle Type"))
+        brand = self._vehicle_master_by_code("nsp.vehicle.brand", item.get("brand_code"), _("Vehicle Brand"))
+        vehicle_model = self._vehicle_master_by_code("nsp.vehicle.model", item.get("model_code"), _("Vehicle Model"))
+        color = self._vehicle_master_by_code("nsp.vehicle.color", item.get("color_code"), _("Vehicle Color"))
+        if vehicle_model and brand and vehicle_model.brand_id and vehicle_model.brand_id != brand:
+            raise UserError(_("Vehicle Model %(model)s does not belong to Brand %(brand)s.") % {
+                "model": vehicle_model.code,
+                "brand": brand.code,
+            })
         vals = {
             "license_plate": plate,
             "owner_id": owner.id,
+            "vehicle_type_id": vehicle_type.id if vehicle_type else False,
+            "brand_id": brand.id if brand else False,
+            "model_id": vehicle_model.id if vehicle_model else False,
+            "color_id": color.id if color else False,
             "state": "approved" if bool(item.get("active", True)) else "pending",
         }
         for field_name in ("vehicle_code", "code"):
@@ -716,6 +866,20 @@ class NspSyncJob(models.Model):
             active=bool(item.get("active", True)),
         )
         return card
+
+    @api.model
+    def _reconcile_card_snapshot(self, items):
+        tids = {
+            str(item.get("card_uid") or "").strip().upper().replace(" ", "")
+            for item in (items or [])
+            if isinstance(item, dict) and str(item.get("card_uid") or "").strip()
+        }
+        Card = self.env["nsp.rfid.card"].sudo()
+        stale = Card.search([("tid", "not in", list(tids))]) if tids else Card.search([])
+        count = len(stale)
+        if stale:
+            stale.unlink()
+        return count
 
     @api.model
     def _apply_vehicle_borrow(self, item):
@@ -1016,9 +1180,9 @@ class NspSyncJob(models.Model):
 
     def _build_pull_payload(self):
         self.ensure_one()
-        # Device Whitelist is synchronized as a complete snapshot so removals on
-        # Cloud are also removed on Edge. It does not use an incremental cursor.
-        if self._action_kind() == "device_whitelist":
+        # Full snapshots do not use incremental cursors. This guarantees that
+        # deletions, revocations and assignment changes are reflected on Edge.
+        if self._action_kind() in ("device_whitelist", "vehicle_config", "card"):
             return {"edge_server_code": self.edge_server_code}
         payload = {"edge_server_code": self.edge_server_code, "limit": self.batch_size}
         if self.sync_cursor:
@@ -1032,7 +1196,7 @@ class NspSyncJob(models.Model):
         for field_name in (
             "record_key", "card_uid", "borrow_uid", "branch_code", "user_code",
             "vehicle_code", "license_plate", "parking_area_code", "transaction_uid",
-            "measurement_code", "event_uid", "serial_number",
+            "measurement_code", "event_uid", "serial_number", "code",
             "controller_code", "edge_server_code",
         ):
             if item.get(field_name):
@@ -1415,43 +1579,76 @@ class NspSyncJob(models.Model):
     def run_pull_once(self):
         self.ensure_one()
         data = self._json_or_error(self._post_remote(self.sync_action_id, self._build_pull_payload(), timeout=120))
+        kind = self._action_kind()
+
+        if kind == "vehicle_config":
+            records, removed = self._apply_vehicle_config_snapshot(data)
+            self.write({"last_pull_at": fields.Datetime.now(), "sync_cursor": False})
+            return {
+                "pulled": len(records),
+                "failed": 0,
+                "has_more": False,
+                "message": (
+                    "Pulled Vehicle Configuration snapshot: %(count)s record(s); "
+                    "archived %(types)s type(s), %(brands)s brand(s), %(models)s model(s), %(colors)s color(s)."
+                ) % {
+                    "count": len(records),
+                    "types": removed["vehicle_types"],
+                    "brands": removed["brands"],
+                    "models": removed["models"],
+                    "colors": removed["colors"],
+                },
+            }
+
         items = self._items_from_response(data)
         next_cursor = data.get("next_sync_cursor") or False
         has_more = bool(data.get("has_more"))
-        kind = self._action_kind()
+        full_snapshot = kind in ("device_whitelist", "card")
         if not items:
-            removed = self._reconcile_device_whitelist_snapshot([]) if kind == "device_whitelist" else 0
+            removed = 0
+            if kind == "device_whitelist":
+                removed = self._reconcile_device_whitelist_snapshot([])
+            elif kind == "card":
+                removed = self._reconcile_card_snapshot([])
             self.write({
                 "last_pull_at": fields.Datetime.now(),
-                "sync_cursor": False if kind == "device_whitelist" else (next_cursor or self.sync_cursor),
+                "sync_cursor": False if full_snapshot else (next_cursor or self.sync_cursor),
             })
+            if kind == "device_whitelist":
+                message = "Device Whitelist snapshot is empty; removed %s stale record(s)." % removed
+            elif kind == "card":
+                message = "Cards snapshot is empty; removed %s stale card(s)." % removed
+            else:
+                message = "No changed records to pull."
             return {
                 "pulled": 0,
                 "failed": 0,
-                "has_more": False if kind == "device_whitelist" else has_more,
-                "message": (
-                    "Device Whitelist snapshot is empty; removed %s stale record(s)." % removed
-                    if kind == "device_whitelist"
-                    else "No changed records to pull."
-                ),
+                "has_more": False if full_snapshot else has_more,
+                "message": message,
             }
         results, failed = self._apply_items(kind, items)
         if failed:
             raise UserError(json.dumps(failed, ensure_ascii=False))
-        removed = self._reconcile_device_whitelist_snapshot(items) if kind == "device_whitelist" else 0
+        removed = 0
+        if kind == "device_whitelist":
+            removed = self._reconcile_device_whitelist_snapshot(items)
+        elif kind == "card":
+            removed = self._reconcile_card_snapshot(items)
         self.write({
             "last_pull_at": fields.Datetime.now(),
-            "sync_cursor": False if kind == "device_whitelist" else (next_cursor or self.sync_cursor),
+            "sync_cursor": False if full_snapshot else (next_cursor or self.sync_cursor),
         })
+        if kind == "device_whitelist":
+            message = "Pulled %s Device Whitelist record(s); removed %s stale record(s)." % (len(results), removed)
+        elif kind == "card":
+            message = "Pulled %s Card record(s); removed %s stale card(s)." % (len(results), removed)
+        else:
+            message = "Pulled %s record(s)." % len(results)
         return {
             "pulled": len(results),
             "failed": 0,
-            "has_more": has_more,
-            "message": (
-                "Pulled %s Device Whitelist record(s); removed %s stale record(s)." % (len(results), removed)
-                if kind == "device_whitelist"
-                else "Pulled %s record(s)." % len(results)
-            ),
+            "has_more": False if full_snapshot else has_more,
+            "message": message,
         }
 
     def run_once(self):

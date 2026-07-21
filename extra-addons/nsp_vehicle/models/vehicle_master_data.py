@@ -17,13 +17,14 @@ class VehicleType(models.Model):
 
     name = fields.Char(required=True, tracking=True)
     code = fields.Char(
-        tracking=True, copy=False, index=True,
+        tracking=True, copy=False, index=True, required=True,
         default=lambda self: new_management_code("VTYPE"),
     )
     active = fields.Boolean(default=True)
 
     _sql_constraints = [
         ('nsp_vehicle_type_name_uniq', 'unique(name)', 'Vehicle Type already exists.'),
+        ('nsp_vehicle_type_code_uniq', 'unique(code)', 'Vehicle Type Code already exists.'),
     ]
 
 
@@ -36,13 +37,14 @@ class VehicleBrand(models.Model):
 
     name = fields.Char(required=True, tracking=True)
     code = fields.Char(
-        tracking=True, copy=False, index=True,
+        tracking=True, copy=False, index=True, required=True,
         default=lambda self: new_management_code("BRAND"),
     )
     active = fields.Boolean(default=True)
 
     _sql_constraints = [
         ('nsp_vehicle_brand_name_uniq', 'unique(name)', 'Brand already exists.'),
+        ('nsp_vehicle_brand_code_uniq', 'unique(code)', 'Vehicle Brand Code already exists.'),
     ]
 
 
@@ -56,13 +58,14 @@ class VehicleModel(models.Model):
     name = fields.Char(required=True, tracking=True)
     brand_id = fields.Many2one('nsp.vehicle.brand', string='Brand', ondelete='set null', tracking=True)
     code = fields.Char(
-        tracking=True, copy=False, index=True,
+        tracking=True, copy=False, index=True, required=True,
         default=lambda self: new_management_code("VMODEL"),
     )
     active = fields.Boolean(default=True)
 
     _sql_constraints = [
         ('nsp_vehicle_model_brand_name_uniq', 'unique(brand_id, name)', 'Model already exists for this brand.'),
+        ('nsp_vehicle_model_code_uniq', 'unique(code)', 'Vehicle Model Code already exists.'),
     ]
 
 
@@ -75,11 +78,12 @@ class VehicleColor(models.Model):
 
     name = fields.Char(required=True, tracking=True)
     code = fields.Char(
-        tracking=True, copy=False, index=True,
+        tracking=True, copy=False, index=True, required=True,
         default=lambda self: new_management_code("COLOR"),
     )
     active = fields.Boolean(default=True)
 
     _sql_constraints = [
         ('nsp_vehicle_color_name_uniq', 'unique(name)', 'Color already exists.'),
+        ('nsp_vehicle_color_code_uniq', 'unique(code)', 'Vehicle Color Code already exists.'),
     ]
