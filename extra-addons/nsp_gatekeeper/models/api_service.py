@@ -352,8 +352,13 @@ class NspGatekeeperApiService(models.AbstractModel):
         """
         if not isinstance(item, dict):
             raise ValueError("invalid_payload")
-        if "device_code" in item:
-            raise ValueError("unsupported_field:device_code")
+        allowed_fields = {
+            "serial_number", "antennas", "device_status",
+            "last_seen_at", "firmware_version",
+        }
+        unsupported = sorted(set(item) - allowed_fields)
+        if unsupported:
+            raise ValueError("unsupported_field:%s" % ",".join(unsupported))
         serial_number = str(item.get("serial_number") or "").strip().upper()
         if not serial_number:
             raise ValueError("serial_number is required")
@@ -381,12 +386,11 @@ class NspGatekeeperApiService(models.AbstractModel):
                 raise ValueError("invalid_antenna_number") from exc
             if any(number <= 0 for number in reported_numbers):
                 raise ValueError("invalid_antenna_number")
-            declared_numbers = set(device.antennas_ids.mapped("antenna_id"))
+            declared_numbers = set(device.antennas_ids.mapped("antenna_no"))
             if reported_numbers != declared_numbers:
                 raise ValueError("antenna_inventory_mismatch")
 
         last_seen_at = self._safe_datetime_value(item.get("last_seen_at"), default_now=False)
-        connection = item.get("connection") if isinstance(item.get("connection"), dict) else {}
         vals = {"status": status}
         if last_seen_at:
             vals["last_seen"] = last_seen_at
@@ -394,10 +398,6 @@ class NspGatekeeperApiService(models.AbstractModel):
             vals["last_seen"] = fields.Datetime.now()
         if item.get("firmware_version") not in (None, ""):
             vals["firmware_version"] = str(item.get("firmware_version"))
-        if connection.get("ip_address") not in (None, ""):
-            vals["device_ip"] = str(connection.get("ip_address"))
-        if connection.get("port") not in (None, ""):
-            vals["device_port"] = int(connection.get("port"))
         device.write(vals)
         return device
 
@@ -1034,11 +1034,11 @@ class NspGatekeeperApiService(models.AbstractModel):
         for antenna in session.antenna_ids.sorted(
             key=lambda item: (
                 item.device_id.serial_number or "",
-                item.antenna_id or 0,
+                item.antenna_no or 0,
                 item.id,
             )
         ):
-            grouped.setdefault(antenna.device_id.serial_number, []).append(int(antenna.antenna_id))
+            grouped.setdefault(antenna.device_id.serial_number, []).append(int(antenna.antenna_no))
         return [
             {"serial_number": serial_number, "antennas": sorted(set(numbers))}
             for serial_number, numbers in sorted(grouped.items())
@@ -1126,7 +1126,7 @@ class NspGatekeeperApiService(models.AbstractModel):
                 antenna = Antenna.search([
                     ("device_id.controller_id", "=", controller.id),
                     ("device_id.serial_number", "=", serial_number),
-                    ("antenna_id", "=", antenna_no),
+                    ("antenna_no", "=", antenna_no),
                 ], limit=1)
                 if not antenna:
                     raise ValueError("antenna_not_found")
@@ -1351,7 +1351,7 @@ class NspGatekeeperApiService(models.AbstractModel):
         if antenna_no <= 0:
             raise ValueError("antenna_not_found")
         matched = session.antenna_ids.filtered(
-            lambda antenna: antenna.device_id.serial_number == serial_number and antenna.antenna_id == antenna_no
+            lambda antenna: antenna.device_id.serial_number == serial_number and antenna.antenna_no == antenna_no
         )
         if not matched:
             raise ValueError("antenna_not_found")
@@ -1634,7 +1634,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             raise ValueError("device_not_found")
         antenna = self.env["nsp.device.antenna"].sudo().search([
             ("device_id", "=", device.id),
-            ("antenna_id", "=", antenna_no),
+            ("antenna_no", "=", antenna_no),
         ], limit=1)
         if not antenna:
             raise ValueError("antenna_not_found")

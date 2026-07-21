@@ -67,7 +67,7 @@
                             <field name="reader_count" widget="statinfo" string="Readers"/>
                         </button>
                         <button name="action_open_antennas" type="object" class="oe_stat_button" icon="fa-signal">
-                            <field name="physical_antenna_count" widget="statinfo" string="Antennas"/>
+                            <field name="declared_antenna_count" widget="statinfo" string="Antennas"/>
                         </button>
                         <button name="action_open_device_whitelist" type="object" class="oe_stat_button" icon="fa-shield">
                             <field name="whitelist_count" widget="statinfo" string="Whitelist"/>
@@ -86,7 +86,7 @@
                     </div>
 
                     <div class="alert alert-info" role="alert">
-                        Configure the complete parking operation from this screen: infrastructure, lanes, direction/detection groups and physical antenna mappings. Controllers receive only their Reader configuration; parking topology remains on the server.
+                        Configure the complete parking operation from this screen: infrastructure, lanes, direction/detection groups and antenna-port mappings. Controllers receive only their Reader configuration; parking topology remains on the server.
                     </div>
 
                     <group>
@@ -100,7 +100,7 @@
                             <field name="edge_server_ids" widget="many2many_tags" readonly="1"/>
                             <field name="controller_ids" widget="many2many_tags" readonly="1"/>
                             <field name="reader_ids" widget="many2many_tags" readonly="1"/>
-                            <field name="physical_antenna_ids" widget="many2many_tags" readonly="1"/>
+                            <field name="antenna_ids" widget="many2many_tags" readonly="1"/>
                         </group>
                     </group>
 
@@ -129,7 +129,7 @@
 
                         <page string="2. Direction &amp; Detection">
                             <div class="alert alert-secondary" role="alert">
-                                Direction groups are generated automatically from each lane type. Open a row to choose the physical antennas used for that direction.
+                                Direction groups are generated automatically from each lane type. Open a row to choose the Reader antenna ports used for that direction.
                             </div>
                             <field name="lane_antenna_group_ids">
                                 <list editable="bottom" create="0" delete="0">
@@ -145,7 +145,7 @@
 
                         <page string="3. Parking Lane Antenna Mapping">
                             <div class="alert alert-secondary" role="alert">
-                                Map each physical antenna to the lane direction where it operates. A physical antenna can be active in only one lane direction.
+                                Map each Reader antenna port to the lane direction where it operates. An antenna port can be active in only one lane direction.
                             </div>
                             <field name="lane_antenna_rule_ids">
                                 <list editable="bottom">
@@ -154,11 +154,10 @@
                                     <field name="lane_id" readonly="1"/>
                                     <field name="group_direction" string="Direction" widget="badge" readonly="1"/>
                                     <field name="detection_mode" widget="badge" readonly="1"/>
-                                    <field name="antenna_ref_id" string="Physical Antenna"
+                                    <field name="antenna_ref_id" string="Antenna"
                                            domain="[('device_id.controller_id','=',lane_controller_id)]"/>
                                     <field name="device_id" string="Reader" readonly="1"/>
                                     <field name="antenna_no" string="Antenna No" readonly="1"/>
-                                    <field name="physical_antenna" readonly="1"/>
                                     <field name="sequence_no"/>
                                     <field name="is_active" widget="boolean_toggle"/>
                                 </list>
@@ -202,11 +201,10 @@
                                     </field>
                                 </group>
                                 <group string="Antennas">
-                                    <field name="physical_antenna_ids" readonly="1">
+                                    <field name="antenna_ids" readonly="1">
                                         <list>
                                             <field name="device_id" string="Reader"/>
-                                            <field name="antenna_id" string="Antenna No"/>
-                                            <field name="physical_antenna"/>
+                                            <field name="antenna_no" string="Antenna No"/>
                                             <field name="lane_count" string="Mapped Lanes"/>
                                         </list>
                                     </field>
@@ -290,7 +288,6 @@
                                     <field name="detection_mode" widget="badge"/>
                                     <field name="device_id" string="Reader"/>
                                     <field name="antenna_no" string="Antenna No"/>
-                                    <field name="physical_antenna"/>
                                     <field name="sequence_no"/>
                                     <field name="is_active" widget="boolean_toggle"/>
                                 </list>
@@ -325,19 +322,18 @@
                         </group>
                     </group>
                     <notebook>
-                        <page string="Physical Antenna Mapping">
+                        <page string="Antenna Mapping">
                             <div class="alert alert-info" role="alert">
                                 Select only antennas belonging to Readers declared under the lane Controller and present in Device Whitelist.
                             </div>
                             <field name="antenna_mapping_ids" context="{'default_antenna_group_id': id}">
                                 <list editable="bottom">
                                     <field name="lane_controller_id" column_invisible="1"/>
-                                    <field name="antenna_ref_id" string="Physical Antenna"
+                                    <field name="antenna_ref_id" string="Antenna"
                                            domain="[('device_id.controller_id','=',parent.controller_id)]"/>
                                     <field name="device_id" string="Reader" readonly="1"/>
                                     <field name="serial_number" string="Reader Serial" readonly="1"/>
                                     <field name="antenna_no" string="Antenna No" readonly="1"/>
-                                    <field name="physical_antenna" readonly="1"/>
                                     <field name="sequence_no"/>
                                     <field name="is_active" widget="boolean_toggle"/>
                                 </list>
@@ -368,7 +364,6 @@
                 <field name="device_id" string="Reader"/>
                 <field name="serial_number" string="Reader Serial" optional="hide"/>
                 <field name="antenna_no" string="Antenna No"/>
-                <field name="physical_antenna"/>
                 <field name="sequence_no"/>
                 <field name="is_active" widget="boolean_toggle"/>
             </list>
@@ -393,14 +388,13 @@
                             <field name="detection_mode" readonly="1"/>
                             <field name="lane_controller_id" invisible="1"/>
                         </group>
-                        <group string="Physical Antenna">
+                        <group string="Antenna">
                             <field name="antenna_ref_id"
                                    domain="[('device_id.controller_id','=',lane_controller_id)]"/>
                             <field name="controller_id" readonly="1"/>
                             <field name="device_id" string="Reader" readonly="1"/>
                             <field name="serial_number" string="Reader Serial" readonly="1"/>
                             <field name="antenna_no" string="Antenna No" readonly="1"/>
-                            <field name="physical_antenna" readonly="1"/>
                             <field name="sequence_no"/>
                             <field name="is_active"/>
                         </group>

@@ -183,9 +183,10 @@
                                     <field name="device_code" string="Device Code"/>
                                     <field name="model_number"/>
                                     <field name="device_vendor" string="Vendor"/>
+                                    <field name="connection_type" string="Physical Connection" optional="show"/>
                                     <field name="status" widget="badge" readonly="1"/>
-                                    <field name="device_ip" string="IP Address" readonly="1" optional="show"/>
-                                    <field name="device_port" string="Port" readonly="1" optional="show"/>
+                                    
+                                    
                                     <field name="antennas" string="Antennas" readonly="1"/>
                                 </list>
                             </field>

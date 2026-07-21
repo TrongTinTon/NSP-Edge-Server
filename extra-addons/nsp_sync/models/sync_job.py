@@ -452,14 +452,10 @@ class NspSyncJob(models.Model):
                 status = str(device.status or "offline").lower()
                 devices.append({
                     "serial_number": device.serial_number or "",
-                    "antennas": sorted(int(number) for number in device.antennas_ids.mapped("antenna_id")),
+                    "antennas": sorted(int(number) for number in device.antennas_ids.mapped("antenna_no")),
                     "device_status": status if status in ("online", "offline", "degraded") else "offline",
                     "last_seen_at": self._dt(device.last_seen) if device.last_seen else False,
                     **({"firmware_version": device.firmware_version} if device.firmware_version else {}),
-                    "connection": {
-                        **({"ip_address": device.device_ip} if device.device_ip else {}),
-                        **({"port": int(device.device_port)} if device.device_port else {}),
-                    },
                 })
             controller_status = str(controller.status or "offline").lower()
             controllers.append({
@@ -489,7 +485,7 @@ class NspSyncJob(models.Model):
             "parking_area_code": parking_area.code if parking_area else "",
             "lane_code": record.lane_id.code if record.lane_id else "",
             "serial_number": device.serial_number if device else "",
-            "antenna_no": int(antenna.antenna_id) if antenna else 0,
+            "antenna_no": int(antenna.antenna_no) if antenna else 0,
             "direction": record.direction,
             "check_time": self._dt(record.time_entered),
             "vehicle_tid": record.vehicle_tid or "",
@@ -1126,13 +1122,12 @@ class NspSyncJob(models.Model):
                 Antenna = self.env["nsp.device.antenna"].sudo()
                 antenna = Antenna.search([
                     ("device_id", "=", device.id),
-                    ("antenna_id", "=", antenna_no),
+                    ("antenna_no", "=", antenna_no),
                 ], limit=1)
                 if not antenna:
                     antenna = Antenna.create({
                         "device_id": device.id,
-                        "antenna_id": antenna_no,
-                        "physical_antenna": "ANT-%s" % antenna_no,
+                        "antenna_no": antenna_no,
                     })
                 antenna_refs |= antenna
         if not antenna_refs:
@@ -1240,18 +1235,12 @@ class NspSyncJob(models.Model):
                         raise UserError(_("Each antenna mapping requires serial_number and antenna_no."))
                     device = self._find_or_create_device(controller, serial)
                     Antenna = self.env["nsp.device.antenna"].sudo()
-                    antenna = Antenna.search([("device_id", "=", device.id), ("antenna_id", "=", antenna_no)], limit=1)
-                    physical_antenna = str(
-                        antenna_item.get("physical_antenna") or "ANT-%s" % antenna_no
-                    ).strip()
+                    antenna = Antenna.search([("device_id", "=", device.id), ("antenna_no", "=", antenna_no)], limit=1)
                     if not antenna:
                         antenna = Antenna.create({
                             "device_id": device.id,
-                            "antenna_id": antenna_no,
-                            "physical_antenna": physical_antenna,
+                            "antenna_no": antenna_no,
                         })
-                    elif physical_antenna and antenna.physical_antenna != physical_antenna:
-                        antenna.write({"physical_antenna": physical_antenna})
                     sequence_no = int(antenna_item.get("sequence_no") or antenna_index) if detection_mode == "sequential" else 0
                     Mapping.create({
                         "antenna_group_id": group.id,

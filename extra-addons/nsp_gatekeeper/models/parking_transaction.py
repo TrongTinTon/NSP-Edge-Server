@@ -49,7 +49,7 @@ class ParkingTransaction(models.Model):
     )
     antenna_no = fields.Integer(
         string="Antenna No",
-        related="antenna_id.antenna_id", readonly=True,
+        related="antenna_id.antenna_no", readonly=True,
     )
     direction = fields.Selection(
         [("entry", "Entry"), ("exit", "Exit")],
@@ -409,7 +409,7 @@ class ParkingTransaction(models.Model):
             raise ValidationError(_("device_not_found"))
         antenna = self.env["nsp.device.antenna"].sudo().search([
             ("device_id", "=", device.id),
-            ("antenna_id", "=", antenna_no),
+            ("antenna_no", "=", antenna_no),
         ], limit=1)
         if not antenna:
             raise ValidationError(_("antenna_not_found"))

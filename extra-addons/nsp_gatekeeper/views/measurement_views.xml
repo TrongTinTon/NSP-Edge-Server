@@ -88,8 +88,7 @@
                                 <list create="0" delete="1">
                                     <field name="device_serial" string="Reader Serial"/>
                                     <field name="device_id" string="Reader"/>
-                                    <field name="antenna_id" string="Antenna No"/>
-                                    <field name="physical_antenna"/>
+                                    <field name="antenna_no" string="Antenna No"/>
                                 </list>
                             </field>
                         </page>

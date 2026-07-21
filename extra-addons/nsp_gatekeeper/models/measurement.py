@@ -14,7 +14,7 @@ def _new_measurement_code():
 class NspMeasurementSession(models.Model):
     """One measurement plan executed by one Controller.
 
-    The session owns only the selected physical antennas and its runtime state.
+    The session owns only the selected Reader antenna ports and its runtime state.
     Raw detections are stored as ``nsp.measurement.event`` records.  Runs,
     commands and stored summary tables are intentionally not used.
     """
@@ -65,7 +65,7 @@ class NspMeasurementSession(models.Model):
         "session_id",
         "antenna_id",
         string="Measurement Antennas",
-        help="Physical Reader antennas included in this measurement session.",
+        help="Reader antenna ports included in this measurement session.",
     )
     event_ids = fields.One2many(
         "nsp.measurement.event",
@@ -151,11 +151,11 @@ class NspMeasurementSession(models.Model):
         for antenna in self.antenna_ids.sorted(
             key=lambda item: (
                 item.device_id.serial_number or "",
-                item.antenna_id or 0,
+                item.antenna_no or 0,
                 item.id,
             )
         ):
-            grouped[antenna.device_id.serial_number].append(int(antenna.antenna_id))
+            grouped[antenna.device_id.serial_number].append(int(antenna.antenna_no))
         return {
             "measurement_code": self.measurement_code,
             "controller_code": self.controller_id.controller_id,
@@ -443,7 +443,7 @@ class NspMeasurementEvent(models.Model):
             matched = event.session_id.antenna_ids.filtered(
                 lambda antenna: (
                     antenna.device_id.serial_number == event.serial_number
-                    and antenna.antenna_id == event.antenna_no
+                    and antenna.antenna_no == event.antenna_no
                 )
             )
             if not matched:

@@ -35,8 +35,18 @@ class Device(models.Model):
     ], string="Status", required=True, default="offline", index=True)
     last_seen = fields.Datetime(string="Last Seen", readonly=True, copy=False, index=True)
     firmware_version = fields.Char(string="Firmware Version", readonly=True, copy=False)
-    device_ip = fields.Char(string="IP Address", readonly=True, copy=False)
-    device_port = fields.Integer(string="Port", readonly=True, copy=False)
+
+    # Physical connection inventory. Wired/Wireless is represented in option labels only.
+    connection_type = fields.Selection([
+        ("usb", "Wired — USB"),
+        ("rs232", "Wired — RS-232"),
+        ("rs485", "Wired — RS-485"),
+        ("ethernet", "Wired — Ethernet (RJ45)"),
+        ("wiegand", "Wired — Wiegand"),
+        ("bluetooth", "Wireless — Bluetooth"),
+        ("wifi", "Wireless — Wi-Fi"),
+        ("cellular", "Wireless — 4G/5G"),
+    ], string="Physical Connection", index=True)
 
     # Reader parameters controlled by the server
     power_dbm = fields.Integer(string="Power dBm", default=30)
@@ -141,31 +151,25 @@ class Device(models.Model):
             record.antennas = len(record.antennas_ids)
 
     def _build_config_payload(self):
-        """Return only technical configuration owned by the Controller."""
+        """Return Reader configuration owned by the Controller.
+
+        Device Code, physical connection inventory and parking topology are
+        server-only. Antennas are identified solely by their numeric ports.
+        """
         self.ensure_one()
-        antennas = [
-            {
-                "antenna_no": int(antenna.antenna_id or 0),
-                "physical_antenna": antenna.physical_antenna or "",
-            }
-            for antenna in self.antennas_ids.sorted(key=lambda rec: (rec.antenna_id or 0, rec.id))
-        ]
         return {
             "serial_number": self.serial_number or "",
-            "model_number": self.model_number or "",
-            "vendor": self.device_vendor or "",
-            "connection": {
-                "protocol": "tcp",
-                "ip_address": self.device_ip or "",
-                "port": int(self.device_port or 0),
-            },
             "reader_parameters": {
                 "power_dbm": int(self.power_dbm or 0),
                 "read_interval_ms": int(self.read_interval_ms or 0),
                 "tid_start_address": int(self.tid_addr or 0),
                 "tid_length": int(self.tid_len or 0),
             },
-            "antennas": antennas,
+            "antennas": sorted(
+                int(antenna.antenna_no)
+                for antenna in self.antennas_ids
+                if int(antenna.antenna_no or 0) > 0
+            ),
         }
 
     @api.model

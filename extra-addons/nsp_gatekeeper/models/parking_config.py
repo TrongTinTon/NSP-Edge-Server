@@ -54,14 +54,14 @@ class NspParkingArea(models.Model):
         "nsp.device", string="Readers", compute="_compute_topology",
         help="Readers declared under the Controllers used in this parking operation."
     )
-    physical_antenna_ids = fields.Many2many(
+    antenna_ids = fields.Many2many(
         "nsp.device.antenna", string="Antennas", compute="_compute_topology",
-        help="Physical antennas declared on the Readers used by this parking operation."
+        help="Antenna ports declared on the Readers used by this parking operation."
     )
     edge_server_count = fields.Integer(string="Edge Servers", compute="_compute_counts")
     controller_count = fields.Integer(string="Controllers", compute="_compute_counts")
     reader_count = fields.Integer(string="Readers", compute="_compute_counts")
-    physical_antenna_count = fields.Integer(string="Antennas", compute="_compute_counts")
+    declared_antenna_count = fields.Integer(string="Antennas", compute="_compute_counts")
     lane_count = fields.Integer(string="Lanes", compute="_compute_counts")
     antenna_count = fields.Integer(string="Mapped Antennas", compute="_compute_counts")
     whitelist_count = fields.Integer(string="Device Whitelist", compute="_compute_whitelist_count")
@@ -85,7 +85,7 @@ class NspParkingArea(models.Model):
             rec.controller_ids = controllers
             rec.edge_server_ids = controllers.mapped("edge_server_id")
             rec.reader_ids = readers
-            rec.physical_antenna_ids = readers.mapped("antennas_ids")
+            rec.antenna_ids = readers.mapped("antennas_ids")
 
     @api.model
     def _search_controllers(self, operator, value):
@@ -95,7 +95,7 @@ class NspParkingArea(models.Model):
         "edge_server_ids",
         "controller_ids",
         "reader_ids",
-        "physical_antenna_ids",
+        "antenna_ids",
         "lane_ids.active",
         "lane_antenna_rule_ids.is_active",
     )
@@ -104,7 +104,7 @@ class NspParkingArea(models.Model):
             rec.edge_server_count = len(rec.edge_server_ids)
             rec.controller_count = len(rec.controller_ids)
             rec.reader_count = len(rec.reader_ids)
-            rec.physical_antenna_count = len(rec.physical_antenna_ids)
+            rec.declared_antenna_count = len(rec.antenna_ids)
             rec.lane_count = len(rec.lane_ids.filtered("active"))
             rec.antenna_count = len(rec.lane_antenna_rule_ids.filtered("is_active"))
 
@@ -156,7 +156,6 @@ class NspParkingArea(models.Model):
                     item = {
                         "serial_number": mapping.serial_number or "",
                         "antenna_no": int(mapping.antenna_no or 0),
-                        "physical_antenna": mapping.physical_antenna or "",
                     }
                     if group.detection_mode == "sequential":
                         item["sequence_no"] = int(mapping.sequence_no or 0)
@@ -261,7 +260,7 @@ class NspParkingArea(models.Model):
         if len(self.reader_ids) == 1:
             context["default_device_id"] = self.reader_ids.id
         return self._open_related_action(
-            "nsp_gatekeeper.action_nsp_device_antenna", self.physical_antenna_ids, _("Antennas"), context
+            "nsp_gatekeeper.action_nsp_device_antenna", self.antenna_ids, _("Antennas"), context
         )
 
     def action_open_device_whitelist(self):
@@ -489,34 +488,32 @@ class NspParkingLaneAntennaMapping(models.Model):
         store=True, readonly=True, index=True
     )
     antenna_ref_id = fields.Many2one(
-        "nsp.device.antenna", string="Physical Antenna", required=True, ondelete="restrict", index=True
+        "nsp.device.antenna", string="Antenna", required=True, ondelete="restrict", index=True
     )
     controller_id = fields.Many2one(
         "nsp.controller", related="antenna_ref_id.device_id.controller_id", store=True, readonly=True, index=True
     )
     device_id = fields.Many2one("nsp.device", related="antenna_ref_id.device_id", store=True, readonly=True, index=True)
     serial_number = fields.Char(related="device_id.serial_number", store=True, readonly=True, index=True)
-    antenna_no = fields.Integer(related="antenna_ref_id.antenna_id", store=True, readonly=True, index=True)
-    physical_antenna = fields.Char(related="antenna_ref_id.physical_antenna", store=True, readonly=True)
+    antenna_no = fields.Integer(related="antenna_ref_id.antenna_no", store=True, readonly=True, index=True)
     sequence_no = fields.Integer(default=0)
     is_active = fields.Boolean(default=True, index=True)
 
     _sql_constraints = [
-        ("unique_group_antenna", "unique(antenna_group_id, antenna_ref_id)", "This physical antenna is already mapped to this Antenna Group."),
+        ("unique_group_antenna", "unique(antenna_group_id, antenna_ref_id)", "This antenna is already mapped to this Antenna Group."),
     ]
 
     @api.depends(
         "parking_area_id.code", "lane_id.code", "serial_number", "antenna_no",
-        "physical_antenna", "group_direction", "detection_mode", "sequence_no",
+        "group_direction", "detection_mode", "sequence_no",
     )
     def _compute_rule_name(self):
         for rec in self:
-            rec.rule_name = "%s / %s / %s:%s - %s / %s / Seq %s" % (
+            rec.rule_name = "%s / %s / %s:%s / %s / Seq %s" % (
                 rec.parking_area_id.code or "Parking",
                 rec.lane_id.code or "Lane",
                 rec.serial_number or "Reader",
                 rec.antenna_no or "",
-                rec.physical_antenna or "Physical Antenna",
                 rec.group_direction or "",
                 rec.sequence_no or 0,
             )
@@ -531,12 +528,12 @@ class NspParkingLaneAntennaMapping(models.Model):
                     ("is_active", "=", True),
                 ])
                 if duplicate:
-                    raise ValidationError(_("A physical antenna can be actively mapped to only one Parking Lane direction."))
+                    raise ValidationError(_("An antenna can be actively mapped to only one Parking Lane direction."))
             if rec.controller_id != rec.lane_id.controller_id:
-                raise ValidationError(_("Physical Antenna must belong to the Controller assigned to this Lane."))
+                raise ValidationError(_("Antenna must belong to the Controller assigned to this Lane."))
             if not rec.device_id._is_whitelisted():
                 rec.device_id._notify_not_whitelisted()
-                raise ValidationError(_("Physical Antenna must belong to a Reader in Device Whitelist."))
+                raise ValidationError(_("Antenna must belong to a Reader in Device Whitelist."))
             if rec.detection_mode == "sequential" and int(rec.sequence_no or 0) <= 0:
                 raise ValidationError(_("Sequential antenna mapping requires a sequence number greater than zero."))
             if rec.detection_mode == "any" and int(rec.sequence_no or 0) != 0:

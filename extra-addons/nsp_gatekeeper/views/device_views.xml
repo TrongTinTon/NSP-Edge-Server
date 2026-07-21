@@ -10,7 +10,7 @@
                 <field name="model_number"/>
                 <field name="device_vendor"/>
                 <field name="controller_id"/>
-                <field name="device_ip"/>
+                <field name="connection_type"/>
                 <filter string="Online" name="online" domain="[('status','=','online')]"/>
                 <filter string="Offline" name="offline" domain="[('status','=','offline')]"/>
                 <filter string="Degraded" name="degraded" domain="[('status','=','degraded')]"/>
@@ -38,8 +38,7 @@
                 <field name="model_number"/>
                 <field name="device_vendor" string="Vendor"/>
                 <field name="controller_id"/>
-                <field name="device_ip" string="IP Address" optional="show"/>
-                <field name="device_port" string="Port" optional="show"/>
+                <field name="connection_type" string="Physical Connection" optional="show"/>
                 <field name="last_seen" readonly="1" optional="show"/>
                 <field name="firmware_version" readonly="1" optional="hide"/>
                 <field name="antennas" string="Antennas" readonly="1"/>
@@ -66,6 +65,7 @@
                             <field name="model_number"/>
                             <field name="device_vendor" string="Vendor"/>
                             <field name="controller_id" options="{'no_create': False, 'no_open': False}"/>
+                            <field name="connection_type" string="Physical Connection"/>
                         </group>
                         <group string="Runtime Status">
                             <field name="status" widget="badge" readonly="1"
@@ -74,8 +74,7 @@
                                    decoration-warning="status == 'degraded'"/>
                             <field name="last_seen" readonly="1"/>
                             <field name="firmware_version" readonly="1"/>
-                            <field name="device_ip" string="IP Address" readonly="1"/>
-                            <field name="device_port" string="Port" readonly="1"/>
+
                         </group>
                     </group>
                     <group string="Reader Parameters">
@@ -91,12 +90,11 @@
                     <notebook>
                         <page name="antennas" string="Antennas">
                             <div class="alert alert-info" role="alert">
-                                Declare only the physical antenna ports available on this Reader. RFID read parameters are configured at Reader level.
+                                Declare only the numbered antenna ports available on this Reader. RFID read parameters are configured at Reader level.
                             </div>
                             <field name="antennas_ids" context="{'default_device_id': id}">
                                 <list string="Antennas" editable="bottom">
-                                    <field name="antenna_id" string="Antenna No"/>
-                                    <field name="physical_antenna" string="Physical Antenna"/>
+                                    <field name="antenna_no" string="Antenna No"/>
                                     <field name="lane_count" string="Mapped Lanes" readonly="1"/>
                                 </list>
                             </field>
@@ -131,8 +129,7 @@
                 <field name="controller_id"/>
                 <field name="last_seen"/>
                 <field name="firmware_version"/>
-                <field name="device_ip" string="IP Address"/>
-                <field name="device_port" string="Port"/>
+
             </list>
         </field>
     </record>
@@ -152,8 +149,7 @@
         <field name="model">nsp.device.antenna</field>
         <field name="arch" type="xml">
             <search string="Antennas">
-                <field name="antenna_id" string="Antenna No"/>
-                <field name="physical_antenna"/>
+                <field name="antenna_no" string="Antenna No"/>
                 <field name="device_id" string="Reader"/>
                 <field name="device_serial" string="Reader Serial"/>
                 <field name="controller_id"/>
@@ -174,8 +170,7 @@
             <list string="Antennas">
                 <field name="controller_id" readonly="1"/>
                 <field name="device_id" string="Reader"/>
-                <field name="antenna_id" string="Antenna No"/>
-                <field name="physical_antenna"/>
+                <field name="antenna_no" string="Antenna No"/>
                 <field name="lane_count" string="Mapped Lanes" readonly="1"/>
             </list>
         </field>
@@ -188,13 +183,12 @@
             <form string="Antenna">
                 <sheet>
                     <div class="oe_title">
-                        <label for="physical_antenna"/>
-                        <h1><field name="physical_antenna" placeholder="Entry Left"/></h1>
+                        <h1><field name="display_name" readonly="1"/></h1>
                     </div>
                     <group>
-                        <group string="Physical Antenna">
+                        <group string="Antenna">
                             <field name="device_id" string="Reader" options="{'no_create': False, 'no_open': False}"/>
-                            <field name="antenna_id" string="Antenna No"/>
+                            <field name="antenna_no" string="Antenna No"/>
                         </group>
                         <group string="Ownership">
                             <field name="controller_id" readonly="1"/>
