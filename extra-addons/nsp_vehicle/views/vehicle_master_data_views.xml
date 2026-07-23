@@ -19,7 +19,6 @@
                 <sheet>
                     <group>
                         <field name="name"/>
-                        <field name="code"/>
                     </group>
                 </sheet>
             </form>
@@ -51,7 +50,6 @@
                 <sheet>
                     <group>
                         <field name="name"/>
-                        <field name="code"/>
                     </group>
                 </sheet>
             </form>
@@ -85,7 +83,6 @@
                     <group>
                         <field name="name"/>
                         <field name="brand_id"/>
-                        <field name="code"/>
                     </group>
                 </sheet>
             </form>
@@ -117,7 +114,6 @@
                 <sheet>
                     <group>
                         <field name="name"/>
-                        <field name="code"/>
                     </group>
                 </sheet>
             </form>

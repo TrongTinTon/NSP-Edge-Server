@@ -880,9 +880,9 @@ class NspGatekeeperApiService(models.AbstractModel):
         application, actor_kind, edge_server, error = self._auth_edge_server_sync(data)
         if error:
             return error
-        if "nsp.vehicle.borrow.request" not in self.env.registry.models:
+        if "nsp.vehicle.borrow" not in self.env.registry.models:
             return self._ok({"items": [], "next_sync_cursor": data.get("sync_cursor") or False, "has_more": False, "server_time": self._iso_datetime(fields.Datetime.now())})
-        Borrow = self.env["nsp.vehicle.borrow.request"].sudo()
+        Borrow = self.env["nsp.vehicle.borrow"].sudo()
         records, next_cursor, has_more, server_time = self._cursor_page(Borrow, data)
         items = []
         for borrow in records:
@@ -898,7 +898,7 @@ class NspGatekeeperApiService(models.AbstractModel):
                 "borrow_uid": borrow_uid,
                 "vehicle_code": vehicle_code or (vehicle.license_plate if vehicle else ""),
                 "borrower_user_code": self._user_access_code(borrower),
-                "active": borrow.state == "approved" and not getattr(borrow, "returned_at", False),
+                "active": borrow.state == "active" and not getattr(borrow, "returned_at", False),
             }
             if borrow.valid_from:
                 item["valid_from"] = self._iso_datetime(borrow.valid_from)

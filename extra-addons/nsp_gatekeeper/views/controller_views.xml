@@ -5,8 +5,8 @@
         <field name="model">nsp.edge.server</field>
         <field name="arch" type="xml">
             <search string="Edge Servers">
-                <field name="edge_server_code"/>
                 <field name="name"/>
+                <field name="edge_server_code" string="Technical Code" optional="hide"/>
                 <filter string="Online" name="online" domain="[('status','=','online')]"/>
                 <filter string="Offline" name="offline" domain="[('status','=','offline')]"/>
                 <filter string="Error" name="error" domain="[('status','=','error')]"/>
@@ -27,8 +27,8 @@
                        decoration-success="status == 'online'"
                        decoration-danger="status in ('offline','revoked')"
                        decoration-warning="status in ('error','block')"/>
-                <field name="edge_server_code"/>
                 <field name="name"/>
+                <field name="edge_server_code" string="Technical Code" optional="hide"/>
                 <field name="controller_count"/>
                 <field name="reader_count"/>
                 <field name="timestamp" string="Last Heartbeat"/>
@@ -55,13 +55,13 @@
                         </button>
                     </div>
                     <div class="oe_title">
-                        <label for="edge_server_code"/>
-                        <h1><field name="edge_server_code" placeholder="EDGE-BD-01"/></h1>
+                        <label for="name"/>
+                        <h1><field name="name" placeholder="Main Edge Server"/></h1>
                     </div>
                     <group>
                         <group string="Edge Server Declaration">
-                            <field name="name"/>
                             <field name="active"/>
+                            <field name="edge_server_code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
                         <group string="Runtime Status">
                             <field name="status" widget="badge" readonly="1"
@@ -78,8 +78,8 @@
                             </div>
                             <field name="controller_ids" context="{'default_edge_server_id': id}">
                                 <list editable="bottom">
-                                    <field name="controller_id" string="Controller Code"/>
-                                    <field name="controller_name"/>
+                                    <field name="controller_name" string="Controller"/>
+                                    <field name="controller_id" string="Technical Code" optional="hide"/>
                                     <field name="status" widget="badge" readonly="1"/>
                                     <field name="reader_count" readonly="1"/>
                                     <field name="antenna_count" readonly="1"/>
@@ -124,8 +124,8 @@
                        decoration-success="status == 'online'"
                        decoration-danger="status in ('offline','revoked')"
                        decoration-warning="status in ('error','block')"/>
-                <field name="controller_id" string="Controller Code"/>
-                <field name="controller_name"/>
+                <field name="controller_name" string="Controller" decoration-bf="1"/>
+                <field name="controller_id" string="Technical Code" optional="hide"/>
                 <field name="edge_server_id"/>
                 <field name="reader_count"/>
                 <field name="antenna_count"/>
@@ -153,14 +153,14 @@
                         </button>
                     </div>
                     <div class="oe_title">
-                        <label for="controller_id"/>
-                        <h1><field name="controller_id" placeholder="CTRL-GATE-01"/></h1>
+                        <label for="controller_name"/>
+                        <h1><field name="controller_name" placeholder="Main Gate Controller"/></h1>
                     </div>
                     <group>
                         <group string="Controller Declaration">
-                            <field name="controller_name"/>
                             <field name="edge_server_id" options="{'no_create': False, 'no_open': False}"/>
                             <field name="active"/>
+                            <field name="controller_id" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
                         <group string="Runtime Status">
                             <field name="status" widget="badge" readonly="1"
@@ -177,8 +177,9 @@
                             </div>
                             <field name="device_ids" context="{'default_controller_id': id}">
                                 <list editable="bottom">
+                                    <field name="name" string="Reader"/>
                                     <field name="serial_number" string="Serial"/>
-                                    <field name="device_code" string="Device Code"/>
+                                    <field name="device_code" string="Technical Code" optional="hide"/>
                                     <field name="model_number"/>
                                     <field name="device_vendor" string="Vendor"/>
                                     <field name="connection_type" string="Physical Connection" optional="show"/>

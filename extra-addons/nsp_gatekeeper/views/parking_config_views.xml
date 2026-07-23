@@ -31,8 +31,8 @@
                        decoration-success="state == 'operational'"
                        decoration-warning="state == 'draft' or state == 'maintenance'"
                        decoration-danger="state == 'blocked'"/>
-                <field name="code"/>
                 <field name="name"/>
+                <field name="code" string="Technical Code" optional="hide"/>
                 <field name="branch_id"/>
                 <field name="edge_server_count" string="Edge Servers"/>
                 <field name="controller_count" string="Controllers"/>
@@ -93,9 +93,9 @@
 
                     <group>
                         <group string="Parking Operation">
-                            <field name="code"/>
                             <field name="branch_id" options="{'no_create': False, 'no_open': False}"/>
                             <field name="state" readonly="1"/>
+                            <field name="code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
                         <group string="Derived Infrastructure">
                             <field name="edge_server_ids" widget="many2many_tags" readonly="1"/>
@@ -108,17 +108,15 @@
                     <notebook>
                         <page string="1. Parking Lanes">
                             <div class="alert alert-secondary" role="alert">
-                                Assign one Controller and one operating direction to each lane. Vehicle RFID is always required. User RFID policy is configured independently for Entry and Exit. For a Two-way lane, map antennas to Outside and Inside zones; Edge resolves movement from the zone sequence, then applies the matching User RFID policy.
+                                Assign one Controller and one operating direction to each lane. Vehicle RFID is always required. Check-in never requires User RFID. Check-out always requires exactly one User RFID; Edge pairs the nearest unused User detection by timestamp within the grouping window. For a Two-way lane, map antennas to Outside and Inside zones to resolve movement.
                             </div>
                             <field name="lane_ids" context="{'default_parking_area_id': id}">
                                 <list editable="bottom">
                                     <field name="lane_no" string="Lane No"/>
-                                    <field name="code" string="Lane Code"/>
                                     <field name="name" string="Lane Name"/>
+                                    <field name="code" string="Technical Code" optional="hide" readonly="1"/>
                                     <field name="controller_id" options="{'no_create': False, 'no_open': False}"/>
                                     <field name="direction"/>
-                                    <field name="require_user_tid_entry" optional="hide"/>
-                                    <field name="require_user_tid_exit" optional="hide"/>
                                     <field name="transition_window_seconds" optional="hide"/>
                                     <field name="grouping_window_seconds" optional="hide"/>
                                     <field name="repeat_suppression_seconds" optional="hide"/>
@@ -166,8 +164,8 @@
             <list string="Parking Lanes">
                 <field name="parking_area_id"/>
                 <field name="lane_no" string="Lane No"/>
-                <field name="code" string="Lane Code"/>
-                <field name="name" string="Lane Name"/>
+                <field name="name" string="Lane Name" decoration-bf="1"/>
+                <field name="code" string="Technical Code" optional="hide" readonly="1"/>
                 <field name="controller_id"/>
                 <field name="direction"/>
                 <field name="antenna_count" string="Antennas"/>
@@ -190,18 +188,16 @@
                         <group string="Lane Declaration">
                             <field name="parking_area_id" options="{'no_create': False, 'no_open': False}"/>
                             <field name="controller_id" options="{'no_create': False, 'no_open': False}"/>
-                            <field name="code" string="Lane Code"/>
                             <field name="lane_no" string="Lane No"/>
                             <field name="active"/>
                         </group>
                         <group string="Event Processing">
                             <field name="direction"/>
-                            <field name="require_user_tid_entry" invisible="direction == 'exit'"/>
-                            <field name="require_user_tid_exit" invisible="direction == 'entry'"/>
                             <field name="transition_window_seconds" invisible="direction != 'both'"/>
                             <field name="grouping_window_seconds"/>
                             <field name="repeat_suppression_seconds"/>
                             <field name="antenna_count" readonly="1"/>
+                            <field name="code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
                     </group>
                     <notebook>

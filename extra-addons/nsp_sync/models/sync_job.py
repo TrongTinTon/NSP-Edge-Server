@@ -1036,7 +1036,7 @@ class NspSyncJob(models.Model):
         code = str(item.get("borrow_uid") or "").strip()
         if not code:
             raise UserError(_("Borrow UID is required."))
-        Borrow = self.env["nsp.vehicle.borrow.request"].sudo()
+        Borrow = self.env["nsp.vehicle.borrow"].sudo()
         borrow = Borrow.search([("borrow_code", "=", code)], limit=1)
         vehicle = self._find_vehicle(item.get("vehicle_code"))
         borrower = self.env["nsp.user"].sudo().search([("user_code", "=", item.get("borrower_user_code"))], limit=1)
@@ -1054,14 +1054,14 @@ class NspSyncJob(models.Model):
             "borrower_id": borrower.id,
             "valid_from": valid_from,
             "valid_to": valid_to,
-            "state": "approved" if is_active else "returned",
+            "state": "active" if is_active else "returned",
             "returned_at": False if is_active else fields.Datetime.now(),
         }
         if borrow:
-            borrow.write(vals)
+            borrow.with_context(vehicle_borrow_sync=True).write(vals)
             return borrow
         vals["borrow_code"] = code
-        return Borrow.create(vals)
+        return Borrow.with_context(vehicle_borrow_sync=True).create(vals)
 
     def _find_or_create_device(self, controller, serial_number):
         self.ensure_one()
@@ -1311,8 +1311,6 @@ class NspSyncJob(models.Model):
                 "controller_id": controller.id,
                 "lane_no": int(lane_item.get("lane_no") or lane_index),
                 "direction": direction,
-                "require_user_tid_entry": bool(lane_item.get("require_user_tid_entry", False)),
-                "require_user_tid_exit": bool(lane_item.get("require_user_tid_exit", True)),
                 "transition_window_seconds": transition_window,
                 "grouping_window_seconds": grouping_window,
                 "repeat_suppression_seconds": repeat_suppression,

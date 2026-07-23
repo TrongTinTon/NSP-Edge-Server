@@ -1,0 +1,39 @@
+<odoo>
+    <record id="view_nsp_user_friendship_list" model="ir.ui.view">
+        <field name="name">nsp.user.friendship.list</field>
+        <field name="model">nsp.user.friendship</field>
+        <field name="arch" type="xml">
+            <list decoration-success="state == 'accepted'" decoration-muted="state == 'cancelled'">
+                <field name="requester_id"/>
+                <field name="addressee_id"/>
+                <field name="state"/>
+                <field name="accepted_at"/>
+            </list>
+        </field>
+    </record>
+    <record id="view_nsp_user_friendship_form" model="ir.ui.view">
+        <field name="name">nsp.user.friendship.form</field>
+        <field name="model">nsp.user.friendship</field>
+        <field name="arch" type="xml">
+            <form string="Friendship">
+                <header>
+                    <button name="action_accept" type="object" string="Accept" class="btn-primary" invisible="state == 'accepted'"/>
+                    <button name="action_cancel" type="object" string="Cancel" invisible="state == 'cancelled'"/>
+                    <field name="state" widget="statusbar" statusbar_visible="pending,accepted,cancelled"/>
+                </header>
+                <sheet>
+                    <group>
+                        <field name="requester_id" readonly="state != 'pending'"/>
+                        <field name="addressee_id" readonly="state != 'pending'"/>
+                        <field name="accepted_at" readonly="1"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+    <record id="action_nsp_user_friendship" model="ir.actions.act_window">
+        <field name="name">Friendships</field>
+        <field name="res_model">nsp.user.friendship</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>

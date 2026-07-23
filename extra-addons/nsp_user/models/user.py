@@ -8,7 +8,7 @@ class NspUser(models.Model):
     _name = "nsp.user"
     _description = "NSP User"
     _inherit = ["mail.thread", "mail.activity.mixin"]
-    _rec_name = "display_name"
+    _rec_name = "name"
     _order = "user_code, name, id"
 
     display_name = fields.Char(string="Display Name", compute="_compute_display_name", store=True)
@@ -28,14 +28,24 @@ class NspUser(models.Model):
     user_rfid_tids = fields.Char(string="All Active User TIDs", compute="_compute_card_tids", store=False, readonly=True)
     active_user_card_count = fields.Integer(string="Active User Cards", compute="_compute_card_tids", store=False)
 
+    friendship_sent_ids = fields.One2many(
+        "nsp.user.friendship", "requester_id", string="Sent Friend Requests"
+    )
+    friendship_received_ids = fields.One2many(
+        "nsp.user.friendship", "addressee_id", string="Received Friend Requests"
+    )
+    accepted_friend_ids = fields.Many2many(
+        "nsp.user", compute="_compute_accepted_friends", string="Friends"
+    )
+
     _sql_constraints = [
         ("user_code_unique", "unique(user_code)", "User Code must be unique."),
     ]
 
-    @api.depends("user_code", "name")
+    @api.depends("name")
     def _compute_display_name(self):
         for rec in self:
-            rec.display_name = "[%s] %s" % (rec.user_code or "-", rec.name or "")
+            rec.display_name = rec.name or _("User")
 
     @api.depends("user_card_ids.state", "user_card_ids.tid", "user_card_ids.card_id.tid")
     def _compute_card_tids(self):
@@ -45,6 +55,12 @@ class NspUser(models.Model):
             rec.user_rfid_tid = tids[0] if tids else False
             rec.user_rfid_tids = ",".join(tids) if tids else False
             rec.active_user_card_count = len(tids)
+
+
+    def _compute_accepted_friends(self):
+        Friendship = self.env["nsp.user.friendship"].sudo()
+        for rec in self:
+            rec.accepted_friend_ids = Friendship.accepted_friends(rec)
 
     @api.model
     def _normalize_code(self, value):

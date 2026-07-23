@@ -36,6 +36,10 @@ class Vehicle(models.Model):
     )
     vehicle_tid_tids = fields.Char(string="All Active Vehicle TIDs", compute='_compute_vehicle_card_tids', store=False, readonly=True)
     active_vehicle_card_count = fields.Integer(string="Active Vehicle Cards", compute='_compute_vehicle_card_tids', store=False)
+    borrow_ids = fields.One2many(
+        "nsp.vehicle.borrow", "vehicle_id", string="Authorized Users",
+        help="Temporary vehicle-use permissions granted by the owner to accepted friends.",
+    )
 
     @api.depends('vehicle_card_ids.state', 'vehicle_card_ids.tid', 'vehicle_card_ids.card_id.tid')
     def _compute_vehicle_card_tids(self):

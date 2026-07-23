@@ -15,7 +15,7 @@ class NspEdgeServer(models.Model):
     _name = "nsp.edge.server"
     _description = "NSP Edge Server"
     _inherit = ["mail.thread", "mail.activity.mixin"]
-    _rec_name = "edge_server_code"
+    _rec_name = "name"
     _order = "name, edge_server_code, id"
 
     edge_server_code = fields.Char(
@@ -88,7 +88,7 @@ class NspController(models.Model):
     _name = "nsp.controller"
     _description = "NSP Controller"
     _inherit = ["mail.thread", "mail.activity.mixin"]
-    _rec_name = "controller_id"
+    _rec_name = "controller_name"
     _order = "edge_server_id, controller_name, controller_id, id"
 
     controller_id = fields.Char(

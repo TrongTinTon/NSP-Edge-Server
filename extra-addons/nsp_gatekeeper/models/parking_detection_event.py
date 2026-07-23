@@ -339,71 +339,99 @@ class ParkingDetectionEvent(models.Model):
         return True
 
     @api.model
-    def _group_is_complete(self, lane, events, direction):
-        has_vehicle = bool(events.filtered(
-            lambda rec: rec.card_id.card_type == "vehicle_card"
-        ))
-        has_user = bool(events.filtered(
-            lambda rec: rec.card_id.card_type == "user_card"
-        ))
-        return has_vehicle and (not lane._requires_user_tid(direction) or has_user)
+    def _nearest_pending_user_event(self, lane, anchor_at, window_seconds):
+        """Return the nearest unused User RFID read to one vehicle Check-out.
+
+        Pairing is strictly 1:1. Only pending/unassigned detections in the same
+        lane are candidates. Once selected, the caller assigns transaction_id,
+        so the same User read cannot be reused by another vehicle.
+        """
+        delta = timedelta(seconds=max(1, int(window_seconds or 3)))
+        candidates = self.search([
+            ("lane_id", "=", lane.id),
+            ("state", "=", "pending"),
+            ("transaction_id", "=", False),
+            ("card_id.card_type", "=", "user_card"),
+            ("detected_at", ">=", anchor_at - delta),
+            ("detected_at", "<=", anchor_at + delta),
+        ], order="detected_at asc, id asc", limit=200)
+        if not candidates:
+            return self.browse()
+        return min(
+            candidates,
+            key=lambda rec: (abs((rec.detected_at - anchor_at).total_seconds()), rec.detected_at, rec.id),
+        )
+
+    @api.model
+    def _expire_orphan_user_events(self, lane, now):
+        """Discard old User reads that were never paired with a Check-out."""
+        cutoff = now - timedelta(seconds=max(1, int(lane.grouping_window_seconds or 3)))
+        stale = self.search([
+            ("lane_id", "=", lane.id),
+            ("state", "=", "pending"),
+            ("transaction_id", "=", False),
+            ("card_id.card_type", "=", "user_card"),
+            ("detected_at", "<", cutoff),
+        ])
+        if stale:
+            stale.write({"state": "error"})
+
+    @api.model
+    def _create_transaction_for_vehicle(self, lane, vehicle_events, direction, user_event=False):
+        group = vehicle_events
+        if direction == "exit" and user_event:
+            group |= user_event
+        transaction = self.env["nsp.parking.transaction"].sudo().create_from_detection_group(
+            group, resolved_direction=direction
+        )
+        group.write({"state": "processed", "transaction_id": transaction.id})
+        return transaction
 
     @api.model
     def _process_one_way_lane(self, lane, now, finalize_expired=True):
         transactions = self.env["nsp.parking.transaction"].browse()
+        pairing_window = max(1, int(lane.grouping_window_seconds or 3))
         while True:
-            first = self.search([
+            vehicle_event = self.search([
                 ("lane_id", "=", lane.id),
                 ("state", "=", "pending"),
                 ("transaction_id", "=", False),
+                ("card_id.card_type", "=", "vehicle_card"),
             ], order="detected_at asc, id asc", limit=1)
-            if not first:
+            if not vehicle_event:
                 break
-            deadline = first.detected_at + timedelta(
-                seconds=max(1, int(lane.grouping_window_seconds or 3))
-            )
-            group = self.search([
-                ("lane_id", "=", lane.id),
-                ("state", "=", "pending"),
-                ("transaction_id", "=", False),
-                ("detected_at", ">=", first.detected_at),
-                ("detected_at", "<=", deadline),
-            ], order="detected_at asc, id asc")
-            if not self._group_is_complete(lane, group, lane.direction):
-                if not finalize_expired or now < deadline:
+
+            user_event = self.browse()
+            if lane.direction == "exit":
+                user_event = self._nearest_pending_user_event(
+                    lane, vehicle_event.detected_at, pairing_window
+                )
+                deadline = vehicle_event.detected_at + timedelta(seconds=pairing_window)
+                if not user_event and (not finalize_expired or now < deadline):
                     break
-            has_vehicle = bool(group.filtered(
-                lambda rec: rec.card_id.card_type == "vehicle_card"
-            ))
-            if not has_vehicle:
-                # Parking transactions are vehicle-centric. A group without a
-                # registered vehicle card is not a parking movement.
-                group.write({"state": "error"})
-                continue
+
             try:
                 with self.env.cr.savepoint():
-                    transaction = self.env["nsp.parking.transaction"].sudo().create_from_detection_group(
-                        group, resolved_direction=lane.direction
+                    transaction = self._create_transaction_for_vehicle(
+                        lane, vehicle_event, lane.direction, user_event=user_event
                     )
-                    group.write({"state": "processed", "transaction_id": transaction.id})
                     transactions |= transaction
             except Exception:
                 _logger.exception(
-                    "Parking one-way detection group failed: lane=%s ids=%s",
-                    lane.id, group.ids,
+                    "Parking one-way vehicle processing failed: lane=%s detection=%s",
+                    lane.id, vehicle_event.id,
                 )
-                group.write({"state": "error"})
+                vehicle_event.write({"state": "error"})
+                if user_event:
+                    user_event.write({"state": "error"})
+
+        if finalize_expired:
+            self._expire_orphan_user_events(lane, now)
         return transactions
 
     @api.model
     def _first_card_transition(self, events, transition_window):
-        """Return the first valid zone change for one card.
-
-        Same-zone reads update the latest source sample. A long gap resets the
-        source cluster, preventing an old detection from being paired with a new
-        crossing. All events in the source cluster through destination are linked
-        to the resulting transaction.
-        """
+        """Return the first valid zone change for one vehicle RFID card."""
         ordered = events.sorted(key=lambda rec: (rec.detected_at, rec.id))
         previous = False
         cluster_start = False
@@ -427,7 +455,6 @@ class ParkingDetectionEvent(models.Model):
                 )
                 return {
                     "card_id": rec.card_id.id,
-                    "card_type": rec.card_id.card_type,
                     "direction": direction,
                     "start_at": cluster_start.detected_at,
                     "end_at": rec.detected_at,
@@ -448,10 +475,9 @@ class ParkingDetectionEvent(models.Model):
             return pending, []
         transition_window = max(1, int(lane.transition_window_seconds or 10))
         transitions = []
-        for card_id in sorted(set(pending.mapped("card_id").ids)):
-            card_events = pending.filtered(lambda rec: rec.card_id.id == card_id)
-            if not card_events or card_events[:1].card_id.card_type != "vehicle_card":
-                continue
+        vehicle_pending = pending.filtered(lambda rec: rec.card_id.card_type == "vehicle_card")
+        for card_id in sorted(set(vehicle_pending.mapped("card_id").ids)):
+            card_events = vehicle_pending.filtered(lambda rec: rec.card_id.id == card_id)
             transition = self._first_card_transition(card_events, transition_window)
             if transition:
                 transitions.append(transition)
@@ -462,7 +488,7 @@ class ParkingDetectionEvent(models.Model):
     def _process_two_way_lane(self, lane, now, finalize_expired=True):
         transactions = self.env["nsp.parking.transaction"].browse()
         transition_window = max(1, int(lane.transition_window_seconds or 10))
-        grouping_window = max(1, int(lane.grouping_window_seconds or 3))
+        pairing_window = max(1, int(lane.grouping_window_seconds or 3))
 
         while True:
             pending, transitions = self._available_two_way_transitions(lane)
@@ -470,63 +496,47 @@ class ParkingDetectionEvent(models.Model):
                 break
 
             if not transitions:
-                # Ingestion may arrive as multiple HTTP requests. Never expire an
-                # unmatched first-zone detection while handling a request; otherwise
-                # request #1 could be discarded before request #2 reaches Edge.
                 if not finalize_expired:
                     break
-                first = pending[:1]
-                # User-card reads may legitimately arrive before the vehicle
-                # crossing. Keep them through one transition + grouping window.
-                wait_seconds = transition_window
-                if first.card_id.card_type == "user_card":
-                    wait_seconds += grouping_window
-                if now < first.detected_at + timedelta(seconds=wait_seconds):
-                    break
-                # A read that cannot be attached to a vehicle movement is not a
-                # Parking Transaction and must not block later transitions.
-                first.write({"state": "error"})
-                continue
+                vehicle_pending = pending.filtered(lambda rec: rec.card_id.card_type == "vehicle_card")
+                first_vehicle = vehicle_pending[:1]
+                if first_vehicle and now >= first_vehicle.detected_at + timedelta(seconds=transition_window):
+                    first_vehicle.write({"state": "error"})
+                    continue
+                self._expire_orphan_user_events(lane, now)
+                break
 
-            # Vehicle RFID is mandatory and is the only movement anchor.
-            # User RFID is identity evidence only; it does not determine direction.
+            # Process vehicle transitions chronologically. Entry ignores User RFID.
+            # Exit selects the nearest unused User RFID by detected_at. Marking the
+            # selected User read processed provides strict 1:1 consumption.
             anchor = transitions[0]
             direction = anchor["direction"]
-            group_start = anchor["start_at"] - timedelta(seconds=grouping_window)
-            group_deadline = anchor["end_at"] + timedelta(seconds=grouping_window)
-
-            selected_vehicle_transitions = [
-                item for item in transitions
-                if item["direction"] == direction
-                and group_start <= item["end_at"] <= group_deadline
-            ]
-            group = self.browse()
-            for item in selected_vehicle_transitions:
-                group |= item["events"]
-
-            user_events = pending.filtered(
-                lambda rec: rec.card_id.card_type == "user_card"
-                and group_start <= rec.detected_at <= group_deadline
-            )
-            group |= user_events
-
-            if not self._group_is_complete(lane, group, direction):
-                if not finalize_expired or now < group_deadline:
+            user_event = self.browse()
+            if direction == "exit":
+                user_event = self._nearest_pending_user_event(
+                    lane, anchor["end_at"], pairing_window
+                )
+                deadline = anchor["end_at"] + timedelta(seconds=pairing_window)
+                if not user_event and (not finalize_expired or now < deadline):
                     break
 
             try:
                 with self.env.cr.savepoint():
-                    transaction = self.env["nsp.parking.transaction"].sudo().create_from_detection_group(
-                        group, resolved_direction=direction
+                    transaction = self._create_transaction_for_vehicle(
+                        lane, anchor["events"], direction, user_event=user_event
                     )
-                    group.write({"state": "processed", "transaction_id": transaction.id})
                     transactions |= transaction
             except Exception:
                 _logger.exception(
                     "Parking Two-way transition processing failed: lane=%s direction=%s ids=%s",
-                    lane.id, direction, group.ids,
+                    lane.id, direction, anchor["events"].ids,
                 )
-                group.write({"state": "error"})
+                anchor["events"].write({"state": "error"})
+                if user_event:
+                    user_event.write({"state": "error"})
+
+        if finalize_expired:
+            self._expire_orphan_user_events(lane, now)
         return transactions
 
     @api.model

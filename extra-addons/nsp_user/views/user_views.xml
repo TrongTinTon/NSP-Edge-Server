@@ -4,10 +4,10 @@
         <field name="model">nsp.user</field>
         <field name="arch" type="xml">
             <search>
-                <field name="user_code"/>
                 <field name="name"/>
-                <field name="email"/>
                 <field name="phone"/>
+                <field name="email"/>
+                <field name="user_code" string="Technical User Code"/>
                 <filter string="Active" name="active" domain="[('active','=',True)]"/>
                 <filter string="Archived" name="archived" domain="[('active','=',False)]"/>
             </search>
@@ -20,12 +20,12 @@
         <field name="arch" type="xml">
             <list string="Users">
                 <field name="active" widget="boolean_toggle"/>
-                <field name="user_code"/>
-                <field name="name"/>
+                <field name="name" decoration-bf="1"/>
                 <field name="phone" optional="show"/>
                 <field name="email" optional="show"/>
-                <field name="user_rfid_tid" optional="show"/>
+                <field name="user_rfid_tid" string="Primary User TID" optional="show"/>
                 <field name="active_user_card_count" optional="show"/>
+                <field name="user_code" string="Technical Code" optional="hide"/>
             </list>
         </field>
     </record>
@@ -40,16 +40,18 @@
                     <button name="action_unarchive" type="object" string="Unarchive" invisible="active" class="btn-primary"/>
                 </header>
                 <sheet>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1><field name="name" placeholder="User name"/></h1>
+                    </div>
                     <group>
-                        <group string="User">
-                            <field name="active"/>
-                            <field name="user_code"/>
-                            <field name="name"/>
-                            <field name="pin" password="True"/>
-                        </group>
                         <group string="Contact">
+                            <field name="active"/>
                             <field name="phone"/>
                             <field name="email"/>
+                            <field name="pin" password="True"/>
+                        </group>
+                        <group string="RFID Summary">
                             <field name="user_rfid_tid" readonly="1"/>
                             <field name="active_user_card_count" readonly="1"/>
                         </group>
@@ -58,17 +60,47 @@
                         <page string="User Cards">
                             <field name="user_card_ids" context="{'default_user_id': id}">
                                 <list editable="bottom">
-                                    <field name="card_id"/>
+                                    <field name="card_id" options="{'no_create': True}"/>
                                     <field name="tid" readonly="1"/>
-                                    <field name="state"/>
-                                    <field name="assigned_at"/>
-                                    <field name="revoked_at" readonly="1"/>
-                                    <field name="note"/>
+                                    <field name="state" widget="badge" decoration-success="state == 'active'" decoration-muted="state == 'revoked'"/>
+                                    <field name="assigned_at" optional="hide"/>
+                                    <field name="revoked_at" readonly="1" optional="hide"/>
+                                    <field name="note" optional="hide"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Friends">
+                            <group>
+                                <field name="accepted_friend_ids" widget="many2many_tags" readonly="1"/>
+                            </group>
+                            <separator string="Sent Requests"/>
+                            <field name="friendship_sent_ids" context="{'default_requester_id': id}">
+                                <list editable="bottom">
+                                    <field name="addressee_id" string="Friend" domain="[('id','!=',parent.id)]"/>
+                                    <field name="state" widget="badge" readonly="1"/>
+                                    <field name="accepted_at" readonly="1" optional="hide"/>
+                                    <button name="action_cancel" type="object" string="Cancel" invisible="state == 'cancelled'"/>
+                                </list>
+                            </field>
+                            <separator string="Received Requests"/>
+                            <field name="friendship_received_ids">
+                                <list create="0" delete="0">
+                                    <field name="requester_id" string="From"/>
+                                    <field name="state" widget="badge"/>
+                                    <field name="accepted_at" optional="hide"/>
+                                    <button name="action_accept" type="object" string="Accept" class="btn-primary" invisible="state != 'pending'"/>
+                                    <button name="action_cancel" type="object" string="Decline" invisible="state != 'pending'"/>
                                 </list>
                             </field>
                         </page>
                         <page string="Note">
                             <field name="note" nolabel="1"/>
+                        </page>
+                        <page string="Technical" groups="nsp_core.group_nsp_it_parking">
+                            <group>
+                                <field name="user_code" readonly="1" widget="CopyClipboardChar"/>
+                                <field name="user_rfid_tids" readonly="1"/>
+                            </group>
                         </page>
                     </notebook>
                 </sheet>

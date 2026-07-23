@@ -5,6 +5,7 @@
         <field name="model">nsp.device</field>
         <field name="arch" type="xml">
             <search string="Readers">
+                <field name="name"/>
                 <field name="serial_number"/>
                 <field name="device_code"/>
                 <field name="model_number"/>
@@ -33,8 +34,9 @@
                        decoration-success="status == 'online'"
                        decoration-danger="status == 'offline'"
                        decoration-warning="status == 'degraded'"/>
+                <field name="name" string="Reader" decoration-bf="1"/>
                 <field name="serial_number" string="Serial"/>
-                <field name="device_code" string="Device Code"/>
+                <field name="device_code" string="Technical Code" optional="hide"/>
                 <field name="model_number"/>
                 <field name="device_vendor" string="Vendor"/>
                 <field name="controller_id"/>
@@ -56,16 +58,17 @@
                 </header>
                 <sheet>
                     <div class="oe_title">
-                        <label for="serial_number" string="Reader Serial"/>
-                        <h1><field name="serial_number" placeholder="24113001"/></h1>
+                        <label for="name" string="Reader Name"/>
+                        <h1><field name="name" placeholder="Entry Reader 01"/></h1>
                     </div>
                     <group>
                         <group string="Device Declaration">
-                            <field name="device_code" string="Device Code"/>
+                            <field name="serial_number" string="Serial"/>
                             <field name="model_number"/>
                             <field name="device_vendor" string="Vendor"/>
                             <field name="controller_id" options="{'no_create': False, 'no_open': False}"/>
                             <field name="connection_type" string="Physical Connection"/>
+                            <field name="device_code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
                         <group string="Runtime Status">
                             <field name="status" widget="badge" readonly="1"
@@ -79,7 +82,8 @@
                     </group>
                     <group string="Reader Parameters">
                         <group>
-                                        <field name="read_interval_ms" string="Read Interval ms"/>
+                            <field name="power_dbm" string="Power (dBm)"/>
+                            <field name="read_interval_ms" string="Read Interval ms"/>
                         </group>
                         <group>
                             <field name="tid_addr" string="TID Start Address"/>
@@ -124,9 +128,10 @@
                        decoration-success="status == 'online'"
                        decoration-danger="status == 'offline'"
                        decoration-warning="status == 'degraded'"/>
+                <field name="name" string="Reader"/>
                 <field name="serial_number"/>
-                <field name="device_code"/>
                 <field name="controller_id"/>
+                <field name="device_code" string="Technical Code" optional="hide"/>
                 <field name="last_seen"/>
                 <field name="firmware_version"/>
 

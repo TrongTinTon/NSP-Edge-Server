@@ -218,8 +218,6 @@ class NspParkingArea(models.Model):
                 "lane_no": int(lane.lane_no or 0),
                 "controller_code": lane.controller_id.controller_id,
                 "direction": lane.direction,
-                "require_user_tid_entry": bool(lane.require_user_tid_entry),
-                "require_user_tid_exit": bool(lane.require_user_tid_exit),
                 "grouping_window_seconds": int(lane.grouping_window_seconds or 3),
                 "repeat_suppression_seconds": int(lane.repeat_suppression_seconds or 1),
                 "antenna_mappings": mappings,
@@ -239,7 +237,7 @@ class NspParkingArea(models.Model):
             return [_('Configure at least one active Parking Lane.')]
 
         for lane in lanes:
-            lane_name = lane.display_name or lane.code
+            lane_name = lane.display_name or lane.name or _("Lane")
             if not lane.controller_id:
                 issues.append(
                     _("Lane %(lane)s must have a Controller.") % {"lane": lane_name}
@@ -453,16 +451,6 @@ class NspParkingLane(models.Model):
             "from Outside/Inside antenna-zone transitions at Edge."
         ),
     )
-    require_user_tid_entry = fields.Boolean(
-        string="Require User TID on Entry",
-        default=False,
-        help="Require a registered User RFID card when the resolved movement is Entry/Check-in.",
-    )
-    require_user_tid_exit = fields.Boolean(
-        string="Require User TID on Exit",
-        default=True,
-        help="Require a registered User RFID card when the resolved movement is Exit/Check-out.",
-    )
     transition_window_seconds = fields.Integer(
         string="Transition Window (Seconds)",
         default=10,
@@ -478,8 +466,8 @@ class NspParkingLane(models.Model):
         default=3,
         required=True,
         help=(
-            "After movement direction is known, Edge waits up to this duration to group "
-            "vehicle and user RFID cards into one Parking Transaction."
+            "For Check-out, Edge pairs the vehicle with the nearest unused User RFID "
+            "detection in this time window. Check-in never requires User RFID."
         ),
     )
     repeat_suppression_seconds = fields.Integer(
@@ -527,20 +515,14 @@ class NspParkingLane(models.Model):
         ),
     ]
 
-    def _requires_user_tid(self, direction):
-        self.ensure_one()
-        if direction == "entry":
-            return bool(self.require_user_tid_entry)
-        if direction == "exit":
-            return bool(self.require_user_tid_exit)
-        return False
 
-    @api.depends("parking_area_id.code", "code", "name")
+    @api.depends("parking_area_id.name", "name", "lane_no")
     def _compute_display_name(self):
         for rec in self:
+            lane_name = rec.name or (_("Lane %s") % (rec.lane_no or ""))
             rec.display_name = "%s / %s" % (
-                rec.parking_area_id.code or "Parking",
-                rec.code or rec.name or "Lane",
+                rec.parking_area_id.name or _("Parking"),
+                lane_name,
             )
 
     @api.depends("antenna_mapping_ids")
@@ -638,20 +620,20 @@ class NspParkingLaneAntennaMapping(models.Model):
     ]
 
     @api.depends(
-        "parking_area_id.code",
-        "lane_id.code",
+        "parking_area_id.name",
+        "lane_id.name",
         "lane_id.direction",
-        "serial_number",
+        "device_id.name",
         "antenna_no",
         "zone",
     )
     def _compute_rule_name(self):
         for rec in self:
             suffix = rec.zone.title() if rec.zone else rec.lane_id.direction.title()
-            rec.rule_name = "%s / %s / %s:%s / %s" % (
-                rec.parking_area_id.code or "Parking",
-                rec.lane_id.code or "Lane",
-                rec.serial_number or "Reader",
+            rec.rule_name = "%s / %s / %s / Antenna %s / %s" % (
+                rec.parking_area_id.name or _("Parking"),
+                rec.lane_id.name or _("Lane"),
+                rec.device_id.name or rec.serial_number or _("Reader"),
                 rec.antenna_no or "",
                 suffix or "",
             )

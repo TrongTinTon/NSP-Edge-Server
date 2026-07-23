@@ -7,10 +7,11 @@ from odoo.addons.nsp_core.utils import new_management_code
 class Device(models.Model):
     _name = "nsp.device"
     _description = "NSP RFID Reader"
-    _rec_name = "serial_number"
+    _rec_name = "name"
     _order = "controller_id, serial_number, id"
 
     # Device declaration
+    name = fields.Char(string="Reader Name", required=True, default="RFID Reader", index=True)
     serial_number = fields.Char(string="Serial", required=True, copy=False, index=True)
     device_code = fields.Char(
         string="Device Code", required=True, copy=False, index=True,
@@ -118,6 +119,7 @@ class Device(models.Model):
             vals = dict(source)
             serial = self._normalize_serial(vals.get("serial_number"))
             vals["serial_number"] = serial
+            vals["name"] = str(vals.get("name") or serial or "RFID Reader").strip()
             vals["device_code"] = self._normalize_code(
                 vals.get("device_code") or new_management_code("DEV")
             )
@@ -132,6 +134,8 @@ class Device(models.Model):
         values = dict(vals)
         if "serial_number" in values:
             values["serial_number"] = self._normalize_serial(values.get("serial_number"))
+        if "name" in values:
+            values["name"] = str(values.get("name") or "").strip() or "RFID Reader"
         if "device_code" in values:
             values["device_code"] = self._normalize_code(values.get("device_code"))
         if "model_number" in values:

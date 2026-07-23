@@ -63,11 +63,11 @@ class DeviceAntenna(models.Model):
         ),
     ]
 
-    @api.depends("device_id.serial_number", "antenna_no")
+    @api.depends("device_id.name", "device_id.serial_number", "antenna_no")
     def _compute_display_name(self):
         for antenna in self:
             antenna.display_name = "%s / Antenna %s" % (
-                antenna.device_id.serial_number or _("Reader"),
+                antenna.device_id.name or antenna.device_id.serial_number or _("Reader"),
                 antenna.antenna_no or "",
             )
 
