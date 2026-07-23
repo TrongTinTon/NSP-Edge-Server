@@ -130,13 +130,10 @@ class NspGatekeeperApiService(models.AbstractModel):
                 details={"controller_code": controller.controller_id},
             )
 
-        controller = self.env["nsp.controller"].sudo().browse(controller.id)
-
-        controller.write({
-            "timestamp": fields.Datetime.now(),
-            "status": "online",
-        })
-        return controller, None
+        # Authentication only resolves and authorizes the Controller. Runtime
+        # liveness is owned by the dedicated heartbeat/status APIs so high-volume
+        # detection requests do not write Controller state for every detected TID.
+        return self.env["nsp.controller"].sudo().browse(controller.id), None
 
     @api.model
     def _auth_sync_application(self, data=None):
@@ -1745,6 +1742,19 @@ class NspGatekeeperApiService(models.AbstractModel):
         if error:
             return error
 
+        allowed_fields = {
+            "event_uid", "controller_code", "serial_number", "antenna_no",
+            "detected_at", "tid",
+        }
+        unsupported = sorted(set(data) - allowed_fields)
+        if unsupported:
+            return self._error(
+                "invalid_payload: unsupported field(s): %s" % ", ".join(unsupported),
+                400,
+                error_code="parking_detection_rejected",
+                details={"unsupported_fields": unsupported},
+            )
+
         key = str(data.get("event_uid") or "").strip()
         tid = self.env["nsp.rfid.card"]._normalize_tid(data.get("tid"))
         card = (
@@ -1773,5 +1783,4 @@ class NspGatekeeperApiService(models.AbstractModel):
                     details={"record_key": key},
                 )
 
-        controller.write({"timestamp": fields.Datetime.now(), "status": "online"})
         return {"status_code": 200, "status": "success", "message": "OK", "data": {}}

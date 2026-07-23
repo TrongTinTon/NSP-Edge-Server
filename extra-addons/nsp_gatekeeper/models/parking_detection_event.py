@@ -197,15 +197,6 @@ class ParkingDetectionEvent(models.Model):
         self._ensure_edge_role()
         if not isinstance(payload, dict):
             raise ValidationError(_("invalid_payload"))
-        allowed_fields = {
-            "event_uid", "controller_code", "serial_number", "antenna_no",
-            "detected_at", "tid",
-        }
-        unsupported = sorted(set(payload) - allowed_fields)
-        if unsupported:
-            raise ValidationError(_(
-                "invalid_payload: unsupported field(s): %s"
-            ) % ", ".join(unsupported))
 
         controller_code = str(payload.get("controller_code") or "").strip()
         if controller_code and controller_code != controller.controller_id:

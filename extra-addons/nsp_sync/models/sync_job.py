@@ -1308,8 +1308,8 @@ class NspSyncJob(models.Model):
                 mapping_direction = str(mapping_item.get("direction") or "").strip().lower()
                 if not serial or antenna_no <= 0:
                     raise UserError(_("Each antenna mapping requires serial_number and antenna_no."))
-                if mapping_direction not in ("entry", "exit"):
-                    raise UserError(_("Antenna mapping direction must be entry or exit."))
+                if mapping_direction not in ("entry", "exit", "both"):
+                    raise UserError(_("Antenna mapping direction must be entry, exit or both."))
                 if direction != "both" and mapping_direction != direction:
                     raise UserError(_("A one-way Lane antenna mapping must match the Lane direction."))
                 device = Device.search([
