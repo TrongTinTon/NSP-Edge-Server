@@ -204,7 +204,7 @@
                                 <list string="Parking Lane Antenna Mapping">
                                     <field name="parking_area_id" string="Parking Area"/>
                                     <field name="lane_id"/>
-                                    <field name="direction" widget="badge"/>
+                                    <field name="zone" widget="badge"/>
                                 </list>
                             </field>
                         </page>

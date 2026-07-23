@@ -24,7 +24,6 @@
                 <filter string="Check-out" name="check_out" domain="[('event_type','=','check_out')]"/>
                 <filter string="Allowed" name="allowed" domain="[('status','=','allowed')]"/>
                 <filter string="Denied" name="denied" domain="[('status','=','denied')]"/>
-                <filter string="Missing Vehicle Card" name="missing_vehicle_tid" domain="[('error_code','=','missing_vehicle_tid')]"/>
                 <filter string="Missing User Card" name="missing_user_tid" domain="[('error_code','=','missing_user_tid')]"/>
                 <filter string="Authentication Errors" name="auth_errors"
                         domain="[('error_code','in',['multiple_vehicle_tid','multiple_user_tid','vehicle_not_found','user_not_assigned','borrow_not_allowed'])]"/>
@@ -110,10 +109,9 @@
                             <field name="detection_event_ids" readonly="1">
                                 <list create="0" edit="0" delete="0">
                                     <field name="detected_at"/>
-                                    <field name="direction" widget="badge"
-                                           decoration-success="direction == 'entry'"
-                                           decoration-info="direction == 'exit'"
-                                           decoration-warning="direction == 'both'"/>
+                                    <field name="zone" widget="badge"
+                                           decoration-info="zone == 'outside'"
+                                           decoration-success="zone == 'inside'"/>
                                     <field name="card_id" context="{'nsp_simple_card_name': True}"/>
                                     <field name="antenna_id"/>
                                 </list>

@@ -1287,16 +1287,17 @@ class NspSyncJob(models.Model):
                 raise UserError(_("Controller %s is missing from Parking controller configuration.") % controller_code)
 
             try:
+                transition_window = int(lane_item.get("transition_window_seconds") or 10)
                 grouping_window = int(lane_item.get("grouping_window_seconds") or 3)
-                repeat_suppression = int(lane_item.get("repeat_suppression_seconds") or 10)
+                repeat_suppression = int(lane_item.get("repeat_suppression_seconds") or 1)
             except (TypeError, ValueError) as exc:
                 raise UserError(_("Parking Lane timing values must be integers.")) from exc
+            if transition_window < 1:
+                raise UserError(_("Transition window must be at least one second."))
             if grouping_window < 1:
                 raise UserError(_("Grouping window must be at least one second."))
-            if repeat_suppression < grouping_window:
-                raise UserError(_(
-                    "Repeat read suppression must be greater than or equal to the grouping window."
-                ))
+            if repeat_suppression < 1:
+                raise UserError(_("Repeat read suppression must be at least one second."))
 
             incoming_codes.append(lane_code)
             lane = Lane.search([
@@ -1310,8 +1311,9 @@ class NspSyncJob(models.Model):
                 "controller_id": controller.id,
                 "lane_no": int(lane_item.get("lane_no") or lane_index),
                 "direction": direction,
-                "required_vehicle_tid": bool(lane_item.get("required_vehicle_tid", True)),
-                "required_user_tid": bool(lane_item.get("required_user_tid", False)),
+                "require_user_tid_entry": bool(lane_item.get("require_user_tid_entry", False)),
+                "require_user_tid_exit": bool(lane_item.get("require_user_tid_exit", True)),
+                "transition_window_seconds": transition_window,
                 "grouping_window_seconds": grouping_window,
                 "repeat_suppression_seconds": repeat_suppression,
                 "active": True,
@@ -1331,13 +1333,13 @@ class NspSyncJob(models.Model):
                     raise UserError(_("Antenna mappings must contain objects."))
                 serial = str(mapping_item.get("serial_number") or "").strip().upper()
                 antenna_no = int(mapping_item.get("antenna_no") or 0)
-                mapping_direction = str(mapping_item.get("direction") or "").strip().lower()
+                mapping_zone = str(mapping_item.get("zone") or "").strip().lower()
                 if not serial or antenna_no <= 0:
                     raise UserError(_("Each antenna mapping requires serial_number and antenna_no."))
-                if mapping_direction not in ("entry", "exit", "both"):
-                    raise UserError(_("Antenna mapping direction must be entry, exit or both."))
-                if direction != "both" and mapping_direction != direction:
-                    raise UserError(_("A one-way Lane antenna mapping must match the Lane direction."))
+                if direction == "both" and mapping_zone not in ("outside", "inside"):
+                    raise UserError(_("A Two-way Lane antenna mapping requires zone outside or inside."))
+                if direction != "both" and mapping_zone:
+                    raise UserError(_("A one-way Lane antenna mapping must not define zone."))
                 device = Device.search([
                     ("controller_id", "=", controller.id),
                     ("serial_number", "=", serial),
@@ -1355,7 +1357,7 @@ class NspSyncJob(models.Model):
                 desired_antenna_ids.add(antenna.id)
                 mapping_vals = {
                     "lane_id": lane.id,
-                    "direction": mapping_direction,
+                    "zone": mapping_zone or False,
                     "antenna_ref_id": antenna.id,
                 }
                 mapping = Mapping.search([("antenna_ref_id", "=", antenna.id)], limit=1)

@@ -9,7 +9,7 @@
                 <field name="card_id" context="{'nsp_simple_card_name': True}"/>
                 <field name="lane_id"/>
                 <field name="antenna_id"/>
-                <field name="direction"/>
+                <field name="zone"/>
                 <field name="state"/>
                 <field name="transaction_id"/>
                 <filter string="Pending" name="pending" domain="[('state','=','pending')]"/>
@@ -18,7 +18,7 @@
                 <filter string="Vehicle Cards" name="vehicle_cards" domain="[('card_id.card_type','=','vehicle_card')]"/>
                 <filter string="User Cards" name="user_cards" domain="[('card_id.card_type','=','user_card')]"/>
                 <separator/>
-                <filter string="Direction" name="group_direction" context="{'group_by':'direction'}"/>
+                <filter string="Zone" name="group_zone" context="{'group_by':'zone'}"/>
                 <filter string="Lane" name="group_lane" context="{'group_by':'lane_id'}"/>
                 <filter string="State" name="group_state" context="{'group_by':'state'}"/>
             </search>
@@ -33,10 +33,9 @@
                 <field name="detected_at"/>
                 <field name="lane_id"/>
                 <field name="antenna_id" optional="hide"/>
-                <field name="direction" widget="badge"
-                       decoration-success="direction == 'entry'"
-                       decoration-info="direction == 'exit'"
-                       decoration-warning="direction == 'both'"/>
+                <field name="zone" widget="badge"
+                       decoration-info="zone == 'outside'"
+                       decoration-success="zone == 'inside'" optional="hide"/>
                 <field name="card_id" context="{'nsp_simple_card_name': True}"/>
                 <field name="state" widget="badge"
                        decoration-success="state == 'processed'"

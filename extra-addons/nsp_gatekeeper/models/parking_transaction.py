@@ -90,7 +90,6 @@ class ParkingTransaction(models.Model):
         string="Decision", required=True, default="allowed", index=True,
     )
     error_code = fields.Selection([
-        ("missing_vehicle_tid", "Missing Vehicle RFID Card"),
         ("missing_user_tid", "Missing User RFID Card"),
         ("multiple_vehicle_tid", "Multiple Vehicle RFID Cards"),
         ("multiple_user_tid", "Multiple User RFID Cards"),
@@ -173,7 +172,6 @@ class ParkingTransaction(models.Model):
     @api.model
     def _error_catalog(self):
         return {
-            "missing_vehicle_tid": ("missing_tag", "critical"),
             "missing_user_tid": ("missing_tag", "critical"),
             "multiple_vehicle_tid": ("ambiguous_tag", "critical"),
             "multiple_user_tid": ("ambiguous_tag", "critical"),
@@ -192,8 +190,6 @@ class ParkingTransaction(models.Model):
         mapping = (
             ("multiple vehicle", "multiple_vehicle_tid"),
             ("multiple user", "multiple_user_tid"),
-            ("vehicle tid is required", "missing_vehicle_tid"),
-            ("missing vehicle", "missing_vehicle_tid"),
             ("vehicle not found", "vehicle_not_found"),
             ("user tid is required", "missing_user_tid"),
             ("missing user", "missing_user_tid"),
@@ -293,31 +289,12 @@ class ParkingTransaction(models.Model):
         return True, ""
 
     @api.model
-    def _resolve_event_type(self, direction, vehicle=False, vehicle_tid=False, event_time=False):
-        """Resolve the final business event type from Edge-side direction.
-
-        Entry and Exit mappings are deterministic. A Two-way antenna has no
-        direction signal in the Controller payload, so Edge alternates from the
-        vehicle's latest allowed parking transaction. A vehicle with no history
-        starts with Check-in.
-        """
-        fixed = {"entry": "check_in", "exit": "check_out"}.get(direction)
-        if fixed:
-            return fixed
-        if direction != "both":
-            raise ValidationError(_("invalid_direction"))
-
-        domain = [("status", "=", "allowed")]
-        if vehicle:
-            domain.append(("vehicle_id", "=", vehicle.id))
-        elif vehicle_tid:
-            domain.append(("vehicle_tid", "=", vehicle_tid))
-        else:
-            return "check_in"
-        if event_time:
-            domain.append(("event_time", "<", event_time))
-        last = self.search(domain, order="event_time desc, id desc", limit=1)
-        return "check_out" if last and last.event_type == "check_in" else "check_in"
+    def _resolve_event_type(self, direction):
+        """Map a resolved physical movement direction to the business event."""
+        event_type = {"entry": "check_in", "exit": "check_out"}.get(direction)
+        if not event_type:
+            raise ValidationError(_("unresolved_movement_direction"))
+        return event_type
 
     @api.model
     def _business_values(self, source):
@@ -378,7 +355,7 @@ class ParkingTransaction(models.Model):
         return events.sorted(key=lambda rec: (rec.detected_at, rec.id))[:1]
 
     @api.model
-    def create_from_detection_group(self, detections):
+    def create_from_detection_group(self, detections, resolved_direction=False):
         """Create one final transaction from one Edge-side detection group."""
         detections = detections.exists().filtered(lambda rec: rec.state == "pending")
         if not detections:
@@ -386,12 +363,15 @@ class ParkingTransaction(models.Model):
 
         lane = detections[:1].lane_id
         controller = lane.controller_id
-        direction = detections[:1].direction
-        if any(
-            rec.lane_id != lane or rec.direction != direction
-            for rec in detections
-        ):
+        if any(rec.lane_id != lane for rec in detections):
             raise ValidationError(_("mixed_detection_group"))
+
+        direction = resolved_direction or lane.direction
+        if direction not in ("entry", "exit"):
+            raise ValidationError(_("unresolved_movement_direction"))
+        if lane.direction != "both" and direction != lane.direction:
+            raise ValidationError(_("movement_direction_not_allowed"))
+
         vehicle_events = detections.filtered(
             lambda rec: rec.card_id.card_type == "vehicle_card"
         )
@@ -405,25 +385,14 @@ class ParkingTransaction(models.Model):
         primary = vehicle_event or user_event or detections.sorted("detected_at")[:1]
         event_time = max(detections.mapped("detected_at"))
 
-        vehicle_tid = vehicle_event.card_id.tid if vehicle_event else False
+        if not vehicle_event:
+            raise ValidationError(_("Vehicle RFID card/TID is required for every Parking Transaction."))
+
+        vehicle_tid = vehicle_event.card_id.tid
         user_tid = user_event.card_id.tid if user_event else False
         vehicle = self._resolve_vehicle_by_tid(vehicle_tid)
         user = self._resolve_user_by_tid(user_tid)
-
-        # A two-way antenna carries no direction in the Controller payload.
-        # Serialize by vehicle before reading continuity so concurrent lanes do
-        # not infer the same event type for the same vehicle.
-        if direction == "both" and vehicle_tid:
-            self.env.cr.execute(
-                "SELECT pg_advisory_xact_lock(hashtext(%s))",
-                (f"nsp.parking:vehicle:{vehicle_tid}",),
-            )
-        event_type = self._resolve_event_type(
-            direction,
-            vehicle=vehicle,
-            vehicle_tid=vehicle_tid,
-            event_time=event_time,
-        )
+        event_type = self._resolve_event_type(direction)
 
         errors = []
         if lane.parking_area_id.state != "operational":
@@ -432,11 +401,9 @@ class ParkingTransaction(models.Model):
             errors.append(("multiple_vehicle_tid", _("Multiple vehicle TIDs were detected in one grouping window.")))
         if len(user_tids) > 1:
             errors.append(("multiple_user_tid", _("Multiple user TIDs were detected in one grouping window.")))
-        if lane.required_vehicle_tid and not vehicle_event:
-            errors.append(("missing_vehicle_tid", _("Vehicle RFID card/TID was not detected.")))
-        elif vehicle_event and not vehicle:
+        if not vehicle:
             errors.append(("vehicle_not_found", _("Vehicle TID is not assigned to an active vehicle.")))
-        if lane.required_user_tid and not user_event:
+        if lane._requires_user_tid(direction) and not user_event:
             errors.append(("missing_user_tid", _("User RFID card/TID was not detected.")))
         elif user_event and not user:
             errors.append(("user_not_assigned", _("User TID is not assigned to an active NSP User.")))

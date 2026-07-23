@@ -108,7 +108,7 @@
                     <notebook>
                         <page string="1. Parking Lanes">
                             <div class="alert alert-secondary" role="alert">
-                                Assign one Controller and one operating direction to each lane. A Two-way lane may use separate Entry/Exit antennas or an antenna configured as Two-way.
+                                Assign one Controller and one operating direction to each lane. Vehicle RFID is always required. User RFID policy is configured independently for Entry and Exit. For a Two-way lane, map antennas to Outside and Inside zones; Edge resolves movement from the zone sequence, then applies the matching User RFID policy.
                             </div>
                             <field name="lane_ids" context="{'default_parking_area_id': id}">
                                 <list editable="bottom">
@@ -117,8 +117,9 @@
                                     <field name="name" string="Lane Name"/>
                                     <field name="controller_id" options="{'no_create': False, 'no_open': False}"/>
                                     <field name="direction"/>
-                                    <field name="required_vehicle_tid" optional="hide"/>
-                                    <field name="required_user_tid" optional="hide"/>
+                                    <field name="require_user_tid_entry" optional="hide"/>
+                                    <field name="require_user_tid_exit" optional="hide"/>
+                                    <field name="transition_window_seconds" optional="hide"/>
                                     <field name="grouping_window_seconds" optional="hide"/>
                                     <field name="repeat_suppression_seconds" optional="hide"/>
                                     <field name="active" widget="boolean_toggle"/>
@@ -129,14 +130,14 @@
 
                         <page string="2. Antenna Mapping">
                             <div class="alert alert-secondary" role="alert">
-                                Configure each antenna as Entry, Exit or Two-way. The Controller sends only the Reader serial, antenna number, detection time and TID. Edge resolves direction from this mapping; for a Two-way antenna, Edge derives Check-in or Check-out from the vehicle's latest accepted transaction.
+                                For a Two-way lane, configure each antenna as Outside or Inside. Outside → Inside means Entry/Check-in; Inside → Outside means Exit/Check-out. One-way lanes do not require antenna zones.
                             </div>
                             <button name="action_open_antenna_mappings" type="object"
                                     string="Configure Antenna Mappings" class="oe_highlight" icon="fa-exchange"/>
                             <field name="lane_antenna_mapping_ids" readonly="1">
                                 <list create="0" delete="0">
                                     <field name="lane_id"/>
-                                    <field name="direction"/>
+                                    <field name="zone"/>
                                     <field name="controller_id"/>
                                     <field name="device_id" string="Reader"/>
                                     <field name="serial_number" string="Reader Serial" optional="hide"/>
@@ -195,8 +196,9 @@
                         </group>
                         <group string="Event Processing">
                             <field name="direction"/>
-                            <field name="required_vehicle_tid"/>
-                            <field name="required_user_tid"/>
+                            <field name="require_user_tid_entry" invisible="direction == 'exit'"/>
+                            <field name="require_user_tid_exit" invisible="direction == 'entry'"/>
+                            <field name="transition_window_seconds" invisible="direction != 'both'"/>
                             <field name="grouping_window_seconds"/>
                             <field name="repeat_suppression_seconds"/>
                             <field name="antenna_count" readonly="1"/>
@@ -205,12 +207,12 @@
                     <notebook>
                         <page string="Antenna Mapping">
                             <div class="alert alert-info" role="alert">
-                                Select only antennas belonging to the Lane Controller. Reader Power is configured once on the Reader. Minimum RSSI is configured per Antenna, not on the lane mapping.
+                                Select only antennas belonging to the Lane Controller. Two-way lanes require Outside/Inside zones. One-way lanes leave Zone empty. Reader Power and Minimum RSSI remain Reader/Antenna technical settings.
                             </div>
                             <field name="antenna_mapping_ids" context="{'default_lane_id': id}">
                                 <list editable="bottom">
                                     <field name="lane_controller_id" column_invisible="1"/>
-                                    <field name="direction"/>
+                                    <field name="zone"/>
                                     <field name="antenna_ref_id" string="Antenna"
                                            domain="[('device_id.controller_id','=',parent.controller_id)]"/>
                                     <field name="device_id" string="Reader" readonly="1"/>
@@ -240,7 +242,7 @@
                 <field name="lane_controller_id" column_invisible="1"/>
                 <field name="parking_area_id" readonly="1"/>
                 <field name="lane_id"/>
-                <field name="direction"/>
+                <field name="zone"/>
                 <field name="antenna_ref_id" string="Antenna"
                        domain="[('device_id.controller_id','=',lane_controller_id)]"/>
                 <field name="controller_id" readonly="1"/>
@@ -266,7 +268,7 @@
                             <field name="lane_id"/>
                             <field name="parking_area_id" readonly="1"/>
                             <field name="lane_controller_id" readonly="1"/>
-                            <field name="direction"/>
+                            <field name="zone"/>
                         </group>
                         <group string="Antenna">
                             <field name="antenna_ref_id"

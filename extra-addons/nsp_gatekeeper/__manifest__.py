@@ -2,7 +2,7 @@
     'name': 'NSP Gatekeeper',
     'summary': 'Main NSP Gatekeeper module',
     'description': 'NSP Gatekeeper infrastructure, parking runtime, configuration and measurement APIs.',
-    'version': '19.0.36.1.0',
+    'version': '19.0.41.0.0',
     'sequence': -1,
     'author': 'BKU Team',
     'category': 'Services',

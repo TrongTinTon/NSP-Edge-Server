@@ -1647,7 +1647,6 @@ class NspGatekeeperApiService(models.AbstractModel):
         mapping = self.env["nsp.parking.lane.antenna.mapping"].sudo().search([
             ("lane_id", "=", lane.id),
             ("antenna_ref_id", "=", antenna.id),
-            ("direction", "in", [direction, "both"]),
         ], limit=1)
         if not mapping:
             raise ValueError("no_antenna_rule")
@@ -1656,6 +1655,8 @@ class NspGatekeeperApiService(models.AbstractModel):
             raise ValueError("invalid_decision")
         Transaction = self.env["nsp.parking.transaction"].sudo()
         vehicle_tid = str(item.get("vehicle_tid") or "").strip()
+        if not vehicle_tid:
+            raise ValueError("missing_vehicle_tid")
         user_tid = str(item.get("user_tid") or "").strip()
         vehicle = Transaction._resolve_vehicle_by_tid(vehicle_tid)
         user = Transaction._resolve_user_by_tid(user_tid)
@@ -1728,20 +1729,20 @@ class NspGatekeeperApiService(models.AbstractModel):
 
     @endpoint("NSP Controller Parking Detection Push", route_suffix="parking/detections/push", methods="POST", code="nsp_controller_parking_detection_push")
     def api_parking_detection_push(self):
-        """Accept one raw TID detection from an authenticated Controller.
+        """Accept a batch of raw TID detections from one authenticated Controller.
 
-        The Controller only reports what it detects. Edge validates and handles
-        the detection internally, then returns one minimal acknowledgement.
+        The Controller only reports physical detections. One batch may contain
+        detections from multiple Readers and antennas owned by that Controller.
+        Edge validates, suppresses repeated reads, groups detections, and creates
+        Parking Transactions internally. The Controller receives only one minimal
+        acknowledgement for an accepted batch.
         """
         data = self._payload()
         controller, error = self._auth_controller(data)
         if error:
             return error
 
-        allowed_fields = {
-            "event_uid", "controller_code", "serial_number", "antenna_no",
-            "detected_at", "tid",
-        }
+        allowed_fields = {"controller_code", "detections"}
         unsupported = sorted(set(data) - allowed_fields)
         if unsupported:
             return self._error(
@@ -1751,45 +1752,107 @@ class NspGatekeeperApiService(models.AbstractModel):
                 details={"unsupported_fields": unsupported},
             )
 
-        key = str(data.get("event_uid") or "").strip()
-        detected_at = self._safe_datetime_value(data.get("detected_at"), default_now=False)
-        if not detected_at:
+        incoming = data.get("detections")
+        if not isinstance(incoming, list) or not incoming:
             return self._error(
-                "detected_at is required or invalid",
+                "detections must be a non-empty array",
                 400,
                 error_code="parking_detection_rejected",
-                details={"record_key": key, "field": "detected_at"},
+                details={"field": "detections"},
             )
-        # Normalize the timestamp once at the API boundary. Downstream parking
-        # logic receives the canonical Odoo UTC datetime string and does not
-        # need to understand ISO-8601 transport variants such as a trailing Z.
-        data = dict(data, detected_at=detected_at)
-
-        tid = self.env["nsp.rfid.card"]._normalize_tid(data.get("tid"))
-        card = (
-            self.env["nsp.rfid.card"].sudo().search([("tid", "=", tid)], limit=1)
-            if tid else self.env["nsp.rfid.card"]
-        )
-
-        # Unknown TIDs are discarded at the API boundary. The Controller only
-        # needs an acknowledgement that Edge accepted the request, so all
-        # accepted detections return the same empty success payload.
-        if tid and not card:
-            _logger.debug(
-                "Parking detection ignored because TID is not registered: "
-                "controller=%s tid=%s event_uid=%s",
-                controller.controller_id, tid, key,
+        if len(incoming) > 1000:
+            return self._error(
+                "detections exceeds the maximum batch size of 1000",
+                400,
+                error_code="parking_detection_rejected",
+                details={"field": "detections", "max_items": 1000},
             )
-        else:
-            try:
-                with self.env.cr.savepoint():
-                    self.env["nsp.parking.detection.event"].sudo().ingest_controller_detection(
-                        controller, data, card
-                    )
-            except Exception as exc:
+
+        item_fields = {"event_uid", "serial_number", "antenna_no", "detected_at", "tid"}
+        normalized = []
+        tids = set()
+        Card = self.env["nsp.rfid.card"].sudo()
+
+        # Validate the whole transport contract before writing any detection.
+        for index, item in enumerate(incoming):
+            if not isinstance(item, dict):
                 return self._error(
-                    str(exc), 400, error_code="parking_detection_rejected",
-                    details={"record_key": key},
+                    "Each detection must be an object",
+                    400,
+                    error_code="parking_detection_rejected",
+                    details={"index": index},
+                )
+            unsupported_item = sorted(set(item) - item_fields)
+            if unsupported_item:
+                return self._error(
+                    "invalid_payload: unsupported detection field(s): %s" % ", ".join(unsupported_item),
+                    400,
+                    error_code="parking_detection_rejected",
+                    details={"index": index, "unsupported_fields": unsupported_item},
+                )
+
+            event_uid = str(item.get("event_uid") or "").strip()
+            serial_number = str(item.get("serial_number") or "").strip().upper()
+            tid = Card._normalize_tid(item.get("tid"))
+            detected_at = self._safe_datetime_value(item.get("detected_at"), default_now=False)
+            try:
+                antenna_no = int(item.get("antenna_no") or 0)
+            except (TypeError, ValueError):
+                antenna_no = 0
+
+            missing = []
+            if not event_uid:
+                missing.append("event_uid")
+            if not serial_number:
+                missing.append("serial_number")
+            if antenna_no <= 0:
+                missing.append("antenna_no")
+            if not detected_at:
+                missing.append("detected_at")
+            if not tid:
+                missing.append("tid")
+            if missing:
+                return self._error(
+                    "Invalid or missing detection field(s): %s" % ", ".join(missing),
+                    400,
+                    error_code="parking_detection_rejected",
+                    details={"index": index, "fields": missing, "record_key": event_uid},
+                )
+
+            payload = {
+                "event_uid": event_uid,
+                "serial_number": serial_number,
+                "antenna_no": antenna_no,
+                "detected_at": detected_at,
+                "tid": tid,
+            }
+            normalized.append(payload)
+            tids.add(tid)
+
+        # One database lookup for all cards in the batch. Unknown TIDs are
+        # terminally ignored at the API boundary and are never persisted.
+        cards_by_tid = {
+            card.tid: card
+            for card in Card.search([("tid", "in", list(tids))])
+        }
+        accepted = [
+            (payload, cards_by_tid[payload["tid"]])
+            for payload in normalized
+            if payload["tid"] in cards_by_tid
+        ]
+
+        if accepted:
+            try:
+                self.env["nsp.parking.detection.event"].sudo().ingest_controller_detections(
+                    controller, accepted
+                )
+            except Exception as exc:
+                _logger.exception(
+                    "Parking detection batch failed: controller=%s count=%s",
+                    controller.controller_id, len(accepted),
+                )
+                return self._error(
+                    str(exc), 500, error_code="parking_detection_failed"
                 )
 
         return {"status_code": 200, "status": "success", "message": "OK", "data": {}}

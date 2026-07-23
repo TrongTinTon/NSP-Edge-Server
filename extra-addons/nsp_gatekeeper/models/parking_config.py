@@ -199,33 +199,36 @@ class NspParkingArea(models.Model):
             mappings = []
             for mapping in lane.antenna_mapping_ids.sorted(
                 key=lambda item: (
-                    item.direction,
+                    item.zone or "",
                     item.serial_number or "",
                     item.antenna_no,
                     item.id,
                 )
             ):
-                mappings.append(
-                    {
-                        "direction": mapping.direction,
-                        "serial_number": mapping.serial_number or "",
-                        "antenna_no": int(mapping.antenna_no or 0),
-                    }
-                )
-            result.append(
-                {
-                    "lane_code": lane.code,
-                    "lane_name": lane.name,
-                    "lane_no": int(lane.lane_no or 0),
-                    "controller_code": lane.controller_id.controller_id,
-                    "direction": lane.direction,
-                    "required_vehicle_tid": bool(lane.required_vehicle_tid),
-                    "required_user_tid": bool(lane.required_user_tid),
-                    "grouping_window_seconds": int(lane.grouping_window_seconds or 3),
-                    "repeat_suppression_seconds": int(lane.repeat_suppression_seconds or 10),
-                    "antenna_mappings": mappings,
+                mapping_payload = {
+                    "serial_number": mapping.serial_number or "",
+                    "antenna_no": int(mapping.antenna_no or 0),
                 }
-            )
+                if lane.direction == "both":
+                    mapping_payload["zone"] = mapping.zone
+                mappings.append(mapping_payload)
+            lane_payload = {
+                "lane_code": lane.code,
+                "lane_name": lane.name,
+                "lane_no": int(lane.lane_no or 0),
+                "controller_code": lane.controller_id.controller_id,
+                "direction": lane.direction,
+                "require_user_tid_entry": bool(lane.require_user_tid_entry),
+                "require_user_tid_exit": bool(lane.require_user_tid_exit),
+                "grouping_window_seconds": int(lane.grouping_window_seconds or 3),
+                "repeat_suppression_seconds": int(lane.repeat_suppression_seconds or 1),
+                "antenna_mappings": mappings,
+            }
+            if lane.direction == "both":
+                lane_payload["transition_window_seconds"] = int(
+                    lane.transition_window_seconds or 10
+                )
+            result.append(lane_payload)
         return result
 
     def _operational_issues(self):
@@ -251,21 +254,21 @@ class NspParkingArea(models.Model):
                 )
                 continue
 
-            expected_directions = (
-                {"entry", "exit"} if lane.direction == "both" else {lane.direction}
-            )
-            mapped_directions = set(mappings.mapped("direction"))
-            covered_directions = set(mapped_directions)
-            if "both" in mapped_directions:
-                covered_directions.update({"entry", "exit"})
-            missing_directions = expected_directions - covered_directions
-            if missing_directions:
+            if lane.direction == "both":
+                mapped_zones = set(mappings.mapped("zone"))
+                missing_zones = {"outside", "inside"} - mapped_zones
+                if missing_zones:
+                    issues.append(
+                        _("Two-way Lane %(lane)s requires antenna mappings for zones: %(zones)s.")
+                        % {
+                            "lane": lane_name,
+                            "zones": ", ".join(sorted(missing_zones)),
+                        }
+                    )
+            elif mappings.filtered("zone"):
                 issues.append(
-                    _("Lane %(lane)s is missing antenna mapping for: %(directions)s.")
-                    % {
-                        "lane": lane_name,
-                        "directions": ", ".join(sorted(missing_directions)),
-                    }
+                    _("One-way Lane %(lane)s must not configure antenna zones.")
+                    % {"lane": lane_name}
                 )
 
             wrong_scope = mappings.filtered(
@@ -445,19 +448,48 @@ class NspParkingLane(models.Model):
         required=True,
         default="entry",
         index=True,
+        help=(
+            "Physical operating direction of the lane. Two-way direction is resolved "
+            "from Outside/Inside antenna-zone transitions at Edge."
+        ),
     )
-    required_vehicle_tid = fields.Boolean(string="Require Vehicle TID", default=True)
-    required_user_tid = fields.Boolean(string="Require User TID", default=False)
+    require_user_tid_entry = fields.Boolean(
+        string="Require User TID on Entry",
+        default=False,
+        help="Require a registered User RFID card when the resolved movement is Entry/Check-in.",
+    )
+    require_user_tid_exit = fields.Boolean(
+        string="Require User TID on Exit",
+        default=True,
+        help="Require a registered User RFID card when the resolved movement is Exit/Check-out.",
+    )
+    transition_window_seconds = fields.Integer(
+        string="Transition Window (Seconds)",
+        default=10,
+        required=True,
+        help=(
+            "For a Two-way lane, maximum time between detections of the same RFID card "
+            "in opposite antenna zones. Outside to Inside resolves Entry; Inside to "
+            "Outside resolves Exit."
+        ),
+    )
     grouping_window_seconds = fields.Integer(
-        string="Grouping Window (Seconds)", default=3, required=True,
-        help="Edge waits up to this duration to group vehicle and user TIDs into one transaction.",
+        string="Grouping Window (Seconds)",
+        default=3,
+        required=True,
+        help=(
+            "After movement direction is known, Edge waits up to this duration to group "
+            "vehicle and user RFID cards into one Parking Transaction."
+        ),
     )
     repeat_suppression_seconds = fields.Integer(
-        string="Repeat Read Suppression (Seconds)", default=10, required=True,
+        string="Repeat Read Suppression (Seconds)",
+        default=1,
+        required=True,
         help=(
-            "Edge ignores repeated reads of the same RFID card on the same lane "
-            "during this cooldown. Controller request retries are handled separately "
-            "by event_uid idempotency."
+            "For One-way lanes, Edge suppresses the same RFID card across the whole Lane. "
+            "For Two-way lanes, suppression is per antenna so a read in the opposite zone "
+            "is preserved for movement resolution. event_uid handles request retries separately."
         ),
     )
     active = fields.Boolean(default=True, index=True)
@@ -478,13 +510,30 @@ class NspParkingLane(models.Model):
             "Lane number must be unique within a Parking Area.",
         ),
         ("lane_no_positive", "CHECK(lane_no > 0)", "Lane number must be greater than zero."),
-        ("grouping_window_positive", "CHECK(grouping_window_seconds >= 1)", "Grouping window must be at least one second."),
         (
-            "repeat_suppression_not_shorter_than_grouping",
-            "CHECK(repeat_suppression_seconds >= grouping_window_seconds)",
-            "Repeat read suppression must be greater than or equal to the grouping window.",
+            "transition_window_positive",
+            "CHECK(transition_window_seconds >= 1)",
+            "Transition window must be at least one second.",
+        ),
+        (
+            "grouping_window_positive",
+            "CHECK(grouping_window_seconds >= 1)",
+            "Grouping window must be at least one second.",
+        ),
+        (
+            "repeat_suppression_positive",
+            "CHECK(repeat_suppression_seconds >= 1)",
+            "Repeat read suppression must be at least one second.",
         ),
     ]
+
+    def _requires_user_tid(self, direction):
+        self.ensure_one()
+        if direction == "entry":
+            return bool(self.require_user_tid_entry)
+        if direction == "exit":
+            return bool(self.require_user_tid_exit)
+        return False
 
     @api.depends("parking_area_id.code", "code", "name")
     def _compute_display_name(self):
@@ -529,22 +578,13 @@ class NspParkingLane(models.Model):
                 raise ValidationError(
                     _("Existing antenna mappings do not belong to the selected Lane Controller.")
                 )
-        if "direction" in values:
-            invalid_direction = self.mapped("antenna_mapping_ids").filtered(
-                lambda item: item.lane_id.direction != "both"
-                and item.direction != item.lane_id.direction
-            )
-            if invalid_direction:
-                raise ValidationError(
-                    _("Existing antenna mappings do not match the selected Lane direction.")
-                )
         return result
 
 
 class NspParkingLaneAntennaMapping(models.Model):
     _name = "nsp.parking.lane.antenna.mapping"
     _description = "NSP Parking Lane Antenna Mapping"
-    _order = "lane_id, direction, id"
+    _order = "lane_id, zone, id"
     _rec_name = "rule_name"
 
     rule_name = fields.Char(compute="_compute_rule_name")
@@ -561,15 +601,14 @@ class NspParkingLaneAntennaMapping(models.Model):
     lane_controller_id = fields.Many2one(
         "nsp.controller", related="lane_id.controller_id", readonly=True
     )
-    direction = fields.Selection(
-        [
-            ("entry", "Entry"),
-            ("exit", "Exit"),
-            ("both", "Two-way"),
-        ],
-        required=True,
-        default="entry",
+    zone = fields.Selection(
+        [("outside", "Outside"), ("inside", "Inside")],
+        string="Zone",
         index=True,
+        help=(
+            "Used only for Two-way lanes. Outside → Inside resolves Entry; "
+            "Inside → Outside resolves Exit. Leave empty on one-way lanes."
+        ),
     )
     antenna_ref_id = fields.Many2one(
         "nsp.device.antenna",
@@ -594,32 +633,34 @@ class NspParkingLaneAntennaMapping(models.Model):
         (
             "unique_antenna_mapping",
             "unique(antenna_ref_id)",
-            "An antenna can be mapped to only one Parking Lane direction.",
+            "An antenna can be mapped to only one Parking Lane.",
         ),
     ]
 
     @api.depends(
         "parking_area_id.code",
         "lane_id.code",
+        "lane_id.direction",
         "serial_number",
         "antenna_no",
-        "direction",
+        "zone",
     )
     def _compute_rule_name(self):
         for rec in self:
+            suffix = rec.zone.title() if rec.zone else rec.lane_id.direction.title()
             rec.rule_name = "%s / %s / %s:%s / %s" % (
                 rec.parking_area_id.code or "Parking",
                 rec.lane_id.code or "Lane",
                 rec.serial_number or "Reader",
                 rec.antenna_no or "",
-                rec.direction or "",
+                suffix or "",
             )
 
     @api.onchange("lane_id")
     def _onchange_lane_id(self):
         for rec in self:
-            if rec.lane_id and rec.lane_id.direction in ("entry", "exit"):
-                rec.direction = rec.lane_id.direction
+            if rec.lane_id and rec.lane_id.direction != "both":
+                rec.zone = False
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -628,8 +669,8 @@ class NspParkingLaneAntennaMapping(models.Model):
         for source in vals_list:
             vals = dict(source)
             lane = Lane.browse(vals.get("lane_id")).exists()
-            if lane and lane.direction in ("entry", "exit"):
-                vals["direction"] = lane.direction
+            if lane and lane.direction != "both":
+                vals["zone"] = False
             prepared.append(vals)
         return super().create(prepared)
 
@@ -638,11 +679,11 @@ class NspParkingLaneAntennaMapping(models.Model):
         lane = self.env["nsp.parking.lane"].sudo().browse(
             values.get("lane_id")
         ).exists() if values.get("lane_id") else self[:1].lane_id
-        if lane and lane.direction in ("entry", "exit"):
-            values["direction"] = lane.direction
+        if lane and lane.direction != "both":
+            values["zone"] = False
         return super().write(values)
 
-    @api.constrains("lane_id", "antenna_ref_id", "direction")
+    @api.constrains("lane_id", "antenna_ref_id", "zone")
     def _check_mapping(self):
         for rec in self:
             if rec.controller_id != rec.lane_id.controller_id:
@@ -654,11 +695,11 @@ class NspParkingLaneAntennaMapping(models.Model):
                 raise ValidationError(
                     _("Antenna must belong to a Reader in Device Whitelist.")
                 )
-            if rec.lane_id.direction in ("entry", "exit") and rec.direction != rec.lane_id.direction:
-                raise ValidationError(
-                    _("A one-way Lane antenna mapping must match the Lane direction.")
-                )
-            if rec.direction not in ("entry", "exit", "both"):
-                raise ValidationError(
-                    _("Antenna mapping direction must be Entry, Exit or Two-way.")
-                )
+            if rec.lane_id.direction == "both" and rec.zone not in ("outside", "inside"):
+                raise ValidationError(_(
+                    "A Two-way Lane antenna mapping requires Zone = Outside or Inside."
+                ))
+            if rec.lane_id.direction != "both" and rec.zone:
+                raise ValidationError(_(
+                    "A one-way Lane antenna mapping must not define a zone."
+                ))
