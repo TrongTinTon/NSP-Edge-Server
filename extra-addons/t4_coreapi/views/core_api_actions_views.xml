@@ -10,7 +10,6 @@
                 <field name="route_suffix"/>
                 <field name="http_methods"/>
                 <field name="model_id"/>
-                <!-- <field name="endpoint_manager_id"/> -->
             </list>
         </field>
     </record>

@@ -79,11 +79,6 @@ class IrHttp(models.AbstractModel):
         request.session.can_save = False
 
     @classmethod
-    def _auth_method_validate_core_api(cls):
-        """Alias auth method. Same gatekeeper as core_api."""
-        cls._auth_method_core_api()
-
-    @classmethod
     def _handle_error(cls, exception):
         """Return JSON error bodies for Core API gateway routes."""
         if cls._is_core_api_request():

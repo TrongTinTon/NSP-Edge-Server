@@ -11,15 +11,13 @@ class NspUser(models.Model):
     _rec_name = "name"
     _order = "user_code, name, id"
 
-    display_name = fields.Char(string="Display Name", compute="_compute_display_name", store=True)
     user_code = fields.Char(
-        string="User Code", required=True, readonly=True, copy=False, index=True, tracking=True,
+        string="User Code", required=True, readonly=True, copy=False, index=True,
         default=lambda self: new_management_code("USER"),
         help="Stable user code synced to Controller. This replaces HR Code and does not depend on Odoo HR.",
     )
     name = fields.Char(string="User Name", required=True, tracking=True)
     active = fields.Boolean(default=True, tracking=True, index=True)
-    pin = fields.Char(string="PIN", copy=False, tracking=True)
     email = fields.Char(string="Email")
     phone = fields.Char(string="Phone")
     note = fields.Text(string="Note")
@@ -42,11 +40,6 @@ class NspUser(models.Model):
         ("user_code_unique", "unique(user_code)", "User Code must be unique."),
     ]
 
-    @api.depends("name")
-    def _compute_display_name(self):
-        for rec in self:
-            rec.display_name = rec.name or _("User")
-
     @api.depends("user_card_ids.state", "user_card_ids.tid", "user_card_ids.card_id.tid")
     def _compute_card_tids(self):
         for rec in self:
@@ -59,8 +52,10 @@ class NspUser(models.Model):
 
     def _compute_accepted_friends(self):
         Friendship = self.env["nsp.user.friendship"].sudo()
+        friend_map = Friendship.accepted_friends_map(self)
+        User = self.env["nsp.user"]
         for rec in self:
-            rec.accepted_friend_ids = Friendship.accepted_friends(rec)
+            rec.accepted_friend_ids = User.browse(friend_map.get(rec.id, []))
 
     @api.model
     def _normalize_code(self, value):

@@ -7,24 +7,22 @@ from odoo.addons.nsp_core.utils import new_management_code
 class NspBranch(models.Model):
     _name = "nsp.branch"
     _description = "NSP Branch"
-    _inherit = ["mail.thread", "mail.activity.mixin"]
     _rec_name = "name"
     _order = "code, name, id"
 
-    name = fields.Char(string="Branch Name", required=True, tracking=True)
+    name = fields.Char(string="Branch Name", required=True)
     code = fields.Char(
-        string="Branch Code", required=True, readonly=True, index=True, tracking=True, copy=False,
+        string="Branch Code", required=True, readonly=True, index=True, copy=False,
         default=lambda self: new_management_code("BRN"),
     )
     status = fields.Selection([
         ("active", "Active"),
         ("inactive", "Inactive"),
-    ], string="Status", default="active", required=True, tracking=True, index=True)
+    ], string="Status", default="active", required=True, index=True)
     timezone = fields.Char(
         string="Timezone",
         default="Asia/Ho_Chi_Minh",
         required=True,
-        tracking=True,
         help="Branch-level IANA timezone used for parking operations at this branch.",
     )
     note = fields.Text(string="Note")
@@ -73,25 +71,3 @@ class NspBranch(models.Model):
             tz = str(rec.timezone or "").strip()
             if not tz or (tz != "UTC" and "/" not in tz):
                 raise ValidationError(_("Branch Timezone must be an IANA value, for example Asia/Ho_Chi_Minh."))
-
-    @api.model
-    def _table_exists(self, table_name):
-        self.env.cr.execute("SELECT to_regclass(%s)", (table_name,))
-        return bool(self.env.cr.fetchone()[0])
-
-    @api.model
-    def get_default_branch(self):
-        """Return/create the default Branch only after the table is available."""
-        Branch = self.sudo()
-        if not Branch._table_exists("nsp_branch"):
-            return Branch.browse()
-        branch = Branch.search([("code", "=", "DEFAULT")], limit=1)
-        if branch:
-            return branch
-        return Branch.create({
-            "name": "Default Branch",
-            "code": "DEFAULT",
-            "status": "active",
-            "timezone": "Asia/Ho_Chi_Minh",
-            "note": "Automatically created as the default NSP branch.",
-        })

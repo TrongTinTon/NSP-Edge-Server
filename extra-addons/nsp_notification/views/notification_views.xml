@@ -8,9 +8,12 @@
                 <field name="name"/>
                 <field name="message"/>
                 <field name="controller_code"/>
+                <field name="recipient_user_id"/>
+                <field name="transaction_uid"/>
                 <field name="device_serial"/>
                 <filter string="Unread" name="unread" domain="[('state','=','unread')]"/>
                 <filter string="Device Security" name="device_security" domain="[('category','=','device_security')]"/>
+                <filter string="Parking" name="parking" domain="[('category','=','parking')]"/>
                 <filter string="Critical" name="critical" domain="[('severity','=','critical')]"/>
                 <separator/>
                 <group>
@@ -38,7 +41,9 @@
                        decoration-muted="state == 'archived'"/>
                 <field name="category"/>
                 <field name="name"/>
-                <field name="controller_code" optional="show"/>
+                <field name="recipient_user_id" optional="show"/>
+                <field name="parking_event_type" optional="show"/>
+                <field name="controller_code" optional="hide"/>
                 <field name="device_serial" optional="show"/>
             </list>
         </field>
@@ -53,7 +58,7 @@
                     <button name="action_mark_read" string="Mark Read" type="object" class="oe_highlight" invisible="state != 'unread'"/>
                     <button name="action_mark_unread" string="Mark Unread" type="object" invisible="state != 'read'"/>
                     <button name="action_archive" string="Archive" type="object" invisible="state == 'archived'"/>
-                    <field name="state" widget="statusbar" statusbar_visible="unread,read,archived"/>
+                    <field name="state" widget="statusbar" statusbar_visible="unread,read,archived" readonly="1"/>
                 </header>
                 <sheet>
                     <div class="oe_title">
@@ -67,7 +72,10 @@
                             <field name="event_time" readonly="1"/>
                             <field name="message" readonly="1"/>
                         </group>
-                        <group string="Device Context">
+                        <group string="Source Context">
+                            <field name="recipient_user_id" readonly="1"/>
+                            <field name="parking_event_type" readonly="1"/>
+                            <field name="transaction_uid" readonly="1" widget="CopyClipboardChar"/>
                             <field name="controller_code" readonly="1"/>
                             <field name="device_serial" readonly="1"/>
                             <field name="source_model" readonly="1"/>
@@ -77,7 +85,6 @@
                         </group>
                     </group>
                 </sheet>
-                <chatter/>
             </form>
         </field>
     </record>

@@ -88,7 +88,7 @@
                     </div>
 
                     <div class="alert alert-info" role="alert">
-                        Configure the server-owned parking topology here. Each lane selects one Controller and maps its Reader antenna ports to Entry, Exit or Two-way. Controllers receive only Reader parameters and per-antenna RF settings; branch, parking area, lane and direction remain on the server.
+                        Configure the server-owned parking topology here. Each lane selects one Controller and one lane direction. For Two-way lanes, map Reader antenna ports to Outside or Inside zones; One-way lanes do not require zones. Controllers receive only Reader parameters and per-antenna RF settings; branch, parking area and lane business rules remain on the server.
                     </div>
 
                     <group>

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import inspect
 import re
-from odoo import models, fields, api, _
+from odoo import models, fields, _
 from odoo.exceptions import UserError
 
 
@@ -17,12 +17,6 @@ class ActionEndpointManager(models.Model):
         required=True,
         domain=[('transient', '=', False)],
         ondelete='cascade',
-    )
-
-    generated_action_ids = fields.One2many(
-        'ir.actions.server',
-        'endpoint_manager_id',
-        string='Server Actions',
     )
 
     core_api_action_ids = fields.One2many(
@@ -117,46 +111,6 @@ class ActionEndpointManager(models.Model):
                 existing_action.write(vals)
             else:
                 CAaction.create(vals)
-
-    def _generate_endpoints(self):
-        self.ensure_one()
-        ActionServer = self.env['ir.actions.server'].sudo()
-        for method_name, func in self._get_endpoint_methods():
-            action_name = getattr(func, '_endpoint_name')
-            code_body = f"model.{method_name}()"
-            existing_action = ActionServer.search([
-                ('endpoint_manager_id', '=', self.id),
-                ('name', '=', action_name),
-            ], limit=1)
-            vals = {
-                'name': action_name,
-                'model_id': self.model_id.id,
-                'state': 'code',
-                'code': code_body,
-                'type': 'ir.actions.server',
-                'endpoint_manager_id': self.id,
-                'binding_model_id': False,
-                'binding_type': 'action',
-            }
-            if existing_action:
-                existing_action.write(vals)
-            else:
-                ActionServer.create(vals)
-
-    def action_generate_endpoints(self):
-        self.ensure_one()
-        self._generate_endpoints()
-        return {
-            'type': 'ir.actions.client',
-            'tag': 'display_notification',
-            'params': {
-                'title': _('Success'),
-                'message': _('Endpoints have been synchronized for model %s.') % self.model_id.model,
-                'type': 'success',
-                'sticky': False,
-                'next': {'type': 'ir.actions.client', 'tag': 'reload'},
-            }
-        }
 
     def _generate_core_api_routes_for_applications(self, applications, version=False):
         self.ensure_one()

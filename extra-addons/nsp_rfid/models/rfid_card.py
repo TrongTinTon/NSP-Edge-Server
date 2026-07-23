@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+from collections import defaultdict
+
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
 
@@ -49,38 +51,59 @@ class RfidCard(models.Model):
 
     @api.depends("card_type", "tid")
     def _compute_usage(self):
+        """Resolve assignment labels in at most two queries for the whole batch."""
+        card_ids = [record.id for record in self if isinstance(record.id, int)]
+        user_names = defaultdict(list)
+        vehicle_names = defaultdict(list)
+
+        if card_ids and self._model_ready("nsp.user.card"):
+            lines = self.env["nsp.user.card"].sudo().search([
+                ("card_id", "in", card_ids),
+                ("state", "=", "active"),
+            ])
+            for line in lines:
+                if line.card_id and line.user_id:
+                    user_names[line.card_id.id].append(
+                        line.user_id.display_name or line.user_id.name or line.user_id.user_code
+                    )
+
+        if card_ids and self._model_ready("nsp.vehicle.card"):
+            lines = self.env["nsp.vehicle.card"].sudo().search([
+                ("card_id", "in", card_ids),
+                ("state", "=", "active"),
+            ])
+            for line in lines:
+                if line.card_id and line.vehicle_id:
+                    vehicle_names[line.card_id.id].append(
+                        line.vehicle_id.license_plate or line.vehicle_id.display_name
+                    )
+
         for card in self:
-            user_names = card._assigned_users()
-            vehicle_names = card._assigned_vehicles()
-            used = bool(user_names or vehicle_names)
-            card.is_used = used
-            card.usage_state = "used" if used else "available"
-            labels = []
-            labels += ["User: %s" % name for name in user_names if name]
-            labels += ["Vehicle: %s" % name for name in vehicle_names if name]
+            users = user_names.get(card.id, [])
+            vehicles = vehicle_names.get(card.id, [])
+            card.is_used = bool(users or vehicles)
+            card.usage_state = "used" if card.is_used else "available"
+            labels = ["User: %s" % name for name in users if name]
+            labels.extend("Vehicle: %s" % name for name in vehicles if name)
             card.assigned_to = ", ".join(labels)
-
-    def _assigned_users(self):
-        self.ensure_one()
-        if not self.id or not isinstance(self.id, int) or not self._model_ready("nsp.user.card"):
-            return []
-        lines = self.env["nsp.user.card"].sudo().search([("card_id", "=", self.id), ("state", "=", "active")])
-        return [line.user_id.display_name or line.user_id.name or line.user_id.user_code for line in lines if line.user_id]
-
-    def _assigned_vehicles(self):
-        self.ensure_one()
-        if not self.id or not isinstance(self.id, int) or not self._model_ready("nsp.vehicle.card"):
-            return []
-        lines = self.env["nsp.vehicle.card"].sudo().search([("card_id", "=", self.id), ("state", "=", "active")])
-        return [line.vehicle_id.license_plate or line.vehicle_id.display_name for line in lines if line.vehicle_id]
 
     @api.model
     def _used_card_ids(self):
         used = set()
         if self._model_ready("nsp.user.card"):
-            used.update(self.env["nsp.user.card"].sudo().search([("card_id", "!=", False), ("state", "=", "active")]).mapped("card_id").ids)
+            used.update(
+                self.env["nsp.user.card"].sudo().search([
+                    ("card_id", "!=", False),
+                    ("state", "=", "active"),
+                ]).mapped("card_id").ids
+            )
         if self._model_ready("nsp.vehicle.card"):
-            used.update(self.env["nsp.vehicle.card"].sudo().search([("card_id", "!=", False), ("state", "=", "active")]).mapped("card_id").ids)
+            used.update(
+                self.env["nsp.vehicle.card"].sudo().search([
+                    ("card_id", "!=", False),
+                    ("state", "=", "active"),
+                ]).mapped("card_id").ids
+            )
         return list(used)
 
     @api.model
@@ -102,31 +125,20 @@ class RfidCard(models.Model):
     @api.constrains("card_type", "tid")
     def _check_card_data(self):
         for card in self:
+            normalized = card._normalize_tid(card.tid)
             if not card.card_type:
                 raise ValidationError(_("Card Type is required."))
-            if not card._normalize_tid(card.tid):
+            if not normalized:
                 raise ValidationError(_("TID is required."))
-            if card.tid != card._normalize_tid(card.tid):
+            if card.tid != normalized:
                 raise ValidationError(_("TID must be normalized uppercase without spaces."))
-
-    def _clear_references_before_unlink(self):
-        ids = [card_id for card_id in self.ids if isinstance(card_id, int)]
-        if not ids:
-            return
-        if self._model_ready("nsp.user.card"):
-            self.env["nsp.user.card"].sudo().search([("card_id", "in", ids)]).unlink()
-        if self._model_ready("nsp.vehicle.card"):
-            self.env["nsp.vehicle.card"].sudo().search([("card_id", "in", ids)]).unlink()
-
-    def unlink(self):
-        self._clear_references_before_unlink()
-        return super().unlink()
 
     def name_get(self):
         result = []
         simple_name = bool(self.env.context.get("nsp_simple_card_name"))
+        selections = dict(self._fields["card_type"].selection)
         for card in self:
-            label = "%s [%s]" % (card.tid or "", dict(self._fields["card_type"].selection).get(card.card_type, card.card_type or ""))
+            label = "%s [%s]" % (card.tid or "", selections.get(card.card_type, card.card_type or ""))
             if not simple_name and card.is_used and card.assigned_to:
                 label += " - %s" % card.assigned_to
             result.append((card.id, label))

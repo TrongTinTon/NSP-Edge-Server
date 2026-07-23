@@ -15,7 +15,7 @@ SYNC_ROUTE_DIRECTIONS = {
     "edge-server/status": "push",
     "device-whitelist/sync": "pull",
     "branches/sync": "pull",
-    "employees/sync": "pull",
+    "users/sync": "pull",
     "vehicle-config/sync": "pull",
     "vehicles/sync": "pull",
     "cards/sync": "pull",
@@ -32,7 +32,7 @@ DEFAULT_JOB_SETTINGS = {
     "edge-server/status": {"schedule_interval_minutes": 1, "batch_size": 1},
     "device-whitelist/sync": {"schedule_interval_minutes": 1, "batch_size": 1000},
     "branches/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
-    "employees/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
+    "users/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
     "vehicle-config/sync": {"schedule_interval_minutes": 5, "batch_size": 1000},
     "vehicles/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
     "cards/sync": {"schedule_interval_minutes": 5, "batch_size": 1000},
@@ -47,7 +47,7 @@ ACTION_KINDS = {
     "edge-server/status": "edge_server_status",
     "device-whitelist/sync": "device_whitelist",
     "branches/sync": "branch",
-    "employees/sync": "user",
+    "users/sync": "user",
     "vehicle-config/sync": "vehicle_config",
     "vehicles/sync": "vehicle",
     "cards/sync": "card",
@@ -180,20 +180,13 @@ class NspSyncJob(models.Model):
 
     @api.model
     def ensure_default_jobs(self, auth_records):
-        """Create the supported job set for each Cloud Connection exactly once."""
+        """Create/repair the supported job set using bounded queries."""
         auth_records = auth_records.exists()
         if not auth_records:
             return self.browse()
         self._ensure_edge_server_instance()
-        obsolete_jobs = self.search([
-            ("auth_id", "in", auth_records.ids),
-            ("sync_action_id.route_suffix", "=", "devices-status/sync"),
-        ])
-        if obsolete_jobs:
-            obsolete_jobs.unlink()
         Action = self.env["ir.actions.core_api"].sudo()
-        Version = self.env["core.api.version"].sudo()
-        version = Version.get_default_version()
+        version = self.env["core.api.version"].sudo().get_default_version()
         if not version:
             raise UserError(_("A default Core API Version is required before creating Sync Jobs."))
 
@@ -206,20 +199,23 @@ class NspSyncJob(models.Model):
         for action in actions.sorted(key=lambda rec: rec.id):
             route = str(action.route_suffix or "").strip().strip("/")
             action_by_route.setdefault(route, action)
-
         missing_routes = [route for route in NSP_SYNC_ALLOWED_ROUTES if route not in action_by_route]
         if missing_routes:
             raise UserError(
                 _("Missing NSP Core API endpoint definitions: %s") % ", ".join(missing_routes)
             )
 
-        created = self.browse()
-        now = fields.Datetime.now()
-        for auth in auth_records:
-            existing_routes = set(
-                self.search([("auth_id", "=", auth.id)]).mapped("route_suffix")
+        existing_jobs = self.search([("auth_id", "in", auth_records.ids)])
+        existing_by_auth = {}
+        for job in existing_jobs:
+            existing_by_auth.setdefault(job.auth_id.id, set()).add(
+                (job.route_suffix or "").strip().strip("/")
             )
-            vals_list = []
+
+        now = fields.Datetime.now()
+        vals_list = []
+        for auth in auth_records:
+            existing_routes = existing_by_auth.get(auth.id, set())
             for route in NSP_SYNC_ALLOWED_ROUTES:
                 if route in existing_routes:
                     continue
@@ -235,22 +231,22 @@ class NspSyncJob(models.Model):
                     "next_run_at": now,
                     "active": True,
                 })
-            if vals_list:
-                created |= self.create(vals_list)
-            existing_jobs = self.search([("auth_id", "=", auth.id)])
-            for job in existing_jobs:
-                route = (job.route_suffix or "").strip().strip("/")
-                values = {}
-                if route in JOB_SEQUENCE and job.sequence != JOB_SEQUENCE[route]:
-                    values["sequence"] = JOB_SEQUENCE[route]
-                if route in DEFAULT_JOB_SETTINGS:
-                    settings = DEFAULT_JOB_SETTINGS[route]
-                    if job.schedule_interval_minutes < 1:
-                        values["schedule_interval_minutes"] = settings["schedule_interval_minutes"]
-                    if job.batch_size < 1:
-                        values["batch_size"] = settings["batch_size"]
-                if values:
-                    job.write(values)
+        created = self.create(vals_list) if vals_list else self.browse()
+
+        for job in existing_jobs | created:
+            route = (job.route_suffix or "").strip().strip("/")
+            values = {}
+            expected_sequence = JOB_SEQUENCE.get(route)
+            if expected_sequence is not None and job.sequence != expected_sequence:
+                values["sequence"] = expected_sequence
+            settings = DEFAULT_JOB_SETTINGS.get(route)
+            if settings:
+                if job.schedule_interval_minutes < 1:
+                    values["schedule_interval_minutes"] = settings["schedule_interval_minutes"]
+                if job.batch_size < 1:
+                    values["batch_size"] = settings["batch_size"]
+            if values:
+                job.write(values)
         return created
 
     @api.onchange("sync_action_id")
@@ -375,7 +371,7 @@ class NspSyncJob(models.Model):
             data = {"success": False, "error": response.text}
         if not isinstance(data, dict):
             raise UserError(_("Cloud API returned an invalid response."))
-        ok = data.get("success", data.get("ok", data.get("status") == "success"))
+        ok = data.get("success") if "success" in data else data.get("status") == "success"
         if response.status_code >= 400 or not ok:
             raise UserError(data.get("error") or data.get("message") or ("HTTP %s" % response.status_code))
         if isinstance(data.get("data"), dict):
@@ -557,20 +553,24 @@ class NspSyncJob(models.Model):
         base["items"] = [self._remote_push_item(item) for item in items]
         return base
 
-    # --------------------------- pull application ---------------------
     @api.model
-    def _card(self, tid, card_type):
-        tid = str(tid or "").strip().upper().replace(" ", "")
-        if not tid:
-            return self.env["nsp.rfid.card"].browse()
-        Card = self.env["nsp.rfid.card"].sudo()
-        card = Card.search([("tid", "=", tid)], limit=1)
-        vals = {"tid": tid, "card_type": card_type}
-        if card:
-            card.write(vals)
-            return card
-        return Card.create(vals)
+    def _write_changed(self, record, values):
+        """Write only fields whose persisted value actually changes."""
+        if not record:
+            return False
+        changes = {}
+        for field_name, target in (values or {}).items():
+            field = record._fields[field_name]
+            current = record[field_name]
+            if field.type == "many2one":
+                current = current.id or False
+            if current != target:
+                changes[field_name] = target
+        if changes:
+            record.write(changes)
+        return bool(changes)
 
+    # --------------------------- pull application ---------------------
     def _find_or_create_controller(self, code, name=False):
         self.ensure_one()
         code = str(code or "").strip().upper()
@@ -585,21 +585,108 @@ class NspSyncJob(models.Model):
             "active": True,
         }
         if controller:
-            controller.write(vals)
+            self._write_changed(controller, vals)
             return controller
         vals["controller_id"] = code
         return Controller.create(vals)
 
     @api.model
-    def _apply_device_whitelist(self, item):
+    def _prepare_apply_cache(self, kind, items):
+        """Preload master records used by high-volume pull snapshots."""
+        rows = [item for item in (items or []) if isinstance(item, dict)]
+        if kind == "device_whitelist":
+            serials = {str(item.get("serial_number") or "").strip().upper() for item in rows}
+            serials.discard("")
+            records = self.env["nsp.device.whitelist"].sudo().search([
+                ("serial_number", "in", list(serials)),
+            ]) if serials else self.env["nsp.device.whitelist"].browse()
+            return {"records": {record.serial_number: record for record in records}}
+
+        if kind == "branch":
+            codes = {str(item.get("branch_code") or "").strip().upper() for item in rows}
+            codes.discard("")
+            records = self.env["nsp.branch"].sudo().with_context(active_test=False).search([
+                ("code", "in", list(codes)),
+            ]) if codes else self.env["nsp.branch"].browse()
+            return {"records": {record.code: record for record in records}}
+
+        if kind == "user":
+            codes = {str(item.get("user_code") or "").strip().upper() for item in rows}
+            codes.discard("")
+            records = self.env["nsp.user"].sudo().with_context(active_test=False).search([
+                ("user_code", "in", list(codes)),
+            ]) if codes else self.env["nsp.user"].browse()
+            return {"records": {record.user_code: record for record in records}}
+
+        if kind == "vehicle":
+            vehicle_codes = {str(item.get("vehicle_code") or "").strip().upper() for item in rows}
+            plates = {str(item.get("license_plate") or "").strip().upper() for item in rows}
+            owner_codes = {str(item.get("owner_user_code") or "").strip().upper() for item in rows}
+            vehicle_codes.discard(""); plates.discard(""); owner_codes.discard("")
+            Vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False)
+            domain = []
+            if vehicle_codes and plates:
+                domain = ["|", ("vehicle_code", "in", list(vehicle_codes)), ("license_plate", "in", list(plates))]
+            elif vehicle_codes:
+                domain = [("vehicle_code", "in", list(vehicle_codes))]
+            elif plates:
+                domain = [("license_plate", "in", list(plates))]
+            vehicles = Vehicle.search(domain) if domain else Vehicle.browse()
+            users = self.env["nsp.user"].sudo().with_context(active_test=False).search([
+                ("user_code", "in", list(owner_codes)),
+            ]) if owner_codes else self.env["nsp.user"].browse()
+            cache = {
+                "vehicle_by_code": {record.vehicle_code: record for record in vehicles if record.vehicle_code},
+                "vehicle_by_plate": {record.license_plate: record for record in vehicles if record.license_plate},
+                "user_by_code": {record.user_code: record for record in users},
+            }
+            master_specs = (
+                ("type_by_code", "nsp.vehicle.type", "vehicle_type_code"),
+                ("brand_by_code", "nsp.vehicle.brand", "brand_code"),
+                ("model_by_code", "nsp.vehicle.model", "model_code"),
+                ("color_by_code", "nsp.vehicle.color", "color_code"),
+            )
+            for cache_key, model_name, payload_field in master_specs:
+                codes = {str(item.get(payload_field) or "").strip().upper() for item in rows}
+                codes.discard("")
+                records = self.env[model_name].sudo().with_context(active_test=False).search([
+                    ("code", "in", list(codes)),
+                ]) if codes else self.env[model_name].browse()
+                cache[cache_key] = {record.code: record for record in records}
+            return cache
+
+        if kind == "vehicle_borrow":
+            borrow_codes = {str(item.get("borrow_uid") or "").strip() for item in rows}
+            vehicle_codes = {str(item.get("vehicle_code") or "").strip().upper() for item in rows}
+            user_codes = {str(item.get("borrower_user_code") or "").strip().upper() for item in rows}
+            borrow_codes.discard(""); vehicle_codes.discard(""); user_codes.discard("")
+            borrows = self.env["nsp.vehicle.borrow"].sudo().search([
+                ("borrow_code", "in", list(borrow_codes)),
+            ]) if borrow_codes else self.env["nsp.vehicle.borrow"].browse()
+            vehicles = self.env["nsp.vehicle"].sudo().with_context(active_test=False).search([
+                ("vehicle_code", "in", list(vehicle_codes)),
+            ]) if vehicle_codes else self.env["nsp.vehicle"].browse()
+            users = self.env["nsp.user"].sudo().with_context(active_test=False).search([
+                ("user_code", "in", list(user_codes)),
+            ]) if user_codes else self.env["nsp.user"].browse()
+            return {
+                "borrow_by_code": {record.borrow_code: record for record in borrows},
+                "vehicle_by_code": {record.vehicle_code: record for record in vehicles},
+                "user_by_code": {record.user_code: record for record in users},
+            }
+        return {}
+
+    @api.model
+    def _apply_device_whitelist(self, item, cache=None):
         serial = str(item.get("serial_number") or "").strip().upper()
         if not serial:
             raise UserError(_("Device Whitelist Serial is required."))
         device_type = str(item.get("device_type") or "rfid_reader").strip().lower()
         if device_type not in ("rfid_reader", "camera", "other"):
             raise UserError(_("Invalid Device Type: %s") % device_type)
+        cache = cache or self._prepare_apply_cache("device_whitelist", [item])
         Whitelist = self.env["nsp.device.whitelist"].sudo()
-        record = Whitelist.search([("serial_number", "=", serial)], limit=1)
+        record = cache.get("records", {}).get(serial)
         vals = {
             "serial_number": serial,
             "model_number": str(item.get("model_number") or "").strip() or False,
@@ -611,7 +698,9 @@ class NspSyncJob(models.Model):
             if changed:
                 record.write(changed)
             return record
-        return Whitelist.create(vals)
+        record = Whitelist.create(vals)
+        cache.setdefault("records", {})[serial] = record
+        return record
 
     @api.model
     def _reconcile_device_whitelist_snapshot(self, items):
@@ -627,12 +716,13 @@ class NspSyncJob(models.Model):
         return len(stale)
 
     @api.model
-    def _apply_branch(self, item):
+    def _apply_branch(self, item, cache=None):
         code = str(item.get("branch_code") or "").strip().upper()
         if not code:
             raise UserError(_("Branch Code is required."))
+        cache = cache or self._prepare_apply_cache("branch", [item])
         Branch = self.env["nsp.branch"].sudo().with_context(active_test=False)
-        branch = Branch.search([("code", "=", code)], limit=1)
+        branch = cache.get("records", {}).get(code)
         vals = {
             "code": code,
             "name": item.get("branch_name") or code,
@@ -640,45 +730,27 @@ class NspSyncJob(models.Model):
             "status": "active" if bool(item.get("active", True)) else "inactive",
         }
         if branch:
-            branch.write(vals)
+            self._write_changed(branch, vals)
             return branch
-        return Branch.create(vals)
+        branch = Branch.create(vals)
+        cache.setdefault("records", {})[code] = branch
+        return branch
 
     @api.model
-    def _apply_user(self, item):
-        code = str(item.get("user_code") or "").strip()
+    def _apply_user(self, item, cache=None):
+        code = str(item.get("user_code") or "").strip().upper()
         if not code:
             raise UserError(_("User Code is required."))
+        cache = cache or self._prepare_apply_cache("user", [item])
         User = self.env["nsp.user"].sudo().with_context(active_test=False)
-        user = User.search([("user_code", "=", code)], limit=1)
+        user = cache.get("records", {}).get(code)
         vals = {"user_code": code, "name": item.get("name") or code, "active": bool(item.get("active", True))}
         if user:
-            user.write(vals)
+            self._write_changed(user, vals)
             return user
-        return User.create(vals)
-
-    @api.model
-    def _upsert_vehicle_master(self, model_name, item, extra_vals=None):
-        if not isinstance(item, dict):
-            raise UserError(_("Vehicle Configuration items must be objects."))
-        code = str(item.get("code") or "").strip().upper()
-        name = str(item.get("name") or "").strip()
-        if not code or not name:
-            raise UserError(_("Vehicle Configuration Code and Name are required."))
-        Model = self.env[model_name].sudo().with_context(active_test=False)
-        record = Model.search([("code", "=", code)], limit=1)
-        vals = {
-            "code": code,
-            "name": name,
-            "active": bool(item.get("active", True)),
-        }
-        vals.update(extra_vals or {})
-        if record:
-            changed = {field_name: value for field_name, value in vals.items() if record[field_name] != value}
-            if changed:
-                record.write(changed)
-            return record
-        return Model.create(vals)
+        user = User.create(vals)
+        cache.setdefault("records", {})[code] = user
+        return user
 
     @api.model
     def _reconcile_vehicle_master_snapshot(self, model_name, incoming_codes):
@@ -689,6 +761,46 @@ class NspSyncJob(models.Model):
         if stale_active:
             stale_active.write({"active": False})
         return len(stale_active)
+
+    @api.model
+    def _vehicle_master_snapshot_group(self, model_name, items, extra_values=None):
+        """Apply one master-data snapshot with bounded queries and writes."""
+        rows = items or []
+        normalized = []
+        seen = set()
+        for item in rows:
+            if not isinstance(item, dict):
+                raise UserError(_("Vehicle Configuration items must be objects."))
+            code = str(item.get("code") or "").strip().upper()
+            name = str(item.get("name") or "").strip()
+            if not code or not name:
+                raise UserError(_("Vehicle Configuration Code and Name are required."))
+            if code in seen:
+                raise UserError(_("Duplicate Vehicle Configuration Code: %s") % code)
+            seen.add(code)
+            normalized.append((item, code, name))
+
+        Model = self.env[model_name].sudo().with_context(active_test=False)
+        existing = Model.search([("code", "in", list(seen))]) if seen else Model.browse()
+        by_code = {record.code: record for record in existing}
+        creates = []
+        create_meta = []
+        applied = []
+        for item, code, name in normalized:
+            vals = {"code": code, "name": name, "active": bool(item.get("active", True))}
+            if extra_values:
+                vals.update(extra_values(item, code) or {})
+            record = by_code.get(code)
+            if record:
+                self._write_changed(record, vals)
+                applied.append((item, record))
+            else:
+                creates.append(vals)
+                create_meta.append(item)
+        if creates:
+            created = Model.create(creates)
+            applied.extend(zip(create_meta, created))
+        return applied, [code for _item, code, _name in normalized]
 
     def _apply_vehicle_config_snapshot(self, data, request_payload=False):
         self.ensure_one()
@@ -704,39 +816,47 @@ class NspSyncJob(models.Model):
             if not isinstance(values, list):
                 raise UserError(_("Vehicle Configuration field %s must be an array.") % group_name)
 
-        results = []
         applied = []
-        codes = {key: [] for key in groups}
+        codes = {}
         with self.env.cr.savepoint():
-            for item in groups["vehicle_types"]:
-                record = self._upsert_vehicle_master("nsp.vehicle.type", item)
-                codes["vehicle_types"].append(record.code)
-                results.append(record)
-                applied.append(("vehicle_type", item, record))
-            for item in groups["brands"]:
-                record = self._upsert_vehicle_master("nsp.vehicle.brand", item)
-                codes["brands"].append(record.code)
-                results.append(record)
-                applied.append(("brand", item, record))
+            type_rows, codes["vehicle_types"] = self._vehicle_master_snapshot_group(
+                "nsp.vehicle.type", groups["vehicle_types"]
+            )
+            applied.extend(("vehicle_type", item, record) for item, record in type_rows)
+
+            brand_rows, codes["brands"] = self._vehicle_master_snapshot_group(
+                "nsp.vehicle.brand", groups["brands"]
+            )
+            applied.extend(("brand", item, record) for item, record in brand_rows)
+
             Brand = self.env["nsp.vehicle.brand"].sudo().with_context(active_test=False)
-            for item in groups["models"]:
+            brand_codes = {
+                str(item.get("brand_code") or "").strip().upper()
+                for item in groups["models"] if isinstance(item, dict)
+            }
+            brand_codes.discard("")
+            brands = Brand.search([("code", "in", list(brand_codes))]) if brand_codes else Brand.browse()
+            brand_by_code = {record.code: record for record in brands}
+
+            def model_extra(item, _code):
                 brand_code = str(item.get("brand_code") or "").strip().upper()
-                brand = Brand.search([("code", "=", brand_code)], limit=1) if brand_code else Brand.browse()
+                brand = brand_by_code.get(brand_code) if brand_code else False
                 if brand_code and not brand:
-                    raise UserError(_("Vehicle Brand %s was not found for Vehicle Model %s.") % (brand_code, item.get("code") or "-"))
-                record = self._upsert_vehicle_master(
-                    "nsp.vehicle.model",
-                    item,
-                    extra_vals={"brand_id": brand.id if brand else False},
-                )
-                codes["models"].append(record.code)
-                results.append(record)
-                applied.append(("model", item, record))
-            for item in groups["colors"]:
-                record = self._upsert_vehicle_master("nsp.vehicle.color", item)
-                codes["colors"].append(record.code)
-                results.append(record)
-                applied.append(("color", item, record))
+                    raise UserError(
+                        _("Vehicle Brand %(brand)s was not found for Vehicle Model %(model)s.")
+                        % {"brand": brand_code, "model": item.get("code") or "-"}
+                    )
+                return {"brand_id": brand.id if brand else False}
+
+            model_rows, codes["models"] = self._vehicle_master_snapshot_group(
+                "nsp.vehicle.model", groups["models"], extra_values=model_extra
+            )
+            applied.extend(("model", item, record) for item, record in model_rows)
+
+            color_rows, codes["colors"] = self._vehicle_master_snapshot_group(
+                "nsp.vehicle.color", groups["colors"]
+            )
+            applied.extend(("color", item, record) for item, record in color_rows)
 
             removed = {
                 "vehicle_types": self._reconcile_vehicle_master_snapshot("nsp.vehicle.type", codes["vehicle_types"]),
@@ -760,90 +880,84 @@ class NspSyncJob(models.Model):
                 response=item,
                 operation="pull",
             )
-        return results, removed
+        return [record for _group, _item, record in applied], removed
 
     @api.model
-    def _vehicle_master_by_code(self, model_name, code, label):
-        normalized = str(code or "").strip().upper()
-        if not normalized:
-            return self.env[model_name].browse()
-        record = self.env[model_name].sudo().with_context(active_test=False).search(
-            [("code", "=", normalized)], limit=1
-        )
-        if not record:
-            raise UserError(_("%(label)s %(code)s was not found. Run vehicle-config/sync first.") % {
-                "label": label,
-                "code": normalized,
-            })
-        return record
-
-    @api.model
-    def _find_vehicle(self, code):
-        code = str(code or "").strip()
-        Vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False)
-        if not code:
-            return Vehicle.browse()
-        for field_name in ("vehicle_code", "code"):
-            if field_name in Vehicle._fields:
-                record = Vehicle.search([(field_name, "=", code)], limit=1)
-                if record:
-                    return record
-        return Vehicle.search([("license_plate", "=", code)], limit=1)
-
-    @api.model
-    def _apply_vehicle(self, item):
-        code = str(item.get("vehicle_code") or item.get("license_plate") or "").strip()
-        plate = str(item.get("license_plate") or code).strip()
+    def _apply_vehicle(self, item, cache=None):
+        code = str(item.get("vehicle_code") or "").strip().upper()
+        plate = str(item.get("license_plate") or "").strip().upper()
         if not code or not plate:
             raise UserError(_("Vehicle Code and License Plate are required."))
-        vehicle = self._find_vehicle(code)
-        owner_user_code = str(item.get("owner_user_code") or "").strip()
-        owner = (
-            self.env["nsp.user"].sudo().search(
-                [("user_code", "=", owner_user_code)], limit=1
-            )
-            if owner_user_code else self.env["nsp.user"].browse()
-        )
+        cache = cache or self._prepare_apply_cache("vehicle", [item])
+        vehicle = cache.get("vehicle_by_code", {}).get(code)
+        if not vehicle:
+            # One-time upgrade adoption: old Edge records were keyed by plate.
+            vehicle = cache.get("vehicle_by_plate", {}).get(plate)
+
+        owner_user_code = str(item.get("owner_user_code") or "").strip().upper()
+        if not owner_user_code:
+            raise UserError(_("Vehicle Owner User Code is required."))
+        owner = cache.get("user_by_code", {}).get(owner_user_code)
         if not owner:
-            owner = self._apply_user({
-                "user_code": owner_user_code or ("OWNER-%s" % code),
-                "name": owner_user_code or code,
-                "active": True,
-            })
-        vehicle_type = self._vehicle_master_by_code("nsp.vehicle.type", item.get("vehicle_type_code"), _("Vehicle Type"))
-        brand = self._vehicle_master_by_code("nsp.vehicle.brand", item.get("brand_code"), _("Vehicle Brand"))
-        vehicle_model = self._vehicle_master_by_code("nsp.vehicle.model", item.get("model_code"), _("Vehicle Model"))
-        color = self._vehicle_master_by_code("nsp.vehicle.color", item.get("color_code"), _("Vehicle Color"))
+            raise UserError(
+                _("Vehicle Owner %(code)s was not found. Run users/sync first.")
+                % {"code": owner_user_code}
+            )
+
+        def master(cache_key, payload_field, label):
+            master_code = str(item.get(payload_field) or "").strip().upper()
+            if not master_code:
+                return False
+            record = cache.get(cache_key, {}).get(master_code)
+            if not record:
+                raise UserError(_("%(label)s %(code)s was not found. Run vehicle-config/sync first.") % {
+                    "label": label, "code": master_code,
+                })
+            return record
+
+        vehicle_type = master("type_by_code", "vehicle_type_code", _("Vehicle Type"))
+        brand = master("brand_by_code", "brand_code", _("Vehicle Brand"))
+        vehicle_model = master("model_by_code", "model_code", _("Vehicle Model"))
+        color = master("color_by_code", "color_code", _("Vehicle Color"))
         if vehicle_model and brand and vehicle_model.brand_id and vehicle_model.brand_id != brand:
             raise UserError(_("Vehicle Model %(model)s does not belong to Brand %(brand)s.") % {
-                "model": vehicle_model.code,
-                "brand": brand.code,
+                "model": vehicle_model.code, "brand": brand.code,
             })
         vals = {
+            "vehicle_code": code,
             "license_plate": plate,
             "owner_id": owner.id,
             "vehicle_type_id": vehicle_type.id if vehicle_type else False,
             "brand_id": brand.id if brand else False,
             "model_id": vehicle_model.id if vehicle_model else False,
             "color_id": color.id if color else False,
-            "state": "approved" if bool(item.get("active", True)) else "pending",
+            "active": bool(item.get("active", True)),
         }
-        for field_name in ("vehicle_code", "code"):
-            if field_name in self.env["nsp.vehicle"]._fields:
-                vals[field_name] = code
-                break
+        Vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False)
         if vehicle:
-            vehicle.write(vals)
-            return vehicle
-        return self.env["nsp.vehicle"].sudo().create(vals)
+            old_code = vehicle.vehicle_code
+            old_plate = vehicle.license_plate
+            self._write_changed(vehicle, vals)
+            if old_code and old_code != code:
+                cache.get("vehicle_by_code", {}).pop(old_code, None)
+            if old_plate and old_plate != plate:
+                cache.get("vehicle_by_plate", {}).pop(old_plate, None)
+        else:
+            vehicle = Vehicle.create(vals)
+        cache.setdefault("vehicle_by_code", {})[code] = vehicle
+        cache.setdefault("vehicle_by_plate", {})[plate] = vehicle
+        return vehicle
 
     @api.model
     def _card_assignment_values(self, item):
         assignment = item.get("assignment")
         if not isinstance(assignment, dict):
             raise UserError(_("Card assignment must be an object."))
+        unsupported = sorted(set(assignment) - {"type", "code"})
+        if unsupported:
+            raise UserError(_("Unsupported Card assignment field(s): %s") % ", ".join(unsupported))
         assignment_type = str(assignment.get("type") or "unassigned").strip().lower()
-        assignment_code = str(assignment.get("code") or "").strip()
+        assignment_code = str(assignment.get("code") or "").strip().upper()
         if assignment_type not in ("unassigned", "user", "vehicle"):
             raise UserError(
                 _("Invalid Card assignment type: %s") % (assignment_type or "-")
@@ -857,161 +971,195 @@ class NspSyncJob(models.Model):
         return assignment_type, assignment_code, assigned_at
 
     @api.model
-    def _apply_card_master(self, item):
+    def _normalize_card_snapshot_item(self, item):
         if not isinstance(item, dict):
             raise UserError(_("Cards snapshot items must be objects."))
-        supported_fields = {
-            "card_uid", "card_type", "active", "assigned", "assignment", "assigned_at",
-        }
+        supported_fields = {"card_uid", "card_type", "assignment", "assigned_at"}
         unsupported_fields = sorted(set(item) - supported_fields)
         if unsupported_fields:
-            raise UserError(
-                _("Unsupported Card field(s): %s") % ", ".join(unsupported_fields)
-            )
+            raise UserError(_("Unsupported Card field(s): %s") % ", ".join(unsupported_fields))
+
         tid = str(item.get("card_uid") or "").strip().upper().replace(" ", "")
         card_type = str(item.get("card_type") or "").strip().lower()
         if not tid:
             raise UserError(_("Card UID is required."))
         if card_type not in ("vehicle_card", "user_card"):
             raise UserError(_("Invalid Card Type for %s.") % tid)
-        assignment_type, _assignment_code, _assigned_at = self._card_assignment_values(item)
-        expected_type = {
-            "user": "user_card",
-            "vehicle": "vehicle_card",
-        }.get(assignment_type)
+
+        assignment_type, assignment_code, assigned_at = self._card_assignment_values(item)
+        expected_type = {"user": "user_card", "vehicle": "vehicle_card"}.get(assignment_type)
         if expected_type and card_type != expected_type:
             raise UserError(
                 _("Card %(tid)s type %(card_type)s does not match %(assignment_type)s assignment.")
                 % {"tid": tid, "card_type": card_type, "assignment_type": assignment_type}
             )
-        return self._card(tid, card_type)
-
-    @api.model
-    def _apply_card_assignment(self, card, item):
-        """Create the concrete User Card or Vehicle Card assignment on Edge."""
-        assignment_type, assignment_code, assigned_at = self._card_assignment_values(item)
-        UserLine = self.env["nsp.user.card"].sudo().with_context(active_test=False)
-        VehicleLine = self.env["nsp.vehicle.card"].sudo().with_context(active_test=False)
-        user_lines = UserLine.search([("card_id", "=", card.id)])
-        vehicle_lines = VehicleLine.search([("card_id", "=", card.id)])
-
-        if not bool(item.get("active", True)) or assignment_type == "unassigned":
-            active_user = user_lines.filtered(lambda line: line.state == "active")
-            active_vehicle = vehicle_lines.filtered(lambda line: line.state == "active")
-            if active_user:
-                active_user.action_revoke()
-            if active_vehicle:
-                active_vehicle.action_revoke()
-            return card
-
-        if assignment_type == "user":
-            owner = self.env["nsp.user"].sudo().with_context(active_test=False).search(
-                [("user_code", "=", assignment_code)], limit=1
-            )
-            if not owner:
-                raise UserError(
-                    _("Card %(tid)s owner User %(code)s was not found. Run employees/sync first.")
-                    % {"tid": card.tid, "code": assignment_code}
-                )
-            other_active = user_lines.filtered(
-                lambda line: line.state == "active" and line.user_id != owner
-            )
-            if other_active:
-                other_active.action_revoke()
-            active_vehicle = vehicle_lines.filtered(lambda line: line.state == "active")
-            if active_vehicle:
-                active_vehicle.action_revoke()
-            line = user_lines.filtered(lambda value: value.user_id == owner)[:1]
-            vals = {
-                "user_id": owner.id,
-                "card_id": card.id,
-                "state": "active",
-                "revoked_at": False,
-            }
-            if assigned_at:
-                vals["assigned_at"] = assigned_at
-            if line:
-                line.write(vals)
-                return line
-            return UserLine.create(vals)
-
-        owner = self._find_vehicle(assignment_code)
-        if not owner:
-            raise UserError(
-                _("Card %(tid)s owner Vehicle %(code)s was not found. Run vehicles/sync first.")
-                % {"tid": card.tid, "code": assignment_code}
-            )
-        other_active = vehicle_lines.filtered(
-            lambda line: line.state == "active" and line.vehicle_id != owner
-        )
-        if other_active:
-            other_active.action_revoke()
-        active_user = user_lines.filtered(lambda line: line.state == "active")
-        if active_user:
-            active_user.action_revoke()
-        line = vehicle_lines.filtered(lambda value: value.vehicle_id == owner)[:1]
-        vals = {
-            "vehicle_id": owner.id,
-            "card_id": card.id,
-            "state": "active",
-            "revoked_at": False,
+        return {
+            "tid": tid,
+            "card_type": card_type,
+            "assignment_type": assignment_type,
+            "assignment_code": assignment_code,
+            "assigned_at": assigned_at,
+            "source": item,
         }
-        if assigned_at:
-            vals["assigned_at"] = assigned_at
-        if line:
-            line.write(vals)
-            return line
-        return VehicleLine.create(vals)
 
     def _apply_card_snapshot(self, data, request_payload=False):
-        """Apply the complete Card snapshot atomically in two phases.
-
-        Phase 1 creates/updates every Master Card. Phase 2 creates the concrete
-        User Card / Vehicle Card records. A missing owner rolls back the whole
-        snapshot, so Edge never exposes a partially assigned card set.
-        """
+        """Apply one complete Card snapshot with batched lookups and writes."""
         self.ensure_one()
         items = self._items_from_response(data)
         if not isinstance(items, list):
             raise UserError(_("Cards snapshot must contain an items array."))
-        normalized_tids = []
+
+        normalized = []
         seen = set()
-        master_by_tid = {}
-        assignment_records = []
-        counts = {"master_cards": 0, "user_cards": 0, "vehicle_cards": 0, "unassigned_cards": 0}
+        for item in items:
+            info = self._normalize_card_snapshot_item(item)
+            if info["tid"] in seen:
+                raise UserError(_("Duplicate Card UID in snapshot: %s") % info["tid"])
+            seen.add(info["tid"])
+            normalized.append(info)
+
+        tids = [info["tid"] for info in normalized]
+        Card = self.env["nsp.rfid.card"].sudo()
+        User = self.env["nsp.user"].sudo().with_context(active_test=False)
+        Vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False)
+        UserLine = self.env["nsp.user.card"].sudo().with_context(active_test=False)
+        VehicleLine = self.env["nsp.vehicle.card"].sudo().with_context(active_test=False)
+
+        counts = {"master_cards": len(normalized), "user_cards": 0, "vehicle_cards": 0, "unassigned_cards": 0}
+        assignment_by_card = {}
 
         with self.env.cr.savepoint():
-            for item in items:
-                card = self._apply_card_master(item)
-                if card.tid in seen:
-                    raise UserError(_("Duplicate Card UID in snapshot: %s") % card.tid)
-                seen.add(card.tid)
-                normalized_tids.append(card.tid)
-                master_by_tid[card.tid] = (card, item)
+            existing_cards = Card.search([("tid", "in", tids)]) if tids else Card.browse()
+            card_by_tid = {card.tid: card for card in existing_cards}
 
-            for tid in normalized_tids:
-                card, item = master_by_tid[tid]
-                assignment_record = self._apply_card_assignment(card, item)
-                assignment_type, _assignment_code, _assigned_at = self._card_assignment_values(item)
-                if not bool(item.get("active", True)):
-                    assignment_type = "unassigned"
-                counts["master_cards"] += 1
-                counts[{
-                    "user": "user_cards",
-                    "vehicle": "vehicle_cards",
-                    "unassigned": "unassigned_cards",
-                }[assignment_type]] += 1
-                assignment_records.append((card, assignment_record, item, assignment_type))
+            create_vals = [
+                {"tid": info["tid"], "card_type": info["card_type"]}
+                for info in normalized if info["tid"] not in card_by_tid
+            ]
+            if create_vals:
+                created = Card.create(create_vals)
+                card_by_tid.update({card.tid: card for card in created})
 
-            Card = self.env["nsp.rfid.card"].sudo()
-            stale = Card.search([("tid", "not in", normalized_tids)]) if normalized_tids else Card.search([])
+            for info in normalized:
+                card = card_by_tid[info["tid"]]
+                if card.card_type != info["card_type"]:
+                    card.write({"card_type": info["card_type"]})
+                info["card"] = card
+
+            user_codes = {
+                info["assignment_code"] for info in normalized
+                if info["assignment_type"] == "user"
+            }
+            vehicle_codes = {
+                info["assignment_code"].upper() for info in normalized
+                if info["assignment_type"] == "vehicle"
+            }
+            users = User.search([("user_code", "in", list(user_codes))]) if user_codes else User.browse()
+            vehicles = Vehicle.search([("vehicle_code", "in", list(vehicle_codes))]) if vehicle_codes else Vehicle.browse()
+            user_by_code = {user.user_code: user for user in users}
+            vehicle_by_code = {vehicle.vehicle_code: vehicle for vehicle in vehicles}
+
+            for info in normalized:
+                if info["assignment_type"] == "user" and info["assignment_code"] not in user_by_code:
+                    raise UserError(
+                        _("Card %(tid)s owner User %(code)s was not found. Run users/sync first.")
+                        % {"tid": info["tid"], "code": info["assignment_code"]}
+                    )
+                if info["assignment_type"] == "vehicle" and info["assignment_code"].upper() not in vehicle_by_code:
+                    raise UserError(
+                        _("Card %(tid)s owner Vehicle %(code)s was not found. Run vehicles/sync first.")
+                        % {"tid": info["tid"], "code": info["assignment_code"]}
+                    )
+
+            card_ids = [info["card"].id for info in normalized]
+            user_lines = UserLine.search([("card_id", "in", card_ids)]) if card_ids else UserLine.browse()
+            vehicle_lines = VehicleLine.search([("card_id", "in", card_ids)]) if card_ids else VehicleLine.browse()
+            user_line_by_pair = {(line.card_id.id, line.user_id.id): line for line in user_lines}
+            vehicle_line_by_pair = {(line.card_id.id, line.vehicle_id.id): line for line in vehicle_lines}
+
+            desired = {}
+            for info in normalized:
+                card = info["card"]
+                if info["assignment_type"] == "user":
+                    owner = user_by_code[info["assignment_code"]]
+                    desired[card.id] = ("user", owner.id)
+                elif info["assignment_type"] == "vehicle":
+                    owner = vehicle_by_code[info["assignment_code"].upper()]
+                    desired[card.id] = ("vehicle", owner.id)
+                else:
+                    desired[card.id] = ("unassigned", 0)
+
+            revoke_users = user_lines.filtered(
+                lambda line: line.state == "active" and desired.get(line.card_id.id) != ("user", line.user_id.id)
+            )
+            revoke_vehicles = vehicle_lines.filtered(
+                lambda line: line.state == "active" and desired.get(line.card_id.id) != ("vehicle", line.vehicle_id.id)
+            )
+            if revoke_users:
+                revoke_users.action_revoke()
+            if revoke_vehicles:
+                revoke_vehicles.action_revoke()
+
+            create_user_vals = []
+            create_vehicle_vals = []
+            for info in normalized:
+                card = info["card"]
+                assignment_type = info["assignment_type"]
+                counts[{"user": "user_cards", "vehicle": "vehicle_cards", "unassigned": "unassigned_cards"}[assignment_type]] += 1
+
+                if assignment_type == "unassigned":
+                    assignment_by_card[card.id] = card
+                    continue
+
+                if assignment_type == "user":
+                    owner = user_by_code[info["assignment_code"]]
+                    line = user_line_by_pair.get((card.id, owner.id))
+                    vals = {"state": "active", "revoked_at": False}
+                    if info["assigned_at"]:
+                        vals["assigned_at"] = info["assigned_at"]
+                    if line:
+                        changed = {name: value for name, value in vals.items() if line[name] != value}
+                        if changed:
+                            line.write(changed)
+                        assignment_by_card[card.id] = line
+                    else:
+                        vals.update({"user_id": owner.id, "card_id": card.id})
+                        create_user_vals.append((card.id, vals))
+                    continue
+
+                owner = vehicle_by_code[info["assignment_code"].upper()]
+                line = vehicle_line_by_pair.get((card.id, owner.id))
+                vals = {"state": "active", "revoked_at": False}
+                if info["assigned_at"]:
+                    vals["assigned_at"] = info["assigned_at"]
+                if line:
+                    changed = {name: value for name, value in vals.items() if line[name] != value}
+                    if changed:
+                        line.write(changed)
+                    assignment_by_card[card.id] = line
+                else:
+                    vals.update({"vehicle_id": owner.id, "card_id": card.id})
+                    create_vehicle_vals.append((card.id, vals))
+
+            if create_user_vals:
+                created = UserLine.create([vals for _card_id, vals in create_user_vals])
+                for (card_id, _vals), line in zip(create_user_vals, created):
+                    assignment_by_card[card_id] = line
+            if create_vehicle_vals:
+                created = VehicleLine.create([vals for _card_id, vals in create_vehicle_vals])
+                for (card_id, _vals), line in zip(create_vehicle_vals, created):
+                    assignment_by_card[card_id] = line
+
+            stale = Card.search([("tid", "not in", tids)]) if tids else Card.search([])
             removed = len(stale)
             if stale:
                 stale.unlink()
 
         Record = self.env["nsp.sync.record"].sudo()
-        for card, assignment_record, item, assignment_type in assignment_records:
-            record = assignment_record if assignment_record._name in ("nsp.user.card", "nsp.vehicle.card") else card
+        for info in normalized:
+            card = info["card"]
+            assignment_type = info["assignment_type"]
+            record = assignment_by_card.get(card.id, card)
             Record.mark_result(
                 sync_job=self,
                 action_code=self.sync_action_code,
@@ -1026,20 +1174,23 @@ class NspSyncJob(models.Model):
                     else "Master Card synchronized without an active assignment."
                 ),
                 payload=request_payload,
-                response=item,
+                response=info["source"],
                 operation="pull",
             )
         return counts, removed
 
     @api.model
-    def _apply_vehicle_borrow(self, item):
+    def _apply_vehicle_borrow(self, item, cache=None):
         code = str(item.get("borrow_uid") or "").strip()
         if not code:
             raise UserError(_("Borrow UID is required."))
+        cache = cache or self._prepare_apply_cache("vehicle_borrow", [item])
         Borrow = self.env["nsp.vehicle.borrow"].sudo()
-        borrow = Borrow.search([("borrow_code", "=", code)], limit=1)
-        vehicle = self._find_vehicle(item.get("vehicle_code"))
-        borrower = self.env["nsp.user"].sudo().search([("user_code", "=", item.get("borrower_user_code"))], limit=1)
+        borrow = cache.get("borrow_by_code", {}).get(code)
+        vehicle_code = str(item.get("vehicle_code") or "").strip().upper()
+        vehicle = cache.get("vehicle_by_code", {}).get(vehicle_code)
+        borrower_code = str(item.get("borrower_user_code") or "").strip().upper()
+        borrower = cache.get("user_by_code", {}).get(borrower_code)
         if not vehicle or not borrower:
             raise UserError(_("Vehicle and borrower must exist before Vehicle Borrow sync."))
         valid_from = self._remote_datetime(item.get("valid_from")) or fields.Datetime.now()
@@ -1048,36 +1199,31 @@ class NspSyncJob(models.Model):
         )
         if fields.Datetime.to_datetime(valid_to) <= fields.Datetime.to_datetime(valid_from):
             raise UserError(_("Vehicle Borrow valid_to must be later than valid_from."))
-        is_active = bool(item.get("active", True))
+        state = str(item.get("state") or "active").strip().lower()
+        if state not in ("active", "returned", "cancelled"):
+            raise UserError(_("Invalid Vehicle Borrow state: %s") % state)
+        returned_at = (
+            self._remote_datetime(item.get("returned_at"))
+            if "returned_at" in item and item.get("returned_at")
+            else (borrow.returned_at if borrow else False)
+        )
+        if state in ("active", "cancelled"):
+            returned_at = False
         vals = {
             "vehicle_id": vehicle.id,
             "borrower_id": borrower.id,
             "valid_from": valid_from,
             "valid_to": valid_to,
-            "state": "active" if is_active else "returned",
-            "returned_at": False if is_active else fields.Datetime.now(),
+            "state": state,
+            "returned_at": returned_at,
         }
         if borrow:
-            borrow.with_context(vehicle_borrow_sync=True).write(vals)
+            self._write_changed(borrow.with_context(vehicle_borrow_sync=True), vals)
             return borrow
         vals["borrow_code"] = code
-        return Borrow.with_context(vehicle_borrow_sync=True).create(vals)
-
-    def _find_or_create_device(self, controller, serial_number):
-        self.ensure_one()
-        serial = str(serial_number or "").strip().upper()
-        if not serial:
-            raise UserError(_("Reader Serial Number is required."))
-        Device = self.env["nsp.device"].sudo()
-        device = Device.search([("serial_number", "=", serial)], limit=1)
-        vals = {
-            "controller_id": controller.id,
-        }
-        if device:
-            device.write(vals)
-            return device
-        vals["serial_number"] = serial
-        return Device.create(vals)
+        borrow = Borrow.with_context(vehicle_borrow_sync=True).create(vals)
+        cache.setdefault("borrow_by_code", {})[code] = borrow
+        return borrow
 
     def _apply_measurement_config(self, item):
         self.ensure_one()
@@ -1089,6 +1235,70 @@ class NspSyncJob(models.Model):
         if status not in ("ready", "running", "completed", "failed", "cancelled"):
             raise UserError(_("Invalid Measurement Session status: %s") % status)
         controller = self._find_or_create_controller(controller_code)
+
+        keys = set()
+        for device_item in item.get("measurement_antennas") or []:
+            if not isinstance(device_item, dict):
+                raise UserError(_("Measurement Antennas must contain objects."))
+            serial = str(device_item.get("serial_number") or "").strip().upper()
+            numbers = device_item.get("antennas")
+            if not serial or not isinstance(numbers, list) or not numbers:
+                raise UserError(_("Each Measurement Reader requires serial_number and antennas."))
+            for raw_number in numbers:
+                try:
+                    antenna_no = int(raw_number)
+                except Exception as exc:
+                    raise UserError(_("Invalid Measurement Antenna number.")) from exc
+                key = (serial, antenna_no)
+                if antenna_no <= 0 or key in keys:
+                    raise UserError(
+                        _("Invalid or duplicate Measurement Antenna %s/%s.")
+                        % (serial, raw_number)
+                    )
+                keys.add(key)
+        if not keys:
+            raise UserError(_("Measurement Configuration has no antennas."))
+
+        Device = self.env["nsp.device"].sudo()
+        serials = {serial for serial, _antenna_no in keys}
+        existing_devices = Device.search([("serial_number", "in", list(serials))])
+        device_by_serial = {device.serial_number: device for device in existing_devices}
+        missing_serials = sorted(serials - set(device_by_serial))
+        if missing_serials:
+            created_devices = Device.create([
+                {"serial_number": serial, "controller_id": controller.id}
+                for serial in missing_serials
+            ])
+            device_by_serial.update({device.serial_number: device for device in created_devices})
+        for device in device_by_serial.values():
+            self._write_changed(device, {"controller_id": controller.id})
+
+        Antenna = self.env["nsp.device.antenna"].sudo()
+        device_ids = [device.id for device in device_by_serial.values()]
+        antenna_numbers = {antenna_no for _serial, antenna_no in keys}
+        existing_antennas = Antenna.search([
+            ("device_id", "in", device_ids),
+            ("antenna_no", "in", list(antenna_numbers)),
+        ])
+        antenna_by_key = {
+            (antenna.device_id.serial_number, int(antenna.antenna_no or 0)): antenna
+            for antenna in existing_antennas
+        }
+        missing_keys = sorted(keys - set(antenna_by_key))
+        if missing_keys:
+            created_antennas = Antenna.create([
+                {
+                    "device_id": device_by_serial[serial].id,
+                    "antenna_no": antenna_no,
+                }
+                for serial, antenna_no in missing_keys
+            ])
+            antenna_by_key.update({
+                (antenna.device_id.serial_number, int(antenna.antenna_no or 0)): antenna
+                for antenna in created_antennas
+            })
+        antenna_refs = Antenna.browse([antenna_by_key[key].id for key in sorted(keys)])
+
         Session = self.env["nsp.measurement.session"].sudo().with_context(measurement_sync=True)
         session = Session.search([("measurement_code", "=", code)], limit=1)
         vals = {
@@ -1099,284 +1309,358 @@ class NspSyncJob(models.Model):
             "planned_end_at": self._remote_datetime(item.get("planned_end_at")),
             "note": str(item.get("note") or "").strip() or False,
         }
-
-        antenna_refs = self.env["nsp.device.antenna"].sudo().browse()
-        seen = set()
-        for device_item in item.get("measurement_antennas") or []:
-            if not isinstance(device_item, dict):
-                raise UserError(_("Measurement Antennas must contain objects."))
-            serial = str(device_item.get("serial_number") or "").strip().upper()
-            numbers = device_item.get("antennas")
-            if not serial or not isinstance(numbers, list) or not numbers:
-                raise UserError(_("Each Measurement Reader requires serial_number and antennas."))
-            device = self._find_or_create_device(controller, serial)
-            for raw_number in numbers:
-                try:
-                    antenna_no = int(raw_number)
-                except Exception as exc:
-                    raise UserError(_("Invalid Measurement Antenna number.")) from exc
-                key = (serial, antenna_no)
-                if antenna_no <= 0 or key in seen:
-                    raise UserError(_("Invalid or duplicate Measurement Antenna %s/%s.") % (serial, raw_number))
-                seen.add(key)
-                Antenna = self.env["nsp.device.antenna"].sudo()
-                antenna = Antenna.search([
-                    ("device_id", "=", device.id),
-                    ("antenna_no", "=", antenna_no),
-                ], limit=1)
-                if not antenna:
-                    antenna = Antenna.create({
-                        "device_id": device.id,
-                        "antenna_no": antenna_no,
-                    })
-                antenna_refs |= antenna
-        if not antenna_refs:
-            raise UserError(_("Measurement Configuration has no antennas."))
-        vals["antenna_ids"] = [(6, 0, antenna_refs.ids)]
         if session:
-            session.write(vals)
+            self._write_changed(session, vals)
+            if set(session.antenna_ids.ids) != set(antenna_refs.ids):
+                session.write({"antenna_ids": [(6, 0, antenna_refs.ids)]})
         else:
+            vals["antenna_ids"] = [(6, 0, antenna_refs.ids)]
             session = Session.create(vals)
         return session
 
     def _apply_parking_config(self, item):
+        """Apply one full Parking Area snapshot without per-row lookup queries."""
         self.ensure_one()
-
-        def write_changed(record, values):
-            changes = {}
-            for field_name, target in values.items():
-                field = record._fields[field_name]
-                current = record[field_name]
-                if field.type == "many2one":
-                    current = current.id or False
-                if current != target:
-                    changes[field_name] = target
-            if changes:
-                record.write(changes)
+        if not isinstance(item, dict):
+            raise UserError(_("Parking Configuration item must be an object."))
 
         branch_code = str(item.get("branch_code") or "").strip().upper()
         area_code = str(item.get("parking_area_code") or "").strip().upper()
         if not branch_code or not area_code:
             raise UserError(_("Branch Code and Parking Area Code are required."))
-
         state = str(item.get("state") or "draft").strip().lower()
         if state not in ("draft", "operational", "maintenance", "blocked"):
             raise UserError(_("Invalid Parking Area state: %s") % state)
 
-        branch = self.env["nsp.branch"].sudo().search([("code", "=", branch_code)], limit=1)
+        branch = self.env["nsp.branch"].sudo().with_context(active_test=False).search(
+            [("code", "=", branch_code)], limit=1
+        )
         if not branch:
-            branch = self._apply_branch({
-                "branch_code": branch_code,
-                "branch_name": branch_code,
-                "active": True,
-            })
+            raise UserError(
+                _("Branch %(code)s was not found. Run branches/sync before parking-config/sync.")
+                % {"code": branch_code}
+            )
 
         Parking = self.env["nsp.parking.area"].sudo()
         parking = Parking.search([("code", "=", area_code)], limit=1)
         parking_vals = {
             "code": area_code,
-            "name": item.get("parking_area_name") or area_code,
+            "name": str(item.get("parking_area_name") or area_code).strip(),
             "branch_id": branch.id,
             "state": state,
         }
         if parking:
-            write_changed(parking, parking_vals)
+            self._write_changed(parking, parking_vals)
         else:
             parking = Parking.create(parking_vals)
-
-        Controller = self.env["nsp.controller"].sudo()
-        Device = self.env["nsp.device"].sudo()
-        Antenna = self.env["nsp.device.antenna"].sudo()
-        configured_controllers = {}
 
         controllers_data = item.get("controllers") or []
         if not isinstance(controllers_data, list):
             raise UserError(_("Parking controllers must be an array."))
+        controller_specs = {}
+        reader_specs = {}
+        antenna_specs = {}
+        allowed_connections = {
+            key for key, _label in self.env["nsp.device"]._fields["connection_type"].selection
+        }
         for controller_item in controllers_data:
             if not isinstance(controller_item, dict):
                 raise UserError(_("Parking controllers must contain objects."))
+            unsupported = set(controller_item) - {"controller_code", "controller_name", "devices"}
+            if unsupported:
+                raise UserError(
+                    _("Unsupported Parking Controller field(s): %s") % ", ".join(sorted(unsupported))
+                )
             controller_code = str(controller_item.get("controller_code") or "").strip().upper()
-            if not controller_code:
-                raise UserError(_("Each Parking Controller requires controller_code."))
-            controller = self._find_or_create_controller(controller_code)
-            configured_controllers[controller_code] = controller
-
+            if not controller_code or controller_code in controller_specs:
+                raise UserError(_("Parking Controller Code is missing or duplicated."))
+            controller_specs[controller_code] = {
+                "name": str(controller_item.get("controller_name") or controller_code).strip(),
+            }
             devices_data = controller_item.get("devices") or []
             if not isinstance(devices_data, list):
                 raise UserError(_("Controller devices must be an array."))
             for device_item in devices_data:
                 if not isinstance(device_item, dict):
                     raise UserError(_("Controller devices must contain objects."))
+                unsupported_device = set(device_item) - {
+                    "serial_number", "reader_name", "model_number", "vendor",
+                    "physical_connection", "reader_parameters", "antennas",
+                }
+                if unsupported_device:
+                    raise UserError(
+                        _("Unsupported Reader field(s): %s") % ", ".join(sorted(unsupported_device))
+                    )
                 serial = str(device_item.get("serial_number") or "").strip().upper()
-                if not serial:
-                    raise UserError(_("Each Reader requires serial_number."))
-                device = self._find_or_create_device(controller, serial)
+                if not serial or serial in reader_specs:
+                    raise UserError(_("Reader Serial Number is missing or duplicated in Parking Configuration."))
                 reader_parameters = device_item.get("reader_parameters") or {}
                 if not isinstance(reader_parameters, dict):
                     raise UserError(_("reader_parameters must be an object."))
-                connection_type = device_item.get("physical_connection") or False
-                allowed_connections = {
-                    key for key, _label in Device._fields["connection_type"].selection
+                unsupported_params = set(reader_parameters) - {
+                    "power_dbm", "read_interval_ms", "tid_start_address", "tid_length",
                 }
+                if unsupported_params:
+                    raise UserError(
+                        _("Unsupported Reader parameter(s): %s") % ", ".join(sorted(unsupported_params))
+                    )
+                connection_type = device_item.get("physical_connection") or False
                 if connection_type and connection_type not in allowed_connections:
                     raise UserError(_("Invalid Physical Connection for Reader %s.") % serial)
-                write_changed(device, {
-                    "model_number": str(device_item.get("model_number") or "").strip() or False,
-                    "device_vendor": str(device_item.get("vendor") or "").strip() or False,
-                    "connection_type": connection_type,
-                    "power_dbm": int(
-                        reader_parameters.get("power_dbm")
-                        if reader_parameters.get("power_dbm") is not None
-                        else 30
-                    ),
-                    "read_interval_ms": int(reader_parameters.get("read_interval_ms") or 200),
-                    "tid_addr": int(reader_parameters.get("tid_start_address") or 0),
-                    "tid_len": int(reader_parameters.get("tid_length") or 4),
-                })
+                try:
+                    reader_specs[serial] = {
+                        "controller_code": controller_code,
+                        "name": str(device_item.get("reader_name") or serial).strip(),
+                        "model_number": str(device_item.get("model_number") or "").strip() or False,
+                        "device_vendor": str(device_item.get("vendor") or "").strip() or False,
+                        "connection_type": connection_type,
+                        "power_dbm": int(
+                            reader_parameters.get("power_dbm")
+                            if reader_parameters.get("power_dbm") is not None else 30
+                        ),
+                        "read_interval_ms": int(reader_parameters.get("read_interval_ms") or 200),
+                        "tid_addr": int(reader_parameters.get("tid_start_address") or 0),
+                        "tid_len": int(reader_parameters.get("tid_length") or 4),
+                    }
+                except (TypeError, ValueError) as exc:
+                    raise UserError(_("Invalid Reader technical parameter for %s.") % serial) from exc
 
                 antennas_data = device_item.get("antennas") or []
                 if not isinstance(antennas_data, list):
                     raise UserError(_("Reader antennas must be an array."))
-                seen_numbers = set()
                 for antenna_item in antennas_data:
                     if not isinstance(antenna_item, dict):
                         raise UserError(_("Reader antennas must contain objects."))
-                    antenna_no = int(antenna_item.get("antenna_no") or 0)
-                    if antenna_no <= 0 or antenna_no in seen_numbers:
-                        raise UserError(_("Invalid or duplicate Antenna No for Reader %s.") % serial)
-                    seen_numbers.add(antenna_no)
-                    antenna = Antenna.search([
-                        ("device_id", "=", device.id),
-                        ("antenna_no", "=", antenna_no),
-                    ], limit=1)
-                    antenna_vals = {
-                        "device_id": device.id,
-                        "antenna_no": antenna_no,
-                        "minimum_rssi_dbm": float(
+                    unsupported_antenna = set(antenna_item) - {"antenna_no", "minimum_rssi_dbm"}
+                    if unsupported_antenna:
+                        raise UserError(
+                            _("Unsupported Reader Antenna field(s): %s")
+                            % ", ".join(sorted(unsupported_antenna))
+                        )
+                    try:
+                        antenna_no = int(antenna_item.get("antenna_no") or 0)
+                        minimum_rssi = float(
                             antenna_item.get("minimum_rssi_dbm")
-                            if antenna_item.get("minimum_rssi_dbm") is not None
-                            else -65.0
-                        ),
-                    }
-                    if antenna:
-                        write_changed(antenna, antenna_vals)
-                    else:
-                        Antenna.create(antenna_vals)
+                            if antenna_item.get("minimum_rssi_dbm") is not None else -65.0
+                        )
+                    except (TypeError, ValueError) as exc:
+                        raise UserError(_("Invalid Antenna configuration for Reader %s.") % serial) from exc
+                    key = (serial, antenna_no)
+                    if antenna_no <= 0 or key in antenna_specs:
+                        raise UserError(_("Invalid or duplicate Antenna No for Reader %s.") % serial)
+                    antenna_specs[key] = {"minimum_rssi_dbm": minimum_rssi}
 
-        Lane = self.env["nsp.parking.lane"].sudo().with_context(active_test=False)
-        Mapping = self.env["nsp.parking.lane.antenna.mapping"].sudo()
-        incoming_codes = []
+        edge = self._require_edge_server_record()
+        Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
+        existing_controllers = Controller.search([
+            ("controller_id", "in", list(controller_specs)),
+        ]) if controller_specs else Controller.browse()
+        controller_by_code = {controller.controller_id: controller for controller in existing_controllers}
+        missing_controller_codes = sorted(set(controller_specs) - set(controller_by_code))
+        if missing_controller_codes:
+            created_controllers = Controller.create([
+                {
+                    "controller_id": code,
+                    "controller_name": controller_specs[code]["name"],
+                    "edge_server_id": edge.id,
+                    "active": True,
+                }
+                for code in missing_controller_codes
+            ])
+            controller_by_code.update({controller.controller_id: controller for controller in created_controllers})
+        for code, spec in controller_specs.items():
+            self._write_changed(controller_by_code[code], {
+                "controller_name": spec["name"],
+                "edge_server_id": edge.id,
+                "active": True,
+            })
+
+        Device = self.env["nsp.device"].sudo()
+        existing_devices = Device.search([
+            ("serial_number", "in", list(reader_specs)),
+        ]) if reader_specs else Device.browse()
+        device_by_serial = {device.serial_number: device for device in existing_devices}
+        missing_serials = sorted(set(reader_specs) - set(device_by_serial))
+        if missing_serials:
+            created_devices = Device.create([
+                {
+                    "serial_number": serial,
+                    "name": reader_specs[serial]["name"],
+                    "controller_id": controller_by_code[reader_specs[serial]["controller_code"]].id,
+                }
+                for serial in missing_serials
+            ])
+            device_by_serial.update({device.serial_number: device for device in created_devices})
+        for serial, spec in reader_specs.items():
+            values = dict(spec)
+            controller_code = values.pop("controller_code")
+            values["controller_id"] = controller_by_code[controller_code].id
+            self._write_changed(device_by_serial[serial], values)
+
+        Antenna = self.env["nsp.device.antenna"].sudo()
+        antenna_numbers = {number for _serial, number in antenna_specs}
+        existing_antennas = Antenna.search([
+            ("device_id", "in", [device.id for device in device_by_serial.values()]),
+            ("antenna_no", "in", list(antenna_numbers)),
+        ]) if device_by_serial and antenna_numbers else Antenna.browse()
+        antenna_by_key = {
+            (antenna.device_id.serial_number, int(antenna.antenna_no or 0)): antenna
+            for antenna in existing_antennas
+        }
+        missing_antenna_keys = sorted(set(antenna_specs) - set(antenna_by_key))
+        if missing_antenna_keys:
+            created_antennas = Antenna.create([
+                {
+                    "device_id": device_by_serial[serial].id,
+                    "antenna_no": antenna_no,
+                    "minimum_rssi_dbm": antenna_specs[(serial, antenna_no)]["minimum_rssi_dbm"],
+                }
+                for serial, antenna_no in missing_antenna_keys
+            ])
+            antenna_by_key.update({
+                (antenna.device_id.serial_number, int(antenna.antenna_no or 0)): antenna
+                for antenna in created_antennas
+            })
+        for key, spec in antenna_specs.items():
+            self._write_changed(antenna_by_key[key], spec)
+
         lanes_data = item.get("lanes") or []
         if not isinstance(lanes_data, list):
             raise UserError(_("Parking lanes must be an array."))
-
+        lane_specs = {}
+        desired_mapping_specs = []
+        desired_antenna_ids = set()
         for lane_index, lane_item in enumerate(lanes_data, start=1):
             if not isinstance(lane_item, dict):
                 raise UserError(_("Parking lanes must contain objects."))
+            unsupported_lane = set(lane_item) - {
+                "lane_code", "lane_name", "lane_no", "controller_code", "direction",
+                "transition_window_seconds", "grouping_window_seconds",
+                "repeat_suppression_seconds", "antenna_mappings",
+            }
+            if unsupported_lane:
+                raise UserError(
+                    _("Unsupported Parking Lane field(s): %s") % ", ".join(sorted(unsupported_lane))
+                )
             lane_code = str(lane_item.get("lane_code") or "").strip().upper()
             controller_code = str(lane_item.get("controller_code") or "").strip().upper()
             direction = str(lane_item.get("direction") or "").strip().lower()
-            if not lane_code or not controller_code:
-                raise UserError(_("Each Parking Lane requires lane_code and controller_code."))
+            if not lane_code or lane_code in lane_specs or not controller_code:
+                raise UserError(_("Parking Lane Code is missing or duplicated."))
+            if controller_code not in controller_by_code:
+                raise UserError(
+                    _("Controller %s is missing from Parking controller configuration.") % controller_code
+                )
             if direction not in ("entry", "exit", "both"):
                 raise UserError(_("Parking Lane direction must be entry, exit or both."))
-            controller = configured_controllers.get(controller_code)
-            if not controller:
-                controller = Controller.search([("controller_id", "=", controller_code)], limit=1)
-            if not controller:
-                raise UserError(_("Controller %s is missing from Parking controller configuration.") % controller_code)
-
             try:
                 transition_window = int(lane_item.get("transition_window_seconds") or 10)
                 grouping_window = int(lane_item.get("grouping_window_seconds") or 3)
                 repeat_suppression = int(lane_item.get("repeat_suppression_seconds") or 1)
+                lane_no = int(lane_item.get("lane_no") or lane_index)
             except (TypeError, ValueError) as exc:
-                raise UserError(_("Parking Lane timing values must be integers.")) from exc
-            if transition_window < 1:
-                raise UserError(_("Transition window must be at least one second."))
-            if grouping_window < 1:
-                raise UserError(_("Grouping window must be at least one second."))
-            if repeat_suppression < 1:
-                raise UserError(_("Repeat read suppression must be at least one second."))
-
-            incoming_codes.append(lane_code)
-            lane = Lane.search([
-                ("parking_area_id", "=", parking.id),
-                ("code", "=", lane_code),
-            ], limit=1)
-            lane_vals = {
+                raise UserError(_("Parking Lane timing and lane number values must be integers.")) from exc
+            if min(transition_window, grouping_window, repeat_suppression, lane_no) < 1:
+                raise UserError(_("Parking Lane timing values and Lane No. must be at least one."))
+            lane_specs[lane_code] = {
                 "parking_area_id": parking.id,
                 "code": lane_code,
-                "name": lane_item.get("lane_name") or lane_code,
-                "controller_id": controller.id,
-                "lane_no": int(lane_item.get("lane_no") or lane_index),
+                "name": str(lane_item.get("lane_name") or lane_code).strip(),
+                "controller_id": controller_by_code[controller_code].id,
+                "lane_no": lane_no,
                 "direction": direction,
                 "transition_window_seconds": transition_window,
                 "grouping_window_seconds": grouping_window,
                 "repeat_suppression_seconds": repeat_suppression,
                 "active": True,
             }
-            if lane:
-                write_changed(lane, lane_vals)
-            else:
-                lane = Lane.create(lane_vals)
 
-            existing_lane_mappings = Mapping.search([("lane_id", "=", lane.id)])
-            desired_antenna_ids = set()
             mappings_data = lane_item.get("antenna_mappings") or []
             if not isinstance(mappings_data, list):
                 raise UserError(_("Antenna mappings must be an array."))
             for mapping_item in mappings_data:
                 if not isinstance(mapping_item, dict):
                     raise UserError(_("Antenna mappings must contain objects."))
+                unsupported_mapping = set(mapping_item) - {"serial_number", "antenna_no", "zone"}
+                if unsupported_mapping:
+                    raise UserError(
+                        _("Unsupported Antenna Mapping field(s): %s")
+                        % ", ".join(sorted(unsupported_mapping))
+                    )
                 serial = str(mapping_item.get("serial_number") or "").strip().upper()
-                antenna_no = int(mapping_item.get("antenna_no") or 0)
+                try:
+                    antenna_no = int(mapping_item.get("antenna_no") or 0)
+                except (TypeError, ValueError) as exc:
+                    raise UserError(_("Invalid antenna_no in Parking Lane mapping.")) from exc
                 mapping_zone = str(mapping_item.get("zone") or "").strip().lower()
-                if not serial or antenna_no <= 0:
-                    raise UserError(_("Each antenna mapping requires serial_number and antenna_no."))
+                antenna = antenna_by_key.get((serial, antenna_no))
+                if not antenna:
+                    raise UserError(
+                        _("Antenna %s/%s is missing from Reader configuration.") % (serial, antenna_no)
+                    )
+                if antenna.device_id.controller_id.id != controller_by_code[controller_code].id:
+                    raise UserError(_("Antenna must belong to the Controller assigned to this Lane."))
                 if direction == "both" and mapping_zone not in ("outside", "inside"):
                     raise UserError(_("A Two-way Lane antenna mapping requires zone outside or inside."))
                 if direction != "both" and mapping_zone:
                     raise UserError(_("A one-way Lane antenna mapping must not define zone."))
-                device = Device.search([
-                    ("controller_id", "=", controller.id),
-                    ("serial_number", "=", serial),
-                ], limit=1)
-                if not device:
-                    raise UserError(_("Reader %s is missing from Parking controller configuration.") % serial)
-                antenna = Antenna.search([
-                    ("device_id", "=", device.id),
-                    ("antenna_no", "=", antenna_no),
-                ], limit=1)
-                if not antenna:
-                    raise UserError(_("Antenna %s/%s is missing from Reader configuration.") % (serial, antenna_no))
                 if antenna.id in desired_antenna_ids:
-                    raise UserError(_("Antenna %s/%s is duplicated in the Lane mapping.") % (serial, antenna_no))
+                    raise UserError(_("An antenna can be mapped to only one Parking Lane."))
                 desired_antenna_ids.add(antenna.id)
-                mapping_vals = {
-                    "lane_id": lane.id,
-                    "zone": mapping_zone or False,
-                    "antenna_ref_id": antenna.id,
-                }
-                mapping = Mapping.search([("antenna_ref_id", "=", antenna.id)], limit=1)
-                if mapping:
-                    write_changed(mapping, mapping_vals)
-                else:
-                    Mapping.create(mapping_vals)
+                desired_mapping_specs.append((lane_code, antenna.id, mapping_zone or False))
 
-            stale_mappings = existing_lane_mappings.filtered(
-                lambda mapping: mapping.antenna_ref_id.id not in desired_antenna_ids
-            )
-            if stale_mappings:
-                stale_mappings.unlink()
+        Lane = self.env["nsp.parking.lane"].sudo().with_context(active_test=False)
+        existing_lanes = Lane.search([
+            ("parking_area_id", "=", parking.id),
+            ("code", "in", list(lane_specs)),
+        ]) if lane_specs else Lane.browse()
+        lane_by_code = {lane.code: lane for lane in existing_lanes}
+        for lane_code, lane_vals in lane_specs.items():
+            lane = lane_by_code.get(lane_code)
+            if lane:
+                self._write_changed(lane, lane_vals)
+            else:
+                lane = Lane.create(lane_vals)
+                lane_by_code[lane_code] = lane
 
-        stale_domain = [("parking_area_id", "=", parking.id)]
-        if incoming_codes:
-            stale_domain.append(("code", "not in", incoming_codes))
-        stale_lanes = Lane.search(stale_domain)
+        Mapping = self.env["nsp.parking.lane.antenna.mapping"].sudo()
+        desired_mappings = Mapping.search([
+            ("antenna_ref_id", "in", list(desired_antenna_ids)),
+        ]) if desired_antenna_ids else Mapping.browse()
+        mapping_by_antenna = {mapping.antenna_ref_id.id: mapping for mapping in desired_mappings}
+        create_mapping_vals = []
+        for lane_code, antenna_id, zone in desired_mapping_specs:
+            mapping_vals = {
+                "lane_id": lane_by_code[lane_code].id,
+                "antenna_ref_id": antenna_id,
+                "zone": zone,
+            }
+            mapping = mapping_by_antenna.get(antenna_id)
+            if mapping:
+                self._write_changed(mapping, mapping_vals)
+            else:
+                create_mapping_vals.append(mapping_vals)
+        if create_mapping_vals:
+            Mapping.create(create_mapping_vals)
+
+        area_lanes = Lane.search([("parking_area_id", "=", parking.id)])
+        current_area_mappings = Mapping.search([("lane_id", "in", area_lanes.ids)]) if area_lanes else Mapping.browse()
+        stale_mappings = current_area_mappings.filtered(
+            lambda mapping: mapping.antenna_ref_id.id not in desired_antenna_ids
+        )
+        if stale_mappings:
+            stale_mappings.unlink()
+
+        incoming_codes = set(lane_specs)
+        stale_lanes = area_lanes.filtered(lambda lane: lane.code not in incoming_codes and lane.active)
         if stale_lanes:
             stale_lanes.mapped("antenna_mapping_ids").unlink()
             stale_lanes.write({"active": False})
+
+        if parking.state == "operational":
+            issues = parking._operational_issues()
+            if issues:
+                raise UserError("; ".join(str(issue) for issue in issues))
         return parking
 
     def _reconcile_parking_config_snapshot(self, items):
@@ -1387,9 +1671,7 @@ class NspSyncJob(models.Model):
             if isinstance(item, dict) and item.get("parking_area_code")
         }
         Parking = self.env["nsp.parking.area"].sudo()
-        stale = Parking.search([])
-        if incoming_codes:
-            stale = stale.filtered(lambda record: record.code not in incoming_codes)
+        stale = Parking.search([("code", "not in", list(incoming_codes))]) if incoming_codes else Parking.search([])
         if stale:
             stale.mapped("lane_ids.antenna_mapping_ids").unlink()
             stale.mapped("lane_ids").write({"active": False})
@@ -1412,11 +1694,14 @@ class NspSyncJob(models.Model):
         handler = handlers.get(kind)
         if not handler:
             raise UserError(_("Unsupported pull route: %s") % self.route_suffix)
-        for index, item in enumerate(items if isinstance(items, list) else []):
+        normalized_items = items if isinstance(items, list) else []
+        cached_kinds = {"device_whitelist", "branch", "user", "vehicle", "vehicle_borrow"}
+        apply_cache = self._prepare_apply_cache(kind, normalized_items) if kind in cached_kinds else None
+        for index, item in enumerate(normalized_items):
             key = self._record_key_from_item(item)
             try:
                 with self.env.cr.savepoint():
-                    record = handler(item)
+                    record = handler(item, cache=apply_cache) if kind in cached_kinds else handler(item)
                 key = key or record.display_name or str(record.id)
                 Record.mark_result(
                     sync_job=self,

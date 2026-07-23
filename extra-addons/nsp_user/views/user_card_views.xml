@@ -1,72 +1,30 @@
+<?xml version='1.0' encoding='utf-8'?>
 <odoo>
-    <record id="view_nsp_user_card_search" model="ir.ui.view">
-        <field name="name">nsp.user.card.search</field>
-        <field name="model">nsp.user.card</field>
-        <field name="arch" type="xml">
-            <search>
-                <field name="user_id"/>
-                <field name="card_id"/>
-                <field name="tid"/>
-                <field name="state"/>
-                <filter string="Active" name="active_cards" domain="[('state','=','active')]"/>
-                <filter string="Revoked" name="revoked_cards" domain="[('state','=','revoked')]"/>
-                <separator/>
-                    <filter string="User" name="group_user" context="{'group_by':'user_id'}"/>
-                    <filter string="Status" name="group_status" context="{'group_by':'state'}"/>
-                </search>
-        </field>
-    </record>
-
-    <record id="view_nsp_user_card_list" model="ir.ui.view">
-        <field name="name">nsp.user.card.list</field>
-        <field name="model">nsp.user.card</field>
-        <field name="arch" type="xml">
-            <list string="User Cards">
-                <field name="user_id"/>
-                <field name="card_id"/>
-                <field name="tid"/>
-                <field name="state" widget="badge" decoration-success="state == 'active'" decoration-muted="state == 'revoked'"/>
-                <field name="assigned_at"/>
-                <field name="revoked_at" optional="show"/>
-                <button name="action_revoke" type="object" string="Revoke" invisible="state != 'active'" class="btn-secondary"/>
-                <button name="action_activate" type="object" string="Activate" invisible="state != 'revoked'" class="btn-primary"/>
-            </list>
-        </field>
-    </record>
-
-    <record id="view_nsp_user_card_form" model="ir.ui.view">
-        <field name="name">nsp.user.card.form</field>
-        <field name="model">nsp.user.card</field>
-        <field name="arch" type="xml">
-            <form string="User Card">
-                <header>
-                    <button name="action_revoke" type="object" string="Revoke" invisible="state != 'active'" class="btn-secondary"/>
-                    <button name="action_activate" type="object" string="Activate" invisible="state != 'revoked'" class="btn-primary"/>
-                </header>
-                <sheet>
-                    <group>
-                        <group>
-                            <field name="user_id"/>
-                            <field name="card_id"/>
-                            <field name="tid" readonly="1"/>
-                        </group>
-                        <group>
-                            <field name="state"/>
-                            <field name="assigned_at"/>
-                            <field name="revoked_at" readonly="1"/>
-                        </group>
-                    </group>
-                    <field name="note" placeholder="Note..."/>
-                </sheet>
-                <chatter/>
-            </form>
-        </field>
-    </record>
-
-    <record id="action_nsp_user_card" model="ir.actions.act_window">
-        <field name="name">User Cards</field>
-        <field name="res_model">nsp.user.card</field>
-        <field name="view_mode">list,form</field>
-        <field name="search_view_id" ref="view_nsp_user_card_search"/>
-    </record>
+  <record id="view_nsp_user_card_form" model="ir.ui.view">
+    <field name="name">nsp.user.card.form</field>
+    <field name="model">nsp.user.card</field>
+    <field name="arch" type="xml">
+      <form string="User Card">
+        <header>
+          <button name="action_revoke" type="object" string="Revoke" invisible="state != 'active'" class="btn-secondary"/>
+          <button name="action_activate" type="object" string="Activate" invisible="state != 'revoked'" class="btn-primary"/>
+        </header>
+        <sheet>
+          <group>
+            <group>
+              <field name="user_id"/>
+              <field name="card_id"/>
+              <field name="tid" readonly="1"/>
+            </group>
+            <group>
+              <field name="state" readonly="1"/>
+              <field name="assigned_at" readonly="1"/>
+              <field name="revoked_at" readonly="1"/>
+            </group>
+          </group>
+          <field name="note" placeholder="Note..."/>
+        </sheet>
+      </form>
+    </field>
+  </record>
 </odoo>

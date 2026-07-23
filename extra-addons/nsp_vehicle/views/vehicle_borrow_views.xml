@@ -1,71 +1,40 @@
+<?xml version='1.0' encoding='utf-8'?>
 <odoo>
-    <record id="view_nsp_vehicle_borrow_request_tree" model="ir.ui.view">
-        <field name="name">nsp.vehicle.borrow.list</field>
-        <field name="model">nsp.vehicle.borrow</field>
-        <field name="arch" type="xml">
-            <list decoration-success="active_now" decoration-muted="state in ('returned','cancelled')">
-                <field name="vehicle_id"/>
-                <field name="owner_id"/>
-                <field name="borrower_id" string="Authorized User"/>
-                <field name="valid_from"/>
-                <field name="valid_to"/>
-                <field name="state" widget="badge"/>
-                <field name="active_now"/>
-                <field name="borrow_code" string="Technical Code" optional="hide"/>
-            </list>
-        </field>
-    </record>
-    <record id="view_nsp_vehicle_borrow_request_form" model="ir.ui.view">
-        <field name="name">nsp.vehicle.borrow.form</field>
-        <field name="model">nsp.vehicle.borrow</field>
-        <field name="arch" type="xml">
-            <form string="Authorized Vehicle User">
-                <header>
-                    <button name="action_return_vehicle" type="object" string="End Borrow" class="btn-primary" invisible="state != 'active'"/>
-                    <button name="action_cancel" type="object" string="Cancel" invisible="state != 'active'"/>
-                    <field name="state" widget="statusbar" statusbar_visible="active,returned,cancelled"/>
-                </header>
-                <sheet>
-                    <div class="oe_title"><h1><field name="name" readonly="1"/></h1></div>
-                    <group>
-                        <group>
-                            <field name="vehicle_id" readonly="state != 'active'"/>
-                            <field name="owner_id" readonly="1"/>
-                            <field name="allowed_borrower_ids" invisible="1"/>
-                            <field name="borrower_id" string="Authorized User" domain="[('id','in',allowed_borrower_ids)]" readonly="state != 'active'"/>
-                        </group>
-                        <group>
-                            <field name="valid_from" readonly="state != 'active'"/>
-                            <field name="valid_to" readonly="state != 'active'"/>
-                            <field name="returned_at" readonly="1"/>
-                            <field name="active_now" readonly="1"/>
-                        </group>
-                    </group>
-                    <group string="Technical" groups="nsp_core.group_nsp_it_parking">
-                        <field name="borrow_code" readonly="1" widget="CopyClipboardChar"/>
-                    </group>
-                </sheet>
-            </form>
-        </field>
-    </record>
-    <record id="view_nsp_vehicle_borrow_request_search" model="ir.ui.view">
-        <field name="name">nsp.vehicle.borrow.search</field>
-        <field name="model">nsp.vehicle.borrow</field>
-        <field name="arch" type="xml">
-            <search>
-                <field name="vehicle_id"/>
-                <field name="borrower_id"/>
-                <field name="borrow_code" string="Technical Code"/>
-                <filter name="active" string="Active" domain="[('state','=','active')]"/>
-                <filter name="returned" string="Returned" domain="[('state','=','returned')]"/>
-                <filter name="cancelled" string="Cancelled" domain="[('state','=','cancelled')]"/>
-            </search>
-        </field>
-    </record>
-    <record id="action_nsp_vehicle_borrow_request" model="ir.actions.act_window">
-        <field name="name">Authorized Vehicle Users</field>
-        <field name="res_model">nsp.vehicle.borrow</field>
-        <field name="view_mode">list,form</field>
-        <field name="search_view_id" ref="view_nsp_vehicle_borrow_request_search"/>
-    </record>
+  <record id="view_nsp_vehicle_borrow_form" model="ir.ui.view">
+    <field name="name">nsp.vehicle.borrow.form</field>
+    <field name="model">nsp.vehicle.borrow</field>
+    <field name="arch" type="xml">
+      <form string="Authorized Vehicle User">
+        <header>
+          <button name="action_return_vehicle" type="object" string="End Borrow" class="btn-primary" invisible="state != 'active'"/>
+          <button name="action_cancel" type="object" string="Cancel" invisible="state != 'active'"/>
+          <field name="state" widget="statusbar" statusbar_visible="active,returned,cancelled" readonly="1"/>
+        </header>
+        <sheet>
+          <div class="oe_title">
+            <h1>
+              <field name="name" readonly="1"/>
+            </h1>
+          </div>
+          <group>
+            <group>
+              <field name="vehicle_id" readonly="state != 'active'"/>
+              <field name="owner_id" readonly="1"/>
+              <field name="allowed_borrower_ids" invisible="1"/>
+              <field name="borrower_id" string="Authorized User" domain="[('id','in',allowed_borrower_ids)]" readonly="state != 'active'"/>
+            </group>
+            <group>
+              <field name="valid_from" readonly="state != 'active'"/>
+              <field name="valid_to" readonly="state != 'active'"/>
+              <field name="returned_at" readonly="1"/>
+              <field name="active_now" readonly="1"/>
+            </group>
+          </group>
+          <group string="Technical" groups="nsp_core.group_nsp_it_parking">
+            <field name="borrow_code" readonly="1" widget="CopyClipboardChar"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
 </odoo>

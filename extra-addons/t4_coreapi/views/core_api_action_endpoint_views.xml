@@ -23,13 +23,7 @@
                     </h1>
                 </div>
                 <header>
-                    <!-- <button name="action_generate_endpoints" 
-                            type="object" 
-                            string="Generate actions" 
-                            class="oe_highlight" 
-                            icon="fa-refresh"/> -->
-
-                    <button name="action_generate_core_api_routes"
+<button name="action_generate_core_api_routes"
                             type="object"
                             string="Generate API Actions &amp; Routes"
                             class="oe_highlight"
@@ -48,16 +42,7 @@
                         </group>
                     </group>
                     <notebook>
-                        <!-- <page string="Server Actions">
-                            <field name="generated_action_ids">
-                                <list>
-                                    <field name="name" string="Action name"/>
-                                    <field name="code" string="Code"/>
-                                    <field name="write_date" string="Last updated"/>
-                                </list>
-                            </field>
-                        </page> -->
-                        <page string="API Actions">
+<page string="API Actions">
                             <field name="core_api_action_ids">
                                 <list>
                                     <field name="name" string="Action Name"/>

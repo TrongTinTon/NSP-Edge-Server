@@ -11,13 +11,13 @@ class VehicleCloudSyncMixin(models.AbstractModel):
 class VehicleType(models.Model):
     _name = 'nsp.vehicle.type'
     _description = 'Vehicle Type'
-    _inherit = ['mail.thread', 'mail.activity.mixin', 'nsp.vehicle.cloud.sync.mixin']
+    _inherit = ['nsp.vehicle.cloud.sync.mixin']
     _rec_name = 'name'
     _order = 'name'
 
-    name = fields.Char(required=True, tracking=True)
+    name = fields.Char(required=True)
     code = fields.Char(
-        tracking=True, copy=False, index=True, required=True, readonly=True,
+        copy=False, index=True, required=True, readonly=True,
         default=lambda self: new_management_code("VTYPE"),
     )
     active = fields.Boolean(default=True)
@@ -31,13 +31,13 @@ class VehicleType(models.Model):
 class VehicleBrand(models.Model):
     _name = 'nsp.vehicle.brand'
     _description = 'Vehicle Brand'
-    _inherit = ['mail.thread', 'mail.activity.mixin', 'nsp.vehicle.cloud.sync.mixin']
+    _inherit = ['nsp.vehicle.cloud.sync.mixin']
     _rec_name = 'name'
     _order = 'name'
 
-    name = fields.Char(required=True, tracking=True)
+    name = fields.Char(required=True)
     code = fields.Char(
-        tracking=True, copy=False, index=True, required=True, readonly=True,
+        copy=False, index=True, required=True, readonly=True,
         default=lambda self: new_management_code("BRAND"),
     )
     active = fields.Boolean(default=True)
@@ -51,14 +51,14 @@ class VehicleBrand(models.Model):
 class VehicleModel(models.Model):
     _name = 'nsp.vehicle.model'
     _description = 'Vehicle Model'
-    _inherit = ['mail.thread', 'mail.activity.mixin', 'nsp.vehicle.cloud.sync.mixin']
+    _inherit = ['nsp.vehicle.cloud.sync.mixin']
     _rec_name = 'name'
     _order = 'brand_id, name'
 
-    name = fields.Char(required=True, tracking=True)
-    brand_id = fields.Many2one('nsp.vehicle.brand', string='Brand', ondelete='set null', tracking=True)
+    name = fields.Char(required=True)
+    brand_id = fields.Many2one('nsp.vehicle.brand', string='Brand', ondelete='set null')
     code = fields.Char(
-        tracking=True, copy=False, index=True, required=True, readonly=True,
+        copy=False, index=True, required=True, readonly=True,
         default=lambda self: new_management_code("VMODEL"),
     )
     active = fields.Boolean(default=True)
@@ -72,13 +72,13 @@ class VehicleModel(models.Model):
 class VehicleColor(models.Model):
     _name = 'nsp.vehicle.color'
     _description = 'Vehicle Color'
-    _inherit = ['mail.thread', 'mail.activity.mixin', 'nsp.vehicle.cloud.sync.mixin']
+    _inherit = ['nsp.vehicle.cloud.sync.mixin']
     _rec_name = 'name'
     _order = 'name'
 
-    name = fields.Char(required=True, tracking=True)
+    name = fields.Char(required=True)
     code = fields.Char(
-        tracking=True, copy=False, index=True, required=True, readonly=True,
+        copy=False, index=True, required=True, readonly=True,
         default=lambda self: new_management_code("COLOR"),
     )
     active = fields.Boolean(default=True)

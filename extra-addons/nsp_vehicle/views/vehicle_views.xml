@@ -11,12 +11,11 @@
                 <field name="brand_id"/>
                 <field name="model_id"/>
                 <field name="color_id"/>
-                <filter string="Approved" name="approved" domain="[('state','=','approved')]"/>
-                <filter string="Pending" name="pending" domain="[('state','=','pending')]"/>
+                <filter string="Active" name="active" domain="[('active','=',True)]"/>
+                <filter string="Archived" name="archived" domain="[('active','=',False)]"/>
                 <separator/>
                 <filter string="Vehicle Type" name="groupby_type" context="{'group_by':'vehicle_type_id'}"/>
                 <filter string="Owner" name="groupby_owner" context="{'group_by':'owner_id'}"/>
-                <filter string="Status" name="groupby_state" context="{'group_by':'state'}"/>
             </search>
         </field>
     </record>
@@ -34,7 +33,7 @@
                 <field name="color_id" optional="hide"/>
                 <field name="tid" string="Primary TID"/>
                 <field name="active_vehicle_card_count" optional="hide"/>
-                <field name="state" widget="badge" decoration-success="state == 'approved'" decoration-warning="state == 'pending'" decoration-danger="state == 'rejected'"/>
+                <field name="active" widget="boolean_toggle"/>
             </list>
         </field>
     </record>
@@ -45,10 +44,9 @@
         <field name="arch" type="xml">
             <form string="Vehicle">
                 <header>
-                    <button name="action_approve" string="Approve Vehicle" type="object" class="btn-primary" invisible="state != 'pending'"/>
-                    <button name="action_reject" string="Reject" type="object" class="btn-secondary" invisible="state != 'pending'"/>
+                    <button name="action_archive" type="object" string="Archive" invisible="not active" class="btn-secondary"/>
+                    <button name="action_unarchive" type="object" string="Unarchive" invisible="active" class="btn-primary"/>
                     <button name="action_open_grant_card_wizard" string="Grant Card by Scan" type="object" class="btn-secondary" icon="fa-id-card-o"/>
-                    <field name="state" widget="statusbar" statusbar_visible="pending,approved,rejected"/>
                 </header>
                 <sheet>
                     <div class="oe_title">
@@ -57,6 +55,7 @@
                     </div>
                     <group>
                         <group string="Vehicle">
+                            <field name="active"/>
                             <field name="owner_id" string="Owner"/>
                             <field name="vehicle_type_id" options="{'no_create': False, 'no_quick_create': False}"/>
                             <field name="brand_id" options="{'no_create': False, 'no_quick_create': False}"/>
@@ -74,9 +73,11 @@
                                 <list editable="bottom">
                                     <field name="card_id" domain="[('card_type','=','vehicle_card'), ('usage_state','=','available')]" options="{'no_create': True}"/>
                                     <field name="tid" readonly="1"/>
-                                    <field name="state" widget="badge" decoration-success="state == 'active'" decoration-muted="state == 'revoked'"/>
+                                    <field name="state" widget="badge" readonly="1" decoration-success="state == 'active'" decoration-muted="state == 'revoked'"/>
                                     <field name="assigned_at" optional="hide"/>
                                     <field name="revoked_at" optional="hide" readonly="1"/>
+                                    <button name="action_revoke" type="object" string="Revoke" invisible="state != 'active'"/>
+                                    <button name="action_activate" type="object" string="Activate" invisible="state != 'revoked'" class="btn-primary"/>
                                 </list>
                             </field>
                         </page>
@@ -99,6 +100,7 @@
                         </page>
                         <page string="Technical" groups="nsp_core.group_nsp_it_parking">
                             <group>
+                                <field name="vehicle_code" readonly="1" widget="CopyClipboardChar"/>
                                 <field name="vehicle_tid_tids" string="All Active Vehicle TIDs" readonly="1"/>
                             </group>
                         </page>
@@ -114,5 +116,6 @@
         <field name="res_model">nsp.vehicle</field>
         <field name="view_mode">list,form</field>
         <field name="search_view_id" ref="view_nsp_vehicle_search"/>
+        <field name="context">{'search_default_active': 1}</field>
     </record>
 </odoo>

@@ -10,8 +10,6 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from psycopg2 import IntegrityError
-
 from odoo import api, fields, models
 
 from odoo.addons.t4_coreapi.utils import endpoint, get_params, get_body
@@ -78,7 +76,7 @@ class NspGatekeeperApiService(models.AbstractModel):
     def _controller_code_from_data(self, data=None):
         """Read the only supported Controller integration identifier.
 
-        Internal database IDs and historical aliases are deliberately rejected.
+        Internal database IDs are deliberately rejected.
         """
         data = data or {}
         return str(data.get("controller_code") or "").strip()
@@ -178,13 +176,6 @@ class NspGatekeeperApiService(models.AbstractModel):
         return fields.Datetime.to_string(parsed)
 
     @api.model
-    def _float_or_false(self, value):
-        try:
-            return False if value in (None, "") else float(value)
-        except Exception:
-            return False
-
-    @api.model
     def _safe_positive_int(self, value, default=1):
         try:
             parsed = int(value)
@@ -193,49 +184,13 @@ class NspGatekeeperApiService(models.AbstractModel):
             return default
 
     @api.model
-    def _employee_code_fields(self):
-        User = self.env["nsp.user"].sudo()
-        preferred = ["user_code"]
-        return [fname for fname in preferred if fname in User._fields]
-
-    @api.model
-    def _employee_code(self, user):
-        for fname in self._employee_code_fields():
-            value = str(user[fname] or "").strip()
-            if value:
-                return value
-        return ""
-
-    @api.model
-    def _employee_pin_fields(self):
-        User = self.env["nsp.user"].sudo()
-        preferred = ["pin"]
-        return [fname for fname in preferred if fname in User._fields]
-
-    @api.model
-    def _employee_pin(self, user):
-        for fname in self._employee_pin_fields():
-            value = str(user[fname] or "").strip()
-            if value:
-                return value
-        return ""
-
-    @api.model
-    def _find_employee_by_api_id(self, user_id):
-        raw = str(user_id or "").strip()
-        User = self.env["nsp.user"].sudo().with_context(active_test=False)
-        if not raw:
-            return User.browse()
-        for fname in self._employee_code_fields():
-            user = User.search([(fname, "=", raw)], limit=1)
-            if user:
-                return user
-        return User.browse()
+    def _user_code(self, user):
+        return str(user.user_code or "").strip() if user else ""
 
     # ------------------------------------------------------------------
     # Runtime Core API endpoints
     # ------------------------------------------------------------------
-    @endpoint("NSP Gatekeeper Health", route_suffix="health", methods="GET,POST", code="nsp_gatekeeper_health")
+    @endpoint("NSP Gatekeeper Health", route_path="health", methods="GET", code="nsp_gatekeeper_health")
     def api_health(self):
         return self._ok({
             "service": "nsp_gatekeeper",
@@ -243,20 +198,26 @@ class NspGatekeeperApiService(models.AbstractModel):
             "server_time": self._iso_datetime(fields.Datetime.now()),
         }, message="NSP Gatekeeper is running.")
 
-    @endpoint("NSP Gatekeeper Heartbeat", route_suffix="heartbeat", methods="POST", code="nsp_gatekeeper_heartbeat")
+    @endpoint("NSP Gatekeeper Heartbeat", route_path="heartbeat", methods="POST", code="nsp_gatekeeper_heartbeat")
     def api_controller_heartbeat(self):
         data = self._payload()
         controller, error = self._auth_controller(data)
         if error:
             return error
         now = fields.Datetime.now()
-        vals = {"timestamp": now, "status": "online"}
-        controller.write(vals)
+        if controller.status != "online":
+            controller.write({"timestamp": now, "status": "online"})
+        else:
+            self.env.cr.execute(
+                "UPDATE nsp_controller SET timestamp = %s WHERE id = %s",
+                (now, controller.id),
+            )
+            controller.invalidate_recordset(["timestamp"])
         return self._ok({
             "controller_code": controller.controller_id,
             "current_status": "online",
             "last_seen_at": self._iso_datetime(now),
-            "reader_count": len(self._whitelisted_devices(controller.device_ids)),
+            "reader_count": self._whitelisted_device_count(controller),
         }, message="Heartbeat accepted.")
 
     @api.model
@@ -300,12 +261,33 @@ class NspGatekeeperApiService(models.AbstractModel):
         if current_status not in ("online", "offline", "error", "block", "revoked"):
             raise ValueError("invalid_payload")
         last_seen_at = self._safe_datetime_value(data.get("last_seen_at"), default_now=False) or fields.Datetime.now()
-        vals = {
-            "timestamp": last_seen_at,
-            "status": current_status,
-        }
-        parent.write(vals)
+        if parent.status != current_status:
+            parent.write({"timestamp": last_seen_at, "status": current_status})
+        else:
+            self.env.cr.execute(
+                "UPDATE nsp_edge_server SET timestamp = %s WHERE id = %s",
+                (last_seen_at, parent.id),
+            )
+            parent.invalidate_recordset(["timestamp"])
         return parent
+
+    @api.model
+    def _whitelisted_device_count(self, controller):
+        """Count configured Readers that are currently whitelisted in one query."""
+        if not controller:
+            return 0
+        self.env.cr.execute(
+            """
+            SELECT COUNT(*)
+              FROM nsp_device AS device
+              JOIN nsp_device_whitelist AS whitelist
+                ON whitelist.serial_number = device.serial_number
+             WHERE device.controller_id = %s
+            """,
+            (controller.id,),
+        )
+        row = self.env.cr.fetchone()
+        return int(row[0] or 0) if row else 0
 
     @api.model
     def _whitelisted_devices(self, devices):
@@ -320,8 +302,6 @@ class NspGatekeeperApiService(models.AbstractModel):
 
     @api.model
     def _notify_device_not_whitelisted(self, controller, item, serial_number):
-        if "nsp.notification" not in self.env.registry.models:
-            return True
         values = item if isinstance(item, dict) else {}
         self.env["nsp.notification"].sudo().notify_device_not_whitelisted(
             serial_number,
@@ -335,7 +315,28 @@ class NspGatekeeperApiService(models.AbstractModel):
         return True
 
     @api.model
-    def _apply_device_status(self, controller, item):
+    def _device_status_cache(self, controllers, items):
+        serials = {
+            str(item.get("serial_number") or "").strip().upper()
+            for item in (items or []) if isinstance(item, dict)
+        }
+        serials.discard("")
+        controller_ids = controllers.ids if controllers else []
+        Device = self.env["nsp.device"].sudo()
+        devices = Device.search([
+            ("controller_id", "in", controller_ids),
+            ("serial_number", "in", list(serials)),
+        ]) if controller_ids and serials else Device.browse()
+        whitelist = self.env["nsp.device.whitelist"].sudo().search([
+            ("serial_number", "in", list(serials)),
+        ]) if serials else self.env["nsp.device.whitelist"].browse()
+        return {
+            "device_by_key": {(device.controller_id.id, device.serial_number): device for device in devices},
+            "whitelist_serials": set(whitelist.mapped("serial_number")),
+        }
+
+    @api.model
+    def _apply_device_status(self, controller, item, cache=None):
         """Apply Reader runtime status using Serial Number as the only device identity.
 
         ``device_code`` is a server-side management code and is never accepted
@@ -355,14 +356,11 @@ class NspGatekeeperApiService(models.AbstractModel):
         serial_number = str(item.get("serial_number") or "").strip().upper()
         if not serial_number:
             raise ValueError("serial_number is required")
-        if not self.env["nsp.device.whitelist"].sudo().is_device_whitelisted(serial_number):
+        cache = cache or self._device_status_cache(controller, [item])
+        if serial_number not in cache.get("whitelist_serials", set()):
             self._notify_device_not_whitelisted(controller, item, serial_number)
             raise ValueError("device_not_whitelisted")
-        Device = self.env["nsp.device"].sudo()
-        device = Device.search([
-            ("controller_id", "=", controller.id),
-            ("serial_number", "=", serial_number),
-        ], limit=1)
+        device = cache.get("device_by_key", {}).get((controller.id, serial_number))
         if not device:
             raise ValueError("device_not_found")
         status = str(item.get("device_status") or "online").strip().lower()
@@ -394,7 +392,7 @@ class NspGatekeeperApiService(models.AbstractModel):
         device.write(vals)
         return device
 
-    @endpoint("NSP Gatekeeper Edge Server Status", route_suffix="edge-server/status", methods="POST", code="nsp_gatekeeper_edge_server_status")
+    @endpoint("NSP Gatekeeper Edge Server Status", route_path="edge-server/status", methods="POST", code="nsp_gatekeeper_edge_server_status")
     def api_edge_server_status(self):
         """Accept one Edge heartbeat including its Controllers and Reader runtime inventory."""
         data = self._payload()
@@ -414,6 +412,24 @@ class NspGatekeeperApiService(models.AbstractModel):
             )
 
         Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
+        controller_codes = {
+            str(item.get("controller_code") or "").strip().upper()
+            for item in controller_items if isinstance(item, dict)
+        }
+        controller_codes.discard("")
+        controllers = Controller.search([
+            ("controller_id", "in", list(controller_codes)),
+            ("edge_server_id", "=", edge_server.id),
+        ]) if controller_codes else Controller.browse()
+        controller_by_code = {record.controller_id: record for record in controllers}
+        reported_device_items = [
+            device_item
+            for controller_item in controller_items if isinstance(controller_item, dict)
+            for device_item in (controller_item.get("devices") or [])
+            if isinstance(device_item, dict)
+        ]
+        device_cache = self._device_status_cache(controllers, reported_device_items)
+
         results = []
         reported_controller_ids = set()
         controller_count = device_count = failed = 0
@@ -426,10 +442,7 @@ class NspGatekeeperApiService(models.AbstractModel):
                 controller_code = str(controller_item.get("controller_code") or "").strip().upper()
                 if not controller_code:
                     raise ValueError("missing_controller_code")
-                controller = Controller.search([
-                    ("controller_id", "=", controller_code),
-                    ("edge_server_id", "=", edge_server.id),
-                ], limit=1)
+                controller = controller_by_code.get(controller_code)
                 if not controller:
                     raise ValueError("controller_not_found")
 
@@ -461,7 +474,7 @@ class NspGatekeeperApiService(models.AbstractModel):
                         device_item.get("serial_number") or ""
                     ).strip().upper() if isinstance(device_item, dict) else ""
                     try:
-                        device = self._apply_device_status(controller, device_item)
+                        device = self._apply_device_status(controller, device_item, cache=device_cache)
                         device_count += 1
                         results.append({
                             "controller_index": controller_index,
@@ -527,7 +540,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             "server_time": self._iso_datetime(fields.Datetime.now()),
         }, message="Edge Server status and managed device runtime accepted.")
 
-    @endpoint("NSP Gatekeeper Devices Report", route_suffix="devices/report", methods="POST", code="nsp_gatekeeper_devices_report")
+    @endpoint("NSP Gatekeeper Devices Report", route_path="devices/report", methods="POST", code="nsp_gatekeeper_devices_report")
     def api_devices_report(self):
         data = self._payload()
         controller, error = self._auth_controller(data)
@@ -540,10 +553,11 @@ class NspGatekeeperApiService(models.AbstractModel):
             return self._error("devices must be an array", 400, error_code="invalid_payload", details={"field": "devices"})
         results = []
         processed = failed = 0
+        device_cache = self._device_status_cache(controller, items)
         for index, item in enumerate(items):
             key = str(item.get("serial_number") or "").strip() if isinstance(item, dict) else ""
             try:
-                device = self._apply_device_status(controller, item)
+                device = self._apply_device_status(controller, item, cache=device_cache)
                 processed += 1
                 results.append({"index": index, "record_key": device.serial_number, "status": "processed", "message": "Processed"})
             except Exception as exc:
@@ -595,48 +609,22 @@ class NspGatekeeperApiService(models.AbstractModel):
         next_cursor = self._encode_sync_cursor(page_records[-1]) if page_records else ((data or {}).get("sync_cursor") or False)
         return page_records, next_cursor, has_more, fields.Datetime.now()
 
-    def _card_sync_payload(self, card):
-        """Serialize one Master Card together with its active assignment.
-
-        The assignment relation is the source of truth. ``assigned_to`` on the
-        Master Card is only a computed display field and must never be parsed.
-        The API contract exposes assignment only through the nested
-        ``assignment`` object.
-        """
-        UserCard = self.env["nsp.user.card"].sudo().with_context(active_test=False)
-        VehicleCard = self.env["nsp.vehicle.card"].sudo().with_context(active_test=False)
-        user_line = UserCard.search(
-            [("card_id", "=", card.id), ("state", "=", "active")],
-            order="assigned_at desc, id desc",
-            limit=1,
-        )
-        vehicle_line = VehicleCard.search(
-            [("card_id", "=", card.id), ("state", "=", "active")],
-            order="assigned_at desc, id desc",
-            limit=1,
-        )
-
+    def _card_sync_payload(self, card, user_line=False, vehicle_line=False):
+        """Serialize one Master Card using preloaded active assignments."""
         if user_line and vehicle_line:
             _logger.error(
                 "Card %s has simultaneous active User and Vehicle assignments; "
                 "Vehicle assignment is selected for sync.", card.tid,
             )
 
-        assignment = {"type": "unassigned", "code": False, "name": False}
+        assignment = {"type": "unassigned", "code": False}
         card_type = card.card_type
         assigned_at = False
         if vehicle_line:
             vehicle = vehicle_line.vehicle_id
-            assignment_code = ""
-            for field_name in ("vehicle_code", "code"):
-                if field_name in vehicle._fields and vehicle[field_name]:
-                    assignment_code = str(vehicle[field_name]).strip()
-                    break
-            assignment_code = assignment_code or str(vehicle.license_plate or "").strip()
             assignment = {
                 "type": "vehicle",
-                "code": assignment_code,
-                "name": vehicle.license_plate or vehicle.display_name,
+                "code": vehicle.vehicle_code or "",
             }
             card_type = "vehicle_card"
             assigned_at = vehicle_line.assigned_at
@@ -644,8 +632,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             user = user_line.user_id
             assignment = {
                 "type": "user",
-                "code": self._employee_code(user),
-                "name": user.display_name or user.name,
+                "code": self._user_code(user),
             }
             card_type = "user_card"
             assigned_at = user_line.assigned_at
@@ -653,15 +640,13 @@ class NspGatekeeperApiService(models.AbstractModel):
         payload = {
             "card_uid": card.tid,
             "card_type": card_type,
-            "active": bool(getattr(card, "active", True)),
-            "assigned": assignment["type"] != "unassigned",
             "assignment": assignment,
         }
         if assigned_at:
             payload["assigned_at"] = self._iso_datetime(assigned_at)
         return payload
 
-    @endpoint("NSP Device Whitelist Sync", route_suffix="device-whitelist/sync", methods="POST", code="nsp_device_whitelist_sync")
+    @endpoint("NSP Device Whitelist Sync", route_path="device-whitelist/sync", methods="POST", code="nsp_device_whitelist_sync")
     def api_device_whitelist_sync(self):
         data = self._payload()
         _application, _actor_kind, _edge_server, error = self._auth_edge_server_sync(data)
@@ -690,7 +675,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             "server_time": self._iso_datetime(fields.Datetime.now()),
         }, message="Device Whitelist snapshot loaded.")
 
-    @endpoint("NSP Vehicle Configuration Sync", route_suffix="vehicle-config/sync", methods="POST", code="nsp_vehicle_config_sync")
+    @endpoint("NSP Vehicle Configuration Sync", route_path="vehicle-config/sync", methods="POST", code="nsp_vehicle_config_sync")
     def api_vehicle_config_sync(self):
         data = self._payload()
         _application, _actor_kind, _edge_server, error = self._auth_edge_server_sync(data)
@@ -739,7 +724,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             "server_time": self._iso_datetime(fields.Datetime.now()),
         }, message="Vehicle Configuration snapshot loaded.")
 
-    @endpoint("NSP Gatekeeper Cards Sync", route_suffix="cards/sync", methods="POST", code="nsp_gatekeeper_cards_sync")
+    @endpoint("NSP Gatekeeper Cards Sync", route_path="cards/sync", methods="POST", code="nsp_gatekeeper_cards_sync")
     def api_cards_sync(self):
         data = self._payload()
         _application, _actor_kind, _edge_server, error = self._auth_edge_server_sync(data)
@@ -754,7 +739,28 @@ class NspGatekeeperApiService(models.AbstractModel):
                 details={"unsupported_fields": unsupported},
             )
         cards = self.env["nsp.rfid.card"].sudo().search([], order="tid asc, id asc")
-        items = [self._card_sync_payload(card) for card in cards]
+        card_ids = cards.ids
+        user_by_card = {}
+        vehicle_by_card = {}
+        if card_ids:
+            user_lines = self.env["nsp.user.card"].sudo().search([
+                ("card_id", "in", card_ids), ("state", "=", "active"),
+            ], order="assigned_at desc, id desc")
+            vehicle_lines = self.env["nsp.vehicle.card"].sudo().search([
+                ("card_id", "in", card_ids), ("state", "=", "active"),
+            ], order="assigned_at desc, id desc")
+            for line in user_lines:
+                user_by_card.setdefault(line.card_id.id, line)
+            for line in vehicle_lines:
+                vehicle_by_card.setdefault(line.card_id.id, line)
+        items = [
+            self._card_sync_payload(
+                card,
+                user_line=user_by_card.get(card.id),
+                vehicle_line=vehicle_by_card.get(card.id),
+            )
+            for card in cards
+        ]
         user_card_count = sum(
             1 for item in items
             if (item.get("assignment") or {}).get("type") == "user"
@@ -777,24 +783,22 @@ class NspGatekeeperApiService(models.AbstractModel):
             "server_time": self._iso_datetime(fields.Datetime.now()),
         }, message="Cards snapshot loaded.")
 
-    @endpoint("NSP Gatekeeper Users Sync", route_suffix="employees/sync", methods="POST", code="nsp_gatekeeper_employees_sync")
-    def api_employees_sync(self):
+    @endpoint("NSP Gatekeeper Users Sync", route_path="users/sync", methods="POST", code="nsp_gatekeeper_users_sync")
+    def api_users_sync(self):
         data = self._payload()
         application, actor_kind, edge_server, error = self._auth_edge_server_sync(data)
         if error:
             return error
         User = self.env["nsp.user"].sudo()
-        domain = []
-        code_fields = self._employee_code_fields()
-        if code_fields:
-            domain += [(code_fields[0], "!=", False), (code_fields[0], "!=", "")]
-        users, next_cursor, has_more, server_time = self._cursor_page(User, data, domain=domain)
+        users, next_cursor, has_more, server_time = self._cursor_page(
+            User, data, domain=[("user_code", "!=", False), ("user_code", "!=", "")]
+        )
         items = []
         for user in users:
             item = {
-                "user_code": self._employee_code(user),
+                "user_code": self._user_code(user),
                 "name": user.name or user.display_name,
-                "active": bool(user.active) if "active" in user._fields else True,
+                "active": bool(user.active),
             }
             items.append(item)
         return self._ok({
@@ -802,25 +806,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             "server_time": self._iso_datetime(server_time),
         }, message="Users sync loaded.")
 
-    @api.model
-    def _user_access_code(self, user):
-        """Return the stable user/employee code used by Controller cache.
-
-        NSP no longer depends on Odoo HR employee records. The Controller stores
-        `employee_id` as a text key, so use `nsp.user.user_code` first and fall
-        back to the record id only when a code is missing.
-        """
-        if not user:
-            return ""
-        code = ""
-        try:
-            if "user_code" in user._fields:
-                code = user.user_code or ""
-        except Exception:
-            code = ""
-        return str(code or "").strip()
-
-    @endpoint("NSP Gatekeeper Vehicles Sync", route_suffix="vehicles/sync", methods="POST", code="nsp_gatekeeper_vehicles_sync")
+    @endpoint("NSP Gatekeeper Vehicles Sync", route_path="vehicles/sync", methods="POST", code="nsp_gatekeeper_vehicles_sync")
     def api_vehicles_sync(self):
         data = self._payload()
         application, actor_kind, edge_server, error = self._auth_edge_server_sync(data)
@@ -831,12 +817,7 @@ class NspGatekeeperApiService(models.AbstractModel):
         items = []
         for vehicle in vehicles:
             owner = vehicle.owner_id
-            vehicle_code = ""
-            for field_name in ("vehicle_code", "code"):
-                if field_name in vehicle._fields and vehicle[field_name]:
-                    vehicle_code = vehicle[field_name]
-                    break
-            vehicle_code = vehicle_code or vehicle.license_plate or ""
+            vehicle_code = vehicle.vehicle_code or ""
             item = {
                 "vehicle_code": vehicle_code,
                 "license_plate": vehicle.license_plate or "",
@@ -844,9 +825,9 @@ class NspGatekeeperApiService(models.AbstractModel):
                 "brand_code": vehicle.brand_id.code if vehicle.brand_id else False,
                 "model_code": vehicle.model_id.code if vehicle.model_id else False,
                 "color_code": vehicle.color_id.code if vehicle.color_id else False,
-                "active": vehicle.state == "approved",
+                "active": bool(vehicle.active),
             }
-            owner_user_code = self._user_access_code(owner)
+            owner_user_code = self._user_code(owner)
             if owner_user_code:
                 item["owner_user_code"] = owner_user_code
             items.append(item)
@@ -855,7 +836,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             "server_time": self._iso_datetime(server_time),
         }, message="Vehicles sync loaded.")
 
-    @endpoint("NSP Gatekeeper Branches Sync", route_suffix="branches/sync", methods="POST", code="nsp_gatekeeper_branches_sync")
+    @endpoint("NSP Gatekeeper Branches Sync", route_path="branches/sync", methods="POST", code="nsp_gatekeeper_branches_sync")
     def api_branches_sync(self):
         data = self._payload()
         application, actor_kind, edge_server, error = self._auth_edge_server_sync(data)
@@ -874,7 +855,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             "server_time": self._iso_datetime(server_time),
         }, message="Branches sync loaded.")
 
-    @endpoint("NSP Gatekeeper Vehicle Borrow Sync", route_suffix="vehicle-borrow/sync", methods="POST", code="nsp_gatekeeper_vehicle_borrow_sync")
+    @endpoint("NSP Gatekeeper Vehicle Borrow Sync", route_path="vehicle-borrow/sync", methods="POST", code="nsp_gatekeeper_vehicle_borrow_sync")
     def api_vehicle_borrow_sync(self):
         data = self._payload()
         application, actor_kind, edge_server, error = self._auth_edge_server_sync(data)
@@ -888,29 +869,27 @@ class NspGatekeeperApiService(models.AbstractModel):
         for borrow in records:
             vehicle = borrow.vehicle_id
             borrower = borrow.borrower_id
-            borrow_uid = getattr(borrow, "borrow_uid", False) or getattr(borrow, "borrow_code", False) or ""
-            vehicle_code = ""
-            for field_name in ("vehicle_code", "code"):
-                if vehicle and field_name in vehicle._fields and vehicle[field_name]:
-                    vehicle_code = vehicle[field_name]
-                    break
+            borrow_uid = borrow.borrow_code or ""
+            vehicle_code = vehicle.vehicle_code if vehicle else ""
             item = {
                 "borrow_uid": borrow_uid,
-                "vehicle_code": vehicle_code or (vehicle.license_plate if vehicle else ""),
-                "borrower_user_code": self._user_access_code(borrower),
-                "active": borrow.state == "active" and not getattr(borrow, "returned_at", False),
+                "vehicle_code": vehicle_code,
+                "borrower_user_code": self._user_code(borrower),
+                "state": borrow.state,
             }
             if borrow.valid_from:
                 item["valid_from"] = self._iso_datetime(borrow.valid_from)
             if borrow.valid_to:
                 item["valid_to"] = self._iso_datetime(borrow.valid_to)
+            if borrow.returned_at:
+                item["returned_at"] = self._iso_datetime(borrow.returned_at)
             items.append(item)
         return self._ok({
             "items": items, "next_sync_cursor": next_cursor, "has_more": has_more,
             "server_time": self._iso_datetime(server_time),
         }, message="Vehicle borrow sync loaded.")
 
-    @endpoint("NSP Parking Operation Configuration Sync", route_suffix="parking-config/sync", methods="POST", code="nsp_parking_config_sync")
+    @endpoint("NSP Parking Operation Configuration Sync", route_path="parking-config/sync", methods="POST", code="nsp_parking_config_sync")
     def api_parking_config_sync(self):
         data = self._payload()
         _application, _actor_kind, _edge_server, error = self._auth_edge_server_sync(data)
@@ -933,7 +912,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             "server_time": self._iso_datetime(fields.Datetime.now()),
         }, message="Parking operation configuration snapshot loaded.")
 
-    @endpoint("NSP Controller Device Configuration Pull", route_suffix="controller/device-config/pull", methods="POST", code="nsp_controller_device_config_pull")
+    @endpoint("NSP Controller Device Configuration Pull", route_path="controller/device-config/pull", methods="POST", code="nsp_controller_device_config_pull")
     def api_controller_device_config_pull(self):
         data = self._payload()
         controller, error = self._auth_controller(data)
@@ -1098,8 +1077,8 @@ class NspGatekeeperApiService(models.AbstractModel):
     def _measurement_resolve_antennas(self, controller, values):
         if not isinstance(values, list) or not values:
             raise ValueError("missing_measurement_antennas")
-        Antenna = self.env["nsp.device.antenna"].sudo()
-        result, seen = self.env["nsp.device.antenna"].browse(), set()
+
+        keys = set()
         for item in values:
             if not isinstance(item, dict):
                 raise ValueError("invalid_payload")
@@ -1116,21 +1095,38 @@ class NspGatekeeperApiService(models.AbstractModel):
                 key = (serial_number, antenna_no)
                 if antenna_no <= 0:
                     raise ValueError("antenna_not_found")
-                if key in seen:
+                if key in keys:
                     raise ValueError("duplicate_antenna_mapping")
-                seen.add(key)
-                antenna = Antenna.search([
-                    ("device_id.controller_id", "=", controller.id),
-                    ("device_id.serial_number", "=", serial_number),
-                    ("antenna_no", "=", antenna_no),
-                ], limit=1)
-                if not antenna:
-                    raise ValueError("antenna_not_found")
-                if not antenna.device_id._is_whitelisted():
-                    antenna.device_id._notify_not_whitelisted()
-                    raise ValueError("device_not_whitelisted")
-                result |= antenna
-        return result
+                keys.add(key)
+
+        serials = {serial for serial, _antenna_no in keys}
+        whitelisted = set(
+            self.env["nsp.device.whitelist"].sudo().search([
+                ("serial_number", "in", list(serials)),
+            ]).mapped("serial_number")
+        ) if serials else set()
+        missing_whitelist = serials - whitelisted
+        if missing_whitelist:
+            Notification = self.env["nsp.notification"].sudo()
+            for serial in sorted(missing_whitelist):
+                Notification.notify_device_not_whitelisted(
+                    serial, controller.controller_id, details={"device_type": "rfid_reader"}
+                )
+            raise ValueError("device_not_whitelisted")
+
+        antenna_numbers = {antenna_no for _serial, antenna_no in keys}
+        antennas = self.env["nsp.device.antenna"].sudo().search([
+            ("device_id.controller_id", "=", controller.id),
+            ("device_id.serial_number", "in", list(serials)),
+            ("antenna_no", "in", list(antenna_numbers)),
+        ])
+        by_key = {
+            (antenna.device_id.serial_number, int(antenna.antenna_no or 0)): antenna
+            for antenna in antennas
+        }
+        if any(key not in by_key for key in keys):
+            raise ValueError("antenna_not_found")
+        return self.env["nsp.device.antenna"].browse([by_key[key].id for key in sorted(keys)])
 
     @api.model
     def _measurement_error_response(self, exc):
@@ -1168,17 +1164,20 @@ class NspGatekeeperApiService(models.AbstractModel):
         if target != current and target not in transitions.get(current, set()):
             raise ValueError("invalid_status_transition")
         when = occurred_at or fields.Datetime.now()
-        vals = {"status": target}
-        if target == "running":
-            vals["started_at"] = session.started_at or when
-        if target in ("completed", "failed", "cancelled"):
-            vals["ended_at"] = session.ended_at or when
-        session.with_context(measurement_sync=True).write(vals)
+        vals = {}
+        if target != current:
+            vals["status"] = target
+        if target == "running" and not session.started_at:
+            vals["started_at"] = when
+        if target in ("completed", "failed", "cancelled") and not session.ended_at:
+            vals["ended_at"] = when
+        if vals:
+            session.with_context(measurement_sync=True).write(vals)
         if message:
             session.message_post(body=str(message))
         return session
 
-    @endpoint("NSP Measurement Session Create", route_suffix="measurement-sessions", methods="POST", code="nsp_measurement_session_create")
+    @endpoint("NSP Measurement Session Create", route_path="measurement-sessions", methods="POST", code="nsp_measurement_session_create")
     def api_measurement_session_create(self):
         data = self._payload()
         _application, _actor, error = self._auth_sync_application(data)
@@ -1186,11 +1185,11 @@ class NspGatekeeperApiService(models.AbstractModel):
             return error
         try:
             allowed = {
-                "measurement_code", "controller_code", "planned_start_at", "planned_end_at",
+                "controller_code", "planned_start_at", "planned_end_at",
                 "note", "measurement_antennas",
             }
             self._measurement_reject_unknown_fields(data, allowed)
-            self._measurement_require_fields(data, ["measurement_code", "controller_code", "measurement_antennas"])
+            self._measurement_require_fields(data, ["controller_code", "measurement_antennas"])
             controller = self._measurement_resolve_controller(data)
             antennas = self._measurement_resolve_antennas(controller, data.get("measurement_antennas"))
             planned_start = self._measurement_datetime(data.get("planned_start_at"))
@@ -1198,7 +1197,6 @@ class NspGatekeeperApiService(models.AbstractModel):
             if planned_start and planned_end and planned_end <= planned_start:
                 raise ValueError("invalid_planned_time_range")
             session = self.env["nsp.measurement.session"].sudo().create({
-                "measurement_code": str(data.get("measurement_code") or "").strip().upper(),
                 "controller_id": controller.id,
                 "planned_start_at": planned_start,
                 "planned_end_at": planned_end,
@@ -1209,7 +1207,7 @@ class NspGatekeeperApiService(models.AbstractModel):
         except Exception as exc:
             return self._measurement_error_response(exc)
 
-    @endpoint("NSP Measurement Session Update", route_suffix="measurement-sessions/update", methods="PATCH", code="nsp_measurement_session_update")
+    @endpoint("NSP Measurement Session Update", route_path="measurement-sessions/update", methods="PATCH", code="nsp_measurement_session_update")
     def api_measurement_session_update(self):
         data = self._payload()
         _application, _actor, error = self._auth_sync_application(data)
@@ -1244,7 +1242,7 @@ class NspGatekeeperApiService(models.AbstractModel):
         except Exception as exc:
             return self._measurement_error_response(exc)
 
-    @endpoint("NSP Measurement Session Detail", route_suffix="measurement-sessions/detail", methods="GET,POST", code="nsp_measurement_session_detail")
+    @endpoint("NSP Measurement Session Detail", route_path="measurement-sessions/detail", methods="GET,POST", code="nsp_measurement_session_detail")
     def api_measurement_session_detail(self):
         data = self._measurement_input()
         _application, _actor, error = self._auth_sync_application(data)
@@ -1257,7 +1255,7 @@ class NspGatekeeperApiService(models.AbstractModel):
         except Exception as exc:
             return self._measurement_error_response(exc)
 
-    @endpoint("NSP Measurement Session State", route_suffix="measurement-sessions/state", methods="POST", code="nsp_measurement_session_state")
+    @endpoint("NSP Measurement Session State", route_path="measurement-sessions/state", methods="POST", code="nsp_measurement_session_state")
     def api_measurement_session_state(self):
         data = self._payload()
         _application, _actor, error = self._auth_sync_application(data)
@@ -1278,7 +1276,7 @@ class NspGatekeeperApiService(models.AbstractModel):
         except Exception as exc:
             return self._measurement_error_response(exc)
 
-    @endpoint("NSP Measurement Configuration Sync", route_suffix="measurement-config/sync", methods="POST", code="nsp_measurement_config_sync")
+    @endpoint("NSP Measurement Configuration Sync", route_path="measurement-config/sync", methods="POST", code="nsp_measurement_config_sync")
     def api_measurement_config_sync(self):
         data = self._payload()
         _application, _actor, edge_server, error = self._auth_edge_server_sync(data)
@@ -1304,7 +1302,7 @@ class NspGatekeeperApiService(models.AbstractModel):
         except Exception as exc:
             return self._measurement_error_response(exc)
 
-    @endpoint("NSP Controller Measurement Pull", route_suffix="controller/measurement/pull", methods="POST", code="nsp_controller_measurement_pull")
+    @endpoint("NSP Controller Measurement Pull", route_path="controller/measurement/pull", methods="POST", code="nsp_controller_measurement_pull")
     def api_controller_measurement_pull(self):
         data = self._payload()
         controller, error = self._auth_controller(data)
@@ -1333,7 +1331,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             return self._measurement_error_response(exc)
 
     @api.model
-    def _measurement_event_values(self, session, item):
+    def _measurement_event_values(self, session, item, allowed_antennas=None):
         allowed = {"event_uid", "serial_number", "antenna_no", "tid", "read_at", "rssi_dbm"}
         self._measurement_reject_unknown_fields(item, allowed)
         self._measurement_require_fields(item, ["event_uid", "serial_number", "antenna_no", "tid", "read_at"])
@@ -1346,10 +1344,12 @@ class NspGatekeeperApiService(models.AbstractModel):
             antenna_no = 0
         if antenna_no <= 0:
             raise ValueError("antenna_not_found")
-        matched = session.antenna_ids.filtered(
-            lambda antenna: antenna.device_id.serial_number == serial_number and antenna.antenna_no == antenna_no
-        )
-        if not matched:
+        if allowed_antennas is None:
+            allowed_antennas = {
+                (antenna.device_id.serial_number, int(antenna.antenna_no or 0))
+                for antenna in session.antenna_ids
+            }
+        if (serial_number, antenna_no) not in allowed_antennas:
             raise ValueError("antenna_not_found")
         read_at = self._measurement_datetime(item.get("read_at"), required=True)
         if item.get("rssi_dbm") in (None, ""):
@@ -1370,91 +1370,172 @@ class NspGatekeeperApiService(models.AbstractModel):
         }
 
     @api.model
-    def _measurement_store_event(self, session, item, allow_final=False):
-        Event = self.env["nsp.measurement.event"].sudo()
-        values = self._measurement_event_values(session, item)
-        existing = Event.search([("event_uid", "=", values["event_uid"])], limit=1)
-        if existing:
-            comparable = (
-                existing.session_id.id,
-                existing.serial_number,
-                int(existing.antenna_no or 0),
-                existing.tid,
-                fields.Datetime.to_string(existing.read_at),
-                False if existing.rssi_dbm in (False, None) else float(existing.rssi_dbm),
-            )
-            expected = (
-                session.id,
-                values["serial_number"],
-                int(values["antenna_no"]),
-                values["tid"],
-                fields.Datetime.to_string(values["read_at"]),
-                False if values["rssi_dbm"] in (False, None) else float(values["rssi_dbm"]),
-            )
-            if comparable != expected:
-                raise ValueError("event_uid_conflict")
-            return existing, True
-        if not allow_final and session.status in ("completed", "failed", "cancelled"):
-            raise ValueError("measurement_not_running")
-        try:
-            with self.env.cr.savepoint():
-                return Event.create(values), False
-        except IntegrityError:
-            existing = Event.search([("event_uid", "=", values["event_uid"])], limit=1)
-            if not existing:
-                raise
-            comparable = (
-                existing.session_id.id,
-                existing.serial_number,
-                int(existing.antenna_no or 0),
-                existing.tid,
-                fields.Datetime.to_string(existing.read_at),
-                False if existing.rssi_dbm in (False, None) else float(existing.rssi_dbm),
-            )
-            expected = (
-                session.id,
-                values["serial_number"],
-                int(values["antenna_no"]),
-                values["tid"],
-                fields.Datetime.to_string(values["read_at"]),
-                False if values["rssi_dbm"] in (False, None) else float(values["rssi_dbm"]),
-            )
-            if comparable != expected:
-                raise ValueError("event_uid_conflict")
-            return existing, True
+    def _measurement_event_matches(self, event, values):
+        return (
+            event.session_id.id == values["session_id"]
+            and event.serial_number == values["serial_number"]
+            and int(event.antenna_no or 0) == int(values["antenna_no"] or 0)
+            and event.tid == values["tid"]
+            and fields.Datetime.to_string(event.read_at) == fields.Datetime.to_string(values["read_at"])
+            and (False if event.rssi_dbm in (False, None) else float(event.rssi_dbm))
+            == (False if values["rssi_dbm"] in (False, None) else float(values["rssi_dbm"]))
+        )
 
     @api.model
-    def _measurement_batch_result(self, items, handler):
-        results, created_records, processed, failed = [], self.env["nsp.measurement.event"].browse(), 0, 0
+    def _measurement_process_event_batch(self, session, items, allow_final=False):
+        """Validate/idempotently store one Measurement batch with bounded queries.
+
+        Event UIDs are preloaded once and new valid Events are created in one ORM
+        batch. Repeated UIDs inside the same request are treated idempotently when
+        their payload is identical and rejected when their payload conflicts.
+        """
+        Event = self.env["nsp.measurement.event"].sudo()
+        allowed_antennas = {
+            (antenna.device_id.serial_number, int(antenna.antenna_no or 0))
+            for antenna in session.antenna_ids
+        }
+        prepared = []
+        results = [None] * len(items)
+
         for index, item in enumerate(items):
             key = str(item.get("event_uid") or "") if isinstance(item, dict) else ""
             try:
                 if not isinstance(item, dict):
                     raise ValueError("invalid_payload")
-                event, duplicate = handler(item)
-                if not duplicate:
-                    created_records |= event
-                processed += 1
-                results.append({
-                    "index": index,
-                    "record_key": key,
-                    "status": "duplicate" if duplicate else "processed",
-                    "message": "Already processed" if duplicate else "Processed",
-                })
+                values = self._measurement_event_values(
+                    session, item, allowed_antennas=allowed_antennas
+                )
+                prepared.append((index, key, values))
             except Exception as exc:
-                failed += 1
-                results.append({
+                results[index] = {
                     "index": index,
                     "record_key": key,
                     "status": "rejected",
                     "error_code": str(exc).split(":", 1)[0],
                     "message": str(exc),
-                })
+                }
+
+        event_uids = list({values["event_uid"] for _index, _key, values in prepared})
+        existing_by_uid = {
+            event.event_uid: event
+            for event in Event.search([("event_uid", "in", event_uids)])
+        } if event_uids else {}
+
+        first_values_by_uid = {}
+        pending_by_uid = {}
+        duplicate_indices = {}
+        for index, key, values in prepared:
+            uid = values["event_uid"]
+            existing = existing_by_uid.get(uid)
+            if existing:
+                if not self._measurement_event_matches(existing, values):
+                    results[index] = {
+                        "index": index, "record_key": key, "status": "rejected",
+                        "error_code": "event_uid_conflict", "message": "event_uid_conflict",
+                    }
+                else:
+                    results[index] = {
+                        "index": index, "record_key": key, "status": "duplicate",
+                        "message": "Already processed",
+                    }
+                continue
+
+            first = first_values_by_uid.get(uid)
+            if first is not None:
+                same = (
+                    first["session_id"] == values["session_id"]
+                    and first["serial_number"] == values["serial_number"]
+                    and int(first["antenna_no"]) == int(values["antenna_no"])
+                    and first["tid"] == values["tid"]
+                    and fields.Datetime.to_string(first["read_at"]) == fields.Datetime.to_string(values["read_at"])
+                    and (False if first["rssi_dbm"] in (False, None) else float(first["rssi_dbm"]))
+                    == (False if values["rssi_dbm"] in (False, None) else float(values["rssi_dbm"]))
+                )
+                if same:
+                    duplicate_indices.setdefault(uid, []).append((index, key))
+                else:
+                    results[index] = {
+                        "index": index, "record_key": key, "status": "rejected",
+                        "error_code": "event_uid_conflict", "message": "event_uid_conflict",
+                    }
+                continue
+
+            if not allow_final and session.status in ("completed", "failed", "cancelled"):
+                results[index] = {
+                    "index": index, "record_key": key, "status": "rejected",
+                    "error_code": "measurement_not_running", "message": "measurement_not_running",
+                }
+                continue
+
+            first_values_by_uid[uid] = values
+            pending_by_uid[uid] = (index, key, values)
+
+        created_records = Event.browse()
+        pending = list(pending_by_uid.values())
+        if pending:
+            try:
+                with self.env.cr.savepoint():
+                    created_records = Event.create([values for _index, _key, values in pending])
+                created_by_uid = {event.event_uid: event for event in created_records}
+                for uid, (index, key, _values) in pending_by_uid.items():
+                    if uid in created_by_uid:
+                        results[index] = {
+                            "index": index, "record_key": key, "status": "processed",
+                            "message": "Processed",
+                        }
+            except Exception:
+                # Rare concurrent UID collisions or DB-level failures are isolated
+                # per Event so one bad item does not reject the rest of the batch.
+                created_records = Event.browse()
+                for uid, (index, key, values) in pending_by_uid.items():
+                    try:
+                        existing = Event.search([("event_uid", "=", uid)], limit=1)
+                        if existing:
+                            if not self._measurement_event_matches(existing, values):
+                                raise ValueError("event_uid_conflict")
+                            results[index] = {
+                                "index": index, "record_key": key, "status": "duplicate",
+                                "message": "Already processed",
+                            }
+                            continue
+                        with self.env.cr.savepoint():
+                            event = Event.create(values)
+                        created_records |= event
+                        results[index] = {
+                            "index": index, "record_key": key, "status": "processed",
+                            "message": "Processed",
+                        }
+                    except Exception as exc:
+                        results[index] = {
+                            "index": index, "record_key": key, "status": "rejected",
+                            "error_code": str(exc).split(":", 1)[0], "message": str(exc),
+                        }
+
+        for uid, duplicate_rows in duplicate_indices.items():
+            primary = pending_by_uid.get(uid)
+            primary_result = results[primary[0]] if primary else None
+            for index, key in duplicate_rows:
+                if primary_result and primary_result.get("status") in ("processed", "duplicate"):
+                    results[index] = {
+                        "index": index, "record_key": key, "status": "duplicate",
+                        "message": "Already processed",
+                    }
+                else:
+                    message = (primary_result or {}).get("message") or "event_uid_conflict"
+                    results[index] = {
+                        "index": index, "record_key": key, "status": "rejected",
+                        "error_code": (primary_result or {}).get("error_code", "event_uid_conflict"),
+                        "message": message,
+                    }
+
+        final_results = [row for row in results if row is not None]
+        failed = sum(1 for row in final_results if row["status"] == "rejected")
+        processed = len(final_results) - failed
         return {
             "received": len(items),
             "processed": processed,
             "failed": failed,
-            "results": results,
+            "results": final_results,
         }, created_records
 
     @api.model
@@ -1477,7 +1558,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             _logger.exception("Immediate Measurement status forwarding failed; fallback retry will handle it.")
             return False
 
-    @endpoint("NSP Controller Measurement Events", route_suffix="controller/measurement/events", methods="POST", code="nsp_controller_measurement_events")
+    @endpoint("NSP Controller Measurement Events", route_path="controller/measurement/events", methods="POST", code="nsp_controller_measurement_events")
     def api_controller_measurement_events(self):
         data = self._payload()
         controller, error = self._auth_controller(data)
@@ -1492,9 +1573,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             items = data.get("events")
             if not isinstance(items, list) or not items or len(items) > 100:
                 raise ValueError("invalid_payload")
-            result, records = self._measurement_batch_result(
-                items, lambda item: self._measurement_store_event(session, item)
-            )
+            result, records = self._measurement_process_event_batch(session, items)
             if result["processed"] and session.status == "ready":
                 self._measurement_set_status(session, "running", fields.Datetime.now())
                 self._forward_measurement_status_now(session)
@@ -1503,7 +1582,7 @@ class NspGatekeeperApiService(models.AbstractModel):
         except Exception as exc:
             return self._measurement_error_response(exc)
 
-    @endpoint("NSP Controller Measurement Status", route_suffix="controller/measurement/status", methods="POST", code="nsp_controller_measurement_status")
+    @endpoint("NSP Controller Measurement Status", route_path="controller/measurement/status", methods="POST", code="nsp_controller_measurement_status")
     def api_controller_measurement_status(self):
         data = self._payload()
         controller, error = self._auth_controller(data)
@@ -1522,7 +1601,7 @@ class NspGatekeeperApiService(models.AbstractModel):
         except Exception as exc:
             return self._measurement_error_response(exc)
 
-    @endpoint("NSP Measurement Events Sync", route_suffix="measurement-events/sync", methods="POST", code="nsp_measurement_events_sync")
+    @endpoint("NSP Measurement Events Sync", route_path="measurement-events/sync", methods="POST", code="nsp_measurement_events_sync")
     def api_measurement_events_sync(self):
         data = self._payload()
         _application, _actor, edge_server, error = self._auth_edge_server_sync(data)
@@ -1537,14 +1616,14 @@ class NspGatekeeperApiService(models.AbstractModel):
             items = data.get("events")
             if not isinstance(items, list) or not items or len(items) > 100:
                 raise ValueError("invalid_payload")
-            result, _records = self._measurement_batch_result(
-                items, lambda item: self._measurement_store_event(session, item, allow_final=True)
+            result, _records = self._measurement_process_event_batch(
+                session, items, allow_final=True
             )
             return self._ok(result, message="Measurement Events synchronized.")
         except Exception as exc:
             return self._measurement_error_response(exc)
 
-    @endpoint("NSP Measurement Status Sync", route_suffix="measurement-status/sync", methods="POST", code="nsp_measurement_status_sync")
+    @endpoint("NSP Measurement Status Sync", route_path="measurement-status/sync", methods="POST", code="nsp_measurement_status_sync")
     def api_measurement_status_sync(self):
         data = self._payload()
         _application, _actor, edge_server, error = self._auth_edge_server_sync(data)
@@ -1565,7 +1644,109 @@ class NspGatekeeperApiService(models.AbstractModel):
             return self._measurement_error_response(exc)
 
     @api.model
-    def _upsert_parking_transaction_sync(self, edge_server, item):
+    def _prepare_parking_transaction_sync_cache(self, edge_server, items):
+        """Preload topology, RFID assignments and existing UIDs for one sync batch."""
+        rows = [item for item in items if isinstance(item, dict)]
+        controller_codes = {str(item.get("controller_code") or "").strip() for item in rows}
+        area_codes = {str(item.get("parking_area_code") or "").strip().upper() for item in rows}
+        lane_codes = {str(item.get("lane_code") or "").strip().upper() for item in rows}
+        serials = {str(item.get("serial_number") or "").strip().upper() for item in rows}
+        vehicle_tids = {str(item.get("vehicle_tid") or "").strip() for item in rows}
+        user_tids = {str(item.get("user_tid") or "").strip() for item in rows}
+        uids = {str(item.get("transaction_uid") or "").strip() for item in rows}
+        antenna_nos = set()
+        for item in rows:
+            try:
+                value = int(item.get("antenna_no") or 0)
+            except Exception:
+                continue
+            if value > 0:
+                antenna_nos.add(value)
+        for values in (controller_codes, area_codes, lane_codes, serials, vehicle_tids, user_tids, uids):
+            values.discard("")
+
+        Controller = self.env["nsp.controller"].sudo()
+        controllers = Controller.search([
+            ("edge_server_id", "=", edge_server.id),
+            ("controller_id", "in", list(controller_codes)),
+        ]) if controller_codes else Controller.browse()
+        controller_by_code = {record.controller_id: record for record in controllers}
+
+        Area = self.env["nsp.parking.area"].sudo()
+        areas = Area.search([("code", "in", list(area_codes))]) if area_codes else Area.browse()
+        area_by_code = {record.code: record for record in areas}
+
+        Lane = self.env["nsp.parking.lane"].sudo()
+        lanes = Lane.search([
+            ("controller_id", "in", controllers.ids),
+            ("parking_area_id", "in", areas.ids),
+            ("code", "in", list(lane_codes)),
+            ("active", "=", True),
+        ]) if controllers and areas and lane_codes else Lane.browse()
+        lane_by_key = {
+            (record.controller_id.id, record.parking_area_id.code, record.code): record
+            for record in lanes
+        }
+
+        Device = self.env["nsp.device"].sudo()
+        devices = Device.search([
+            ("controller_id", "in", controllers.ids),
+            ("serial_number", "in", list(serials)),
+        ]) if controllers and serials else Device.browse()
+        device_by_key = {(record.controller_id.id, record.serial_number): record for record in devices}
+
+        Antenna = self.env["nsp.device.antenna"].sudo()
+        antennas = Antenna.search([
+            ("device_id", "in", devices.ids),
+            ("antenna_no", "in", list(antenna_nos)),
+        ]) if devices and antenna_nos else Antenna.browse()
+        antenna_by_key = {(record.device_id.id, int(record.antenna_no or 0)): record for record in antennas}
+
+        Mapping = self.env["nsp.parking.lane.antenna.mapping"].sudo()
+        mappings = Mapping.search([
+            ("lane_id", "in", lanes.ids),
+            ("antenna_ref_id", "in", antennas.ids),
+        ]) if lanes and antennas else Mapping.browse()
+        mapping_keys = {(record.lane_id.id, record.antenna_ref_id.id) for record in mappings}
+
+        VehicleCard = self.env["nsp.vehicle.card"].sudo()
+        vehicle_lines = VehicleCard.search([
+            ("card_id.tid", "in", list(vehicle_tids)),
+            ("state", "=", "active"),
+            ("vehicle_id.active", "=", True),
+        ]) if vehicle_tids else VehicleCard.browse()
+        vehicle_by_tid = {}
+        for line in vehicle_lines:
+            vehicle_by_tid.setdefault(line.card_id.tid, line.vehicle_id)
+
+        UserCard = self.env["nsp.user.card"].sudo()
+        user_lines = UserCard.search([
+            ("card_id.tid", "in", list(user_tids)),
+            ("card_id.card_type", "=", "user_card"),
+            ("state", "=", "active"),
+            ("user_id.active", "=", True),
+        ]) if user_tids else UserCard.browse()
+        user_by_tid = {}
+        for line in user_lines:
+            user_by_tid.setdefault(line.card_id.tid, line.user_id)
+
+        Transaction = self.env["nsp.parking.transaction"].sudo()
+        existing = Transaction.search([("transaction_uid", "in", list(uids))]) if uids else Transaction.browse()
+
+        return {
+            "controller_by_code": controller_by_code,
+            "area_by_code": area_by_code,
+            "lane_by_key": lane_by_key,
+            "device_by_key": device_by_key,
+            "antenna_by_key": antenna_by_key,
+            "mapping_keys": mapping_keys,
+            "vehicle_by_tid": vehicle_by_tid,
+            "user_by_tid": user_by_tid,
+            "transaction_by_uid": {record.transaction_uid: record for record in existing},
+        }
+
+    @api.model
+    def _upsert_parking_transaction_sync(self, edge_server, item, cache=None):
         if not isinstance(item, dict):
             raise ValueError("invalid_payload")
         allowed_fields = {
@@ -1602,36 +1783,56 @@ class NspGatekeeperApiService(models.AbstractModel):
         if antenna_no <= 0:
             raise ValueError("invalid_antenna_no")
 
-        controller = self.env["nsp.controller"].sudo().search([
-            ("controller_id", "=", controller_code),
-            ("edge_server_id", "=", edge_server.id),
-        ], limit=1)
+        use_cache = cache is not None
+        cache = cache or {}
+        if use_cache:
+            controller = cache["controller_by_code"].get(controller_code)
+        else:
+            controller = self.env["nsp.controller"].sudo().search([
+                ("controller_id", "=", controller_code),
+                ("edge_server_id", "=", edge_server.id),
+            ], limit=1)
         if not controller:
             raise ValueError("route_not_allowed")
-        parking_area = self.env["nsp.parking.area"].sudo().search([
-            ("code", "=", parking_area_code),
-            ("lane_ids.controller_id", "=", controller.id),
-        ], limit=1)
+
+        if use_cache:
+            parking_area = cache["area_by_code"].get(parking_area_code)
+        else:
+            parking_area = self.env["nsp.parking.area"].sudo().search([
+                ("code", "=", parking_area_code),
+            ], limit=1)
         if not parking_area:
             raise ValueError("parking_area_not_found")
-        lane = self.env["nsp.parking.lane"].sudo().search([
-            ("parking_area_id", "=", parking_area.id),
-            ("controller_id", "=", controller.id),
-            ("code", "=", lane_code),
-            ("active", "=", True),
-        ], limit=1)
+
+        if use_cache:
+            lane = cache["lane_by_key"].get((controller.id, parking_area_code, lane_code))
+        else:
+            lane = self.env["nsp.parking.lane"].sudo().search([
+                ("parking_area_id", "=", parking_area.id),
+                ("controller_id", "=", controller.id),
+                ("code", "=", lane_code),
+                ("active", "=", True),
+            ], limit=1)
         if not lane:
             raise ValueError("lane_not_found")
-        device = self.env["nsp.device"].sudo().search([
-            ("controller_id", "=", controller.id),
-            ("serial_number", "=", serial_number),
-        ], limit=1)
+
+        if use_cache:
+            device = cache["device_by_key"].get((controller.id, serial_number))
+        else:
+            device = self.env["nsp.device"].sudo().search([
+                ("controller_id", "=", controller.id),
+                ("serial_number", "=", serial_number),
+            ], limit=1)
         if not device:
             raise ValueError("device_not_found")
-        antenna = self.env["nsp.device.antenna"].sudo().search([
-            ("device_id", "=", device.id),
-            ("antenna_no", "=", antenna_no),
-        ], limit=1)
+
+        if use_cache:
+            antenna = cache["antenna_by_key"].get((device.id, antenna_no))
+        else:
+            antenna = self.env["nsp.device.antenna"].sudo().search([
+                ("device_id", "=", device.id),
+                ("antenna_no", "=", antenna_no),
+            ], limit=1)
         if not antenna:
             raise ValueError("antenna_not_found")
 
@@ -1644,11 +1845,13 @@ class NspGatekeeperApiService(models.AbstractModel):
         direction = {"check_in": "entry", "check_out": "exit"}[event_type]
         if lane.direction != "both" and direction != lane.direction:
             raise ValueError("invalid_event_type")
-        mapping = self.env["nsp.parking.lane.antenna.mapping"].sudo().search([
+        if use_cache:
+            if (lane.id, antenna.id) not in cache["mapping_keys"]:
+                raise ValueError("no_antenna_rule")
+        elif not self.env["nsp.parking.lane.antenna.mapping"].sudo().search([
             ("lane_id", "=", lane.id),
             ("antenna_ref_id", "=", antenna.id),
-        ], limit=1)
-        if not mapping:
+        ], limit=1):
             raise ValueError("no_antenna_rule")
         decision = str(item.get("decision") or "").strip().lower()
         if decision not in ("allowed", "denied"):
@@ -1658,8 +1861,12 @@ class NspGatekeeperApiService(models.AbstractModel):
         if not vehicle_tid:
             raise ValueError("missing_vehicle_tid")
         user_tid = str(item.get("user_tid") or "").strip()
-        vehicle = Transaction._resolve_vehicle_by_tid(vehicle_tid)
-        user = Transaction._resolve_user_by_tid(user_tid)
+        if use_cache:
+            vehicle = cache["vehicle_by_tid"].get(vehicle_tid) or self.env["nsp.vehicle"].browse()
+            user = cache["user_by_tid"].get(user_tid) or self.env["nsp.user"].browse()
+        else:
+            vehicle = Transaction._resolve_vehicle_by_tid(vehicle_tid)
+            user = Transaction._resolve_user_by_tid(user_tid)
         reason_code = Transaction._normalize_error_code(
             item.get("decision_reason_code"), item.get("decision_message")
         )
@@ -1683,9 +1890,11 @@ class NspGatekeeperApiService(models.AbstractModel):
             "user_id": user.id if user else False,
             "user_tid": user_tid or False,
         }
-        return Transaction.create_idempotent(vals)
+        return Transaction.create_idempotent(
+            vals, existing_by_uid=cache.get("transaction_by_uid")
+        )
 
-    @endpoint("NSP Gatekeeper Parking Transactions Sync", route_suffix="parking-transactions/sync", methods="POST", code="nsp_gatekeeper_parking_transactions_sync")
+    @endpoint("NSP Gatekeeper Parking Transactions Sync", route_path="parking-transactions/sync", methods="POST", code="nsp_gatekeeper_parking_transactions_sync")
     def api_parking_transactions_sync(self):
         data = self._payload()
         _application, _actor, edge_server, error = self._auth_edge_server_sync(data)
@@ -1696,13 +1905,26 @@ class NspGatekeeperApiService(models.AbstractModel):
             incoming = [incoming]
         if not isinstance(incoming, list) or not incoming:
             return self._error("items must contain at least one transaction", 400, error_code="invalid_payload", details={"field": "items"})
+        cache = self._prepare_parking_transaction_sync_cache(edge_server, incoming)
         results = []
         processed = failed = 0
         for idx, item in enumerate(incoming):
             key = str(item.get("transaction_uid") or "").strip() if isinstance(item, dict) else ""
             try:
                 with self.env.cr.savepoint():
-                    rec, duplicate = self._upsert_parking_transaction_sync(edge_server, item)
+                    rec, duplicate = self._upsert_parking_transaction_sync(edge_server, item, cache=cache)
+                # Fresh creates notify from ParkingTransaction.create(). On an
+                # idempotent replay, ensure the Cloud notification exists as well
+                # without making notification delivery part of transaction sync.
+                if duplicate:
+                    try:
+                        with self.env.cr.savepoint():
+                            self.env["nsp.notification"].sudo().notify_parking_transaction(rec)
+                    except Exception:
+                        _logger.exception(
+                            "Unable to ensure parking notification for synced transaction %s",
+                            rec.transaction_uid or rec.id,
+                        )
                 result = {
                     "index": idx,
                     "record_key": rec.transaction_uid,
@@ -1727,7 +1949,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             "results": results,
         }, message="Parking transactions synced.")
 
-    @endpoint("NSP Controller Parking Detection Push", route_suffix="parking/detections/push", methods="POST", code="nsp_controller_parking_detection_push")
+    @endpoint("NSP Controller Parking Detection Push", route_path="parking/detections/push", methods="POST", code="nsp_controller_parking_detection_push")
     def api_parking_detection_push(self):
         """Accept a batch of raw TID detections from one authenticated Controller.
 

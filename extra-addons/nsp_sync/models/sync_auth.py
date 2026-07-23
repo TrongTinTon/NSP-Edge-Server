@@ -157,9 +157,17 @@ class NspSyncAuth(models.Model):
             rec.remote_base_url = rec._normalize_remote_base_url() if rec.remote_server_url else False
 
     def _compute_job_count(self):
-        Job = self.env["nsp.sync.job"].sudo()
+        counts = {rec.id: 0 for rec in self}
+        if self.ids:
+            groups = self.env["nsp.sync.job"].sudo().read_group(
+                [("auth_id", "in", self.ids)], ["auth_id"], ["auth_id"], lazy=False
+            )
+            for group in groups:
+                auth = group.get("auth_id")
+                if auth:
+                    counts[auth[0]] = group.get("auth_id_count", 0)
         for rec in self:
-            rec.job_count = Job.search_count([("auth_id", "=", rec.id)])
+            rec.job_count = counts.get(rec.id, 0)
 
     @api.constrains("edge_server_code")
     def _check_edge_server_code(self):

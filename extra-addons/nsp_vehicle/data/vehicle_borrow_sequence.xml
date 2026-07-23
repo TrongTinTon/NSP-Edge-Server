@@ -1,5 +1,5 @@
 <odoo noupdate="1">
-    <record id="seq_nsp_vehicle_borrow_request" model="ir.sequence">
+    <record id="seq_nsp_vehicle_borrow" model="ir.sequence">
         <field name="name">NSP Vehicle Borrow</field>
         <field name="code">nsp.vehicle.borrow</field>
         <field name="prefix">BRW/%(year)s/</field>

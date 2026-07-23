@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+from collections import defaultdict
+
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
 
@@ -10,20 +12,22 @@ class NspUserFriendship(models.Model):
     _rec_name = "name"
 
     name = fields.Char(compute="_compute_name", store=True)
-    requester_id = fields.Many2one("nsp.user", string="Requester", required=True, index=True, ondelete="cascade")
-    addressee_id = fields.Many2one("nsp.user", string="Friend", required=True, index=True, ondelete="cascade")
+    requester_id = fields.Many2one(
+        "nsp.user", string="Requester", required=True, index=True, ondelete="cascade"
+    )
+    addressee_id = fields.Many2one(
+        "nsp.user", string="Friend", required=True, index=True, ondelete="cascade"
+    )
     pair_key = fields.Char(required=True, copy=False, readonly=True, index=True)
     state = fields.Selection([
         ("pending", "Pending"),
         ("accepted", "Accepted"),
-        ("cancelled", "Cancelled"),
     ], default="pending", required=True, index=True)
     accepted_at = fields.Datetime(readonly=True)
 
     _sql_constraints = [
         ("friendship_pair_unique", "unique(pair_key)", "A friendship already exists between these users."),
     ]
-
 
     @api.depends("requester_id.name", "addressee_id.name")
     def _compute_name(self):
@@ -60,30 +64,36 @@ class NspUserFriendship(models.Model):
                 raise ValidationError(_("A user cannot add themselves as a friend."))
 
     def action_accept(self):
-        for rec in self:
-            if rec.state != "accepted":
-                rec.write({"state": "accepted", "accepted_at": fields.Datetime.now()})
+        pending = self.filtered(lambda rec: rec.state != "accepted")
+        if pending:
+            pending.write({"state": "accepted", "accepted_at": fields.Datetime.now()})
         return True
 
     def action_cancel(self):
-        self.write({"state": "cancelled", "accepted_at": False})
+        """Decline a pending request or remove an existing friendship."""
+        self.unlink()
         return True
 
     @api.model
-    def are_friends(self, user_a, user_b):
-        if not user_a or not user_b or user_a == user_b:
-            return False
-        key = self._make_pair_key(user_a.id, user_b.id)
-        return bool(self.sudo().search_count([("pair_key", "=", key), ("state", "=", "accepted")]))
-
-    @api.model
-    def accepted_friends(self, user):
-        if not user:
-            return self.env["nsp.user"].browse()
+    def accepted_friends_map(self, users):
+        """Return {user_id: [accepted_friend_ids]} with one friendship query."""
+        users = users.exists()
+        result = {user_id: [] for user_id in users.ids}
+        if not users:
+            return result
+        user_ids = set(users.ids)
         friendships = self.sudo().search([
             ("state", "=", "accepted"),
-            "|", ("requester_id", "=", user.id), ("addressee_id", "=", user.id),
+            "|", ("requester_id", "in", list(user_ids)), ("addressee_id", "in", list(user_ids)),
         ])
-        friend_ids = set(friendships.mapped("requester_id").ids + friendships.mapped("addressee_id").ids)
-        friend_ids.discard(user.id)
-        return self.env["nsp.user"].sudo().browse(sorted(friend_ids))
+        mapped = defaultdict(set)
+        for friendship in friendships:
+            a = friendship.requester_id.id
+            b = friendship.addressee_id.id
+            if a in user_ids:
+                mapped[a].add(b)
+            if b in user_ids:
+                mapped[b].add(a)
+        for user_id in result:
+            result[user_id] = sorted(mapped.get(user_id, set()))
+        return result

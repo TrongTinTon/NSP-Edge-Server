@@ -9,7 +9,7 @@ from odoo.addons.t4_coreapi.utils.exception import ensure_dict, CoreApiInvalidBo
 _logger = logging.getLogger(__name__)
 
 
-def endpoint(name=None, route_path=None, methods='POST', code=None, route_suffix=None):
+def endpoint(name=None, route_path=None, methods='POST', code=None):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -32,21 +32,11 @@ def endpoint(name=None, route_path=None, methods='POST', code=None, route_suffix
 
         wrapper._is_endpoint = True
         wrapper._endpoint_name = name or func.__name__.replace('_', ' ').title()
-        # route_path is the public API. route_suffix remains a compatibility alias.
-        wrapper._endpoint_route_suffix = route_path if route_path is not None else route_suffix
+        wrapper._endpoint_route_suffix = route_path
         wrapper._endpoint_methods = methods or 'POST'
         wrapper._endpoint_code = code or func.__name__
         return api.model(wrapper)
 
-    return decorator
-
-
-def route(route=None, name=None):
-    def decorator(func):
-        func._is_route = True
-        func._route = route
-        func._endpoint_name = name or func.__name__.replace('_', ' ').title()
-        return api.model(func)
     return decorator
 
 

@@ -84,25 +84,22 @@ class Device(models.Model):
     def _normalize_code(self, value):
         return str(value or "").strip().upper()
 
-    def _whitelist_record(self):
-        self.ensure_one()
-        serial = self._normalize_serial(self.serial_number)
-        if not serial:
-            return self.env["nsp.device.whitelist"].browse()
-        return self.env["nsp.device.whitelist"].sudo().search([("serial_number", "=", serial)], limit=1)
-
-    def _is_whitelisted(self):
-        self.ensure_one()
-        return bool(self._whitelist_record())
-
     def _notify_not_whitelisted(self, details=None):
-        if "nsp.notification" not in self.env.registry.models:
+        if not self:
             return True
+        serials = {self._normalize_serial(reader.serial_number) for reader in self if reader.serial_number}
+        allowed = set(
+            self.env["nsp.device.whitelist"].sudo().search([
+                ("serial_number", "in", list(serials)),
+            ]).mapped("serial_number")
+        ) if serials else set()
+        Notification = self.env["nsp.notification"].sudo()
         for reader in self:
-            if reader._is_whitelisted():
+            serial = self._normalize_serial(reader.serial_number)
+            if not serial or serial in allowed:
                 continue
-            self.env["nsp.notification"].sudo().notify_device_not_whitelisted(
-                reader.serial_number,
+            Notification.notify_device_not_whitelisted(
+                serial,
                 reader.controller_id.controller_id,
                 details=details or {
                     "model_number": reader.model_number,
@@ -194,6 +191,7 @@ class Device(models.Model):
         self.ensure_one()
         payload = self._build_config_payload()
         payload.update({
+            "reader_name": self.name or self.serial_number or "RFID Reader",
             "model_number": self.model_number or False,
             "vendor": self.device_vendor or False,
             "physical_connection": self.connection_type or False,

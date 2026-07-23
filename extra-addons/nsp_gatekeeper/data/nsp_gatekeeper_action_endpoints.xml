@@ -12,7 +12,7 @@
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_gatekeeper"/>
         <field name="endpoint_code">nsp_gatekeeper_health</field>
         <field name="route_suffix">health</field>
-        <field name="http_methods">GET,POST</field>
+        <field name="http_methods">GET</field>
     </record>
     <record id="action_core_api_nsp_gatekeeper_heartbeat" model="ir.actions.core_api">
         <field name="name">NSP Gatekeeper Heartbeat</field>
@@ -77,13 +77,13 @@
         <field name="route_suffix">cards/sync</field>
         <field name="http_methods">POST</field>
     </record>
-    <record id="action_core_api_nsp_gatekeeper_employees_sync" model="ir.actions.core_api">
+    <record id="action_core_api_nsp_gatekeeper_users_sync" model="ir.actions.core_api">
         <field name="name">NSP Gatekeeper Users Sync</field>
         <field name="model_id" ref="model_nsp_gatekeeper_api_service"/>
-        <field name="code">model.api_employees_sync()</field>
+        <field name="code">model.api_users_sync()</field>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_gatekeeper"/>
-        <field name="endpoint_code">nsp_gatekeeper_employees_sync</field>
-        <field name="route_suffix">employees/sync</field>
+        <field name="endpoint_code">nsp_gatekeeper_users_sync</field>
+        <field name="route_suffix">users/sync</field>
         <field name="http_methods">POST</field>
     </record>
     <record id="action_core_api_nsp_gatekeeper_vehicles_sync" model="ir.actions.core_api">

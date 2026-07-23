@@ -67,7 +67,6 @@ class CoreApiEndpoint(models.Model):
         help='Comma-separated HTTP methods applications may use.',
     )
     action_id = fields.Many2one(
-        # 'ir.actions.server',
         'ir.actions.core_api',
         string='Server Action',
         help='Executed after auth check. Use env.context core_api_* keys in the action.',
@@ -140,7 +139,7 @@ class CoreApiEndpoint(models.Model):
                 raise ValidationError(_('Route path is required.'))
 
     @api.model
-    def _version_id_from_context(self, application_id=None):
+    def _version_id_from_context(self):
         """Resolve API version from x2many context (tab-specific defaults)."""
         Version = self.env['core.api.version']
         default_version_id = self.env.context.get('default_version_id')
@@ -162,11 +161,7 @@ class CoreApiEndpoint(models.Model):
         defaults = super().default_get(fields_list)
         if 'version_id' not in fields_list:
             return defaults
-        application_id = (
-            defaults.get('application_id')
-            or self.env.context.get('default_application_id')
-        )
-        version_id = self._version_id_from_context(application_id=application_id)
+        version_id = self._version_id_from_context()
         if version_id:
             defaults['version_id'] = version_id
         elif not defaults.get('version_id'):
@@ -179,12 +174,8 @@ class CoreApiEndpoint(models.Model):
     def create(self, vals_list):
         """Fill application_id and version_id from context without dropping rows.
 
-        Fresh-install note:
-        Generate API Actions & Routes creates core.api.endpoint rows with an
-        explicit application_id and version_id. The previous implementation only
-        appended vals when version_id was missing and found from context, so
-        generated routes could silently create zero records. Always append every
-        prepared row, then let required-field constraints report real errors.
+        Every generated route must keep its explicit Application and API Version.
+        Required-field constraints report incomplete route definitions.
         """
         prepared = []
         for vals in vals_list:
@@ -199,16 +190,13 @@ class CoreApiEndpoint(models.Model):
                 vals['version_id'] = default_version_id
 
             if not vals.get('version_id'):
-                version_id = self._version_id_from_context(
-                    application_id=vals.get('application_id'),
-                )
+                version_id = self._version_id_from_context()
                 if version_id:
                     vals['version_id'] = version_id
 
             if 'route_suffix' in vals:
                 vals['route_suffix'] = self._route_path_from_input(
                     vals.get('route_suffix'),
-                    application_id=vals.get('application_id'),
                     version_id=vals.get('version_id'),
                 )
 
@@ -221,7 +209,7 @@ class CoreApiEndpoint(models.Model):
         return (suffix or '').strip().strip('/')
 
     @api.model
-    def _route_path_from_input(self, route_path, application_id=False, version_id=False):
+    def _route_path_from_input(self, route_path, version_id=False):
         """Store only Route Path; tolerate a pasted /v1/route full path."""
         normalized = self._normalize_route_suffix(route_path)
         if not normalized:
@@ -240,7 +228,6 @@ class CoreApiEndpoint(models.Model):
             endpoint_vals = dict(vals)
             endpoint_vals['route_suffix'] = self._route_path_from_input(
                 vals.get('route_suffix'),
-                application_id=endpoint_vals.get('application_id') or endpoint.application_id.id,
                 version_id=endpoint_vals.get('version_id') or endpoint.version_id.id,
             )
             super(CoreApiEndpoint, endpoint).write(endpoint_vals)
@@ -259,38 +246,35 @@ class CoreApiEndpoint(models.Model):
         return not allowed or (method or '').upper() in allowed
 
     @api.model
-    def _endpoint_matches_request(self, endpoint, path, method):
-        """Return True when the route pattern and HTTP method match the request."""
-        normalized = (path or '').split('?')[0].rstrip('/') or '/'
-        method = (method or 'GET').upper()
-        pattern = (endpoint.route_pattern or '').rstrip('/') or '/'
-        if normalized != pattern and not normalized.startswith(f'{pattern}/'):
-            return False
-        return endpoint.allows_method(method)
-
-    @api.model
     def find_for_request(self, path, method, application=None):
-        """Find the best matching active route for path, method, and application."""
-        method = (method or 'GET').upper()
-        app_domain = [('application_id', '=', application.id)] if application else []
-        version_domain = [('version_id.active', '=', True)]
+        """Resolve one fixed gateway route with one indexed query.
 
-        inactive = self.sudo().search(
-            version_domain + app_domain + [('route_active', '=', False)],
-        )
-        for endpoint in inactive:
-            if self._endpoint_matches_request(endpoint, path, method):
-                return endpoint, 'inactive'
-
-        candidates = []
-        for endpoint in self.sudo().search(version_domain + app_domain + [('route_active', '=', True)]):
-            if self._endpoint_matches_request(endpoint, path, method):
-                pattern = (endpoint.route_pattern or '').rstrip('/') or '/'
-                candidates.append((len(pattern), endpoint))
-        if not candidates:
+        NSP/Core API routes are explicit ``/{version}/{route_path}`` records.
+        Loading every endpoint of an Application on each request is unnecessary
+        and becomes expensive as the route catalogue grows.
+        """
+        normalized = (path or '').split('?', 1)[0].rstrip('/') or '/'
+        match = _GATEWAY_ROUTE_RE.match(normalized)
+        if not match or not application:
             return self.browse(), 'missing'
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        return candidates[0][1], 'ok'
+        version_code = (match.group(1) or '').strip()
+        route_suffix = (match.group(2) or '').strip().strip('/')
+        if not version_code or not route_suffix:
+            return self.browse(), 'missing'
+
+        endpoint = self.sudo().search([
+            ('application_id', '=', application.id),
+            ('version_id.code', '=', version_code),
+            ('version_id.active', '=', True),
+            ('route_suffix', '=', route_suffix),
+        ], limit=1)
+        if not endpoint:
+            return self.browse(), 'missing'
+        if not endpoint.route_active:
+            return endpoint, 'inactive'
+        if not endpoint.allows_method(method):
+            return self.browse(), 'missing'
+        return endpoint, 'ok'
 
     def _parse_request_body(self, httprequest):
         """Parse JSON body from the incoming HTTP request."""
@@ -364,7 +348,6 @@ class CoreApiEndpoint(models.Model):
                         'Gateway route "%(route)s" does not belong to application "%(app)s".',
                         route=self.name, app=application.name,
                     ))
-                application.check_api_access(self.code, version_id=self.version_id.id)
             return self._run_server_action(application, request.httprequest)
         except CoreApiBadRequest as e:
             return self._error_response(str(e), 400)

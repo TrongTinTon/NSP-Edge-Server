@@ -49,7 +49,6 @@
                             <field name="active"/>
                             <field name="phone"/>
                             <field name="email"/>
-                            <field name="pin" password="True"/>
                         </group>
                         <group string="RFID Summary">
                             <field name="user_rfid_tid" readonly="1"/>
@@ -62,10 +61,12 @@
                                 <list editable="bottom">
                                     <field name="card_id" options="{'no_create': True}"/>
                                     <field name="tid" readonly="1"/>
-                                    <field name="state" widget="badge" decoration-success="state == 'active'" decoration-muted="state == 'revoked'"/>
+                                    <field name="state" widget="badge" readonly="1" decoration-success="state == 'active'" decoration-muted="state == 'revoked'"/>
                                     <field name="assigned_at" optional="hide"/>
                                     <field name="revoked_at" readonly="1" optional="hide"/>
                                     <field name="note" optional="hide"/>
+                                    <button name="action_revoke" type="object" string="Revoke" invisible="state != 'active'"/>
+                                    <button name="action_activate" type="object" string="Activate" invisible="state != 'revoked'" class="btn-primary"/>
                                 </list>
                             </field>
                         </page>
@@ -79,7 +80,8 @@
                                     <field name="addressee_id" string="Friend" domain="[('id','!=',parent.id)]"/>
                                     <field name="state" widget="badge" readonly="1"/>
                                     <field name="accepted_at" readonly="1" optional="hide"/>
-                                    <button name="action_cancel" type="object" string="Cancel" invisible="state == 'cancelled'"/>
+                                    <button name="action_cancel" type="object" string="Cancel" invisible="state != 'pending'"/>
+                                    <button name="action_cancel" type="object" string="Remove" invisible="state != 'accepted'"/>
                                 </list>
                             </field>
                             <separator string="Received Requests"/>
@@ -90,6 +92,7 @@
                                     <field name="accepted_at" optional="hide"/>
                                     <button name="action_accept" type="object" string="Accept" class="btn-primary" invisible="state != 'pending'"/>
                                     <button name="action_cancel" type="object" string="Decline" invisible="state != 'pending'"/>
+                                    <button name="action_cancel" type="object" string="Remove" invisible="state != 'accepted'"/>
                                 </list>
                             </field>
                         </page>

@@ -25,6 +25,23 @@ class CoreApiLog(models.Model):
     error_message = fields.Text()
     user_agent = fields.Char()
 
+
+    def init(self):
+        self.env.cr.execute(
+            """
+            CREATE INDEX IF NOT EXISTS core_api_log_token_rate_idx
+                ON core_api_log (token_id, event_type, create_date DESC)
+             WHERE token_id IS NOT NULL
+            """
+        )
+        self.env.cr.execute(
+            """
+            CREATE INDEX IF NOT EXISTS core_api_log_ip_auth_rate_idx
+                ON core_api_log (ip_address, event_type, route, create_date DESC)
+             WHERE ip_address IS NOT NULL
+            """
+        )
+
     @api.model
     def log_event(
         self,
@@ -65,7 +82,16 @@ class CoreApiLog(models.Model):
 
     @api.autovacuum
     def _gc_old_logs(self):
-        limit = fields.Datetime.subtract(fields.Datetime.now(), days=90)
-        old = self.sudo().search([('create_date', '<', limit)])
+        raw_days = self.env['ir.config_parameter'].sudo().get_param(
+            't4_coreapi.log_retention_days', '90'
+        )
+        try:
+            retention_days = max(1, int(raw_days))
+        except (TypeError, ValueError):
+            retention_days = 90
+        limit = fields.Datetime.subtract(fields.Datetime.now(), days=retention_days)
+        old = self.sudo().search(
+            [('create_date', '<', limit)], order='create_date asc, id asc', limit=20000
+        )
         if old:
             old.unlink()

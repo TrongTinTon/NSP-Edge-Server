@@ -7,7 +7,7 @@ from passlib.context import CryptContext
 
 from odoo import _, api, fields, models
 from odoo.http import request
-from odoo.exceptions import AccessError, UserError, ValidationError
+from odoo.exceptions import AccessError, UserError
 
 _logger = logging.getLogger(__name__)
 
@@ -497,45 +497,3 @@ class CoreApiApplication(models.Model):
             'last_auth_ip': ip_address or False,
         })
         return application, None
-
-    def check_api_access(self, endpoint_code, version_id=None):
-        """Raise AccessError when the application cannot call the endpoint code."""
-        self.ensure_one()
-        if self.state != 'active':
-            raise AccessError(_('Application "%s" is inactive.', self.name))
-        endpoints = self.endpoint_ids.filtered(
-            lambda e: e.route_active and e.code == endpoint_code
-        )
-        if version_id:
-            endpoints = endpoints.filtered(lambda e: e.version_id.id == version_id)
-        if not endpoints:
-            inactive = self.endpoint_ids.filtered(
-                lambda e: not e.route_active and e.code == endpoint_code
-                and (not version_id or e.version_id.id == version_id)
-            )
-            if inactive:
-                raise AccessError(
-                    _('Gateway route "%(endpoint)s" is inactive for application "%(app)s".',
-                      endpoint=endpoint_code, app=self.name)
-                )
-            raise AccessError(
-                _('Application "%(app)s" is not allowed to access API: %(endpoint)s',
-                  app=self.name, endpoint=endpoint_code)
-            )
-        return True
-
-    def check_route_access(self, path, method=None):
-        """Match request path against allowed endpoint route patterns."""
-        self.ensure_one()
-        active_endpoints = self.endpoint_ids.filtered('route_active')
-        if not active_endpoints:
-            raise AccessError(_('Application "%s" has no active APIs configured.', self.name))
-        normalized = (path or '').split('?')[0].rstrip('/') or '/'
-        for endpoint in active_endpoints:
-            pattern = (endpoint.route_pattern or '').rstrip('/') or '/'
-            if normalized == pattern or normalized.startswith(f'{pattern}/'):
-                return endpoint.code
-        raise AccessError(
-            _('Application "%(app)s" is not allowed to call route: %(route)s',
-              app=self.name, route=path)
-        )

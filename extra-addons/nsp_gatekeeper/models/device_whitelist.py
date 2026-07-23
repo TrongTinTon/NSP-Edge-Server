@@ -47,8 +47,10 @@ class DeviceWhitelist(models.Model):
             values["model_number"] = str(values.get("model_number") or "").strip() or False
         if "device_vendor" in values:
             values["device_vendor"] = str(values.get("device_vendor") or "").strip() or False
+        serial_changed = "serial_number" in values
         result = super().write(values)
-        self._resolve_device_alerts()
+        if serial_changed:
+            self._resolve_device_alerts()
         return result
 
     @api.constrains("serial_number")
@@ -57,17 +59,8 @@ class DeviceWhitelist(models.Model):
             if not self._normalize_serial(record.serial_number):
                 raise ValidationError(_("Serial is required."))
 
-    @api.model
-    def is_device_whitelisted(self, serial_number):
-        serial = self._normalize_serial(serial_number)
-        if not serial:
-            return False
-        return bool(self.sudo().search_count([("serial_number", "=", serial)]))
-
     def _resolve_device_alerts(self):
         """Archive existing not-whitelisted alerts after an administrator allows the Serial."""
-        if "nsp.notification" not in self.env.registry.models:
-            return True
         serials = set(self.mapped("serial_number"))
         if not serials:
             return True

@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-from collections import defaultdict
 from datetime import timedelta
 
 from odoo import api, fields, models, _
@@ -30,7 +29,6 @@ class NspMeasurementSession(models.Model):
         readonly=True,
         copy=False,
         index=True,
-        tracking=True,
         default=lambda self: _new_measurement_code(),
     )
     controller_id = fields.Many2one(
@@ -145,32 +143,6 @@ class NspMeasurementSession(models.Model):
                 raise ValidationError(
                     _("Every Measurement Antenna must belong to the selected Controller.")
                 )
-
-    def _configuration_payload(self):
-        self.ensure_one()
-        grouped = defaultdict(list)
-        for antenna in self.antenna_ids.sorted(
-            key=lambda item: (
-                item.device_id.serial_number or "",
-                item.antenna_no or 0,
-                item.id,
-            )
-        ):
-            grouped[antenna.device_id.serial_number].append(int(antenna.antenna_no))
-        return {
-            "measurement_code": self.measurement_code,
-            "controller_code": self.controller_id.controller_id,
-            "planned_start_at": self.planned_start_at,
-            "planned_end_at": self.planned_end_at,
-            "note": self.note or None,
-            "measurement_antennas": [
-                {
-                    "serial_number": serial_number,
-                    "antennas": sorted(set(antenna_numbers)),
-                }
-                for serial_number, antenna_numbers in sorted(grouped.items())
-            ],
-        }
 
     def action_ready(self):
         for session in self:
@@ -438,16 +410,25 @@ class NspMeasurementEvent(models.Model):
             prepared.append(vals)
         return super().create(prepared)
 
+    def init(self):
+        self.env.cr.execute(
+            """
+            CREATE INDEX IF NOT EXISTS nsp_measurement_event_session_tid_read_idx
+                ON nsp_measurement_event (session_id, tid, read_at, id)
+            """
+        )
+
     @api.constrains("session_id", "serial_number", "antenna_no")
     def _check_event_scope(self):
+        allowed_by_session = {}
+        for session in self.mapped("session_id"):
+            allowed_by_session[session.id] = {
+                (antenna.device_id.serial_number, int(antenna.antenna_no or 0))
+                for antenna in session.antenna_ids
+            }
         for event in self:
-            matched = event.session_id.antenna_ids.filtered(
-                lambda antenna: (
-                    antenna.device_id.serial_number == event.serial_number
-                    and antenna.antenna_no == event.antenna_no
-                )
-            )
-            if not matched:
+            key = (event.serial_number, int(event.antenna_no or 0))
+            if key not in allowed_by_session.get(event.session_id.id, set()):
                 raise ValidationError(
                     _("Measurement Event antenna is not part of the Measurement Session.")
                 )

@@ -11,7 +11,7 @@
     </record>
 
     <record id="group_nsp_employee" model="res.groups">
-        <field name="name">Employee Self Service</field>
+        <field name="name">NSP User Self Service</field>
         <field name="privilege_id" ref="privilege_nsp_parking"/>
         <field name="sequence">10</field>
     </record>

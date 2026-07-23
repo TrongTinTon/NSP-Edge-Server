@@ -9,8 +9,6 @@
             <list string="Server Actions" create="false" edit="false" delete="false" import="false">
                 <field name="name"/>
                 <field name="model_id"/>
-                <!-- <field name="state"/>
-                <field name="usage"/> -->
             </list>
         </field>
     </record>

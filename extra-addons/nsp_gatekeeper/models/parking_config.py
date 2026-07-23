@@ -13,16 +13,14 @@ class NspParkingArea(models.Model):
 
     _name = "nsp.parking.area"
     _description = "NSP Parking Operation Configuration"
-    _inherit = ["mail.thread", "mail.activity.mixin"]
     _rec_name = "name"
     _order = "branch_id, name, id"
 
-    name = fields.Char(string="Parking Area Name", required=True, tracking=True)
+    name = fields.Char(string="Parking Area Name", required=True)
     code = fields.Char(
         string="Parking Area Code",
         required=True,
         readonly=True,
-        tracking=True,
         copy=False,
         index=True,
         default=lambda self: new_management_code("PARK"),
@@ -32,7 +30,6 @@ class NspParkingArea(models.Model):
         string="Branch",
         required=True,
         ondelete="restrict",
-        tracking=True,
         index=True,
     )
     state = fields.Selection(
@@ -45,7 +42,6 @@ class NspParkingArea(models.Model):
         string="State",
         default="draft",
         required=True,
-        tracking=True,
         index=True,
     )
 
@@ -105,11 +101,12 @@ class NspParkingArea(models.Model):
         for rec in self:
             active_lanes = rec.lane_ids.filtered("active")
             mappings = active_lanes.mapped("antenna_mapping_ids")
+            antennas = mappings.mapped("antenna_ref_id")
+            readers = antennas.mapped("device_id")
             controllers = active_lanes.mapped("controller_id")
-            readers = controllers.mapped("device_ids")
             rec.lane_antenna_mapping_ids = mappings
             rec.reader_ids = readers
-            rec.antenna_ids = readers.mapped("antennas_ids")
+            rec.antenna_ids = antennas
             rec.controller_ids = controllers
             rec.edge_server_ids = controllers.mapped("edge_server_id")
 
@@ -143,17 +140,9 @@ class NspParkingArea(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        Branch = self.env["nsp.branch"].sudo()
-        default_branch = (
-            Branch.get_default_branch()
-            if hasattr(Branch, "get_default_branch")
-            else Branch.search([], limit=1)
-        )
         prepared = []
         for source in vals_list:
             vals = dict(source)
-            if not vals.get("branch_id") and default_branch:
-                vals["branch_id"] = default_branch.id
             vals["code"] = self._normalize_code(
                 vals.get("code") or new_management_code("PARK")
             )
@@ -184,6 +173,7 @@ class NspParkingArea(models.Model):
             result.append(
                 {
                     "controller_code": controller.controller_id,
+                    "controller_name": controller.controller_name,
                     "devices": [device._build_edge_config_payload() for device in devices],
                 }
             )
@@ -237,6 +227,18 @@ class NspParkingArea(models.Model):
         if not lanes:
             return [_('Configure at least one active Parking Lane.')]
 
+        all_mappings = lanes.mapped("antenna_mapping_ids")
+        serials = {
+            str(serial or "").strip().upper()
+            for serial in all_mappings.mapped("serial_number")
+            if str(serial or "").strip()
+        }
+        whitelisted_serials = set(
+            self.env["nsp.device.whitelist"].sudo().search([
+                ("serial_number", "in", list(serials)),
+            ]).mapped("serial_number")
+        ) if serials else set()
+
         for lane in lanes:
             lane_name = lane.display_name or lane.name or _("Lane")
             if not lane.controller_id:
@@ -282,7 +284,9 @@ class NspParkingArea(models.Model):
                     }
                 )
 
-            invalid = mappings.filtered(lambda item: not item.device_id._is_whitelisted())
+            invalid = mappings.filtered(
+                lambda item: str(item.serial_number or "").strip().upper() not in whitelisted_serials
+            )
             if invalid:
                 issues.append(
                     _("Lane %(lane)s contains a Reader that is not in Device Whitelist.")
@@ -669,21 +673,36 @@ class NspParkingLaneAntennaMapping(models.Model):
 
     @api.constrains("lane_id", "antenna_ref_id", "zone")
     def _check_mapping(self):
+        serials = {
+            str(serial or "").strip().upper()
+            for serial in self.mapped("serial_number")
+            if str(serial or "").strip()
+        }
+        whitelisted_serials = set(
+            self.env["nsp.device.whitelist"].sudo().search([
+                ("serial_number", "in", list(serials)),
+            ]).mapped("serial_number")
+        ) if serials else set()
+        invalid_devices = self.mapped("device_id").filtered(
+            lambda device: str(device.serial_number or "").strip().upper() not in whitelisted_serials
+        )
+        if invalid_devices:
+            invalid_devices._notify_not_whitelisted()
+            raise ValidationError(
+                _("Antenna must belong to a Reader in Device Whitelist.")
+            )
+
         for rec in self:
             if rec.controller_id != rec.lane_id.controller_id:
                 raise ValidationError(
                     _("Antenna must belong to the Controller assigned to this Lane.")
                 )
-            if not rec.device_id._is_whitelisted():
-                rec.device_id._notify_not_whitelisted()
-                raise ValidationError(
-                    _("Antenna must belong to a Reader in Device Whitelist.")
-                )
             if rec.lane_id.direction == "both" and rec.zone not in ("outside", "inside"):
-                raise ValidationError(_(
-                    "A Two-way Lane antenna mapping requires Zone = Outside or Inside."
-                ))
+                raise ValidationError(
+                    _("A Two-way Lane antenna mapping requires Zone = Outside or Inside.")
+                )
             if rec.lane_id.direction != "both" and rec.zone:
-                raise ValidationError(_(
-                    "A one-way Lane antenna mapping must not define a zone."
-                ))
+                raise ValidationError(
+                    _("A one-way Lane antenna mapping must not define a zone.")
+                )
+

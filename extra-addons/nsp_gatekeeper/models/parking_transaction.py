@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
-from datetime import datetime, timezone
 from uuid import uuid4
+import logging
 
 from psycopg2 import IntegrityError
 
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
+
+
+_logger = logging.getLogger(__name__)
 
 
 class ParkingTransaction(models.Model):
@@ -91,7 +94,6 @@ class ParkingTransaction(models.Model):
     )
     error_code = fields.Selection([
         ("missing_user_tid", "Missing User RFID Card"),
-        ("multiple_vehicle_tid", "Multiple Vehicle RFID Cards"),
         ("vehicle_not_found", "Vehicle Not Found"),
         ("user_not_assigned", "User Card Not Assigned"),
         ("unauthorized_vehicle_user", "Unauthorized Vehicle User"),
@@ -128,10 +130,41 @@ class ParkingTransaction(models.Model):
         ("transaction_uid_unique", "unique(transaction_uid)", "Transaction UID must be unique."),
     ]
 
+    @api.model_create_multi
+    def create(self, vals_list):
+        records = super().create(vals_list)
+        Notification = self.env["nsp.notification"].sudo()
+        for transaction in records:
+            try:
+                with self.env.cr.savepoint():
+                    Notification.notify_parking_transaction(transaction)
+            except Exception:
+                # Notification must never block the parking decision/transaction.
+                _logger.exception(
+                    "Unable to create parking notification for transaction %s",
+                    transaction.transaction_uid or transaction.id,
+                )
+        return records
+
+    def init(self):
+        self.env.cr.execute(
+            """
+            CREATE INDEX IF NOT EXISTS nsp_parking_tx_vehicle_continuity_idx
+                ON nsp_parking_transaction (vehicle_id, event_time DESC, id DESC)
+             WHERE status = 'allowed' AND vehicle_id IS NOT NULL
+            """
+        )
+
     @api.depends("detection_event_ids")
     def _compute_detection_count(self):
+        counts = self.env["nsp.parking.detection.event"].sudo()._read_group(
+            [("transaction_id", "in", self.ids)],
+            ["transaction_id"],
+            ["__count"],
+        ) if self.ids else []
+        by_transaction = {transaction.id: count for transaction, count in counts}
         for rec in self:
-            rec.detection_count = len(rec.detection_event_ids)
+            rec.detection_count = by_transaction.get(rec.id, 0)
 
     @api.depends(
         "lane_id", "lane_id.display_name", "lane_id.name",
@@ -150,29 +183,9 @@ class ParkingTransaction(models.Model):
             ) if rec.vehicle_id else (rec.vehicle_tid or "-")
 
     @api.model
-    def _safe_datetime_value(self, value, default_now=True):
-        if not value:
-            return fields.Datetime.now() if default_now else False
-        text = str(value).strip().replace("T", " ")
-        if not text:
-            return fields.Datetime.now() if default_now else False
-        try:
-            parsed = fields.Datetime.to_datetime(text) or datetime.fromisoformat(text)
-            if parsed and parsed.tzinfo:
-                parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
-            elif parsed:
-                parsed = parsed.replace(tzinfo=None)
-            return fields.Datetime.to_string(parsed) if parsed else (
-                fields.Datetime.now() if default_now else False
-            )
-        except Exception:
-            return fields.Datetime.now() if default_now else False
-
-    @api.model
     def _error_catalog(self):
         return {
             "missing_user_tid": ("missing_tag", "critical"),
-            "multiple_vehicle_tid": ("ambiguous_tag", "critical"),
             "vehicle_not_found": ("auth", "critical"),
             "user_not_assigned": ("auth", "critical"),
             "unauthorized_vehicle_user": ("borrow", "critical"),
@@ -186,7 +199,6 @@ class ParkingTransaction(models.Model):
     def _error_code_from_message(self, message):
         text = str(message or "").lower()
         mapping = (
-            ("multiple vehicle", "multiple_vehicle_tid"),
             ("vehicle not found", "vehicle_not_found"),
             ("user tid is required", "missing_user_tid"),
             ("missing user", "missing_user_tid"),
@@ -235,6 +247,7 @@ class ParkingTransaction(models.Model):
         line = self.env["nsp.vehicle.card"].sudo().search([
             ("card_id.tid", "=", tid),
             ("state", "=", "active"),
+            ("vehicle_id.active", "=", True),
         ], limit=1)
         return line.vehicle_id if line else self.env["nsp.vehicle"].browse()
 
@@ -246,6 +259,7 @@ class ParkingTransaction(models.Model):
             ("card_id.tid", "=", tid),
             ("card_id.card_type", "=", "user_card"),
             ("state", "=", "active"),
+            ("user_id.active", "=", True),
         ], limit=1)
         return line.user_id if line else self.env["nsp.user"].browse()
 
@@ -322,12 +336,17 @@ class ParkingTransaction(models.Model):
         }
 
     @api.model
-    def create_idempotent(self, vals):
+    def create_idempotent(self, vals, existing_by_uid=None):
+        """Create once by transaction_uid, optionally reusing a batch-prefetched map."""
         uid = str(vals.get("transaction_uid") or "").strip()
         if not uid:
             raise ValidationError(_("missing_transaction_uid"))
         vals = dict(vals, transaction_uid=uid)
-        existing = self.search([("transaction_uid", "=", uid)], limit=1)
+        existing = (
+            existing_by_uid.get(uid, self.browse())
+            if existing_by_uid is not None
+            else self.search([("transaction_uid", "=", uid)], limit=1)
+        )
         if existing:
             if self._business_values(existing) != self._business_values(vals):
                 raise ValidationError(_(
@@ -336,7 +355,10 @@ class ParkingTransaction(models.Model):
             return existing, True
         try:
             with self.env.cr.savepoint():
-                return self.create(vals), False
+                created = self.create(vals)
+            if existing_by_uid is not None:
+                existing_by_uid[uid] = created
+            return created, False
         except IntegrityError:
             existing = self.search([("transaction_uid", "=", uid)], limit=1)
             if not existing:
@@ -348,18 +370,16 @@ class ParkingTransaction(models.Model):
             return existing, True
 
     @api.model
-    def _best_detection(self, events):
-        return events.sorted(key=lambda rec: (rec.detected_at, rec.id))[:1]
-
-    @api.model
-    def create_from_detection_group(self, detections, resolved_direction=False):
+    def create_from_detection_group(
+        self, detections, resolved_direction=False, vehicle_by_card=None, user_by_card=None
+    ):
         """Create one vehicle-centric Parking Transaction.
 
         Check-in never uses User RFID. Check-out requires exactly one User RFID
         detection selected by the detection processor using nearest timestamp
         pairing and 1:1 consumption.
         """
-        detections = detections.exists().filtered(lambda rec: rec.state == "pending")
+        detections = detections.filtered(lambda rec: rec.state == "pending")
         if not detections:
             raise ValidationError(_("empty_detection_group"))
 
@@ -381,12 +401,17 @@ class ParkingTransaction(models.Model):
         if not vehicle_events:
             raise ValidationError(_("Vehicle RFID card/TID is required for every Parking Transaction."))
 
-        vehicle_tids = sorted(set(vehicle_events.mapped("card_id.tid")))
+        vehicle_cards = vehicle_events.mapped("card_id")
+        if len(vehicle_cards) != 1:
+            raise ValidationError(_("mixed_vehicle_detection_group"))
         ordered_vehicle = vehicle_events.sorted(key=lambda rec: (rec.detected_at, rec.id))
         vehicle_event = ordered_vehicle[-1]
         event_time = vehicle_event.detected_at
         vehicle_tid = vehicle_event.card_id.tid
-        vehicle = self._resolve_vehicle_by_tid(vehicle_tid)
+        if vehicle_by_card is None:
+            vehicle = self._resolve_vehicle_by_tid(vehicle_tid)
+        else:
+            vehicle = vehicle_by_card.get(vehicle_event.card_id.id) or self.env["nsp.vehicle"].browse()
 
         # Entry is intentionally vehicle-only. Even if User reads exist in the
         # same RF field, they are not part of Check-in business validation.
@@ -400,13 +425,14 @@ class ParkingTransaction(models.Model):
             user_event = user_events[:1]
             if user_event:
                 user_tid = user_event.card_id.tid
-                user = self._resolve_user_by_tid(user_tid)
+                if user_by_card is None:
+                    user = self._resolve_user_by_tid(user_tid)
+                else:
+                    user = user_by_card.get(user_event.card_id.id) or self.env["nsp.user"].browse()
 
         errors = []
         if lane.parking_area_id.state != "operational":
             errors.append(("parking_area_not_operational", _("Parking Area is not operational.")))
-        if len(vehicle_tids) > 1:
-            errors.append(("multiple_vehicle_tid", _("Multiple vehicle TIDs were detected in one transaction.")))
         if not vehicle:
             errors.append(("vehicle_not_found", _("Vehicle TID is not assigned to an active vehicle.")))
 

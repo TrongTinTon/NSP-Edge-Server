@@ -12,7 +12,3 @@ class CoreApiController(http.Controller):
         if not application_id:
             return request.env['core.api.application']
         return request.env['core.api.application'].sudo().browse(application_id)
-
-    def _get_device(self):
-        """Alias for callers that treat the authenticated application as a device client."""
-        return self._get_application()

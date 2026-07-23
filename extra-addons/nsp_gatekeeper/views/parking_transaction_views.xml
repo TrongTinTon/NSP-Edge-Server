@@ -26,7 +26,7 @@
                 <filter string="Denied" name="denied" domain="[('status','=','denied')]"/>
                 <filter string="Missing User Card" name="missing_user_tid" domain="[('error_code','=','missing_user_tid')]"/>
                 <filter string="Authentication Errors" name="auth_errors"
-                        domain="[('error_code','in',['multiple_vehicle_tid','vehicle_not_found','user_not_assigned','unauthorized_vehicle_user'])]"/>
+                        domain="[('error_code','in',['vehicle_not_found','user_not_assigned','unauthorized_vehicle_user'])]"/>
                 <separator/>
                 <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
                 <filter string="Lane" name="group_lane" context="{'group_by':'lane_id'}"/>

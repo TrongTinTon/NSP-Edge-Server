@@ -2,15 +2,6 @@
 from odoo import models, fields, api
 from odoo.tools.safe_eval import safe_eval
 
-class IrActionsServer(models.Model):
-    _inherit = 'ir.actions.server'
-
-    endpoint_manager_id = fields.Many2one(
-        'action.endpoint.manager', 
-        string='Endpoint Manager', 
-        ondelete='cascade'
-    )
-
 class IrActionsCoreApi(models.Model):
     _name = 'ir.actions.core_api'
     _description = 'Action: Only Execute Python Code'

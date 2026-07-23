@@ -115,7 +115,13 @@ class CoreApiToken(models.Model):
         for token in tokens:
             if TOKEN_CRYPT_CONTEXT.verify(plaintext_token, token.token_hash):
                 ip = request.httprequest.environ.get('REMOTE_ADDR') if request else None
-                token.write({'last_used_at': fields.Datetime.now(), 'last_used_ip': ip})
+                now = fields.Datetime.now()
+                last_used = fields.Datetime.to_datetime(token.last_used_at) if token.last_used_at else None
+                # last_used_at is operational telemetry, not a per-request ledger.
+                # Update at most once per minute (or when source IP changes) to
+                # avoid a hot-row write for every authenticated API call.
+                if token.last_used_ip != ip or not last_used or (now - last_used).total_seconds() >= 60:
+                    token.write({'last_used_at': now, 'last_used_ip': ip})
                 return token.application_id, token
         return empty_application, empty_token
 
