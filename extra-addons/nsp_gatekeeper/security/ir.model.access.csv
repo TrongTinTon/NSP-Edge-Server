@@ -13,6 +13,8 @@ access_nsp_device_antenna_it,nsp.device.antenna IT,nsp_gatekeeper.model_nsp_devi
 access_nsp_device_antenna_operator,nsp.device.antenna Operator,nsp_gatekeeper.model_nsp_device_antenna,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_parking_transaction_it,nsp.parking.transaction IT,nsp_gatekeeper.model_nsp_parking_transaction,nsp_core.group_nsp_it_parking,1,0,0,0
 access_nsp_parking_transaction_operator,nsp.parking.transaction Operator,nsp_gatekeeper.model_nsp_parking_transaction,nsp_core.group_nsp_operator,1,0,0,0
+access_nsp_parking_detection_event_it,nsp.parking.detection.event IT,nsp_gatekeeper.model_nsp_parking_detection_event,nsp_core.group_nsp_it_parking,1,0,0,0
+access_nsp_parking_detection_event_operator,nsp.parking.detection.event Operator,nsp_gatekeeper.model_nsp_parking_detection_event,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_edge_server_it,nsp.edge.server IT,nsp_gatekeeper.model_nsp_edge_server,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_edge_server_operator,nsp.edge.server Operator,nsp_gatekeeper.model_nsp_edge_server,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_controller_it,nsp.controller IT,nsp_gatekeeper.model_nsp_controller,nsp_core.group_nsp_it_parking,1,1,1,1

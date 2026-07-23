@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_nsp_parking_detection_event_search" model="ir.ui.view">
+        <field name="name">nsp.parking.detection.event.search</field>
+        <field name="model">nsp.parking.detection.event</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="event_uid"/>
+                <field name="card_id" context="{'nsp_simple_card_name': True}"/>
+                <field name="lane_id"/>
+                <field name="antenna_id"/>
+                <field name="direction"/>
+                <field name="state"/>
+                <field name="transaction_id"/>
+                <filter string="Pending" name="pending" domain="[('state','=','pending')]"/>
+                <filter string="Processed" name="processed" domain="[('state','=','processed')]"/>
+                <filter string="Errors" name="error" domain="[('state','=','error')]"/>
+                <filter string="Vehicle Cards" name="vehicle_cards" domain="[('card_id.card_type','=','vehicle_card')]"/>
+                <filter string="User Cards" name="user_cards" domain="[('card_id.card_type','=','user_card')]"/>
+                <separator/>
+                <filter string="Direction" name="group_direction" context="{'group_by':'direction'}"/>
+                <filter string="Lane" name="group_lane" context="{'group_by':'lane_id'}"/>
+                <filter string="State" name="group_state" context="{'group_by':'state'}"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_parking_detection_event_list" model="ir.ui.view">
+        <field name="name">nsp.parking.detection.event.list</field>
+        <field name="model">nsp.parking.detection.event</field>
+        <field name="arch" type="xml">
+            <list string="Parking Detection Events" create="0" edit="0" delete="0">
+                <field name="detected_at"/>
+                <field name="lane_id"/>
+                <field name="antenna_id" optional="hide"/>
+                <field name="direction" widget="badge"
+                       decoration-success="direction == 'entry'"
+                       decoration-info="direction == 'exit'"
+                       decoration-warning="direction == 'both'"/>
+                <field name="card_id" context="{'nsp_simple_card_name': True}"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'processed'"
+                       decoration-danger="state == 'error'"
+                       decoration-warning="state == 'pending'"/>
+                <field name="transaction_id"/>
+                <field name="event_uid" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_nsp_parking_detection_event" model="ir.actions.act_window">
+        <field name="name">Parking Detection Events</field>
+        <field name="res_model">nsp.parking.detection.event</field>
+        <field name="view_mode">list</field>
+        <field name="search_view_id" ref="view_nsp_parking_detection_event_search"/>
+        <field name="context">{'nsp_simple_card_name': True}</field>
+    </record>
+</odoo>

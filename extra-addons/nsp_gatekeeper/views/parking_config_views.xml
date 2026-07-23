@@ -88,7 +88,7 @@
                     </div>
 
                     <div class="alert alert-info" role="alert">
-                        Configure the server-owned parking topology here. Each lane selects one Controller and maps its Reader antenna ports to Entry or Exit. Controllers receive only Reader parameters and per-antenna RF settings; branch, parking area, lane and direction remain on the server.
+                        Configure the server-owned parking topology here. Each lane selects one Controller and maps its Reader antenna ports to Entry, Exit or Two-way. Controllers receive only Reader parameters and per-antenna RF settings; branch, parking area, lane and direction remain on the server.
                     </div>
 
                     <group>
@@ -108,7 +108,7 @@
                     <notebook>
                         <page string="1. Parking Lanes">
                             <div class="alert alert-secondary" role="alert">
-                                Assign one Controller and one operating direction to each lane. Use Two-way only when separate antenna ports are mapped for Entry and Exit.
+                                Assign one Controller and one operating direction to each lane. A Two-way lane may use separate Entry/Exit antennas or an antenna configured as Two-way.
                             </div>
                             <field name="lane_ids" context="{'default_parking_area_id': id}">
                                 <list editable="bottom">
@@ -119,6 +119,8 @@
                                     <field name="direction"/>
                                     <field name="required_vehicle_tid" optional="hide"/>
                                     <field name="required_user_tid" optional="hide"/>
+                                    <field name="grouping_window_seconds" optional="hide"/>
+                                    <field name="duplicate_suppression_seconds" optional="hide"/>
                                     <field name="active" widget="boolean_toggle"/>
                                     <field name="antenna_count" string="Mapped Antennas" readonly="1"/>
                                 </list>
@@ -127,7 +129,7 @@
 
                         <page string="2. Antenna Mapping">
                             <div class="alert alert-secondary" role="alert">
-                                Each antenna port can belong to only one lane direction. For a Two-way lane, map at least one antenna to Entry and one antenna to Exit.
+                                Configure each antenna as Entry, Exit or Two-way. The Controller sends only the Reader serial, antenna number, detection time and TID. Edge resolves direction from this mapping; for a Two-way antenna, Edge derives Check-in or Check-out from the vehicle's latest accepted transaction.
                             </div>
                             <button name="action_open_antenna_mappings" type="object"
                                     string="Configure Antenna Mappings" class="oe_highlight" icon="fa-exchange"/>
@@ -191,10 +193,12 @@
                             <field name="lane_no" string="Lane No"/>
                             <field name="active"/>
                         </group>
-                        <group string="Access Rules">
+                        <group string="Event Processing">
                             <field name="direction"/>
                             <field name="required_vehicle_tid"/>
                             <field name="required_user_tid"/>
+                            <field name="grouping_window_seconds"/>
+                            <field name="duplicate_suppression_seconds"/>
                             <field name="antenna_count" readonly="1"/>
                         </group>
                     </group>

@@ -1,3 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
 <odoo>
     <record id="view_nsp_parking_transaction_search" model="ir.ui.view">
         <field name="name">view.nsp.parking.transaction.search</field>
@@ -16,21 +17,21 @@
                 <field name="user_id"/>
                 <field name="user_tid"/>
                 <field name="borrow_request_id"/>
-                <field name="direction"/>
+                <field name="event_type"/>
                 <field name="status"/>
                 <field name="error_code"/>
-                <filter string="Entry" name="entry" domain="[('direction','=','entry')]"/>
-                <filter string="Exit" name="exit" domain="[('direction','=','exit')]"/>
+                <filter string="Check-in" name="check_in" domain="[('event_type','=','check_in')]"/>
+                <filter string="Check-out" name="check_out" domain="[('event_type','=','check_out')]"/>
                 <filter string="Allowed" name="allowed" domain="[('status','=','allowed')]"/>
                 <filter string="Denied" name="denied" domain="[('status','=','denied')]"/>
                 <filter string="Missing Vehicle Card" name="missing_vehicle_tid" domain="[('error_code','=','missing_vehicle_tid')]"/>
                 <filter string="Missing User Card" name="missing_user_tid" domain="[('error_code','=','missing_user_tid')]"/>
                 <filter string="Authentication Errors" name="auth_errors"
-                        domain="[('error_code','in',['vehicle_card_unknown','vehicle_not_found','user_card_unknown','user_not_assigned','borrow_not_allowed'])]"/>
+                        domain="[('error_code','in',['multiple_vehicle_tid','multiple_user_tid','vehicle_not_found','user_not_assigned','borrow_not_allowed'])]"/>
                 <separator/>
                 <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
                 <filter string="Lane" name="group_lane" context="{'group_by':'lane_id'}"/>
-                <filter string="Direction" name="group_direction" context="{'group_by':'direction'}"/>
+                <filter string="Event Type" name="group_event_type" context="{'group_by':'event_type'}"/>
                 <filter string="Decision" name="group_status" context="{'group_by':'status'}"/>
                 <filter string="Decision Reason" name="group_error_code" context="{'group_by':'error_code'}"/>
                 <filter string="Vehicle" name="group_vehicle" context="{'group_by':'vehicle_id'}"/>
@@ -42,19 +43,20 @@
         <field name="name">view.nsp.parking.transaction.list</field>
         <field name="model">nsp.parking.transaction</field>
         <field name="arch" type="xml">
-            <list string="Parking Logs" create="0" edit="0" delete="0">
-                <field name="time_entered" string="Event Time"/>
+            <list string="Parking Transactions" create="0" edit="0" delete="0">
+                <field name="event_time" string="Event Time"/>
                 <field name="parking_area_display" string="Parking Area"/>
                 <field name="lane_display" string="Lane"/>
                 <field name="vehicle_display" string="Vehicle"/>
                 <field name="user_id" optional="show"/>
-                <field name="direction" widget="badge"
-                       decoration-success="direction == 'entry'"
-                       decoration-info="direction == 'exit'"/>
+                <field name="event_type" widget="badge"
+                       decoration-success="event_type == 'check_in'"
+                       decoration-info="event_type == 'check_out'"/>
                 <field name="status" string="Decision" widget="badge"
                        decoration-success="status == 'allowed'"
                        decoration-danger="status == 'denied'"/>
                 <field name="error_code" string="Reason" widget="badge" optional="show"/>
+                <field name="detection_count" optional="show"/>
                 <field name="controller_id" optional="hide"/>
                 <field name="device_id" optional="hide"/>
                 <field name="antenna_no" optional="hide"/>
@@ -69,16 +71,17 @@
         <field name="name">view.nsp.parking.transaction.form</field>
         <field name="model">nsp.parking.transaction</field>
         <field name="arch" type="xml">
-            <form string="Parking Log" create="0" edit="0" delete="0">
+            <form string="Parking Transaction" create="0" edit="0" delete="0">
                 <sheet>
                     <group>
-                        <group string="Event">
+                        <group string="Transaction">
                             <field name="transaction_uid"/>
-                            <field name="time_entered"/>
-                            <field name="direction" widget="badge"/>
+                            <field name="event_time"/>
+                            <field name="event_type" widget="badge"/>
                             <field name="status" string="Decision" widget="badge"/>
                             <field name="error_code" string="Decision Reason"/>
                             <field name="error_message" string="Decision Message"/>
+                            <field name="detection_count"/>
                         </group>
                         <group string="Location and Device">
                             <field name="controller_id"/>
@@ -102,14 +105,30 @@
                             <field name="borrow_request_id"/>
                         </group>
                     </group>
+                    <notebook>
+                        <page string="Source Detections">
+                            <field name="detection_event_ids" readonly="1">
+                                <list create="0" edit="0" delete="0">
+                                    <field name="detected_at"/>
+                                    <field name="direction" widget="badge"
+                                           decoration-success="direction == 'entry'"
+                                           decoration-info="direction == 'exit'"
+                                           decoration-warning="direction == 'both'"/>
+                                    <field name="card_id" context="{'nsp_simple_card_name': True}"/>
+                                    <field name="antenna_id"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
                 </sheet>
             </form>
         </field>
     </record>
 
     <record id="action_nsp_parking_transaction" model="ir.actions.act_window">
-        <field name="name">Parking Logs</field>
+        <field name="name">Parking Transactions</field>
         <field name="res_model">nsp.parking.transaction</field>
         <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_nsp_parking_transaction_search"/>
     </record>
 </odoo>

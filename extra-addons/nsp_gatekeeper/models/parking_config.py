@@ -221,6 +221,8 @@ class NspParkingArea(models.Model):
                     "direction": lane.direction,
                     "required_vehicle_tid": bool(lane.required_vehicle_tid),
                     "required_user_tid": bool(lane.required_user_tid),
+                    "grouping_window_seconds": int(lane.grouping_window_seconds or 3),
+                    "duplicate_suppression_seconds": int(lane.duplicate_suppression_seconds or 2),
                     "antenna_mappings": mappings,
                 }
             )
@@ -253,7 +255,10 @@ class NspParkingArea(models.Model):
                 {"entry", "exit"} if lane.direction == "both" else {lane.direction}
             )
             mapped_directions = set(mappings.mapped("direction"))
-            missing_directions = expected_directions - mapped_directions
+            covered_directions = set(mapped_directions)
+            if "both" in mapped_directions:
+                covered_directions.update({"entry", "exit"})
+            missing_directions = expected_directions - covered_directions
             if missing_directions:
                 issues.append(
                     _("Lane %(lane)s is missing antenna mapping for: %(directions)s.")
@@ -443,6 +448,14 @@ class NspParkingLane(models.Model):
     )
     required_vehicle_tid = fields.Boolean(string="Require Vehicle TID", default=True)
     required_user_tid = fields.Boolean(string="Require User TID", default=False)
+    grouping_window_seconds = fields.Integer(
+        string="Grouping Window (Seconds)", default=3, required=True,
+        help="Edge waits up to this duration to group vehicle and user TIDs into one transaction.",
+    )
+    duplicate_suppression_seconds = fields.Integer(
+        string="Duplicate Suppression (Seconds)", default=2, required=True,
+        help="Reads of the same TID are merged during grouping; this value extends repeat suppression in the lane.",
+    )
     active = fields.Boolean(default=True, index=True)
     antenna_mapping_ids = fields.One2many(
         "nsp.parking.lane.antenna.mapping", "lane_id", string="Antenna Mapping"
@@ -461,6 +474,8 @@ class NspParkingLane(models.Model):
             "Lane number must be unique within a Parking Area.",
         ),
         ("lane_no_positive", "CHECK(lane_no > 0)", "Lane number must be greater than zero."),
+        ("grouping_window_positive", "CHECK(grouping_window_seconds >= 1)", "Grouping window must be at least one second."),
+        ("duplicate_suppression_non_negative", "CHECK(duplicate_suppression_seconds >= 0)", "Duplicate suppression must not be negative."),
     ]
 
     @api.depends("parking_area_id.code", "code", "name")
@@ -539,7 +554,11 @@ class NspParkingLaneAntennaMapping(models.Model):
         "nsp.controller", related="lane_id.controller_id", readonly=True
     )
     direction = fields.Selection(
-        [("entry", "Entry"), ("exit", "Exit")],
+        [
+            ("entry", "Entry"),
+            ("exit", "Exit"),
+            ("both", "Two-way"),
+        ],
         required=True,
         default="entry",
         index=True,
@@ -631,5 +650,7 @@ class NspParkingLaneAntennaMapping(models.Model):
                 raise ValidationError(
                     _("A one-way Lane antenna mapping must match the Lane direction.")
                 )
-            if rec.direction not in ("entry", "exit"):
-                raise ValidationError(_("Antenna mapping direction must be Entry or Exit."))
+            if rec.direction not in ("entry", "exit", "both"):
+                raise ValidationError(
+                    _("Antenna mapping direction must be Entry, Exit or Two-way.")
+                )

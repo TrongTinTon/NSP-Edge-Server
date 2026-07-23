@@ -124,9 +124,10 @@ class RfidCard(models.Model):
 
     def name_get(self):
         result = []
+        simple_name = bool(self.env.context.get("nsp_simple_card_name"))
         for card in self:
             label = "%s [%s]" % (card.tid or "", dict(self._fields["card_type"].selection).get(card.card_type, card.card_type or ""))
-            if card.is_used and card.assigned_to:
+            if not simple_name and card.is_used and card.assigned_to:
                 label += " - %s" % card.assigned_to
             result.append((card.id, label))
         return result

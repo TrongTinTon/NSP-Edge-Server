@@ -1577,7 +1577,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             raise ValueError("invalid_payload")
         allowed_fields = {
             "transaction_uid", "controller_code", "parking_area_code", "lane_code",
-            "serial_number", "antenna_no", "direction", "check_time",
+            "serial_number", "antenna_no", "event_type", "event_time",
             "vehicle_tid", "user_tid", "decision", "decision_reason_code",
             "decision_message",
         }
@@ -1642,32 +1642,31 @@ class NspGatekeeperApiService(models.AbstractModel):
         if not antenna:
             raise ValueError("antenna_not_found")
 
-        check_time = self._safe_datetime_value(item.get("check_time"), default_now=False)
-        if not check_time:
-            raise ValueError("check_time is required")
-        direction = str(item.get("direction") or "").strip().lower()
-        if direction not in ("entry", "exit"):
-            raise ValueError("invalid_direction")
+        event_time = self._safe_datetime_value(item.get("event_time"), default_now=False)
+        if not event_time:
+            raise ValueError("event_time is required")
+        event_type = str(item.get("event_type") or "").strip().lower()
+        if event_type not in ("check_in", "check_out"):
+            raise ValueError("invalid_event_type")
+        direction = {"check_in": "entry", "check_out": "exit"}[event_type]
         if lane.direction != "both" and direction != lane.direction:
-            raise ValueError("invalid_direction")
+            raise ValueError("invalid_event_type")
         mapping = self.env["nsp.parking.lane.antenna.mapping"].sudo().search([
             ("lane_id", "=", lane.id),
             ("antenna_ref_id", "=", antenna.id),
-            ("direction", "=", direction),
+            ("direction", "in", [direction, "both"]),
         ], limit=1)
         if not mapping:
             raise ValueError("no_antenna_rule")
         decision = str(item.get("decision") or "").strip().lower()
         if decision not in ("allowed", "denied"):
             raise ValueError("invalid_decision")
-        Log = self.env["nsp.parking.transaction"].sudo()
+        Transaction = self.env["nsp.parking.transaction"].sudo()
         vehicle_tid = str(item.get("vehicle_tid") or "").strip()
         user_tid = str(item.get("user_tid") or "").strip()
-        vehicle = Log._find_vehicle(vehicle_tid)
-        user, _user_card = Log._user_from_user_tid(user_tid) if user_tid else (
-            self.env["nsp.user"].browse(), self.env["nsp.rfid.card"].browse()
-        )
-        reason_code = Log._normalize_error_code(
+        vehicle = Transaction._resolve_vehicle_by_tid(vehicle_tid)
+        user = Transaction._resolve_user_by_tid(user_tid)
+        reason_code = Transaction._normalize_error_code(
             item.get("decision_reason_code"), item.get("decision_message")
         )
         if decision == "denied" and not reason_code:
@@ -1677,11 +1676,11 @@ class NspGatekeeperApiService(models.AbstractModel):
 
         vals = {
             "transaction_uid": uid,
-            "time_entered": check_time,
+            "event_time": event_time,
             "controller_id": controller.id,
             "lane_id": lane.id,
             "antenna_id": antenna.id,
-            "direction": direction,
+            "event_type": event_type,
             "status": decision,
             "error_code": reason_code or False,
             "error_message": str(item.get("decision_message") or "").strip() or False,
@@ -1690,7 +1689,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             "user_id": user.id if user else False,
             "user_tid": user_tid or False,
         }
-        return Log.create_idempotent(vals)
+        return Transaction.create_idempotent(vals)
 
     @endpoint("NSP Gatekeeper Parking Transactions Sync", route_suffix="parking-transactions/sync", methods="POST", code="nsp_gatekeeper_parking_transactions_sync")
     def api_parking_transactions_sync(self):
@@ -1734,39 +1733,45 @@ class NspGatekeeperApiService(models.AbstractModel):
             "results": results,
         }, message="Parking transactions synced.")
 
-    @endpoint("NSP Gatekeeper Parking Logs Push", route_suffix="parking/logs/push", methods="POST", code="nsp_gatekeeper_parking_logs_push")
-    def api_parking_logs_push(self):
+    @endpoint("NSP Controller Parking Detection Push", route_suffix="parking/detections/push", methods="POST", code="nsp_controller_parking_detection_push")
+    def api_parking_detection_push(self):
+        """Accept one raw TID detection from an authenticated Controller.
+
+        The Controller only reports what it detects. Edge validates and handles
+        the detection internally, then returns one minimal acknowledgement.
+        """
         data = self._payload()
         controller, error = self._auth_controller(data)
         if error:
             return error
-        logs = data.get("logs") or data.get("items") or []
-        if isinstance(logs, dict):
-            logs = [logs]
-        if not isinstance(logs, list):
-            return self._error("logs must be an array", 400, error_code="invalid_payload", details={"field": "logs"})
-        results = []
-        processed = failed = 0
-        Log = self.env["nsp.parking.transaction"].sudo()
-        for idx, item in enumerate(logs):
-            key = str(item.get("transaction_uid") or "").strip() if isinstance(item, dict) else ""
+
+        key = str(data.get("event_uid") or "").strip()
+        tid = self.env["nsp.rfid.card"]._normalize_tid(data.get("tid"))
+        card = (
+            self.env["nsp.rfid.card"].sudo().search([("tid", "=", tid)], limit=1)
+            if tid else self.env["nsp.rfid.card"]
+        )
+
+        # Unknown TIDs are discarded at the API boundary. The Controller only
+        # needs an acknowledgement that Edge accepted the request, so all
+        # accepted detections return the same empty success payload.
+        if tid and not card:
+            _logger.debug(
+                "Parking detection ignored because TID is not registered: "
+                "controller=%s tid=%s event_uid=%s",
+                controller.controller_id, tid, key,
+            )
+        else:
             try:
                 with self.env.cr.savepoint():
-                    rec, duplicate = Log.ingest_controller_log(controller, item)
-                result = {
-                    "index": idx,
-                    "record_key": rec.transaction_uid,
-                    "status": "duplicate" if duplicate else "processed",
-                    "message": "Already processed" if duplicate else "Processed",
-                }
-                if rec.status == "denied":
-                    result.update({"business_decision": "denied", "decision_reason_code": rec.error_code or "unknown"})
-                results.append(result)
-                if not duplicate:
-                    processed += 1
+                    self.env["nsp.parking.detection.event"].sudo().ingest_controller_detection(
+                        controller, data, card
+                    )
             except Exception as exc:
-                failed += 1
-                results.append({"index": idx, "record_key": key, "status": "rejected", "message": str(exc)})
-        controller.write({"timestamp": fields.Datetime.now(), "status": "online"})
-        return self._ok({"received": len(logs), "processed": processed, "failed": failed, "results": results}, message="Parking logs accepted.")
+                return self._error(
+                    str(exc), 400, error_code="parking_detection_rejected",
+                    details={"record_key": key},
+                )
 
+        controller.write({"timestamp": fields.Datetime.now(), "status": "online"})
+        return {"status_code": 200, "status": "success", "message": "OK", "data": {}}

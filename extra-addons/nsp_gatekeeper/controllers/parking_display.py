@@ -91,7 +91,7 @@ class NspParkingDisplayController(http.Controller):
         parking_area_id = self._int_param(kw.get("parking_area_id"), default=0, minimum=0)
         limit = self._int_param(kw.get("limit"), default=30, minimum=1, maximum=100)
         since_id = self._int_param(kw.get("since_id"), default=0, minimum=0)
-        direction = (kw.get("direction") or "").strip().lower()
+        event_type = (kw.get("event_type") or "").strip().lower()
         status_filter = (kw.get("status") or "").strip().lower()
 
         domain = []
@@ -99,28 +99,28 @@ class NspParkingDisplayController(http.Controller):
             domain.append(("lane_id.parking_area_id", "=", parking_area_id))
         if since_id:
             domain.append(("id", ">", since_id))
-        if direction in ("entry", "exit"):
-            domain.append(("direction", "=", direction))
+        if event_type in ("check_in", "check_out"):
+            domain.append(("event_type", "=", event_type))
         if status_filter in ("allowed", "denied"):
             domain.append(("status", "=", status_filter))
 
         Tx = request.env["nsp.parking.transaction"].sudo()
-        records = Tx.search(domain, order="time_entered desc, id desc", limit=limit)
-        records = records.sorted(key=lambda rec: (rec.time_entered or fields.Datetime.now(), rec.id))
+        records = Tx.search(domain, order="event_time desc, id desc", limit=limit)
+        records = records.sorted(key=lambda rec: (rec.event_time or fields.Datetime.now(), rec.id))
 
         events = []
         for rec in records:
             parking_area = rec.parking_area_id
             branch = parking_area.branch_id if parking_area else request.env["nsp.branch"].browse()
             controller = rec.controller_id
-            direction_label = "Vào" if rec.direction == "entry" else "Ra"
+            event_type_label = "Vào" if rec.event_type == "check_in" else "Ra"
             status_label = "Được phép" if rec.status == "allowed" else "Từ chối"
             events.append({
                 "id": rec.id,
                 "event_id": rec.id,
-                "event_time": fields.Datetime.to_string(rec.time_entered) if rec.time_entered else "",
-                "direction": rec.direction,
-                "direction_label": direction_label,
+                "event_time": fields.Datetime.to_string(rec.event_time) if rec.event_time else "",
+                "event_type": rec.event_type,
+                "event_type_label": event_type_label,
                 "status": rec.status,
                 "status_label": status_label,
                 "vehicle": rec.vehicle_display or rec.license_plate or rec.vehicle_tid or "-",

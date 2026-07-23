@@ -9,7 +9,7 @@ export class NspParkingDisplay extends Component {
             <div class="nsp-parking-display__header">
                 <div>
                     <div class="nsp-parking-display__title">PARKING DISPLAY</div>
-                    <div class="nsp-parking-display__subtitle">Realtime Vehicle Entry / Exit from Gatekeeper Transactions</div>
+                    <div class="nsp-parking-display__subtitle">Realtime Vehicle Check-in / Check-out from Final Parking Transactions</div>
                 </div>
                 <div class="nsp-parking-display__clock"><t t-esc="state.clock"/></div>
             </div>
@@ -36,7 +36,7 @@ export class NspParkingDisplay extends Component {
                                     <div class="nsp-parking-display__meta">
                                         <span><t t-esc="item.parking_area"/></span>
                                         <span>•</span>
-                                        <span><t t-esc="item.direction_label"/></span>
+                                        <span><t t-esc="item.event_type_label"/></span>
                                         <span>•</span>
                                         <span><t t-esc="item.event_time"/></span>
                                     </div>
@@ -60,7 +60,7 @@ export class NspParkingDisplay extends Component {
                                 <div class="nsp-parking-display__row-plate"><t t-esc="item.vehicle"/></div>
                                 <div class="nsp-parking-display__row-detail">
                                     <span><t t-esc="item.parking_area"/></span>
-                                    <span><t t-esc="item.direction_label"/></span>
+                                    <span><t t-esc="item.event_type_label"/></span>
                                     <span><t t-esc="item.status_label"/></span>
                                     <span><t t-esc="item.event_time"/></span>
                                 </div>

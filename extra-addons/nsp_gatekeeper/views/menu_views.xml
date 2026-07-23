@@ -75,10 +75,18 @@
               sequence="40"/>
 
     <menuitem id="menu_nsp_parking_transaction"
-              name="Parking Logs"
+              name="Parking Transactions"
               parent="menu_nsp_operations_root"
               action="action_nsp_parking_transaction"
               sequence="10"/>
+
+
+    <menuitem id="menu_nsp_parking_detection_event"
+              name="Detection Events"
+              parent="menu_nsp_operations_root"
+              action="action_nsp_parking_detection_event"
+              sequence="20"
+              groups="nsp_core.group_nsp_it_parking"/>
 
     <record id="action_nsp_parking_display" model="ir.actions.client">
         <field name="name">Parking Realtime</field>

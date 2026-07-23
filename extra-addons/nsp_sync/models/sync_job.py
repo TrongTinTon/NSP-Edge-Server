@@ -486,8 +486,8 @@ class NspSyncJob(models.Model):
             "lane_code": record.lane_id.code if record.lane_id else "",
             "serial_number": device.serial_number if device else "",
             "antenna_no": int(antenna.antenna_no) if antenna else 0,
-            "direction": record.direction,
-            "check_time": self._dt(record.time_entered),
+            "event_type": record.event_type,
+            "event_time": self._dt(record.event_time),
             "vehicle_tid": record.vehicle_tid or "",
             "user_tid": record.user_tid or "",
             "decision": decision,
@@ -1287,6 +1287,8 @@ class NspSyncJob(models.Model):
                 "direction": direction,
                 "required_vehicle_tid": bool(lane_item.get("required_vehicle_tid", True)),
                 "required_user_tid": bool(lane_item.get("required_user_tid", False)),
+                "grouping_window_seconds": max(1, int(lane_item.get("grouping_window_seconds") or 3)),
+                "duplicate_suppression_seconds": max(0, int(lane_item.get("duplicate_suppression_seconds") or 2)),
                 "active": True,
             }
             if lane:

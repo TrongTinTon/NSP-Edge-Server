@@ -1,27 +1,44 @@
 # -*- coding: utf-8 -*-
-import logging
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from psycopg2 import IntegrityError
 
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
 
-_logger = logging.getLogger(__name__)
-
 
 class ParkingTransaction(models.Model):
+    """Final parking business transaction created by an Edge Server.
+
+    Controllers never create this model directly. They send individual RFID
+    detections to ``nsp.parking.detection.event``; the Edge groups and classifies
+    those detections, applies business rules, and creates one immutable final
+    transaction. Only this final model is synchronized to Cloud.
+    """
+
     _name = "nsp.parking.transaction"
-    _description = "Parking entry/exit event"
-    _order = "time_entered desc, id desc"
+    _description = "NSP Parking Transaction"
+    _order = "event_time desc, id desc"
 
     transaction_uid = fields.Char(
-        string="Transaction UID", required=True, copy=False, index=True,
-        help="Controller-generated idempotency key for this parking event.",
+        string="Transaction UID",
+        required=True,
+        copy=False,
+        index=True,
+        help="Edge-generated idempotency key for the final parking transaction.",
     )
-    time_entered = fields.Datetime(
-        string="Event Time", required=True, index=True,
-        help="UTC event time reported by the Controller.",
+    event_time = fields.Datetime(
+        string="Event Time",
+        required=True,
+        index=True,
+        help="UTC time of the grouped parking event.",
+    )
+    event_type = fields.Selection(
+        [("check_in", "Check-in"), ("check_out", "Check-out")],
+        string="Event Type",
+        required=True,
+        index=True,
     )
     controller_id = fields.Many2one(
         "nsp.controller", string="Controller", required=True,
@@ -36,7 +53,7 @@ class ParkingTransaction(models.Model):
         related="lane_id.parking_area_id", readonly=True,
     )
     antenna_id = fields.Many2one(
-        "nsp.device.antenna", string="Antenna", required=True,
+        "nsp.device.antenna", string="Primary Antenna", required=True,
         ondelete="restrict", index=True,
     )
     device_id = fields.Many2one(
@@ -51,10 +68,23 @@ class ParkingTransaction(models.Model):
         string="Antenna No",
         related="antenna_id.antenna_no", readonly=True,
     )
-    direction = fields.Selection(
-        [("entry", "Entry"), ("exit", "Exit")],
-        required=True, index=True,
+    primary_detection_id = fields.Many2one(
+        "nsp.parking.detection.event",
+        string="Primary Detection",
+        ondelete="set null",
+        copy=False,
+        index=True,
     )
+    detection_event_ids = fields.One2many(
+        "nsp.parking.detection.event",
+        "transaction_id",
+        string="Source Detections",
+        readonly=True,
+    )
+    detection_count = fields.Integer(
+        string="Detection Count", compute="_compute_detection_count"
+    )
+
     status = fields.Selection(
         [("allowed", "Allowed"), ("denied", "Denied")],
         string="Decision", required=True, default="allowed", index=True,
@@ -62,16 +92,14 @@ class ParkingTransaction(models.Model):
     error_code = fields.Selection([
         ("missing_vehicle_tid", "Missing Vehicle RFID Card"),
         ("missing_user_tid", "Missing User RFID Card"),
-        ("vehicle_card_unknown", "Vehicle Card Not In Master List"),
+        ("multiple_vehicle_tid", "Multiple Vehicle RFID Cards"),
+        ("multiple_user_tid", "Multiple User RFID Cards"),
         ("vehicle_not_found", "Vehicle Not Found"),
-        ("user_card_unknown", "User Card Not In Master List"),
         ("user_not_assigned", "User Card Not Assigned"),
         ("borrow_not_allowed", "Borrow Not Allowed"),
-        ("continuity_entry_missing", "Exit Without Previous Entry"),
-        ("continuity_duplicate", "Duplicate Direction"),
+        ("check_out_without_check_in", "Check-out Without Previous Check-in"),
+        ("continuity_duplicate", "Duplicate Event Type"),
         ("parking_area_not_operational", "Parking Area Not Operational"),
-        ("no_antenna_rule", "No Active Antenna Rule"),
-        ("ambiguous_antenna_mapping", "Ambiguous Antenna Mapping"),
         ("unknown", "Unknown"),
     ], string="Decision Reason", index=True, copy=False)
     error_message = fields.Text(string="Decision Message", copy=False)
@@ -102,6 +130,11 @@ class ParkingTransaction(models.Model):
         ("transaction_uid_unique", "unique(transaction_uid)", "Transaction UID must be unique."),
     ]
 
+    @api.depends("detection_event_ids")
+    def _compute_detection_count(self):
+        for rec in self:
+            rec.detection_count = len(rec.detection_event_ids)
+
     @api.depends(
         "lane_id", "lane_id.display_name", "lane_id.name", "lane_id.code",
         "lane_id.parking_area_id", "lane_id.parking_area_id.name", "lane_id.parking_area_id.code",
@@ -110,16 +143,13 @@ class ParkingTransaction(models.Model):
     def _compute_display_values(self):
         for rec in self:
             area = rec.lane_id.parking_area_id if rec.lane_id else False
-            rec.parking_area_display = (
-                (area.name or area.code) if area else "-"
-            )
+            rec.parking_area_display = (area.name or area.code) if area else "-"
             rec.lane_display = (
                 rec.lane_id.display_name or rec.lane_id.name or rec.lane_id.code
             ) if rec.lane_id else "-"
             rec.vehicle_display = (
-                (rec.vehicle_id.license_plate or rec.vehicle_id.display_name)
-                if rec.vehicle_id else (rec.vehicle_tid or "-")
-            )
+                rec.vehicle_id.license_plate or rec.vehicle_id.display_name
+            ) if rec.vehicle_id else (rec.vehicle_tid or "-")
 
     @api.model
     def _safe_datetime_value(self, value, default_now=True):
@@ -145,16 +175,14 @@ class ParkingTransaction(models.Model):
         return {
             "missing_vehicle_tid": ("missing_tag", "critical"),
             "missing_user_tid": ("missing_tag", "critical"),
-            "vehicle_card_unknown": ("auth", "critical"),
+            "multiple_vehicle_tid": ("ambiguous_tag", "critical"),
+            "multiple_user_tid": ("ambiguous_tag", "critical"),
             "vehicle_not_found": ("auth", "critical"),
-            "user_card_unknown": ("auth", "critical"),
             "user_not_assigned": ("auth", "critical"),
             "borrow_not_allowed": ("borrow", "critical"),
-            "continuity_entry_missing": ("continuity", "warning"),
+            "check_out_without_check_in": ("continuity", "warning"),
             "continuity_duplicate": ("continuity", "warning"),
             "parking_area_not_operational": ("config", "critical"),
-            "no_antenna_rule": ("config", "critical"),
-            "ambiguous_antenna_mapping": ("config", "critical"),
             "unknown": ("unknown", "warning"),
         }
 
@@ -162,22 +190,18 @@ class ParkingTransaction(models.Model):
     def _error_code_from_message(self, message):
         text = str(message or "").lower()
         mapping = (
+            ("multiple vehicle", "multiple_vehicle_tid"),
+            ("multiple user", "multiple_user_tid"),
             ("vehicle tid is required", "missing_vehicle_tid"),
             ("missing vehicle", "missing_vehicle_tid"),
-            ("vehicle card", "vehicle_card_unknown"),
-            ("vehicle tid is not defined", "vehicle_card_unknown"),
             ("vehicle not found", "vehicle_not_found"),
             ("user tid is required", "missing_user_tid"),
             ("missing user", "missing_user_tid"),
-            ("employee tid", "missing_user_tid"),
-            ("user tid is not defined", "user_card_unknown"),
             ("user tid is not assigned", "user_not_assigned"),
             ("borrow", "borrow_not_allowed"),
-            ("no previous entry", "continuity_entry_missing"),
+            ("no previous check-in", "check_out_without_check_in"),
             ("already", "continuity_duplicate"),
             ("not operational", "parking_area_not_operational"),
-            ("no active", "no_antenna_rule"),
-            ("ambiguous antenna", "ambiguous_antenna_mapping"),
         )
         for marker, code in mapping:
             if marker in text:
@@ -187,41 +211,17 @@ class ParkingTransaction(models.Model):
     @api.model
     def _normalize_error_code(self, code, message=False):
         raw = str(code or "").strip().lower().replace("-", "_").replace(" ", "_")
-        aliases = {
-            "missing_vehicle_card": "missing_vehicle_tid",
-            "vehicle_tid_missing": "missing_vehicle_tid",
-            "vehicle_missing": "missing_vehicle_tid",
-            "missing_employee_tid": "missing_user_tid",
-            "missing_employee_card": "missing_user_tid",
-            "user_tid_missing": "missing_user_tid",
-            "employee_tid_missing": "missing_user_tid",
-            "user_not_active": "user_card_unknown",
-            "user_vehicle_mismatch": "borrow_not_allowed",
-            "vehicle_unknown": "vehicle_not_found",
-        }
-        raw = aliases.get(raw, raw)
         if raw in self._error_catalog():
             return raw
         return self._error_code_from_message(message)
 
     @api.model
     def _primary_decision_error(self, error_items):
-        """Return one canonical reason code and one readable message.
-
-        Parking Log stores a single business decision. If several checks fail,
-        keep the highest-severity reason and combine messages for diagnostics.
-        """
         catalog = self._error_catalog()
         rank = {"info": 0, "warning": 1, "error": 2, "critical": 3}
         normalized = []
         messages = []
-        for item in error_items or []:
-            if isinstance(item, (list, tuple)):
-                raw_code = item[0] if item else False
-                message = item[1] if len(item) > 1 else False
-            else:
-                raw_code = False
-                message = item
+        for raw_code, message in error_items or []:
             code = self._normalize_error_code(raw_code, message)
             if code:
                 normalized.append(code)
@@ -235,7 +235,7 @@ class ParkingTransaction(models.Model):
         )
         return primary, " ".join(messages) or False
 
-    def _find_vehicle(self, vehicle_tid):
+    def _resolve_vehicle_by_tid(self, vehicle_tid):
         tid = str(vehicle_tid or "").strip()
         if not tid:
             return self.env["nsp.vehicle"].browse()
@@ -245,24 +245,16 @@ class ParkingTransaction(models.Model):
         ], limit=1)
         return line.vehicle_id if line else self.env["nsp.vehicle"].browse()
 
-    def _card_from_tid(self, tid, card_type):
-        tid = str(tid or "").strip()
+    def _resolve_user_by_tid(self, user_tid):
+        tid = str(user_tid or "").strip()
         if not tid:
-            return self.env["nsp.rfid.card"].browse()
-        return self.env["nsp.rfid.card"].sudo().search([
-            ("tid", "=", tid),
-            ("card_type", "=", card_type),
-        ], limit=1)
-
-    def _user_from_user_tid(self, user_tid):
-        card = self._card_from_tid(user_tid, "user_card")
-        if not card:
-            return self.env["nsp.user"].browse(), card
+            return self.env["nsp.user"].browse()
         line = self.env["nsp.user.card"].sudo().search([
-            ("card_id", "=", card.id),
+            ("card_id.tid", "=", tid),
+            ("card_id.card_type", "=", "user_card"),
             ("state", "=", "active"),
         ], limit=1)
-        return (line.user_id if line else self.env["nsp.user"].browse()), card
+        return line.user_id if line else self.env["nsp.user"].browse()
 
     @api.model
     def _validate_vehicle_borrow_access(self, vehicle, user, event_time):
@@ -275,30 +267,57 @@ class ParkingTransaction(models.Model):
             borrow = Borrow.browse()
         if not borrow:
             return False, _(
-                "Vehicle is not currently borrowed by this user, or the borrow request is not approved/valid/returned."
+                "Vehicle is not currently borrowed by this user, or the borrow request is not approved and valid."
             ), Borrow.browse()
         return True, "", borrow
 
     @api.model
-    def _validate_vehicle_continuity(self, vehicle, direction, event_time):
-        if not vehicle or not direction:
+    def _validate_vehicle_continuity(self, vehicle, event_type, event_time):
+        if not vehicle or not event_type:
             return True, ""
         domain = [("vehicle_id", "=", vehicle.id), ("status", "=", "allowed")]
         if event_time:
-            domain.append(("time_entered", "<", event_time))
-        last = self.search(domain, order="time_entered desc, id desc", limit=1)
+            domain.append(("event_time", "<", event_time))
+        last = self.search(domain, order="event_time desc, id desc", limit=1)
         if not last:
-            if direction == "exit":
+            if event_type == "check_out":
                 return False, _(
-                    "Continuity error: vehicle has no previous Entry but an Exit event was received."
+                    "Continuity error: vehicle has no previous Check-in but a Check-out event was received."
                 )
             return True, ""
-        if last.direction == direction:
-            label = dict(self._fields["direction"].selection).get(direction, direction)
+        if last.event_type == event_type:
+            label = dict(self._fields["event_type"].selection).get(event_type, event_type)
             return False, _(
                 "Continuity error: last valid event for this vehicle is already %s."
             ) % label
         return True, ""
+
+    @api.model
+    def _resolve_event_type(self, direction, vehicle=False, vehicle_tid=False, event_time=False):
+        """Resolve the final business event type from Edge-side direction.
+
+        Entry and Exit mappings are deterministic. A Two-way antenna has no
+        direction signal in the Controller payload, so Edge alternates from the
+        vehicle's latest allowed parking transaction. A vehicle with no history
+        starts with Check-in.
+        """
+        fixed = {"entry": "check_in", "exit": "check_out"}.get(direction)
+        if fixed:
+            return fixed
+        if direction != "both":
+            raise ValidationError(_("invalid_direction"))
+
+        domain = [("status", "=", "allowed")]
+        if vehicle:
+            domain.append(("vehicle_id", "=", vehicle.id))
+        elif vehicle_tid:
+            domain.append(("vehicle_tid", "=", vehicle_tid))
+        else:
+            return "check_in"
+        if event_time:
+            domain.append(("event_time", "<", event_time))
+        last = self.search(domain, order="event_time desc, id desc", limit=1)
+        return "check_out" if last and last.event_type == "check_in" else "check_in"
 
     @api.model
     def _business_values(self, source):
@@ -309,15 +328,15 @@ class ParkingTransaction(models.Model):
                 return raw.id if field and field.type == "many2one" and raw else raw
             return source.get(name)
 
-        event_time = value("time_entered")
+        event_time = value("event_time")
         if event_time:
             event_time = fields.Datetime.to_string(fields.Datetime.to_datetime(event_time))
         return {
             "controller_id": int(value("controller_id") or 0),
             "lane_id": int(value("lane_id") or 0),
             "antenna_id": int(value("antenna_id") or 0),
-            "time_entered": event_time or "",
-            "direction": value("direction") or "",
+            "event_time": event_time or "",
+            "event_type": value("event_type") or "",
             "status": value("status") or "",
             "vehicle_id": int(value("vehicle_id") or 0),
             "vehicle_tid": str(value("vehicle_tid") or "").strip(),
@@ -330,7 +349,6 @@ class ParkingTransaction(models.Model):
 
     @api.model
     def create_idempotent(self, vals):
-        """Create an immutable parking event or return the exact duplicate."""
         uid = str(vals.get("transaction_uid") or "").strip()
         if not uid:
             raise ValidationError(_("missing_transaction_uid"))
@@ -339,7 +357,7 @@ class ParkingTransaction(models.Model):
         if existing:
             if self._business_values(existing) != self._business_values(vals):
                 raise ValidationError(_(
-                    "transaction_uid_conflict: Transaction UID already exists with different event data."
+                    "transaction_uid_conflict: Transaction UID already exists with different transaction data."
                 ))
             return existing, True
         try:
@@ -351,134 +369,103 @@ class ParkingTransaction(models.Model):
                 raise
             if self._business_values(existing) != self._business_values(vals):
                 raise ValidationError(_(
-                    "transaction_uid_conflict: Transaction UID already exists with different event data."
+                    "transaction_uid_conflict: Transaction UID already exists with different transaction data."
                 ))
             return existing, True
 
     @api.model
-    def ingest_controller_log(self, controller, payload):
-        """Validate and persist one Controller event.
+    def _best_detection(self, events):
+        return events.sorted(key=lambda rec: (rec.detected_at, rec.id))[:1]
 
-        Controller sends only its device identity and detected TIDs. Server-side
-        topology resolves Parking Area, Lane and direction.
-        """
-        if not isinstance(payload, dict):
-            raise ValidationError(_("invalid_payload"))
-        allowed_fields = {
-            "transaction_uid", "controller_code", "serial_number", "antenna_no",
-            "check_time", "vehicle_tid", "user_tid",
-        }
-        unsupported = sorted(set(payload) - allowed_fields)
-        if unsupported:
-            raise ValidationError(_(
-                "invalid_payload: unsupported field(s): %s"
-            ) % ", ".join(unsupported))
+    @api.model
+    def create_from_detection_group(self, detections):
+        """Create one final transaction from one Edge-side detection group."""
+        detections = detections.exists().filtered(lambda rec: rec.state == "pending")
+        if not detections:
+            raise ValidationError(_("empty_detection_group"))
 
-        controller_code = str(payload.get("controller_code") or "").strip()
-        if controller_code and controller_code != controller.controller_id:
-            raise ValidationError(_("route_not_allowed"))
-        transaction_uid = str(payload.get("transaction_uid") or "").strip()
-        serial_number = str(payload.get("serial_number") or "").strip().upper()
-        try:
-            antenna_no = int(payload.get("antenna_no") or 0)
-        except Exception as exc:
-            raise ValidationError(_("invalid_payload: antenna_no")) from exc
-        event_time = self._safe_datetime_value(payload.get("check_time"), default_now=False)
-        if not transaction_uid:
-            raise ValidationError(_("missing_transaction_uid"))
-        if not serial_number:
-            raise ValidationError(_("serial_number is required"))
-        if antenna_no <= 0:
-            raise ValidationError(_("antenna_no is required"))
-        if not event_time:
-            raise ValidationError(_("check_time is required"))
-
-        if not self.env["nsp.device.whitelist"].sudo().is_device_whitelisted(serial_number):
-            if "nsp.notification" in self.env.registry.models:
-                self.env["nsp.notification"].sudo().notify_device_not_whitelisted(
-                    serial_number, controller.controller_id,
-                    details={"device_type": "rfid_reader"},
-                )
-            raise ValidationError(_("device_not_whitelisted"))
-
-        device = self.env["nsp.device"].sudo().search([
-            ("controller_id", "=", controller.id),
-            ("serial_number", "=", serial_number),
-        ], limit=1)
-        if not device:
-            raise ValidationError(_("device_not_found"))
-        antenna = self.env["nsp.device.antenna"].sudo().search([
-            ("device_id", "=", device.id),
-            ("antenna_no", "=", antenna_no),
-        ], limit=1)
-        if not antenna:
-            raise ValidationError(_("antenna_not_found"))
-
-        mappings = self.env["nsp.parking.lane.antenna.mapping"].sudo().search([
-            ("antenna_ref_id", "=", antenna.id),
-            ("lane_id.active", "=", True),
-        ])
-        if not mappings:
-            raise ValidationError(_("no_antenna_rule"))
-        if len(mappings) > 1:
-            raise ValidationError(_("ambiguous_antenna_mapping"))
-        mapping = mappings[0]
-        lane = mapping.lane_id
-        parking_area = lane.parking_area_id
-        direction = mapping.direction
-        if lane.controller_id != controller:
-            raise ValidationError(_("controller_not_in_scope"))
-        if direction not in ("entry", "exit"):
-            raise ValidationError(_("invalid_direction"))
-
-        vehicle_tid = str(payload.get("vehicle_tid") or "").strip()
-        user_tid = str(payload.get("user_tid") or "").strip()
-        vehicle = self._find_vehicle(vehicle_tid)
-        vehicle_card = self._card_from_tid(vehicle_tid, "vehicle_card") if vehicle_tid else self.env["nsp.rfid.card"].browse()
-        user, user_card = self._user_from_user_tid(user_tid) if user_tid else (
-            self.env["nsp.user"].browse(), self.env["nsp.rfid.card"].browse()
+        lane = detections[:1].lane_id
+        controller = lane.controller_id
+        direction = detections[:1].direction
+        if any(
+            rec.lane_id != lane or rec.direction != direction
+            for rec in detections
+        ):
+            raise ValidationError(_("mixed_detection_group"))
+        vehicle_events = detections.filtered(
+            lambda rec: rec.card_id.card_type == "vehicle_card"
         )
-
-        continuity_ok, continuity_error = self._validate_vehicle_continuity(
-            vehicle, direction, event_time
+        user_events = detections.filtered(
+            lambda rec: rec.card_id.card_type == "user_card"
         )
-        borrow_ok, borrow_error, borrow_request = (
-            self._validate_vehicle_borrow_access(vehicle, user, event_time)
-            if user_tid and user else
-            (True, "", self.env["nsp.vehicle.borrow.request"].browse())
+        vehicle_tids = sorted(set(vehicle_events.mapped("card_id.tid")))
+        user_tids = sorted(set(user_events.mapped("card_id.tid")))
+        vehicle_event = self._best_detection(vehicle_events)
+        user_event = self._best_detection(user_events)
+        primary = vehicle_event or user_event or detections.sorted("detected_at")[:1]
+        event_time = max(detections.mapped("detected_at"))
+
+        vehicle_tid = vehicle_event.card_id.tid if vehicle_event else False
+        user_tid = user_event.card_id.tid if user_event else False
+        vehicle = self._resolve_vehicle_by_tid(vehicle_tid)
+        user = self._resolve_user_by_tid(user_tid)
+
+        # A two-way antenna carries no direction in the Controller payload.
+        # Serialize by vehicle before reading continuity so concurrent lanes do
+        # not infer the same event type for the same vehicle.
+        if direction == "both" and vehicle_tid:
+            self.env.cr.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                (f"nsp.parking:vehicle:{vehicle_tid}",),
+            )
+        event_type = self._resolve_event_type(
+            direction,
+            vehicle=vehicle,
+            vehicle_tid=vehicle_tid,
+            event_time=event_time,
         )
 
         errors = []
-        if parking_area.state != "operational":
+        if lane.parking_area_id.state != "operational":
             errors.append(("parking_area_not_operational", _("Parking Area is not operational.")))
-        if lane.required_vehicle_tid and not vehicle_tid:
+        if len(vehicle_tids) > 1:
+            errors.append(("multiple_vehicle_tid", _("Multiple vehicle TIDs were detected in one grouping window.")))
+        if len(user_tids) > 1:
+            errors.append(("multiple_user_tid", _("Multiple user TIDs were detected in one grouping window.")))
+        if lane.required_vehicle_tid and not vehicle_event:
             errors.append(("missing_vehicle_tid", _("Vehicle RFID card/TID was not detected.")))
-        elif vehicle_tid and not vehicle_card:
-            errors.append(("vehicle_card_unknown", _("Vehicle TID is not defined as a Vehicle Card.")))
-        if vehicle_tid and not vehicle:
-            errors.append(("vehicle_not_found", _("Vehicle could not be resolved from vehicle_tid.")))
-        if lane.required_user_tid and not user_tid:
+        elif vehicle_event and not vehicle:
+            errors.append(("vehicle_not_found", _("Vehicle TID is not assigned to an active vehicle.")))
+        if lane.required_user_tid and not user_event:
             errors.append(("missing_user_tid", _("User RFID card/TID was not detected.")))
-        elif user_tid and not user_card:
-            errors.append(("user_card_unknown", _("User TID is not defined as a User Card.")))
-        elif user_tid and user_card and not user:
-            errors.append(("user_not_assigned", _("User TID is not assigned to an NSP User.")))
-        if not borrow_ok:
-            errors.append(("borrow_not_allowed", borrow_error))
+        elif user_event and not user:
+            errors.append(("user_not_assigned", _("User TID is not assigned to an active NSP User.")))
+        borrow_request = self.env["nsp.vehicle.borrow.request"].browse()
+        if vehicle and user:
+            borrow_ok, borrow_error, borrow_request = self._validate_vehicle_borrow_access(
+                vehicle, user, event_time
+            )
+            if not borrow_ok:
+                errors.append(("borrow_not_allowed", borrow_error))
+
+        continuity_ok, continuity_error = self._validate_vehicle_continuity(
+            vehicle, event_type, event_time
+        )
         if not continuity_ok:
             errors.append((
                 self._normalize_error_code(False, continuity_error) or "continuity_duplicate",
                 continuity_error,
             ))
-        reason_code, reason_message = self._primary_decision_error(errors)
 
+        reason_code, reason_message = self._primary_decision_error(errors)
         vals = {
-            "transaction_uid": transaction_uid,
-            "time_entered": event_time,
+            "transaction_uid": str(uuid4()),
+            "event_time": event_time,
+            "event_type": event_type,
             "controller_id": controller.id,
             "lane_id": lane.id,
-            "antenna_id": antenna.id,
-            "direction": direction,
+            "antenna_id": primary.antenna_id.id,
+            "primary_detection_id": primary.id,
             "status": "denied" if errors else "allowed",
             "error_code": reason_code or False,
             "error_message": reason_message or False,
@@ -488,4 +475,5 @@ class ParkingTransaction(models.Model):
             "user_tid": user_tid or False,
             "borrow_request_id": borrow_request.id if borrow_request else False,
         }
-        return self.create_idempotent(vals)
+        transaction, _duplicate = self.create_idempotent(vals)
+        return transaction
