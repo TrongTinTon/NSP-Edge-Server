@@ -64,6 +64,7 @@
                         <group>
                             <field name="last_auth_at" readonly="1"/>
                             <field name="token_expiry" readonly="1"/>
+                            <field name="refresh_token_expiry" readonly="1"/>
                             <field name="job_count" readonly="1"/>
                         </group>
                     </group>

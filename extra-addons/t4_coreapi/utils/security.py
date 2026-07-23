@@ -57,35 +57,29 @@ def check_rate_limit(env, domain_extra, limit, error_message):
     return True
 
 
-def check_application_api_rate_limit(application):
-    """Enforce per-application API call rate limits."""
+def check_token_api_rate_limit(application, token):
+    """Enforce the Application policy independently for each access token."""
     application.ensure_one()
+    token.ensure_one()
     check_rate_limit(
         application.env,
-        [('application_id', '=', application.id), ('event_type', '=', 'api')],
+        [('token_id', '=', token.id), ('event_type', '=', 'api')],
         application.rate_limit_per_minute,
-        f'API rate limit exceeded for application "{application.name}" ({application.rate_limit_per_minute}/min).',
+        f'API rate limit exceeded for this access token ({application.rate_limit_per_minute}/min).',
     )
 
 
-def check_application_auth_rate_limit(application):
-    """Enforce per-application token request rate limits."""
-    application.ensure_one()
-    check_rate_limit(
-        application.env,
-        [('application_id', '=', application.id), ('event_type', '=', 'auth')],
-        application.auth_rate_limit_per_minute,
-        f'Auth rate limit exceeded for application "{application.name}" ({application.auth_rate_limit_per_minute}/min).',
-    )
-
-
-def check_ip_auth_rate_limit(env, ip_address, limit=30):
-    """Enforce global per-IP throttling on the auth endpoint."""
+def check_ip_auth_rate_limit(env, ip_address, limit=None):
+    """Enforce authentication throttling per source IP, not per shared Application."""
+    if limit is None:
+        limit = int(env['ir.config_parameter'].sudo().get_param(
+            't4_coreapi.auth_rate_limit_per_ip', '300',
+        ))
     if not ip_address or not limit:
         return True
     check_rate_limit(
         env,
-        [('ip_address', '=', ip_address), ('event_type', '=', 'auth'), ('route', '=like', '%/auth/token')],
+        [('ip_address', '=', ip_address), ('event_type', '=', 'auth'), ('route', 'in', ['/auth/token', '/auth/refresh'])],
         limit,
         f'Too many authentication attempts from IP {ip_address}. Try again later.',
     )

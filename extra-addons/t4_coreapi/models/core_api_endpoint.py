@@ -23,7 +23,7 @@ from odoo.addons.t4_coreapi.utils.routing import build_gateway_path
 
 _logger = logging.getLogger(__name__)
 
-_GATEWAY_ROUTE_RE = re.compile(r'^/([^/]+)/([^/]+)(?:/(.*))?$')
+_GATEWAY_ROUTE_RE = re.compile(r'^/([^/]+)(?:/(.*))?$')
 
 
 class CoreApiEndpoint(models.Model):
@@ -47,19 +47,19 @@ class CoreApiEndpoint(models.Model):
     route_suffix = fields.Char(
         string='Route Path',
         required=True,
-        help='Route Path only, e.g. gate1. Core API automatically derives /{server_code}/{version}/gate1.',
+        help='Route Path only, e.g. edge-server/status. Public URL is /{version}/{route_path}.' ,
     )
     route_pattern = fields.Char(
         string='Gateway Path',
         compute='_compute_route_pattern',
         store=True,
         readonly=True,
-        help='Computed path segment, e.g. /gk/v1/gate1.',
+        help='Computed public path, e.g. /v1/edge-server/status.',
     )
     public_gateway_url = fields.Char(
         string='Full Gateway URL',
         compute='_compute_public_gateway_url',
-        help='Full public URL including host domain, e.g. https://localhost:8069/gk/v1/gate1.',
+        help='Full public URL including host domain, e.g. https://localhost:8069/v1/edge-server/status.',
     )
     http_methods = fields.Char(
         string='Allowed Methods',
@@ -97,19 +97,11 @@ class CoreApiEndpoint(models.Model):
         'Route path must be unique per application and API version.',
     )
 
-    @api.depends(
-        'application_id.service_code',
-        'version_id.code',
-        'route_suffix',
-    )
+    @api.depends('version_id.code', 'route_suffix')
     def _compute_route_pattern(self):
-        """Build the full public URL from service code, version, and route suffix."""
         for endpoint in self:
-            service_code = endpoint.application_id.service_code if endpoint.application_id else False
-            version_code = endpoint.version_id.code if endpoint.version_id else False
             endpoint.route_pattern = build_gateway_path(
-                service_code,
-                version_code,
+                endpoint.version_id.code if endpoint.version_id else False,
                 endpoint.route_suffix,
             )
 
@@ -230,19 +222,12 @@ class CoreApiEndpoint(models.Model):
 
     @api.model
     def _route_path_from_input(self, route_path, application_id=False, version_id=False):
-        """Accept only a Route Path while tolerating a pasted full gateway path.
-
-        The stored value is always the suffix. Core API derives the gateway path from
-        Application Server Code + API Version + Route Path.
-        """
+        """Store only Route Path; tolerate a pasted /v1/route full path."""
         normalized = self._normalize_route_suffix(route_path)
         if not normalized:
             return normalized
-        application = self.env['core.api.application'].browse(application_id).exists()
         version = self.env['core.api.version'].browse(version_id).exists()
         parts = normalized.split('/')
-        if application and parts and parts[0] == (application.service_code or '').strip('/'):
-            parts = parts[1:]
         if version and parts and parts[0] == (version.code or '').strip('/'):
             parts = parts[1:]
         return '/'.join(parts).strip('/')

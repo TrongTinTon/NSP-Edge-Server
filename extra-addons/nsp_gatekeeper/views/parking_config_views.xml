@@ -120,7 +120,7 @@
                                     <field name="required_vehicle_tid" optional="hide"/>
                                     <field name="required_user_tid" optional="hide"/>
                                     <field name="grouping_window_seconds" optional="hide"/>
-                                    <field name="duplicate_suppression_seconds" optional="hide"/>
+                                    <field name="repeat_suppression_seconds" optional="hide"/>
                                     <field name="active" widget="boolean_toggle"/>
                                     <field name="antenna_count" string="Mapped Antennas" readonly="1"/>
                                 </list>
@@ -198,7 +198,7 @@
                             <field name="required_vehicle_tid"/>
                             <field name="required_user_tid"/>
                             <field name="grouping_window_seconds"/>
-                            <field name="duplicate_suppression_seconds"/>
+                            <field name="repeat_suppression_seconds"/>
                             <field name="antenna_count" readonly="1"/>
                         </group>
                     </group>

@@ -9,7 +9,7 @@ from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.http import request
 
 from odoo.addons.t4_coreapi.utils.response import api_error_response
-from odoo.addons.t4_coreapi.utils.routing import is_auth_token_path, is_gateway_path
+from odoo.addons.t4_coreapi.utils.routing import is_auth_path, is_gateway_path
 from odoo.addons.t4_coreapi.utils.security import get_client_ip
 
 
@@ -20,18 +20,17 @@ class IrHttp(models.AbstractModel):
     def _is_core_api_request(cls):
         """Return True when the current request targets a Core API HTTP route."""
         path = request.httprequest.path or ''
-        if is_auth_token_path(path):
+        if is_auth_path(path):
             return True
         if not is_gateway_path(path):
             return False
-        service_code = path.strip('/').split('/')[0]
-        if not service_code:
+        version_code = path.strip('/').split('/')[0]
+        if not version_code:
             return False
         try:
             if request.db and getattr(request, 'env', None):
-                return bool(request.env['core.api.application'].sudo().search_count([
-                    ('service_code', '=', service_code),
-                    ('state', '=', 'active'),
+                return bool(request.env['core.api.version'].sudo().search_count([
+                    ('code', '=', version_code), ('active', '=', True),
                 ]))
         except Exception:
             return False
@@ -65,7 +64,7 @@ class IrHttp(models.AbstractModel):
         ip = get_client_ip()
         try:
             application.check_ip_allowed(ip)
-            application.check_api_rate_limit()
+            application.check_api_rate_limit(token_rec)
         except Exception as e:
             if 'rate limit' in str(e).lower():
                 raise TooManyRequests(str(e)) from e
@@ -76,7 +75,6 @@ class IrHttp(models.AbstractModel):
             core_api_application_id=application.id,
             core_api_token_id=token_rec.id,
             core_api_client_id=application.client_id,
-            core_api_client_instance_id=token_rec.client_instance_id or False,
         )
         request.session.can_save = False
 

@@ -1,7 +1,6 @@
 # Part of T4 Core API. See LICENSE file for full copyright and licensing details.
 
 import logging
-import re
 import secrets
 
 from passlib.context import CryptContext
@@ -57,30 +56,23 @@ class CoreApiApplication(models.Model):
         default=24,
         help='Lifetime of issued access tokens. 0 = non-expiring (not recommended).',
     )
-    refresh_token_ttl_hours = fields.Integer(
-        string='Refresh Token TTL (hours)',
-        default=168,
-        help='Lifetime of refresh tokens. When both access and refresh tokens expire, '
-             'the application must authenticate again with client credentials. 0 = non-expiring.',
+    refresh_token_ttl_days = fields.Integer(
+        string='Refresh Token TTL (days)',
+        default=30,
+        help='Sliding lifetime. Every successful refresh rotates the refresh token and restarts this TTL.',
     )
     token_ids = fields.One2many('core.api.token', 'application_id')
     token_count = fields.Integer(compute='_compute_token_count')
-    active_token_id = fields.Many2one(
-        'core.api.token',
-        string='Latest Active Access Token',
-        compute='_compute_active_token',
-        store=False,
-    )
     has_active_token = fields.Boolean(
         string='Has Active Token',
         compute='_compute_traffic_status',
     )
     api_requests_per_minute = fields.Integer(
-        string='API Requests (last min)',
+        string='Aggregate API Requests (last min)',
         compute='_compute_traffic_status',
     )
     auth_requests_per_minute = fields.Integer(
-        string='Auth Requests (last min)',
+        string='Aggregate Auth Requests (last min)',
         compute='_compute_traffic_status',
     )
     traffic_status = fields.Selection(
@@ -107,14 +99,6 @@ class CoreApiApplication(models.Model):
         tracking=True,
         help='Public hostname used in integration examples for this application.',
     )
-    service_code = fields.Char(
-        string='Server Code',
-        required=True,
-        copy=False,
-        tracking=True,
-        index=True,
-        help='Server-managed unique first URL segment for this application, e.g. gk in /gk/v1/gate1. Clients should identify by Client ID and use this Server Code for routed API calls.',
-    )
     endpoint_ids = fields.One2many(
         'core.api.endpoint',
         'application_id',
@@ -122,14 +106,9 @@ class CoreApiApplication(models.Model):
         help='All API routes owned by this application.',
     )
     rate_limit_per_minute = fields.Integer(
-        string='API Rate Limit (/min)',
+        string='API Rate Limit per Token (/min)',
         default=60,
-        help='Max API calls per minute. 0 = unlimited.',
-    )
-    auth_rate_limit_per_minute = fields.Integer(
-        string='Auth Rate Limit (/min)',
-        default=10,
-        help='Max token requests per minute. 0 = unlimited.',
+        help='Maximum API calls per minute for each independently issued access token. 0 = unlimited.',
     )
     allowed_ips = fields.Text(
         string='Allowed IPs',
@@ -163,111 +142,6 @@ class CoreApiApplication(models.Model):
     )
 
     _client_id_unique = models.Constraint('unique(client_id)', 'Client ID must be unique.')
-    _service_code_unique = models.Constraint(
-        'unique(service_code)',
-        'Server Code must be unique across applications.',
-    )
-
-    @api.constrains('service_code')
-    def _check_service_code(self):
-        """Reject empty or invalid service codes."""
-        for rec in self:
-            code = (rec.service_code or '').strip()
-            if not code:
-                raise ValidationError(_('Server Code is required.'))
-            if '/' in code or ' ' in code:
-                raise ValidationError(_('Server Code must not contain slashes or spaces.'))
-
-    @api.model
-    def get_by_service_code(self, service_code):
-        """Return an active application for the given gateway service code."""
-        code = (service_code or '').strip()
-        if not code:
-            return self.browse()
-        return self.sudo().search([
-            ('service_code', '=', code),
-            ('state', '=', 'active'),
-        ], limit=1)
-
-    @api.model
-    def _generate_service_code(self, name=None, exclude_id=None):
-        """Build a unique service code slug from the application name."""
-        slug = re.sub(r'[^a-z0-9]+', '', (name or 'app').lower())[:16] or 'app'
-        candidate = slug
-        suffix = 1
-        while self.search_count([
-            ('service_code', '=', candidate),
-            *( [('id', '!=', exclude_id)] if exclude_id else [] ),
-        ]):
-            candidate = f'{slug}{suffix}'
-            suffix += 1
-        return candidate
-
-    @api.model
-    def _migrate_service_codes(self):
-        """Backfill unique service codes on existing applications after upgrade."""
-        Application = self.with_context(active_test=False)
-        cr = self.env.cr
-
-        cr.execute("""
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name = 'core_api_domain' AND column_name = 'service_code'
-        """)
-        if cr.fetchone():
-            cr.execute("""
-                UPDATE core_api_application AS app
-                SET service_code = domain.service_code
-                FROM core_api_domain AS domain
-                WHERE app.domain_id = domain.id
-                  AND (app.service_code IS NULL OR app.service_code = '')
-                  AND domain.service_code IS NOT NULL
-                  AND domain.service_code <> ''
-            """)
-
-        for app in Application.search([
-            '|', ('service_code', '=', False), ('service_code', '=', ''),
-        ]):
-            app.service_code = self._generate_service_code(app.name, exclude_id=app.id)
-
-        seen = {}
-        for app in Application.search([], order='id'):
-            code = (app.service_code or '').strip()
-            if not code or code in seen:
-                app.service_code = self._generate_service_code(app.name, exclude_id=app.id)
-                code = app.service_code
-            seen[code] = app.id
-
-    @api.model
-    def _dedupe_service_codes_sql(self):
-        """Ensure application service codes are unique before DB constraints apply."""
-        cr = self.env.cr
-        cr.execute("""
-            SELECT 1 FROM information_schema.tables
-            WHERE table_name = 'core_api_application'
-        """)
-        if not cr.fetchone():
-            return
-        cr.execute("""
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name = 'core_api_application' AND column_name = 'service_code'
-        """)
-        if not cr.fetchone():
-            cr.execute("ALTER TABLE core_api_application ADD COLUMN service_code VARCHAR")
-
-        cr.execute("""
-            UPDATE core_api_application
-            SET service_code = 'app' || id::text
-            WHERE service_code IS NULL OR service_code = ''
-        """)
-        cr.execute("""
-            UPDATE core_api_application AS app
-            SET service_code = 'app' || app.id::text
-            WHERE app.id <> (
-                SELECT MIN(id) FROM core_api_application
-                WHERE service_code = app.service_code
-            )
-        """)
-
     @api.onchange('domain_id')
     def _onchange_domain_id(self):
         """Warn when no API versions exist yet."""
@@ -315,112 +189,81 @@ class CoreApiApplication(models.Model):
         'client_id',
         'domain_id',
         'domain_id.base_url',
-        'service_code',
         'endpoint_ids.route_pattern',
         'endpoint_ids.version_id',
         'endpoint_ids.route_suffix',
     )
     def _compute_api_integration_guide(self):
-        """Build auth URLs and cURL samples shown on the application form."""
+        """Build route-path-only authentication and API examples."""
         from odoo.addons.t4_coreapi.utils.routing import AUTH_TOKEN_PATH, build_gateway_path
 
         for rec in self:
-            service_code = (rec.service_code or '').strip('/')
             base = (rec.domain_id.base_url or '').rstrip('/')
             if not base:
-                base = (
-                    self.env['ir.config_parameter'].sudo().get_param('web.base.url') or ''
-                ).rstrip('/')
-            version = rec.endpoint_ids[:1].version_id if rec.endpoint_ids else False
-            if not version:
-                version = self.env['core.api.version'].get_default_version()
+                base = (self.env['ir.config_parameter'].sudo().get_param('web.base.url') or '').rstrip('/')
+            version = rec.endpoint_ids[:1].version_id if rec.endpoint_ids else self.env['core.api.version'].get_default_version()
             version_code = version.code if version else 'v1'
-            gateway_base = build_gateway_path(service_code, version_code).rstrip('/')
             auth_url = f'{base}{AUTH_TOKEN_PATH}'
             db_name = self.env.cr.dbname
             rec.api_database_name = db_name
-            rec.api_base_url = f'{base}{gateway_base}'
+            rec.api_base_url = f'{base}{build_gateway_path(version_code)}'
             rec.auth_endpoint_url = auth_url
             client_id = rec.client_id or '<client_id>'
             rec.auth_curl_example = (
-                f'# 1) Initial login — send client_id/secret once\n'
-                f'curl -X POST "{auth_url}?db={db_name}" \\\n'
-                f'  -H "Content-Type: application/json" \\\n'
-                f'  -d \'{{"grant_type": "client_credentials", '
-                f'"client_id": "{client_id}", '
-                f'"client_secret": "<client_secret>"}}\'\n\n'
-                f'# Response: status, message, api_token, refresh_token\n\n'
-                f'# 2) When access_token expires — refresh without client_secret\n'
-                f'curl -X POST "{auth_url}?db={db_name}" \\\n'
-                f'  -H "Content-Type: application/json" \\\n'
-                f'  -d \'{{"grant_type": "refresh_token", '
-                f'"refresh_token": "<refresh_token>"}}\''
+                f"curl -X POST '{auth_url}?db={db_name}'\n"
+                f"  -H 'Content-Type: application/json'\n"
+                f"  -d '{{\"client_id\": \"{client_id}\", \"client_secret\": \"<client_secret>\"}}'"
             )
-            sample_suffix = rec.endpoint_ids[:1].route_suffix if rec.endpoint_ids else 'gate1'
-            sample_url = f'{base}{build_gateway_path(service_code, version_code, sample_suffix)}?db={db_name}'
+            sample_suffix = rec.endpoint_ids[:1].route_suffix if rec.endpoint_ids else 'health'
+            sample_url = f'{base}{build_gateway_path(version_code, sample_suffix)}?db={db_name}'
             rec.api_call_curl_example = (
-                f'curl -X GET "{sample_url}" \\\n'
-                f'  -H "Authorization: Bearer <access_token>" \\\n'
-                f'  -H "Content-Type: application/json"'
+                f"curl -X GET '{sample_url}'\n"
+                f"  -H 'Authorization: Bearer <access_token>'\n"
+                f"  -H 'Content-Type: application/json'"
             )
 
-    @api.model
-    def _find_active_access_token(self, application):
-        """Return the current valid access token record for an application."""
-        now = fields.Datetime.now()
-        return application.token_ids.filtered(
-            lambda t: t.token_type == 'access'
-            and t.active
-            and (not t.expiration_date or t.expiration_date >= now)
-        )[:1]
 
     @api.model
     def _traffic_snapshot(self, application):
-        """Return recent request counts and traffic status for one application."""
+        """Return one-minute aggregate counts and status for the busiest token."""
         if not application.id:
             return 0, 0, 'normal', False
 
-        Log = application.env['core.api.log'].sudo()
-        api_count = Log.count_recent(
-            [('application_id', '=', application.id), ('event_type', '=', 'api')],
-            minutes=1,
+        cutoff = fields.Datetime.subtract(fields.Datetime.now(), minutes=1)
+        self.env.cr.execute(
+            """
+            WITH recent AS (
+                SELECT event_type, token_id
+                  FROM core_api_log
+                 WHERE application_id = %s
+                   AND create_date >= %s
+            ), token_counts AS (
+                SELECT token_id, COUNT(*) AS request_count
+                  FROM recent
+                 WHERE event_type = 'api' AND token_id IS NOT NULL
+                 GROUP BY token_id
+            )
+            SELECT
+                COUNT(*) FILTER (WHERE event_type = 'api')::integer,
+                COUNT(*) FILTER (WHERE event_type = 'auth')::integer,
+                COALESCE((SELECT MAX(request_count) FROM token_counts), 0)::integer
+              FROM recent
+            """,
+            [application.id, cutoff],
         )
-        auth_count = Log.count_recent(
-            [('application_id', '=', application.id), ('event_type', '=', 'auth')],
-            minutes=1,
-        )
-
-        api_limit = application.rate_limit_per_minute or 0
-        auth_limit = application.auth_rate_limit_per_minute or 0
-        elevated = False
-        suspicious = False
-
-        if api_limit:
-            if api_count >= api_limit:
-                suspicious = True
-            elif api_count >= max(1, int(api_limit * 0.8)):
-                elevated = True
-        if auth_limit:
-            if auth_count >= auth_limit:
-                suspicious = True
-            elif auth_count >= max(1, int(auth_limit * 0.8)):
-                elevated = True
-
-        if suspicious:
+        api_count, auth_count, max_token_count = self.env.cr.fetchone() or (0, 0, 0)
+        has_token = bool(self.env['core.api.token'].sudo().search_count([
+            ('application_id', '=', application.id),
+            '|', ('active', '=', True), ('refresh_token_hash', '!=', False),
+        ]))
+        limit = application.rate_limit_per_minute or 0
+        if limit and max_token_count >= limit:
             status = 'suspicious'
-        elif elevated:
+        elif limit and max_token_count >= max(1, int(limit * 0.8)):
             status = 'elevated'
         else:
             status = 'normal'
-
-        has_token = bool(self._find_active_access_token(application))
         return api_count, auth_count, status, has_token
-
-    @api.depends('token_ids.active', 'token_ids.expiration_date', 'token_ids.token_type')
-    def _compute_active_token(self):
-        """Pick the current valid access token used by this application."""
-        for rec in self:
-            rec.active_token_id = self._find_active_access_token(rec)
 
     def _compute_traffic_status(self):
         """Compute live request rates and traffic health for each application."""
@@ -431,24 +274,6 @@ class CoreApiApplication(models.Model):
             rec.traffic_status = status
             rec.has_active_token = has_token
 
-    def check_suspicious_and_revoke(self):
-        """Record suspicious aggregate traffic without revoking another client.
-
-        An Application may be shared by multiple independent clients. Aggregate
-        rate-limit pressure cannot identify which token family is malicious, so
-        automatic revocation would risk terminating an unrelated client. The
-        configured rate limiter still rejects excess requests.
-        """
-        for app in self:
-            api_count, auth_count, status, _has_token = self._traffic_snapshot(app)
-            if status == 'suspicious':
-                _logger.warning(
-                    'Core API suspicious aggregate traffic for application %s '
-                    '(API=%s/min, Auth=%s/min)',
-                    app.client_id, api_count, auth_count,
-                )
-        return True
-
     @api.model_create_multi
     def create(self, vals_list):
         """Generate client credentials when a new application is created."""
@@ -456,8 +281,6 @@ class CoreApiApplication(models.Model):
         for vals in vals_list:
             vals = dict(vals)
             plaintext_secret = vals.pop('plaintext_client_secret', None)
-            if not vals.get('service_code'):
-                vals['service_code'] = self._generate_service_code(vals.get('name'))
             if not vals.get('client_id'):
                 vals['client_id'] = self._generate_client_id()
             if plaintext_secret:
@@ -532,6 +355,14 @@ class CoreApiApplication(models.Model):
             'client_secret_plaintext': plaintext,
             'credentials_pending': False,
         })
+        tokens = self.env['core.api.token'].sudo().search([('application_id', '=', self.id)])
+        if tokens:
+            tokens.write({
+                'active': False,
+                'refresh_token_index': False,
+                'refresh_token_hash': False,
+                'refresh_expiration_date': False,
+            })
         self._notify_application_form_reload()
         return self._open_secret_wizard(plaintext)
 
@@ -544,23 +375,28 @@ class CoreApiApplication(models.Model):
         self.write({'state': 'inactive'})
 
     def action_revoke_token(self):
-        """Revoke every active token family owned by this Application."""
+        """Revoke every active access token owned by this Application."""
         self.ensure_one()
         tokens = self.env['core.api.token'].sudo().search([
             ('application_id', '=', self.id),
-            ('active', '=', True),
+            '|', ('active', '=', True), ('refresh_token_hash', '!=', False),
         ])
         if not tokens:
             raise UserError(_('No active tokens to revoke.'))
         count = len(tokens)
-        tokens.write({'active': False})
+        tokens.write({
+            'active': False,
+            'refresh_token_index': False,
+            'refresh_token_hash': False,
+            'refresh_expiration_date': False,
+        })
         self._notify_application_form_reload()
         return {
             'type': 'ir.actions.client',
             'tag': 'display_notification',
             'params': {
                 'title': _('Tokens Revoked'),
-                'message': _('%(count)s active token records for application "%(name)s" were revoked.', count=count, name=self.name),
+                'message': _('%(count)s active token pairs for application "%(name)s" were revoked.', count=count, name=self.name),
                 'type': 'warning',
                 'sticky': False,
             },
@@ -620,16 +456,11 @@ class CoreApiApplication(models.Model):
             )
         return True
 
-    def check_api_rate_limit(self):
-        """Raise AccessError when API rate limit is exceeded."""
-        from odoo.addons.t4_coreapi.utils.security import check_application_api_rate_limit
-        check_application_api_rate_limit(self)
-        return True
-
-    def check_auth_rate_limit(self):
-        """Raise AccessError when auth rate limit is exceeded."""
-        from odoo.addons.t4_coreapi.utils.security import check_application_auth_rate_limit
-        check_application_auth_rate_limit(self)
+    def check_api_rate_limit(self, token):
+        """Enforce the configured API limit for one access token."""
+        self.ensure_one()
+        from odoo.addons.t4_coreapi.utils.security import check_token_api_rate_limit
+        check_token_api_rate_limit(self, token)
         return True
 
     @api.model

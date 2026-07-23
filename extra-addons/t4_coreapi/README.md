@@ -2,66 +2,48 @@
 
 Generic external API gateway for Odoo 19.
 
+## Authentication contract
+
+Clients authenticate with only:
+
+```json
+{
+  "client_id": "app_...",
+  "client_secret": "..."
+}
+```
+
+The response contains one bearer access token and its expiry. When a token expires,
+the client authenticates again with the same credentials.
+
+Many clients may share the same Client ID and Client Secret. Every successful
+authentication creates a new independent access token and does not revoke tokens
+already used by other clients.
+
+## Route authorization
+
+API calls use:
+
+```text
+/<version>/<route_path>
+Authorization: Bearer <access_token>
+```
+
+The token identifies the Core API Application. The gateway accepts a request only
+when the requested Route Path is active and belongs to that Application. Controller
+Code, Edge Server Code, and other payload fields are business data and do not select
+or expand Core API permissions.
+
 ## Scope
 
-This module contains only reusable Core API infrastructure:
-
-- Applications and Client ID / Client Secret credentials
-- access and refresh token families
-- multiple independent clients per Application
-- optional `client_instance_id` for device/process identification
-- bearer authentication
-- service-code and endpoint authorization
+- Applications and shared Client ID / Client Secret credentials
+- independent bearer access tokens
+- route-path authorization
 - API domains and versions
 - IP allowlists and rate limits
 - request audit logs
 - endpoint actions and route generation
 
-It intentionally contains no product-specific Controller, Zeroconfig, pairing,
-handshake, discovery, blacklist, or NSP business models.
-
-## Multi-client behavior
-
-One Application may be shared by multiple clients. Each successful
-`client_credentials` request creates a new independent token family. Existing
-families are preserved.
-
-A client may send an optional stable identifier:
-
-```json
-{
-  "grant_type": "client_credentials",
-  "client_id": "app_...",
-  "client_secret": "...",
-  "client_instance_id": "EDGE-01-WORKER-A"
-}
-```
-
-Refreshing a token rotates only the family owning that refresh token. Other
-clients using the same Application remain active. Concurrent reuse of the same
-refresh token is serialized with a PostgreSQL row lock; only the first rotation
-succeeds.
-
-## Routes
-
-- `POST /auth/token`
-- `/<service_code>/<version>/<route>` with `Authorization: Bearer <token>`
-
-## Operational rule
-
-Regenerating an Application secret changes future authentication credentials;
-existing token families remain valid until expiration or explicit revocation.
-Use **Revoke All Active Tokens** when the Application credential is compromised.
-
-
-## Credential visibility
-
-Authorized Core API managers may reopen **View Credentials** without a view-count limit.
-Applications upgraded from a hash-only release must regenerate the secret once; newly generated
-secrets remain available to authorized managers.
-
-## Route configuration
-
-Endpoint definitions accept only `route_path`, for example `vehicles/sync`. Core API automatically
-builds the gateway path from the owning Application Server Code and API Version, for example
-`/gatekeeper/v1/vehicles/sync`. A pasted full gateway path is normalized back to its Route Path.
+Regenerating a Client Secret affects future authentication only. Existing access
+tokens remain valid until expiration or explicit revocation. Use **Revoke All Active
+Tokens** when shared credentials are compromised.

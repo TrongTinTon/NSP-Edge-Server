@@ -11,7 +11,6 @@
                 <field name="route"/>
                 <field name="method"/>
                 <field name="client_id"/>
-                <field name="client_instance_id" optional="show"/>
                 <field name="application_id"/>
                 <field name="ip_address"/>
                 <field name="status_code"/>
@@ -40,7 +39,6 @@
                         <group>
                             <field name="application_id"/>
                             <field name="client_id"/>
-                            <field name="client_instance_id"/>
                             <field name="token_id"/>
                             <field name="ip_address"/>
                             <field name="user_agent"/>

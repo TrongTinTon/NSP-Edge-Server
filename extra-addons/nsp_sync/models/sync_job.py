@@ -1141,6 +1141,19 @@ class NspSyncJob(models.Model):
 
     def _apply_parking_config(self, item):
         self.ensure_one()
+
+        def write_changed(record, values):
+            changes = {}
+            for field_name, target in values.items():
+                field = record._fields[field_name]
+                current = record[field_name]
+                if field.type == "many2one":
+                    current = current.id or False
+                if current != target:
+                    changes[field_name] = target
+            if changes:
+                record.write(changes)
+
         branch_code = str(item.get("branch_code") or "").strip().upper()
         area_code = str(item.get("parking_area_code") or "").strip().upper()
         if not branch_code or not area_code:
@@ -1167,7 +1180,7 @@ class NspSyncJob(models.Model):
             "state": state,
         }
         if parking:
-            parking.write(parking_vals)
+            write_changed(parking, parking_vals)
         else:
             parking = Parking.create(parking_vals)
 
@@ -1207,7 +1220,7 @@ class NspSyncJob(models.Model):
                 }
                 if connection_type and connection_type not in allowed_connections:
                     raise UserError(_("Invalid Physical Connection for Reader %s.") % serial)
-                device.write({
+                write_changed(device, {
                     "model_number": str(device_item.get("model_number") or "").strip() or False,
                     "device_vendor": str(device_item.get("vendor") or "").strip() or False,
                     "connection_type": connection_type,
@@ -1246,7 +1259,7 @@ class NspSyncJob(models.Model):
                         ),
                     }
                     if antenna:
-                        antenna.write(antenna_vals)
+                        write_changed(antenna, antenna_vals)
                     else:
                         Antenna.create(antenna_vals)
 
@@ -1273,6 +1286,18 @@ class NspSyncJob(models.Model):
             if not controller:
                 raise UserError(_("Controller %s is missing from Parking controller configuration.") % controller_code)
 
+            try:
+                grouping_window = int(lane_item.get("grouping_window_seconds") or 3)
+                repeat_suppression = int(lane_item.get("repeat_suppression_seconds") or 10)
+            except (TypeError, ValueError) as exc:
+                raise UserError(_("Parking Lane timing values must be integers.")) from exc
+            if grouping_window < 1:
+                raise UserError(_("Grouping window must be at least one second."))
+            if repeat_suppression < grouping_window:
+                raise UserError(_(
+                    "Repeat read suppression must be greater than or equal to the grouping window."
+                ))
+
             incoming_codes.append(lane_code)
             lane = Lane.search([
                 ("parking_area_id", "=", parking.id),
@@ -1287,16 +1312,17 @@ class NspSyncJob(models.Model):
                 "direction": direction,
                 "required_vehicle_tid": bool(lane_item.get("required_vehicle_tid", True)),
                 "required_user_tid": bool(lane_item.get("required_user_tid", False)),
-                "grouping_window_seconds": max(1, int(lane_item.get("grouping_window_seconds") or 3)),
-                "duplicate_suppression_seconds": max(0, int(lane_item.get("duplicate_suppression_seconds") or 2)),
+                "grouping_window_seconds": grouping_window,
+                "repeat_suppression_seconds": repeat_suppression,
                 "active": True,
             }
             if lane:
-                lane.write(lane_vals)
+                write_changed(lane, lane_vals)
             else:
                 lane = Lane.create(lane_vals)
 
-            Mapping.search([("lane_id", "=", lane.id)]).unlink()
+            existing_lane_mappings = Mapping.search([("lane_id", "=", lane.id)])
+            desired_antenna_ids = set()
             mappings_data = lane_item.get("antenna_mappings") or []
             if not isinstance(mappings_data, list):
                 raise UserError(_("Antenna mappings must be an array."))
@@ -1324,11 +1350,25 @@ class NspSyncJob(models.Model):
                 ], limit=1)
                 if not antenna:
                     raise UserError(_("Antenna %s/%s is missing from Reader configuration.") % (serial, antenna_no))
-                Mapping.create({
+                if antenna.id in desired_antenna_ids:
+                    raise UserError(_("Antenna %s/%s is duplicated in the Lane mapping.") % (serial, antenna_no))
+                desired_antenna_ids.add(antenna.id)
+                mapping_vals = {
                     "lane_id": lane.id,
                     "direction": mapping_direction,
                     "antenna_ref_id": antenna.id,
-                })
+                }
+                mapping = Mapping.search([("antenna_ref_id", "=", antenna.id)], limit=1)
+                if mapping:
+                    write_changed(mapping, mapping_vals)
+                else:
+                    Mapping.create(mapping_vals)
+
+            stale_mappings = existing_lane_mappings.filtered(
+                lambda mapping: mapping.antenna_ref_id.id not in desired_antenna_ids
+            )
+            if stale_mappings:
+                stale_mappings.unlink()
 
         stale_domain = [("parking_area_id", "=", parking.id)]
         if incoming_codes:

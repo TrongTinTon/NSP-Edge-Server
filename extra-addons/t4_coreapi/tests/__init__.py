@@ -1,1 +1,1 @@
-from . import test_multi_client_tokens
+from . import test_shared_credentials

@@ -8,7 +8,6 @@
                 <field name="name"/>
                 <field name="client_id"/>
                 <field name="domain_id"/>
-                <field name="service_code"/>
                 <filter string="Active" name="filter_active" domain="[('state', '=', 'active')]"/>
                 <filter string="Inactive" name="filter_inactive" domain="[('state', '=', 'inactive')]"/>
             </search>
@@ -22,7 +21,6 @@
             <list>
                 <field name="name"/>
                 <field name="domain_id"/>
-                <field name="service_code"/>
                 <field name="client_id"/>
                 <field name="state" widget="badge" decoration-success="state == 'active'" decoration-muted="state == 'inactive'"/>
                 <field name="traffic_status" widget="badge" decoration-success="traffic_status == 'normal'" decoration-warning="traffic_status == 'elevated'" decoration-danger="traffic_status == 'suspicious'"/>
@@ -54,7 +52,7 @@
                         Authorized Core API managers can view them again from View Credentials.
                     </div>
                     <div class="alert alert-warning mb-3" role="alert" invisible="traffic_status != 'suspicious'">
-                        Request rate exceeded the configured limit. Excess requests are rejected. Review token families and revoke only the affected client, or revoke all tokens when the Application credential is compromised.
+                        Request rate exceeded the configured limit. Excess requests are rejected. Review active tokens and revoke a suspicious token, or revoke all tokens when the shared Application credential is compromised.
                     </div>
                     <div class="oe_button_box" name="button_box">
                         <button name="action_view_tokens" type="object" class="oe_stat_button" icon="fa-key" invisible="not id">
@@ -68,27 +66,16 @@
                         <group>
                             <field name="name"/>
                                         <field name="domain_id" options="{'no_create': True}"/>
-                            <field name="service_code" placeholder="gk"/>
                             <field name="client_id" readonly="1" invisible="not client_id"/>
                             <field name="token_ttl_hours"/>
-                            <field name="refresh_token_ttl_hours"/>
+                            <field name="refresh_token_ttl_days"/>
                         </group>
                         <group string="Application Status">
                             <field name="traffic_status" widget="badge" decoration-success="traffic_status == 'normal'" decoration-warning="traffic_status == 'elevated'" decoration-danger="traffic_status == 'suspicious'"/>
-                            <label for="api_requests_per_minute" string="API Requests (last min)"/>
-                            <div class="o_row">
-                                <field name="api_requests_per_minute" readonly="1" nolabel="1"/>
-                                <span class="mx-1 text-muted">/</span>
-                                <field name="rate_limit_per_minute" readonly="1" nolabel="1"/>
-                            </div>
-                            <label for="auth_requests_per_minute" string="Auth Requests (last min)"/>
-                            <div class="o_row">
-                                <field name="auth_requests_per_minute" readonly="1" nolabel="1"/>
-                                <span class="mx-1 text-muted">/</span>
-                                <field name="auth_rate_limit_per_minute" readonly="1" nolabel="1"/>
-                            </div>
+                            <field name="api_requests_per_minute" readonly="1"/>
+                            <field name="rate_limit_per_minute" readonly="1"/>
+                            <field name="auth_requests_per_minute" readonly="1" string="Auth Requests (last min)"/>
                             <field name="has_active_token" invisible="1"/>
-                            <field name="active_token_id" invisible="1"/>
                             <field name="credentials_pending" invisible="1"/>
                             <field name="active" invisible="1"/>
                         </group>
@@ -116,10 +103,11 @@
                                 <strong>How to authenticate</strong>
                                 <ol class="mb-0 mt-2">
                                     <li>Use your Odoo <strong>database name</strong> (shown below) via <code>?db=...</code>. This is not the module name.</li>
-                                    <li>Request an access token with your <strong>Client ID</strong> and <strong>Client Secret</strong>. Multiple clients may authenticate independently.</li>
-                                    <li>Optionally send <code>client_instance_id</code> to identify the device or process owning the token family.</li>
-                                    <li>Call any allowed Gateway Route with <code>Authorization: Bearer &lt;access_token&gt;</code>.</li>
-                                    <li>Reuse the token until it expires or is revoked.</li>
+                                    <li>Send <strong>Client ID</strong> and <strong>Client Secret</strong> once to receive an access/refresh token pair.</li>
+                                    <li>Multiple clients may use the same credentials; each authentication returns an independent token pair.</li>
+                                    <li>Call a Gateway Route with <code>Authorization: Bearer &lt;access_token&gt;</code>.</li>
+                                    <li>The token is accepted only when the requested Route Path belongs to this Application.</li>
+                                    <li>Before the access token expires, call <code>/auth/refresh</code> with the current refresh token. Refresh rotates automatically; no credential re-authentication is required during continuous operation.</li>
                                 </ol>
                             </div>
                             <group>
@@ -135,7 +123,7 @@
                                 <group string="Step 2: Call a Gateway Route">
                                     <div colspan="2" class="text-muted">
                                         Replace <code>&lt;access_token&gt;</code> with the token from step 1.
-                                        Example URL pattern: <code>/{service_code}/{version}/{route}</code>
+                                        Example URL pattern: <code>/{version}/{route_path}</code>
                                     </div>
                                     <label for="api_call_curl_example" string="Example request"/>
                                     <div class="o_row">
@@ -147,14 +135,13 @@
                                 <div colspan="2" class="font-monospace text-muted">
                                     {<br/>
                                       "status": "success",<br/>
-                                      "message": "Authentication successful.",<br/>
-                                      "api_token": {<br/>
-                                        "token": "…",<br/>
-                                        "expires_in": 86400<br/>
-                                      },<br/>
-                                      "refresh_token": {<br/>
-                                        "token": "…",<br/>
-                                        "expires_in": 604800<br/>
+                                      "message": "OK",<br/>
+                                      "data": {<br/>
+                                        "access_token": "…",<br/>
+                                        "refresh_token": "…",<br/>
+                                        "token_type": "Bearer",<br/>
+                                        "expires_in": 86400,<br/>
+                                        "refresh_expires_in": 2592000<br/>
                                       }<br/>
                                     }
                                 </div>
@@ -174,7 +161,9 @@
                             <group>
                                 <group string="Rate Limits">
                                     <field name="rate_limit_per_minute"/>
-                                    <field name="auth_rate_limit_per_minute"/>
+                                    <div class="text-muted" colspan="2">
+                                        API limits apply independently to each access token. Authentication is throttled per source IP.
+                                    </div>
                                 </group>
                                 <group>
                                     <field name="allowed_ips" placeholder="203.0.113.10&#10;198.51.100.0/24"/>

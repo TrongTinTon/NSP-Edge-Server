@@ -10,7 +10,6 @@ class CoreApiLog(models.Model):
 
     application_id = fields.Many2one('core.api.application', index=True, ondelete='set null')
     client_id = fields.Char(index=True)
-    client_instance_id = fields.Char(index=True)
     token_id = fields.Many2one('core.api.token', index=True, ondelete='set null')
     event_type = fields.Selection(
         [('auth', 'Authentication'), ('api', 'API Call')],
@@ -37,17 +36,15 @@ class CoreApiLog(models.Model):
         success,
         application=None,
         token=None,
-        client_instance_id=None,
         duration_ms=0,
         error_message=None,
         user_agent=None,
     ):
-        """Create one audit log row for an auth or API request."""
+        """Create one audit log row for an authentication or API request."""
         return self.sudo().create({
             'application_id': application.id if application else False,
             'client_id': application.client_id if application else False,
             'token_id': token.id if token else False,
-            'client_instance_id': client_instance_id or (token.client_instance_id if token else False),
             'event_type': event_type,
             'route': route,
             'method': method,
@@ -61,7 +58,6 @@ class CoreApiLog(models.Model):
 
     @api.model
     def count_recent(self, domain_extra, minutes=1):
-        """Count log rows in the last N minutes for rate limiting."""
         domain = [
             ('create_date', '>=', fields.Datetime.subtract(fields.Datetime.now(), minutes=minutes)),
         ] + domain_extra
@@ -69,7 +65,6 @@ class CoreApiLog(models.Model):
 
     @api.autovacuum
     def _gc_old_logs(self):
-        """Delete request logs older than 90 days."""
         limit = fields.Datetime.subtract(fields.Datetime.now(), days=90)
         old = self.sudo().search([('create_date', '<', limit)])
         if old:

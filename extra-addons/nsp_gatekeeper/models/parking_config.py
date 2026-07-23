@@ -222,7 +222,7 @@ class NspParkingArea(models.Model):
                     "required_vehicle_tid": bool(lane.required_vehicle_tid),
                     "required_user_tid": bool(lane.required_user_tid),
                     "grouping_window_seconds": int(lane.grouping_window_seconds or 3),
-                    "duplicate_suppression_seconds": int(lane.duplicate_suppression_seconds or 2),
+                    "repeat_suppression_seconds": int(lane.repeat_suppression_seconds or 10),
                     "antenna_mappings": mappings,
                 }
             )
@@ -452,9 +452,13 @@ class NspParkingLane(models.Model):
         string="Grouping Window (Seconds)", default=3, required=True,
         help="Edge waits up to this duration to group vehicle and user TIDs into one transaction.",
     )
-    duplicate_suppression_seconds = fields.Integer(
-        string="Duplicate Suppression (Seconds)", default=2, required=True,
-        help="Reads of the same TID are merged during grouping; this value extends repeat suppression in the lane.",
+    repeat_suppression_seconds = fields.Integer(
+        string="Repeat Read Suppression (Seconds)", default=10, required=True,
+        help=(
+            "Edge ignores repeated reads of the same RFID card on the same lane "
+            "during this cooldown. Controller request retries are handled separately "
+            "by event_uid idempotency."
+        ),
     )
     active = fields.Boolean(default=True, index=True)
     antenna_mapping_ids = fields.One2many(
@@ -475,7 +479,11 @@ class NspParkingLane(models.Model):
         ),
         ("lane_no_positive", "CHECK(lane_no > 0)", "Lane number must be greater than zero."),
         ("grouping_window_positive", "CHECK(grouping_window_seconds >= 1)", "Grouping window must be at least one second."),
-        ("duplicate_suppression_non_negative", "CHECK(duplicate_suppression_seconds >= 0)", "Duplicate suppression must not be negative."),
+        (
+            "repeat_suppression_not_shorter_than_grouping",
+            "CHECK(repeat_suppression_seconds >= grouping_window_seconds)",
+            "Repeat read suppression must be greater than or equal to the grouping window.",
+        ),
     ]
 
     @api.depends("parking_area_id.code", "code", "name")

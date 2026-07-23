@@ -43,12 +43,9 @@ def log_core_api(event_type='api'):
                     success=True,
                     application=application,
                     token=token_rec,
-                    client_instance_id=request.env.context.get('core_api_client_instance_id'),
                     duration_ms=duration,
                     user_agent=ua,
                 )
-                if application and event_type == 'api':
-                    application.check_suspicious_and_revoke()
                 return result
             except Exception as e:
                 duration = (time.time() - t0) * 1000
@@ -62,13 +59,10 @@ def log_core_api(event_type='api'):
                     success=False,
                     application=application,
                     token=token_rec,
-                    client_instance_id=request.env.context.get('core_api_client_instance_id'),
                     duration_ms=duration,
                     error_message=str(e)[:500],
                     user_agent=ua,
                 )
-                if application and event_type == 'api':
-                    application.check_suspicious_and_revoke()
                 raise
         return wrapper
     return decorator

@@ -3,8 +3,7 @@ import logging
 
 from werkzeug.exceptions import NotFound
 
-from odoo import _, http
-from odoo.exceptions import AccessError
+from odoo import http
 from odoo.http import request
 
 from odoo.addons.t4_coreapi.controllers.base import CoreApiController
@@ -15,10 +14,10 @@ _logger = logging.getLogger(__name__)
 
 
 class CoreApiProxyController(CoreApiController):
-    """HTTP gateway: validate token, then run the matching server action."""
+    """Bearer-token gateway. Application is derived only from the token."""
 
     @http.route(
-        '/<string:service_code>/<path:subpath>',
+        '/<string:version_code>/<path:route_suffix>',
         type='http',
         auth='core_api',
         methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
@@ -26,24 +25,15 @@ class CoreApiProxyController(CoreApiController):
         save_session=False,
     )
     @log_core_api('api')
-    def gateway(self, service_code, subpath, **kw):
-        """Handle gateway routes: /{service_code}/{version}/{route_suffix}."""
-        Version = request.env['core.api.version'].sudo()
-        version, rest = Version.resolve_from_gateway_subpath(subpath)
+    def gateway(self, version_code, route_suffix, **kw):
+        """Handle /{version}/{route}; token scopes the Route Path to its Application."""
+        version = request.env['core.api.version'].sudo().search([
+            ('code', '=', (version_code or '').strip('/')),
+            ('active', '=', True),
+        ], limit=1)
         if not version:
-            raise NotFound('Unknown or inactive API route.')
-
-        if (service_code or '').strip().lower() == 'auth':
-            raise NotFound('Use POST /auth/token for token requests.')
+            raise NotFound('Unknown or inactive API version.')
 
         application = self._get_application()
-        app_service = (application.service_code or '').strip()
-        if app_service != (service_code or '').strip():
-            raise AccessError(_(
-                'Application "%(app)s" is not registered for service code "%(code)s".',
-                app=application.name,
-                code=service_code,
-            ))
-
-        path = build_gateway_path(service_code, version.code, rest).rstrip('/')
+        path = build_gateway_path(version.code, route_suffix).rstrip('/')
         return request.env['core.api.endpoint'].dispatch_request(path, application)

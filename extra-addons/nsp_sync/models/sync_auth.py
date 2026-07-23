@@ -12,10 +12,6 @@ from odoo.exceptions import UserError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
-# T4 Core API route prefix used by NSP Edge-to-Cloud APIs.
-# It is an internal protocol constant, not user-managed connection data.
-CLOUD_API_PREFIX = "EdgeServer"
-
 
 class NspSyncAuth(models.Model):
     _name = "nsp.sync.auth"
@@ -57,7 +53,7 @@ class NspSyncAuth(models.Model):
     access_token = fields.Char(readonly=True, copy=False, groups="base.group_system")
     refresh_token = fields.Char(readonly=True, copy=False, groups="base.group_system")
     token_expiry = fields.Datetime(readonly=True, copy=False)
-    refresh_expiry = fields.Datetime(readonly=True, copy=False)
+    refresh_token_expiry = fields.Datetime(readonly=True, copy=False)
     connected = fields.Boolean(readonly=True, copy=False)
     last_auth_at = fields.Datetime(string="Last Authentication", readonly=True, copy=False)
     last_error = fields.Text(string="Last Error", readonly=True, copy=False)
@@ -131,7 +127,7 @@ class NspSyncAuth(models.Model):
     def write(self, vals):
         protected_fields = {
             "edge_server_code", "remote_server_url", "client_id", "client_secret",
-            "access_token", "refresh_token", "token_expiry", "refresh_expiry",
+            "access_token", "refresh_token", "token_expiry", "refresh_token_expiry",
             "connected",
         }
         if protected_fields.intersection(vals):
@@ -297,7 +293,7 @@ class NspSyncAuth(models.Model):
         if not suffix:
             raise UserError(_("Route is required for NSP Sync."))
         version = str(version_code or "v1").strip().strip("/") or "v1"
-        return self._url("/%s/%s/%s" % (CLOUD_API_PREFIX, version, suffix))
+        return self._url("/%s/%s" % (version, suffix))
 
     def base_headers(self):
         return {"Content-Type": "application/json"}
@@ -312,29 +308,24 @@ class NspSyncAuth(models.Model):
 
     def _parse_auth_response(self, data):
         self.ensure_one()
-        data = dict(data or {})
-        if isinstance(data.get("data"), dict):
-            nested = dict(data["data"])
-            for key in ("api_token", "refresh_token", "access_token", "token", "application"):
-                if key in nested and key not in data:
-                    data[key] = nested[key]
-        api_token = data.get("api_token") or {}
-        refresh_token = data.get("refresh_token") or {}
-        access = api_token.get("token") or data.get("access_token") or data.get("token")
-        refresh = refresh_token.get("token") or data.get("refresh_token")
+        payload = dict(data or {})
+        token_data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        access = token_data.get("access_token")
+        refresh = token_data.get("refresh_token")
         if not access:
             raise UserError(_("Core API token response does not contain an access token."))
+        expires_in = int(token_data.get("expires_in") or 0)
+        refresh_expires_in = int(token_data.get("refresh_expires_in") or 0)
         now = fields.Datetime.now()
-        vals = {
+        self.sudo().write({
             "access_token": access,
-            "refresh_token": refresh or False,
+            "refresh_token": refresh or self.refresh_token,
             "connected": True,
             "last_auth_at": now,
             "last_error": False,
-            "token_expiry": now + timedelta(seconds=int(api_token.get("expires_in") or 0)) if api_token.get("expires_in") else False,
-            "refresh_expiry": now + timedelta(seconds=int(refresh_token.get("expires_in") or 0)) if refresh_token.get("expires_in") else False,
-        }
-        self.sudo().write(vals)
+            "token_expiry": now + timedelta(seconds=expires_in) if expires_in else False,
+            "refresh_token_expiry": now + timedelta(seconds=refresh_expires_in) if refresh_expires_in else self.refresh_token_expiry,
+        })
         return access
 
     def _authenticate_client_credentials(self):
@@ -342,7 +333,6 @@ class NspSyncAuth(models.Model):
         if not self.client_id or not self.client_secret:
             raise UserError(_("Core API Client ID and Core API Secret are required."))
         payload = {
-            "grant_type": "client_credentials",
             "client_id": self.client_id,
             "client_secret": self.client_secret,
         }
@@ -399,34 +389,33 @@ class NspSyncAuth(models.Model):
         self.ensure_one()
         if not self.refresh_token:
             return self._authenticate_client_credentials()
+        url = self._url("/auth/refresh")
+        payload = {"refresh_token": self.refresh_token}
         try:
-            response = requests.post(
-                self._url("/auth/token"),
-                data=json.dumps({"grant_type": "refresh_token", "refresh_token": self.refresh_token}),
-                headers=self.base_headers(),
-                timeout=30,
-            )
+            response = requests.post(url, data=json.dumps(payload), headers=self.base_headers(), timeout=30)
             data = response.json()
+        except requests.exceptions.RequestException as exc:
+            raise UserError(_("Cannot refresh Core API access token: %s") % exc) from exc
         except Exception:
-            return self._authenticate_client_credentials()
+            data = {"status": "error", "message": response.text}
         if response.status_code >= 400 or data.get("status") == "error":
+            # Stored shared credentials allow silent recovery if a refresh token was revoked/expired.
+            self.sudo().write({"refresh_token": False, "refresh_token_expiry": False})
             return self._authenticate_client_credentials()
         return self._parse_auth_response(data)
 
     def get_access_token(self, force=False):
         self.ensure_one()
-        if force or self._token_expiring():
+        if force:
+            return self._authenticate_client_credentials()
+        if self._token_expiring():
             return self._refresh_access_token()
         return self.access_token
 
     def sync_headers(self):
         self.ensure_one()
         headers = self.base_headers()
-        headers.update({
-            "Authorization": "Bearer %s" % self.get_access_token(),
-            "X-NSP-Core-Application": self.client_id or "",
-            "X-Edge-Server-Code": self.edge_server_code or "",
-        })
+        headers["Authorization"] = "Bearer %s" % self.get_access_token()
         return headers
 
     def action_authenticate(self):

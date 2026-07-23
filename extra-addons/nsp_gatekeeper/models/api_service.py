@@ -103,10 +103,6 @@ class NspGatekeeperApiService(models.AbstractModel):
         app = self._application_from_context()
         if not app:
             return None, self._error("Core API Application authentication is required", 401, error_code="invalid_token")
-        service_code = (app.service_code or "").strip()
-        if not service_code:
-            return None, self._error("Core API Application has no service_code", 401, error_code="invalid_client")
-
         controller_code = self._controller_code_from_data(data)
         if not controller_code:
             return None, self._error(

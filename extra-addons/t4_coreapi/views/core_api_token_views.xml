@@ -6,21 +6,14 @@
         <field name="arch" type="xml">
             <search>
                 <field name="application_name"/>
-                <field name="service_code"/>
                 <field name="client_id"/>
-                <field name="client_instance_id"/>
                 <filter string="Active" name="filter_active" domain="[('token_state', '=', 'active')]"/>
                 <filter string="Revoked" name="filter_revoked" domain="[('token_state', '=', 'revoked')]"/>
                 <separator/>
-                <filter string="Access" name="filter_access" domain="[('token_type', '=', 'access')]"/>
-                <filter string="Refresh" name="filter_refresh" domain="[('token_type', '=', 'refresh')]"/>
-                <separator/>
-                    <filter string="Application" name="group_application" context="{'group_by': 'application_id'}"/>
-                    <filter string="Client Instance" name="group_client_instance" context="{'group_by': 'client_instance_id'}"/>
-                    <filter string="Type" name="group_type" context="{'group_by': 'token_type'}"/>
-                    <filter string="Status" name="group_state" context="{'group_by': 'token_state'}"/>
-                    <filter string="Traffic Status" name="group_traffic" context="{'group_by': 'traffic_status'}"/>
-                </search>
+                <filter string="Application" name="group_application" context="{'group_by': 'application_id'}"/>
+                <filter string="Status" name="group_state" context="{'group_by': 'token_state'}"/>
+                <filter string="Traffic Status" name="group_traffic" context="{'group_by': 'traffic_status'}"/>
+            </search>
         </field>
     </record>
 
@@ -30,18 +23,14 @@
         <field name="arch" type="xml">
             <list decoration-muted="token_state == 'revoked'" decoration-danger="traffic_status == 'suspicious' and token_state == 'active'">
                 <field name="application_name"/>
-                <field name="service_code" optional="show"/>
-                <field name="client_instance_id" optional="show"/>
-                <field name="token_type"/>
                 <field name="token_state" widget="badge" decoration-success="token_state == 'active'" decoration-muted="token_state == 'revoked'"/>
                 <field name="traffic_status" widget="badge" decoration-success="traffic_status == 'normal'" decoration-warning="traffic_status == 'elevated'" decoration-danger="traffic_status == 'suspicious'"/>
-                <field name="api_requests_per_minute"/>
-                <field name="rate_limit_per_minute" optional="hide"/>
-                <field name="auth_requests_per_minute" optional="hide"/>
-                <field name="auth_rate_limit_per_minute" optional="hide"/>
+                <field name="last_used_at" optional="show"/>
+                <field name="last_used_ip" optional="show"/>
+                <field name="expiration_date" optional="show"/>
+                <field name="refresh_expiration_date" optional="show"/>
                 <field name="create_date" string="Issued At"/>
                 <field name="active" column_invisible="1"/>
-                <field name="application_state" column_invisible="1"/>
                 <button name="action_revoke" type="object" string="Revoke" invisible="token_state == 'revoked'" groups="t4_coreapi.group_core_api_manager"/>
             </list>
         </field>
@@ -53,47 +42,23 @@
         <field name="arch" type="xml">
             <form string="Access Token" create="false" edit="false">
                 <header>
-                    <button name="action_revoke" type="object" string="Revoke Token Pair" class="btn-warning" invisible="token_state == 'revoked'" groups="t4_coreapi.group_core_api_manager"/>
+                    <button name="action_revoke" type="object" string="Revoke Token" class="btn-warning" invisible="token_state == 'revoked'" groups="t4_coreapi.group_core_api_manager"/>
                 </header>
                 <sheet>
                     <widget name="web_ribbon" title="Revoked" bg_color="text-bg-danger" invisible="token_state == 'active'"/>
-                    <widget name="web_ribbon" title="Suspicious Traffic" bg_color="text-bg-warning" invisible="traffic_status != 'suspicious' or token_state == 'revoked'"/>
-                    <div class="alert alert-warning mb-3" role="alert" invisible="traffic_status != 'suspicious' or token_state == 'revoked'">
-                        This application's request rate exceeded its limit. Revoke the token pair
-                        if the activity looks unauthorized.
-                    </div>
                     <group>
                         <group string="Application">
                             <field name="application_id"/>
-                            <field name="service_code"/>
-                            <field name="client_id"/>
-                            <field name="client_instance_id"/>
+                                        <field name="client_id"/>
                             <field name="application_state" widget="badge" decoration-success="application_state == 'active'" decoration-muted="application_state == 'inactive'"/>
                         </group>
-                        <group string="Application Status">
+                        <group string="Token">
                             <field name="token_state" widget="badge" decoration-success="token_state == 'active'" decoration-muted="token_state == 'revoked'"/>
-                            <field name="traffic_status" widget="badge" decoration-success="traffic_status == 'normal'" decoration-warning="traffic_status == 'elevated'" decoration-danger="traffic_status == 'suspicious'"/>
-                            <label for="api_requests_per_minute" string="API Requests (last min)"/>
-                            <div class="o_row">
-                                <field name="api_requests_per_minute" readonly="1" nolabel="1"/>
-                                <span class="mx-1 text-muted">/</span>
-                                <field name="rate_limit_per_minute" readonly="1" nolabel="1"/>
-                            </div>
-                            <label for="auth_requests_per_minute" string="Auth Requests (last min)"/>
-                            <div class="o_row">
-                                <field name="auth_requests_per_minute" readonly="1" nolabel="1"/>
-                                <span class="mx-1 text-muted">/</span>
-                                <field name="auth_rate_limit_per_minute" readonly="1" nolabel="1"/>
-                            </div>
-                        </group>
-                    </group>
-                    <group string="Token Pair">
-                        <group>
-                            <field name="token_type"/>
                             <field name="create_date" string="Issued At"/>
-                        </group>
-                        <group>
-                            <field name="token_pair_id"/>
+                            <field name="expiration_date"/>
+                            <field name="refresh_expiration_date"/>
+                            <field name="last_used_at"/>
+                            <field name="last_used_ip"/>
                         </group>
                     </group>
                 </sheet>

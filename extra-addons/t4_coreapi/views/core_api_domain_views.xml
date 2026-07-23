@@ -40,7 +40,7 @@
                     </group>
                     <field name="description" placeholder="Describe this host and which clients use it…"/>
                     <div class="alert alert-info" role="alert" invisible="is_default">
-                        Enter only the API host root here. NSP Sync will add /&lt;service_code&gt;/&lt;version&gt;/&lt;route&gt; automatically.
+                        Enter only the API host root here. NSP Sync will add /&lt;version&gt;/&lt;route_path&gt; automatically.
                     </div>
                 </sheet>
             </form>

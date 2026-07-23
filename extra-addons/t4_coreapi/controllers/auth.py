@@ -10,156 +10,97 @@ from odoo import http
 from odoo.http import request
 
 from odoo.addons.t4_coreapi.utils.response import auth_success_response
-from odoo.addons.t4_coreapi.utils.routing import AUTH_TOKEN_PATH
-from odoo.addons.t4_coreapi.utils.security import (
-    check_ip_auth_rate_limit,
-    get_client_ip,
-)
+from odoo.addons.t4_coreapi.utils.routing import AUTH_REFRESH_PATH, AUTH_TOKEN_PATH
+from odoo.addons.t4_coreapi.utils.security import check_ip_auth_rate_limit, get_client_ip
 
 _logger = logging.getLogger(__name__)
 
 
 class CoreApiAuthController(http.Controller):
-    """OAuth2-style token endpoint (client credentials + refresh token)."""
+    """Initial shared-credential login plus rotating refresh tokens."""
 
-    def _log_auth(self, application, route, ip, ua, status_code, success, duration_ms=0, error=None, token=None, client_instance_id=None):
-        """Write an authentication attempt to core.api.log."""
+    def _log_auth(self, application, route, ip, ua, status_code, success, duration_ms=0, error=None, token=None):
         request.env['core.api.log'].sudo().log_event(
-            event_type='auth',
-            route=route,
-            method='POST',
-            ip_address=ip,
-            status_code=status_code,
-            success=success,
-            application=application,
-            token=token,
-            client_instance_id=client_instance_id,
-            duration_ms=duration_ms,
-            error_message=error,
-            user_agent=ua,
+            event_type='auth', route=route, method='POST', ip_address=ip,
+            status_code=status_code, success=success, application=application,
+            token=token, duration_ms=duration_ms, error_message=error, user_agent=ua,
         )
 
-    def _parse_request_data(self, kw):
-        """Parse JSON or form body from the incoming token request."""
+    def _parse_json_object(self):
         try:
             raw = request.httprequest.get_data(as_text=True) or ''
-            if request.httprequest.content_type and 'json' in request.httprequest.content_type:
-                return json.loads(raw) if raw else {}
-            return dict(request.httprequest.form) or (json.loads(raw) if raw else {})
+            data = json.loads(raw) if raw else {}
         except json.JSONDecodeError:
             raise BadRequest('Invalid JSON body.') from None
+        if not isinstance(data, dict):
+            raise BadRequest('Request body must be a JSON object.')
+        return data
 
-    def _issue_token_impl(self, data, kw):
-        """Handle client_credentials and refresh_token grants."""
-        auth_route = AUTH_TOKEN_PATH
+    def _require_exact_fields(self, data, allowed):
+        unsupported = sorted(set(data) - set(allowed))
+        if unsupported:
+            raise BadRequest(f'Unsupported field(s): {", ".join(unsupported)}.')
+
+    @http.route(AUTH_TOKEN_PATH, type='http', auth='none', methods=['POST'], csrf=False, save_session=False)
+    def issue_token(self, **kw):
+        """First login: client sends only client_id and client_secret."""
+        try:
+            check_ip_auth_rate_limit(request.env, get_client_ip())
+        except Exception as exc:
+            raise TooManyRequests(str(exc)) from exc
+
+        data = self._parse_json_object()
+        self._require_exact_fields(data, {'client_id', 'client_secret'})
+        client_id = (data.get('client_id') or '').strip()
+        client_secret = data.get('client_secret') or ''
+        if not client_id:
+            raise BadRequest('client_id is required.')
+        if not client_secret:
+            raise BadRequest('client_secret is required.')
+
+        route = AUTH_TOKEN_PATH
         t0 = time.time()
         ip = get_client_ip()
         ua = request.httprequest.headers.get('User-Agent')
-        application = request.env['core.api.application']
-        grant_type = (data.get('grant_type') or kw.get('grant_type') or 'client_credentials').strip()
-        success_message = 'Authentication successful.'
+        Application = request.env['core.api.application'].sudo()
+        candidate = Application.search([('client_id', '=', client_id)], limit=1)
+        if candidate:
+            candidate.check_ip_allowed(ip)
 
-        if grant_type == 'client_credentials':
-            client_id = (data.get('client_id') or kw.get('client_id') or '').strip()
-            client_secret = data.get('client_secret') or kw.get('client_secret') or ''
+        application, auth_error = Application.authenticate_client_with_reason(client_id, client_secret, ip_address=ip)
+        if not application:
+            self._log_auth(candidate, route, ip, ua, 401, False, (time.time() - t0) * 1000, auth_error)
+            raise Unauthorized(auth_error)
 
-            candidate = request.env['core.api.application'].sudo().search([
-                ('client_id', '=', client_id),
-            ], limit=1) if client_id else request.env['core.api.application']
+        result = request.env['core.api.token'].sudo().issue_for_application(application)
+        self._log_auth(application, route, ip, ua, 200, True, (time.time() - t0) * 1000, token=result['access_token_rec'])
+        return auth_success_response(result, application)
 
-            if candidate:
-                try:
-                    candidate.check_ip_allowed(ip)
-                    candidate.check_auth_rate_limit()
-                except Exception as e:
-                    duration = (time.time() - t0) * 1000
-                    status = 429 if 'rate limit' in str(e).lower() else 403
-                    self._log_auth(candidate, auth_route, ip, ua, status, False, duration, str(e))
-                    if status == 429:
-                        raise TooManyRequests(str(e)) from e
-                    raise
-
-            application, auth_error = request.env['core.api.application'].sudo().authenticate_client_with_reason(
-                client_id, client_secret, ip_address=ip,
-            )
-            if not application:
-                duration = (time.time() - t0) * 1000
-                self._log_auth(candidate, auth_route, ip, ua, 401, False, duration, auth_error)
-                _logger.warning(
-                    'Core API auth failed for client_id=%s from %s: %s',
-                    client_id or '<empty>', ip, auth_error,
-                )
-                raise Unauthorized(auth_error)
-
-            client_instance_id = (data.get('client_instance_id') or kw.get('client_instance_id') or '').strip()
-            token_result = request.env['core.api.token'].sudo().issue_for_application(
-                application,
-                client_instance_id=client_instance_id,
-                revoke_existing=False,
-            )
-
-        elif grant_type == 'refresh_token':
-            refresh_token = (data.get('refresh_token') or kw.get('refresh_token') or '').strip()
-            if not refresh_token:
-                raise BadRequest('refresh_token is required for grant_type refresh_token.')
-
-            Token = request.env['core.api.token'].sudo()
-            application, refresh_token_rec = Token.authenticate_refresh(refresh_token)
-            if not application:
-                duration = (time.time() - t0) * 1000
-                error = 'Invalid or expired refresh_token. Re-authenticate with client credentials.'
-                self._log_auth(application, auth_route, ip, ua, 401, False, duration, error)
-                raise Unauthorized(error)
-
-            try:
-                application.check_ip_allowed(ip)
-                application.check_auth_rate_limit()
-            except Exception as e:
-                duration = (time.time() - t0) * 1000
-                status = 429 if 'rate limit' in str(e).lower() else 403
-                self._log_auth(application, auth_route, ip, ua, status, False, duration, str(e))
-                if status == 429:
-                    raise TooManyRequests(str(e)) from e
-                raise
-
-            token_result = Token.rotate_refresh_token(refresh_token_rec)
-            if not token_result:
-                duration = (time.time() - t0) * 1000
-                error = 'Refresh token was already used or revoked. Re-authenticate with client credentials.'
-                self._log_auth(application, auth_route, ip, ua, 401, False, duration, error)
-                raise Unauthorized(error)
-            success_message = 'Token refreshed successfully.'
-
-        else:
-            raise BadRequest(
-                f'Unsupported grant_type "{grant_type}". Use client_credentials or refresh_token.'
-            )
-
-        duration = (time.time() - t0) * 1000
-        self._log_auth(
-            application, auth_route, ip, ua, 200, True, duration,
-            token=token_result['access_token_rec'],
-            client_instance_id=token_result.get('client_instance_id'),
-        )
-        application.check_suspicious_and_revoke()
-
-        return auth_success_response(success_message, token_result, application)
-
-    @http.route(
-        AUTH_TOKEN_PATH,
-        type='http',
-        auth='none',
-        methods=['POST'],
-        csrf=False,
-        save_session=False,
-    )
-    def issue_token(self, **kw):
-        """Exchange client credentials or a refresh token for new API tokens."""
+    @http.route(AUTH_REFRESH_PATH, type='http', auth='none', methods=['POST'], csrf=False, save_session=False)
+    def refresh_token(self, **kw):
+        """Rotate a refresh token without resending shared client credentials."""
         try:
             check_ip_auth_rate_limit(request.env, get_client_ip())
-        except Exception as e:
-            raise TooManyRequests(str(e)) from e
+        except Exception as exc:
+            raise TooManyRequests(str(exc)) from exc
 
-        data = self._parse_request_data(kw)
-        return self._issue_token_impl(data, kw)
+        data = self._parse_json_object()
+        self._require_exact_fields(data, {'refresh_token'})
+        plaintext = data.get('refresh_token') or ''
+        if not plaintext:
+            raise BadRequest('refresh_token is required.')
 
+        route = AUTH_REFRESH_PATH
+        t0 = time.time()
+        ip = get_client_ip()
+        ua = request.httprequest.headers.get('User-Agent')
+        Token = request.env['core.api.token'].sudo()
+        application, source_token = Token.consume_refresh_token(plaintext)
+        if not application:
+            self._log_auth(False, route, ip, ua, 401, False, (time.time() - t0) * 1000, 'Invalid or expired refresh token.')
+            raise Unauthorized('Invalid or expired refresh token.')
+
+        application.check_ip_allowed(ip)
+        result = Token.issue_for_application(application)
+        self._log_auth(application, route, ip, ua, 200, True, (time.time() - t0) * 1000, token=result['access_token_rec'])
+        return auth_success_response(result, application)

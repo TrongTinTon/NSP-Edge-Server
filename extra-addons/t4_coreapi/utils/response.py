@@ -49,57 +49,18 @@ def api_error_response(message, status_code=400, **extra):
     return make_json_response(error_body(message, **extra), status_code)
 
 
-def auth_token_body(token_result, application):
-    """Build nested api_token and refresh_token objects for auth responses."""
-    api_token = {
-        'token': token_result['access_token'],
+def auth_success_response(token_result, application, status_code=200):
+    """Return one rotating access/refresh token pair."""
+    data = {
+        'access_token': token_result['access_token'],
+        'refresh_token': token_result['refresh_token'],
+        'token_type': 'Bearer',
     }
     if application.token_ttl_hours:
-        api_token['expires_in'] = application.token_ttl_hours * 3600
-
-    refresh_token = {
-        'token': token_result['refresh_token'],
-    }
-    if application.refresh_token_ttl_hours:
-        refresh_token['expires_in'] = application.refresh_token_ttl_hours * 3600
-
-    client_instance_id = token_result.get('client_instance_id')
-    if client_instance_id:
-        api_token['client_instance_id'] = client_instance_id
-        refresh_token['client_instance_id'] = client_instance_id
-    return api_token, refresh_token
-
-
-def auth_success_response(message, token_result, application, status_code=200):
-    """Return the standard auth success payload.
-
-    The gateway path still uses /<service_code>/<version>/<route>, but clients
-    should not have to manually configure the remote service code. Include the
-    authenticated application's server code in the token response so NSP Sync can
-    resolve it from Client ID/Secret and cache it internally.
-    """
-    api_token, refresh_token = auth_token_body(token_result, application)
-    service_code = (application.service_code or '').strip('/') if application else ''
-    app_info = {
-        'id': application.id if application else False,
-        'name': application.name if application else False,
-        'client_id': application.client_id if application else False,
-        'service_code': service_code or False,
-        'server_code': service_code or False,
-        'gateway_base': f'/{service_code}/v1' if service_code else False,
-    }
-    return api_success_response(
-        message,
-        status_code=status_code,
-        data={'application': app_info},
-        application=app_info,
-        service_code=service_code or False,
-        server_code=service_code or False,
-        client_id=application.client_id if application else False,
-        api_token=api_token,
-        refresh_token=refresh_token,
-    )
-
+        data['expires_in'] = application.token_ttl_hours * 3600
+    if application.refresh_token_ttl_days:
+        data['refresh_expires_in'] = application.refresh_token_ttl_days * 86400
+    return api_success_response('OK', status_code=status_code, data=data)
 
 def normalize_gateway_response(response_data, default_message='Request processed successfully.'):
     """Normalize a server-action response dict and extract the HTTP status code."""

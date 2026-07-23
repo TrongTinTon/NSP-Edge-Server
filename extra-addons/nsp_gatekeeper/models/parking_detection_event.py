@@ -259,18 +259,18 @@ class ParkingDetectionEvent(models.Model):
                 ))
             return existing, True, self.env["nsp.parking.transaction"].browse()
 
-        suppression = max(0, int(lane.duplicate_suppression_seconds or 0))
-        deduplication_window = max(grouping_window, suppression)
-        duplicate = self.browse()
-        if deduplication_window:
-            duplicate = self.search([
-                ("lane_id", "=", lane.id),
-                ("direction", "=", direction),
-                ("card_id", "=", card.id),
-                ("detected_at", ">=", detected_dt - timedelta(seconds=deduplication_window)),
-                ("detected_at", "<=", detected_dt),
-                ("state", "in", ["pending", "processed"]),
-            ], order="detected_at desc, id desc", limit=1)
+        repeat_suppression = max(
+            grouping_window,
+            int(lane.repeat_suppression_seconds or 10),
+        )
+        duplicate = self.search([
+            ("lane_id", "=", lane.id),
+            ("direction", "=", direction),
+            ("card_id", "=", card.id),
+            ("detected_at", ">=", detected_dt - timedelta(seconds=repeat_suppression)),
+            ("detected_at", "<=", detected_dt),
+            ("state", "in", ["pending", "processed"]),
+        ], order="detected_at desc, id desc", limit=1)
         if duplicate:
             return duplicate, True, self.env["nsp.parking.transaction"].browse()
 
