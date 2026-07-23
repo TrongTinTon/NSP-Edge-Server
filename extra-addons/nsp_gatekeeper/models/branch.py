@@ -13,7 +13,7 @@ class NspBranch(models.Model):
 
     name = fields.Char(string="Branch Name", required=True, tracking=True)
     code = fields.Char(
-        string="Branch Code", required=True, index=True, tracking=True, copy=False,
+        string="Branch Code", required=True, readonly=True, index=True, tracking=True, copy=False,
         default=lambda self: new_management_code("BRN"),
     )
     status = fields.Selection([

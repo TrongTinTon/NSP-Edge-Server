@@ -19,7 +19,7 @@ class NspEdgeServer(models.Model):
     _order = "name, edge_server_code, id"
 
     edge_server_code = fields.Char(
-        string="Edge Server Code", required=True, copy=False, index=True, tracking=True,
+        string="Edge Server Code", required=True, readonly=True, copy=False, index=True, tracking=True,
         default=lambda self: new_management_code("EDGE"),
         help="Stable code assigned to this Edge Server by the Cloud Server.",
     )
@@ -92,7 +92,7 @@ class NspController(models.Model):
     _order = "edge_server_id, controller_name, controller_id, id"
 
     controller_id = fields.Char(
-        string="Controller Code", required=True, copy=False, index=True, tracking=True,
+        string="Controller Code", required=True, readonly=True, copy=False, index=True, tracking=True,
         default=lambda self: new_management_code("CTRL"),
         help="Stable Controller Code provisioned by the server.",
     )

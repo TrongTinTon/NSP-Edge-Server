@@ -14,7 +14,7 @@ class Device(models.Model):
     name = fields.Char(string="Reader Name", required=True, default="RFID Reader", index=True)
     serial_number = fields.Char(string="Serial", required=True, copy=False, index=True)
     device_code = fields.Char(
-        string="Device Code", required=True, copy=False, index=True,
+        string="Device Code", required=True, readonly=True, copy=False, index=True,
         default=lambda self: new_management_code("DEV"),
     )
     model_number = fields.Char(string="Model Number")

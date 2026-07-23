@@ -5,7 +5,7 @@
         <field name="model">nsp.measurement.session</field>
         <field name="arch" type="xml">
             <search>
-                <field name="measurement_code"/>
+                <field name="measurement_code" string="Technical Code" readonly="1"/>
                 <field name="controller_id"/>
                 <filter string="Draft" name="draft" domain="[('status','=','draft')]"/>
                 <filter string="Ready" name="ready" domain="[('status','=','ready')]"/>
@@ -28,7 +28,7 @@
                   decoration-info="status == 'running'"
                   decoration-success="status == 'completed'"
                   decoration-danger="status == 'failed'">
-                <field name="measurement_code"/>
+                <field name="measurement_code" string="Technical Code" readonly="1"/>
                 <field name="controller_id"/>
                 <field name="planned_start_at"/>
                 <field name="planned_end_at"/>
@@ -64,8 +64,8 @@
                         </button>
                     </div>
                     <div class="oe_title">
-                        <label for="measurement_code"/>
-                        <h1><field name="measurement_code" placeholder="MSR-BD-GATE01-001"/></h1>
+                        <label for="measurement_code" string="Measurement Code"/>
+                        <h1><field name="measurement_code" readonly="1" widget="CopyClipboardChar"/></h1>
                     </div>
                     <group>
                         <group string="Measurement Plan">

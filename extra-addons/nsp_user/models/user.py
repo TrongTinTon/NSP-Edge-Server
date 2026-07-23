@@ -13,7 +13,7 @@ class NspUser(models.Model):
 
     display_name = fields.Char(string="Display Name", compute="_compute_display_name", store=True)
     user_code = fields.Char(
-        string="User Code", required=True, copy=False, index=True, tracking=True,
+        string="User Code", required=True, readonly=True, copy=False, index=True, tracking=True,
         default=lambda self: new_management_code("USER"),
         help="Stable user code synced to Controller. This replaces HR Code and does not depend on Odoo HR.",
     )

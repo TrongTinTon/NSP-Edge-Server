@@ -17,7 +17,7 @@ class VehicleType(models.Model):
 
     name = fields.Char(required=True, tracking=True)
     code = fields.Char(
-        tracking=True, copy=False, index=True, required=True,
+        tracking=True, copy=False, index=True, required=True, readonly=True,
         default=lambda self: new_management_code("VTYPE"),
     )
     active = fields.Boolean(default=True)
@@ -37,7 +37,7 @@ class VehicleBrand(models.Model):
 
     name = fields.Char(required=True, tracking=True)
     code = fields.Char(
-        tracking=True, copy=False, index=True, required=True,
+        tracking=True, copy=False, index=True, required=True, readonly=True,
         default=lambda self: new_management_code("BRAND"),
     )
     active = fields.Boolean(default=True)
@@ -58,7 +58,7 @@ class VehicleModel(models.Model):
     name = fields.Char(required=True, tracking=True)
     brand_id = fields.Many2one('nsp.vehicle.brand', string='Brand', ondelete='set null', tracking=True)
     code = fields.Char(
-        tracking=True, copy=False, index=True, required=True,
+        tracking=True, copy=False, index=True, required=True, readonly=True,
         default=lambda self: new_management_code("VMODEL"),
     )
     active = fields.Boolean(default=True)
@@ -78,7 +78,7 @@ class VehicleColor(models.Model):
 
     name = fields.Char(required=True, tracking=True)
     code = fields.Char(
-        tracking=True, copy=False, index=True, required=True,
+        tracking=True, copy=False, index=True, required=True, readonly=True,
         default=lambda self: new_management_code("COLOR"),
     )
     active = fields.Boolean(default=True)

@@ -21,6 +21,7 @@ class NspParkingArea(models.Model):
     code = fields.Char(
         string="Parking Area Code",
         required=True,
+        readonly=True,
         tracking=True,
         copy=False,
         index=True,
@@ -416,6 +417,7 @@ class NspParkingLane(models.Model):
     code = fields.Char(
         string="Lane Code",
         required=True,
+        readonly=True,
         copy=False,
         index=True,
         default=lambda self: new_management_code("LANE"),

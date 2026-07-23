@@ -6,7 +6,7 @@
             <search>
                 <field name="name"/>
                 <field name="timezone"/>
-                <field name="code" string="Technical Code"/>
+                <field name="code" string="Technical Code" readonly="1"/>
                 <filter string="Active" name="active" domain="[('status','=','active')]"/>
                 <filter string="Inactive" name="inactive" domain="[('status','=','inactive')]"/>
             </search>

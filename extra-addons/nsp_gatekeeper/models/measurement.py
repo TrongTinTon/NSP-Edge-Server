@@ -27,6 +27,7 @@ class NspMeasurementSession(models.Model):
 
     measurement_code = fields.Char(
         required=True,
+        readonly=True,
         copy=False,
         index=True,
         tracking=True,
