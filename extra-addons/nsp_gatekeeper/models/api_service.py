@@ -1752,6 +1752,19 @@ class NspGatekeeperApiService(models.AbstractModel):
             )
 
         key = str(data.get("event_uid") or "").strip()
+        detected_at = self._safe_datetime_value(data.get("detected_at"), default_now=False)
+        if not detected_at:
+            return self._error(
+                "detected_at is required or invalid",
+                400,
+                error_code="parking_detection_rejected",
+                details={"record_key": key, "field": "detected_at"},
+            )
+        # Normalize the timestamp once at the API boundary. Downstream parking
+        # logic receives the canonical Odoo UTC datetime string and does not
+        # need to understand ISO-8601 transport variants such as a trailing Z.
+        data = dict(data, detected_at=detected_at)
+
         tid = self.env["nsp.rfid.card"]._normalize_tid(data.get("tid"))
         card = (
             self.env["nsp.rfid.card"].sudo().search([("tid", "=", tid)], limit=1)

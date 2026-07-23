@@ -208,9 +208,14 @@ class ParkingDetectionEvent(models.Model):
             antenna_no = int(payload.get("antenna_no") or 0)
         except Exception as exc:
             raise ValidationError(_("invalid_payload: antenna_no")) from exc
-        detected_at = self.env["nsp.parking.transaction"]._safe_datetime_value(
-            payload.get("detected_at"), default_now=False
-        )
+        # The Controller API normalizes ISO-8601 detected_at before calling
+        # this model. Keep only a strict Odoo datetime conversion here.
+        try:
+            detected_at = fields.Datetime.to_string(
+                fields.Datetime.to_datetime(payload.get("detected_at"))
+            )
+        except Exception:
+            detected_at = False
         if not event_uid:
             raise ValidationError(_("missing_event_uid"))
         if not serial_number:
