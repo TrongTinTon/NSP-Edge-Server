@@ -10,9 +10,7 @@
                 <field name="controller_code"/>
                 <field name="recipient_user_id"/>
                 <field name="transaction_uid"/>
-                <field name="device_serial"/>
                 <filter string="Unread" name="unread" domain="[('state','=','unread')]"/>
-                <filter string="Device Security" name="device_security" domain="[('category','=','device_security')]"/>
                 <filter string="Parking" name="parking" domain="[('category','=','parking')]"/>
                 <filter string="Critical" name="critical" domain="[('severity','=','critical')]"/>
                 <separator/>
@@ -44,7 +42,6 @@
                 <field name="recipient_user_id" optional="show"/>
                 <field name="parking_event_type" optional="show"/>
                 <field name="controller_code" optional="hide"/>
-                <field name="device_serial" optional="show"/>
             </list>
         </field>
     </record>
@@ -77,7 +74,6 @@
                             <field name="parking_event_type" readonly="1"/>
                             <field name="transaction_uid" readonly="1" widget="CopyClipboardChar"/>
                             <field name="controller_code" readonly="1"/>
-                            <field name="device_serial" readonly="1"/>
                             <field name="source_model" readonly="1"/>
                             <field name="source_record_id" readonly="1"/>
                             <field name="read_at" readonly="1"/>

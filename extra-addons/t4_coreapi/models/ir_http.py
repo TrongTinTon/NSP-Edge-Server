@@ -75,6 +75,11 @@ class IrHttp(models.AbstractModel):
             core_api_application_id=application.id,
             core_api_token_id=token_rec.id,
             core_api_client_id=application.client_id,
+            core_api_token_kind=token_rec.token_kind,
+            core_api_subject_model=token_rec.subject_model,
+            core_api_subject_id=token_rec.subject_record_id,
+            core_api_session_uid=token_rec.session_uid,
+            core_api_device_uid=token_rec.device_uid,
         )
         request.session.can_save = False
 

@@ -1,0 +1,5 @@
+<odoo>
+    <menuitem id="menu_nsp_mobile_root" name="NSP Mobile" sequence="17" groups="base.group_system,nsp_core.group_nsp_it_parking"/>
+    <menuitem id="menu_nsp_mobile_devices" name="Devices" parent="menu_nsp_mobile_root" action="action_nsp_mobile_device" sequence="10" groups="base.group_system,nsp_core.group_nsp_it_parking"/>
+    <menuitem id="menu_nsp_mobile_sessions" name="Sessions" parent="menu_nsp_mobile_root" action="action_nsp_mobile_session" sequence="20" groups="base.group_system,nsp_core.group_nsp_it_parking"/>
+</odoo>

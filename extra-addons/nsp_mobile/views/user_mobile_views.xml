@@ -1,0 +1,25 @@
+<odoo>
+    <record id="view_nsp_user_form_mobile" model="ir.ui.view">
+        <field name="name">nsp.user.form.mobile</field>
+        <field name="model">nsp.user</field>
+        <field name="inherit_id" ref="nsp_user.view_nsp_user_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page string="Mobile" groups="nsp_core.group_nsp_it_parking,base.group_system">
+                    <group>
+                        <group>
+                            <field name="mobile_enabled"/>
+                            <field name="mobile_login" placeholder="email / phone / username"/>
+                            <field name="mobile_password" password="True" placeholder="Enter to set a new password"/>
+                        </group>
+                        <group>
+                            <div class="text-muted" colspan="2">
+                                Mobile password is hashed and never stored as plaintext. Minimum 8 characters.
+                            </div>
+                        </group>
+                    </group>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>

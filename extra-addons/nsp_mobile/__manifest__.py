@@ -1,0 +1,25 @@
+{
+    'name': 'NSP Mobile',
+    'summary': 'Cloud Mobile API, authentication, sessions and device registry for NSP',
+    'description': 'Cloud-only Mobile API layer. Uses T4 Core API Mobile Tokens for user-bound access to profile, vehicles, parking history, friends, vehicle borrowing and notifications.',
+    'version': '19.0.1.0.0',
+    'sequence': 45,
+    'author': 'BKU Team',
+    'category': 'Services',
+    'depends': [
+        'base', 'nsp_core', 't4_coreapi', 'nsp_user', 'nsp_vehicle',
+        'nsp_gatekeeper', 'nsp_notification',
+    ],
+    'data': [
+        'security/ir.model.access.csv',
+        'data/mobile_core_api_data.xml',
+        'views/mobile_device_views.xml',
+        'views/mobile_session_views.xml',
+        'views/user_mobile_views.xml',
+        'views/menu_views.xml',
+    ],
+    'installable': True,
+    'application': True,
+    'auto_install': False,
+    'license': 'LGPL-3',
+}

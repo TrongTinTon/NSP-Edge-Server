@@ -95,11 +95,10 @@ class CoreApiAuthController(http.Controller):
         ip = get_client_ip()
         ua = request.httprequest.headers.get('User-Agent')
         Token = request.env['core.api.token'].sudo()
-        application, source_token = Token.consume_refresh_token(plaintext)
+        application, source_token = Token.consume_refresh_token(plaintext, token_kind='application')
         if not application:
             self._log_auth(False, route, ip, ua, 401, False, (time.time() - t0) * 1000, 'Invalid or expired refresh token.')
             raise Unauthorized('Invalid or expired refresh token.')
-
         application.check_ip_allowed(ip)
         result = Token.issue_for_application(application)
         self._log_auth(application, route, ip, ua, 200, True, (time.time() - t0) * 1000, token=result['access_token_rec'])

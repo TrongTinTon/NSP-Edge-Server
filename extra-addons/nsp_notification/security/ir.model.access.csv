@@ -1,3 +1,6 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_nsp_notification_it,nsp.notification IT,model_nsp_notification,nsp_core.group_nsp_it_parking,1,1,1,1
-access_nsp_notification_operator,nsp.notification Operator,model_nsp_notification,nsp_core.group_nsp_operator,1,0,0,0
+access_nsp_notification_operator,nsp.notification Operator,model_nsp_notification,nsp_core.group_nsp_operator,1,1,0,0
+access_nsp_notification_system,nsp.notification Settings Admin,model_nsp_notification,base.group_system,1,1,1,1
+access_nsp_notification_delivery_it,nsp.notification.delivery IT,model_nsp_notification_delivery,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_notification_delivery_system,nsp.notification.delivery Settings Admin,model_nsp_notification_delivery,base.group_system,1,1,1,1

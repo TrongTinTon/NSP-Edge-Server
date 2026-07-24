@@ -26,6 +26,14 @@ class CoreApiToken(models.Model):
 
     name = fields.Char(required=True)
     application_id = fields.Many2one('core.api.application', required=True, ondelete='cascade', index=True)
+    token_kind = fields.Selection(
+        [('application', 'Application'), ('mobile', 'Mobile')],
+        default='application', required=True, readonly=True, index=True,
+    )
+    subject_model = fields.Char(readonly=True, index=True, help='Generic authenticated subject model for user-bound tokens.')
+    subject_record_id = fields.Integer(readonly=True, index=True, help='Authenticated subject record ID for user-bound tokens.')
+    session_uid = fields.Char(readonly=True, index=True)
+    device_uid = fields.Char(readonly=True, index=True)
     application_name = fields.Char(related='application_id.name', store=True)
     client_id = fields.Char(related='application_id.client_id', store=True, index=True)
     application_state = fields.Selection(related='application_id.state', readonly=True)
@@ -74,16 +82,36 @@ class CoreApiToken(models.Model):
 
     @api.model
     def issue_for_application(self, application):
-        """Issue an independent rotating access/refresh pair for one shared credential login."""
+        """Issue an independent rotating access/refresh pair for a service application."""
+        return self.issue_for_subject(application, token_kind='application')
+
+    @api.model
+    def issue_for_subject(
+        self, application, token_kind='application', subject_model=False, subject_record_id=False,
+        session_uid=False, device_uid=False,
+    ):
+        """Issue a rotating token pair with optional user/device/session binding."""
         application.ensure_one()
         if application.state != 'active':
             raise UserError(_('Cannot issue tokens for an inactive application.'))
+        if token_kind == 'mobile':
+            if application.application_kind != 'mobile':
+                raise UserError(_('Mobile Tokens can only be issued for a Mobile application.'))
+            if not subject_model or not subject_record_id or not session_uid or not device_uid:
+                raise UserError(_('Mobile Token requires subject, session and device binding.'))
+        elif application.application_kind == 'mobile':
+            raise UserError(_('Mobile applications cannot issue shared Application Tokens.'))
 
         access = self._generate_plaintext(TOKEN_SIZE)
         refresh = self._generate_plaintext(REFRESH_TOKEN_SIZE)
         token_rec = self.sudo().create({
-            'name': f'{application.name} — Token Pair',
+            'name': f'{application.name} — {"Mobile" if token_kind == "mobile" else "Token Pair"}',
             'application_id': application.id,
+            'token_kind': token_kind,
+            'subject_model': subject_model or False,
+            'subject_record_id': int(subject_record_id or 0) or False,
+            'session_uid': session_uid or False,
+            'device_uid': device_uid or False,
             'expiration_date': self._expiration_from_hours(application.token_ttl_hours),
             'token_index': access[:INDEX_SIZE],
             'token_hash': TOKEN_CRYPT_CONTEXT.hash(access),
@@ -92,7 +120,7 @@ class CoreApiToken(models.Model):
             'refresh_token_hash': TOKEN_CRYPT_CONTEXT.hash(refresh),
         })
         ip = request.httprequest.environ.get('REMOTE_ADDR', 'n/a') if request else 'n/a'
-        _logger.info('Core API token pair issued for application %s from %s', application.client_id, ip)
+        _logger.info('Core API %s token pair issued for application %s from %s', token_kind, application.client_id, ip)
         return {
             'access_token': access,
             'refresh_token': refresh,
@@ -126,18 +154,21 @@ class CoreApiToken(models.Model):
         return empty_application, empty_token
 
     @api.model
-    def consume_refresh_token(self, plaintext_token):
-        """Validate and consume one refresh token. The old access token remains valid until expiry."""
+    def consume_refresh_token(self, plaintext_token, token_kind=None):
+        """Validate and consume one refresh token, optionally restricted by token kind."""
         empty_application = self.env['core.api.application']
         empty_token = self.browse()
         if not plaintext_token or len(plaintext_token) < INDEX_SIZE:
             return empty_application, empty_token
-        tokens = self.sudo().search([
+        domain = [
             ('refresh_token_index', '=', plaintext_token[:INDEX_SIZE]),
             ('refresh_token_hash', '!=', False),
             ('application_id.state', '=', 'active'),
             '|', ('refresh_expiration_date', '=', False), ('refresh_expiration_date', '>=', fields.Datetime.now()),
-        ])
+        ]
+        if token_kind:
+            domain.append(('token_kind', '=', token_kind))
+        tokens = self.sudo().search(domain)
         for token in tokens:
             if TOKEN_CRYPT_CONTEXT.verify(plaintext_token, token.refresh_token_hash):
                 application = token.application_id

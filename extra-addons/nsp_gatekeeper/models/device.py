@@ -84,31 +84,6 @@ class Device(models.Model):
     def _normalize_code(self, value):
         return str(value or "").strip().upper()
 
-    def _notify_not_whitelisted(self, details=None):
-        if not self:
-            return True
-        serials = {self._normalize_serial(reader.serial_number) for reader in self if reader.serial_number}
-        allowed = set(
-            self.env["nsp.device.whitelist"].sudo().search([
-                ("serial_number", "in", list(serials)),
-            ]).mapped("serial_number")
-        ) if serials else set()
-        Notification = self.env["nsp.notification"].sudo()
-        for reader in self:
-            serial = self._normalize_serial(reader.serial_number)
-            if not serial or serial in allowed:
-                continue
-            Notification.notify_device_not_whitelisted(
-                serial,
-                reader.controller_id.controller_id,
-                details=details or {
-                    "model_number": reader.model_number,
-                    "vendor": reader.device_vendor,
-                    "device_type": "rfid_reader",
-                },
-            )
-        return True
-
     @api.model_create_multi
     def create(self, vals_list):
         prepared = []
@@ -123,9 +98,7 @@ class Device(models.Model):
             vals["model_number"] = str(vals.get("model_number") or "").strip() or False
             vals["device_vendor"] = str(vals.get("device_vendor") or "").strip() or False
             prepared.append(vals)
-        records = super().create(prepared)
-        records._notify_not_whitelisted()
-        return records
+        return super().create(prepared)
 
     def write(self, vals):
         values = dict(vals)
@@ -139,10 +112,7 @@ class Device(models.Model):
             values["model_number"] = str(values.get("model_number") or "").strip() or False
         if "device_vendor" in values:
             values["device_vendor"] = str(values.get("device_vendor") or "").strip() or False
-        result = super().write(values)
-        if set(values) & {"serial_number", "controller_id", "model_number", "device_vendor"}:
-            self._notify_not_whitelisted()
-        return result
+        return super().write(values)
 
     @api.constrains("serial_number", "device_code")
     def _check_declaration(self):

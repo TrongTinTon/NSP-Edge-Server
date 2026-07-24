@@ -35,9 +35,7 @@ class DeviceWhitelist(models.Model):
             vals["model_number"] = str(vals.get("model_number") or "").strip() or False
             vals["device_vendor"] = str(vals.get("device_vendor") or "").strip() or False
             prepared.append(vals)
-        records = super().create(prepared)
-        records._resolve_device_alerts()
-        return records
+        return super().create(prepared)
 
     def write(self, vals):
         values = dict(vals)
@@ -47,28 +45,10 @@ class DeviceWhitelist(models.Model):
             values["model_number"] = str(values.get("model_number") or "").strip() or False
         if "device_vendor" in values:
             values["device_vendor"] = str(values.get("device_vendor") or "").strip() or False
-        serial_changed = "serial_number" in values
-        result = super().write(values)
-        if serial_changed:
-            self._resolve_device_alerts()
-        return result
+        return super().write(values)
 
     @api.constrains("serial_number")
     def _check_serial_number(self):
         for record in self:
             if not self._normalize_serial(record.serial_number):
                 raise ValidationError(_("Serial is required."))
-
-    def _resolve_device_alerts(self):
-        """Archive existing not-whitelisted alerts after an administrator allows the Serial."""
-        serials = set(self.mapped("serial_number"))
-        if not serials:
-            return True
-        notifications = self.env["nsp.notification"].sudo().search([
-            ("category", "=", "device_security"),
-            ("device_serial", "in", list(serials)),
-            ("state", "!=", "archived"),
-        ])
-        if notifications:
-            notifications.write({"state": "archived", "active": False})
-        return True

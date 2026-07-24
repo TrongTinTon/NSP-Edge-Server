@@ -1,0 +1,7 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_nsp_mobile_device_it,nsp.mobile.device IT,model_nsp_mobile_device,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_mobile_device_system,nsp.mobile.device Settings Admin,model_nsp_mobile_device,base.group_system,1,1,1,1
+access_nsp_mobile_session_it,nsp.mobile.session IT,model_nsp_mobile_session,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_mobile_session_system,nsp.mobile.session Settings Admin,model_nsp_mobile_session,base.group_system,1,1,1,1
+access_nsp_mobile_api_service_it,nsp.mobile.api.service IT,model_nsp_mobile_api_service,nsp_core.group_nsp_it_parking,1,0,0,0
+access_nsp_mobile_api_service_system,nsp.mobile.api.service Settings Admin,model_nsp_mobile_api_service,base.group_system,1,0,0,0

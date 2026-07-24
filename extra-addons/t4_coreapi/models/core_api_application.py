@@ -21,6 +21,11 @@ class CoreApiApplication(models.Model):
     _order = 'name'
 
     name = fields.Char(required=True, tracking=True)
+    application_kind = fields.Selection(
+        [('service', 'Service'), ('mobile', 'Mobile')],
+        string='Application Type', default='service', required=True, index=True, tracking=True,
+        help='Service applications use shared Client ID/Secret. Mobile applications issue user-bound Mobile Tokens.',
+    )
     client_id = fields.Char(
         string='Client ID',
         required=False,
@@ -186,6 +191,7 @@ class CoreApiApplication(models.Model):
             rec.log_count = len(rec.log_ids)
 
     @api.depends(
+        'application_kind',
         'client_id',
         'domain_id',
         'domain_id.base_url',
@@ -203,17 +209,26 @@ class CoreApiApplication(models.Model):
                 base = (self.env['ir.config_parameter'].sudo().get_param('web.base.url') or '').rstrip('/')
             version = rec.endpoint_ids[:1].version_id if rec.endpoint_ids else self.env['core.api.version'].get_default_version()
             version_code = version.code if version else 'v1'
-            auth_url = f'{base}{AUTH_TOKEN_PATH}'
             db_name = self.env.cr.dbname
             rec.api_database_name = db_name
             rec.api_base_url = f'{base}{build_gateway_path(version_code)}'
-            rec.auth_endpoint_url = auth_url
-            client_id = rec.client_id or '<client_id>'
-            rec.auth_curl_example = (
-                f"curl -X POST '{auth_url}?db={db_name}'\n"
-                f"  -H 'Content-Type: application/json'\n"
-                f"  -d '{{\"client_id\": \"{client_id}\", \"client_secret\": \"<client_secret>\"}}'"
-            )
+            if rec.application_kind == 'mobile':
+                auth_url = f'{base}/v1/mobile/auth/login'
+                rec.auth_endpoint_url = auth_url
+                rec.auth_curl_example = (
+                    f"curl -X POST '{auth_url}?db={db_name}'\n"
+                    f"  -H 'Content-Type: application/json'\n"
+                    f"  -d '{{\"login\": \"<mobile_login>\", \"password\": \"<password>\", \"device\": {{\"device_uid\": \"<device_uid>\", \"platform\": \"android\"}}}}'"
+                )
+            else:
+                auth_url = f'{base}{AUTH_TOKEN_PATH}'
+                rec.auth_endpoint_url = auth_url
+                client_id = rec.client_id or '<client_id>'
+                rec.auth_curl_example = (
+                    f"curl -X POST '{auth_url}?db={db_name}'\n"
+                    f"  -H 'Content-Type: application/json'\n"
+                    f"  -d '{{\"client_id\": \"{client_id}\", \"client_secret\": \"<client_secret>\"}}'"
+                )
             sample_suffix = rec.endpoint_ids[:1].route_suffix if rec.endpoint_ids else 'health'
             sample_url = f'{base}{build_gateway_path(version_code, sample_suffix)}?db={db_name}'
             rec.api_call_curl_example = (
@@ -276,14 +291,19 @@ class CoreApiApplication(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        """Generate client credentials when a new application is created."""
+        """Generate shared credentials only for Service applications."""
         prepared = []
         for vals in vals_list:
             vals = dict(vals)
             plaintext_secret = vals.pop('plaintext_client_secret', None)
             if not vals.get('client_id'):
                 vals['client_id'] = self._generate_client_id()
-            if plaintext_secret:
+            if vals.get('application_kind', 'service') == 'mobile':
+                vals['client_secret'] = False
+                vals['client_secret_plaintext'] = False
+                vals['credentials_pending'] = False
+                plaintext_secret = None
+            elif plaintext_secret:
                 vals['client_secret'] = SECRET_CRYPT_CONTEXT.hash(plaintext_secret)
                 vals['client_secret_plaintext'] = plaintext_secret
             elif not vals.get('client_secret'):
@@ -336,6 +356,8 @@ class CoreApiApplication(models.Model):
     def action_view_credentials(self):
         """Show credentials whenever requested by an authorized manager."""
         self.ensure_one()
+        if self.application_kind == 'mobile':
+            raise UserError(_('Mobile applications do not use shared Client Secrets.'))
         plaintext = self.client_secret_plaintext
         if not plaintext:
             raise UserError(_(
@@ -347,6 +369,8 @@ class CoreApiApplication(models.Model):
     def action_regenerate_secret(self):
         """Issue a new client secret and show it in the credentials wizard."""
         self.ensure_one()
+        if self.application_kind == 'mobile':
+            raise UserError(_('Mobile applications do not use shared Client Secrets.'))
         if self.state != 'active':
             raise UserError(_('Cannot regenerate secret for an inactive application.'))
         plaintext = secrets.token_urlsafe(32)
@@ -486,6 +510,8 @@ class CoreApiApplication(models.Model):
 
         if application.state != 'active':
             return self.browse(), _('Application "%s" is inactive.') % application.name
+        if application.application_kind == 'mobile':
+            return self.browse(), _('Mobile applications use Mobile User authentication, not shared Client Secret authentication.')
 
         if not application.client_secret or not SECRET_CRYPT_CONTEXT.verify(
             client_secret, application.client_secret

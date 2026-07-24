@@ -192,16 +192,6 @@ class ParkingDetectionEvent(models.Model):
             ]).mapped("serial_number")
         )
 
-        missing_whitelist = serials - allowed_serials
-        if missing_whitelist:
-            Notification = self.env["nsp.notification"].sudo()
-            for serial in sorted(missing_whitelist):
-                Notification.notify_device_not_whitelisted(
-                    serial,
-                    controller.controller_id,
-                    details={"device_type": "rfid_reader"},
-                )
-
         devices = self.env["nsp.device"].sudo().search([
             ("controller_id", "=", controller.id),
             ("serial_number", "in", list(allowed_serials)),

@@ -79,7 +79,7 @@ def check_ip_auth_rate_limit(env, ip_address, limit=None):
         return True
     check_rate_limit(
         env,
-        [('ip_address', '=', ip_address), ('event_type', '=', 'auth'), ('route', 'in', ['/auth/token', '/auth/refresh'])],
+        [('ip_address', '=', ip_address), ('event_type', '=', 'auth'), ('route', 'in', ['/auth/token', '/auth/refresh', '/v1/mobile/auth/login', '/v1/mobile/auth/refresh', '/v1/mobile/auth/logout'])],
         limit,
         f'Too many authentication attempts from IP {ip_address}. Try again later.',
     )

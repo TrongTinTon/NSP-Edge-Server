@@ -130,22 +130,6 @@ class ParkingTransaction(models.Model):
         ("transaction_uid_unique", "unique(transaction_uid)", "Transaction UID must be unique."),
     ]
 
-    @api.model_create_multi
-    def create(self, vals_list):
-        records = super().create(vals_list)
-        Notification = self.env["nsp.notification"].sudo()
-        for transaction in records:
-            try:
-                with self.env.cr.savepoint():
-                    Notification.notify_parking_transaction(transaction)
-            except Exception:
-                # Notification must never block the parking decision/transaction.
-                _logger.exception(
-                    "Unable to create parking notification for transaction %s",
-                    transaction.transaction_uid or transaction.id,
-                )
-        return records
-
     def init(self):
         self.env.cr.execute(
             """

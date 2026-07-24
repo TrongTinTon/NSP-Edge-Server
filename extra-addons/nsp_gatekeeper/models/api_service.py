@@ -301,20 +301,6 @@ class NspGatekeeperApiService(models.AbstractModel):
         return devices.filtered(lambda reader: reader.serial_number in allowed)
 
     @api.model
-    def _notify_device_not_whitelisted(self, controller, item, serial_number):
-        values = item if isinstance(item, dict) else {}
-        self.env["nsp.notification"].sudo().notify_device_not_whitelisted(
-            serial_number,
-            controller.controller_id if controller else False,
-            details={
-                "model_number": values.get("model_number") or values.get("model"),
-                "vendor": values.get("vendor") or values.get("device_vendor"),
-                "device_type": values.get("device_type") or "rfid_reader",
-            },
-        )
-        return True
-
-    @api.model
     def _device_status_cache(self, controllers, items):
         serials = {
             str(item.get("serial_number") or "").strip().upper()
@@ -358,7 +344,6 @@ class NspGatekeeperApiService(models.AbstractModel):
             raise ValueError("serial_number is required")
         cache = cache or self._device_status_cache(controller, [item])
         if serial_number not in cache.get("whitelist_serials", set()):
-            self._notify_device_not_whitelisted(controller, item, serial_number)
             raise ValueError("device_not_whitelisted")
         device = cache.get("device_by_key", {}).get((controller.id, serial_number))
         if not device:
@@ -1107,11 +1092,6 @@ class NspGatekeeperApiService(models.AbstractModel):
         ) if serials else set()
         missing_whitelist = serials - whitelisted
         if missing_whitelist:
-            Notification = self.env["nsp.notification"].sudo()
-            for serial in sorted(missing_whitelist):
-                Notification.notify_device_not_whitelisted(
-                    serial, controller.controller_id, details={"device_type": "rfid_reader"}
-                )
             raise ValueError("device_not_whitelisted")
 
         antenna_numbers = {antenna_no for _serial, antenna_no in keys}
@@ -1913,18 +1893,6 @@ class NspGatekeeperApiService(models.AbstractModel):
             try:
                 with self.env.cr.savepoint():
                     rec, duplicate = self._upsert_parking_transaction_sync(edge_server, item, cache=cache)
-                # Fresh creates notify from ParkingTransaction.create(). On an
-                # idempotent replay, ensure the Cloud notification exists as well
-                # without making notification delivery part of transaction sync.
-                if duplicate:
-                    try:
-                        with self.env.cr.savepoint():
-                            self.env["nsp.notification"].sudo().notify_parking_transaction(rec)
-                    except Exception:
-                        _logger.exception(
-                            "Unable to ensure parking notification for synced transaction %s",
-                            rec.transaction_uid or rec.id,
-                        )
                 result = {
                     "index": idx,
                     "record_key": rec.transaction_uid,
