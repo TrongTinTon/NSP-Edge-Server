@@ -319,6 +319,82 @@ class ParkingTransaction(models.Model):
             "error_message": str(value("error_message") or "").strip(),
         }
 
+    @api.model_create_multi
+    def create(self, vals_list):
+        records = super().create(vals_list)
+        try:
+            records._broadcast_live_monitor()
+        except Exception:
+            # A display failure must never roll back a final Parking Transaction.
+            _logger.exception("Unable to broadcast NSP Parking Live Monitor event")
+        return records
+
+    def _live_monitor_payload(self, slot_snapshot=None):
+        """Serialize one final transaction for the customer-facing monitor."""
+        self.ensure_one()
+        area = self.parking_area_id
+        vehicle = self.vehicle_id
+        owner = vehicle.owner_id if vehicle else self.env["nsp.user"].browse()
+        vehicle_type = vehicle.vehicle_type_id if vehicle else self.env["nsp.vehicle.type"].browse()
+        vehicle_type_code = str(vehicle_type.code or "").strip().lower() if vehicle_type else ""
+        icon = {
+            "motorbike": "🛵",
+            "car": "🚗",
+            "truck": "🚚",
+        }.get(vehicle_type_code, "🚙")
+        slots = slot_snapshot or (
+            area._motorbike_slot_snapshot() if area else {
+                "capacity_configured": False,
+                "motorbike_capacity": 0,
+                "motorbike_occupied": 0,
+                "available_slots": None,
+            }
+        )
+        license_plate = (self.license_plate or self.vehicle_tid or "-").strip().upper()
+        employee_name = (owner.name or _("Unknown employee")).strip().upper() if owner else _("Unknown employee").upper()
+        return {
+            "id": self.id,
+            "transaction_uid": self.transaction_uid,
+            "parking_area_id": area.id if area else False,
+            "parking_area_name": area.name if area else "",
+            "branch_name": area.branch_id.name if area and area.branch_id else "",
+            "lane_id": self.lane_id.id if self.lane_id else False,
+            "lane_name": self.lane_id.name if self.lane_id else "",
+            "event_type": self.event_type,
+            "event_time": fields.Datetime.to_string(self.event_time) if self.event_time else "",
+            "status": self.status,
+            "is_valid": self.status == "allowed",
+            "error_code": self.error_code or "",
+            "message": self.error_message or "",
+            "vehicle_id": vehicle.id if vehicle else False,
+            "vehicle_key": str(vehicle.id if vehicle else (self.vehicle_tid or self.transaction_uid)),
+            "vehicle_type": vehicle_type_code or "other",
+            "vehicle_icon": icon,
+            "license_plate": license_plate,
+            "employee_name": employee_name,
+            **slots,
+        }
+
+    def _broadcast_live_monitor(self):
+        """Broadcast final transactions; screens filter by Parking Area.
+
+        Check-out events are broadcast as well because they change available
+        motorbike slots even though the rolling entry rows only show Check-in.
+        """
+        for transaction in self:
+            area = transaction.parking_area_id
+            if not area:
+                continue
+            payload = transaction._live_monitor_payload(
+                slot_snapshot=area._motorbike_slot_snapshot()
+            )
+            self.env["bus.bus"]._sendone(
+                "broadcast",
+                "nsp_parking_live_transaction",
+                payload,
+            )
+        return True
+
     @api.model
     def create_idempotent(self, vals, existing_by_uid=None):
         """Create once by transaction_uid, optionally reusing a batch-prefetched map."""

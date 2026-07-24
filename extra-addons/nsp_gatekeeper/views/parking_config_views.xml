@@ -62,6 +62,10 @@
                 </header>
                 <sheet>
                     <div class="oe_button_box" name="button_box">
+                        <button name="action_open_live_monitor" type="object" class="oe_stat_button" icon="fa-desktop"
+                                groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking,base.group_system">
+                            <span class="o_stat_text">Live Monitor</span>
+                        </button>
                         <button name="action_open_edge_servers" type="object" class="oe_stat_button" icon="fa-server">
                             <field name="edge_server_count" widget="statinfo" string="Edge Servers"/>
                         </button>
@@ -95,6 +99,7 @@
                         <group string="Parking Operation">
                             <field name="branch_id" options="{'no_create': False, 'no_open': False}"/>
                             <field name="state" readonly="1"/>
+                            <field name="motorbike_capacity" string="Motorbike Capacity"/>
                             <field name="code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
                         <group string="Derived Infrastructure">

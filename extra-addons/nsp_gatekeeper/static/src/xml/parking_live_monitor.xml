@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="nsp_gatekeeper.ParkingLiveMonitor">
+        <div class="nsp-parking-live-monitor d-flex flex-column text-white">
+            <header class="nsp-parking-live-monitor__header d-flex align-items-center justify-content-between">
+                <div class="min-w-0">
+                    <div class="nsp-parking-live-monitor__eyebrow text-uppercase">NSP Parking • Live Monitor</div>
+                    <div class="nsp-parking-live-monitor__title text-truncate">
+                        <t t-esc="state.parkingAreaName || 'Parking Area'"/>
+                    </div>
+                    <div class="nsp-parking-live-monitor__subtitle text-truncate">
+                        <t t-esc="state.branchName || ''"/>
+                        <t t-if="state.areaState"> • <t t-esc="areaStateLabel"/></t>
+                    </div>
+                </div>
+                <div class="nsp-parking-live-monitor__live-badge d-flex align-items-center gap-2 rounded-pill">
+                    <span class="nsp-parking-live-monitor__live-dot"/>
+                    <span>REALTIME</span>
+                </div>
+            </header>
+
+            <main class="nsp-parking-live-monitor__stream flex-grow-1 d-flex flex-column">
+                <t t-foreach="displayRows" t-as="row" t-key="row.key">
+                    <div class="nsp-parking-live-monitor__row d-flex align-items-center"
+                         t-att-class="row.classes">
+                        <t t-if="row.item">
+                            <div class="nsp-parking-live-monitor__vehicle-icon flex-shrink-0">
+                                <t t-esc="row.item.vehicle_icon || '🚙'"/>
+                            </div>
+
+                            <div class="nsp-parking-live-monitor__plate-wrap flex-shrink-0">
+                                <div class="nsp-parking-live-monitor__plate rounded-4 text-center text-dark bg-white">
+                                    <t t-esc="row.item.license_plate || '-'"/>
+                                </div>
+                            </div>
+
+                            <div class="nsp-parking-live-monitor__employee flex-grow-1 min-w-0 px-4">
+                                <div class="nsp-parking-live-monitor__employee-label text-uppercase">Nhân viên</div>
+                                <div class="nsp-parking-live-monitor__employee-name text-truncate">
+                                    <t t-esc="row.item.employee_name || 'KHÔNG XÁC ĐỊNH'"/>
+                                </div>
+                                <div class="nsp-parking-live-monitor__lane text-truncate" t-if="row.item.lane_name">
+                                    <t t-esc="row.item.lane_name"/>
+                                </div>
+                            </div>
+
+                            <div class="nsp-parking-live-monitor__decision flex-shrink-0 text-end">
+                                <t t-if="row.item.is_valid">
+                                    <div class="nsp-parking-live-monitor__allowed text-uppercase">🟢 MỜI VÀO</div>
+                                </t>
+                                <t t-else="">
+                                    <div class="nsp-parking-live-monitor__denied text-uppercase">🔴 XIN VUI LÒNG DỪNG LẠI KIỂM TRA</div>
+                                    <div class="nsp-parking-live-monitor__reason text-truncate" t-if="row.item.message">
+                                        <t t-esc="row.item.message"/>
+                                    </div>
+                                </t>
+                            </div>
+                        </t>
+                        <t t-else="">
+                            <div class="nsp-parking-live-monitor__empty w-100 text-center">
+                                ĐANG CHỜ XE VÀO...
+                            </div>
+                        </t>
+                    </div>
+                </t>
+            </main>
+
+            <footer class="nsp-parking-live-monitor__footer d-flex align-items-center justify-content-between">
+                <div class="nsp-parking-live-monitor__clock d-flex align-items-center gap-3">
+                    <span class="nsp-parking-live-monitor__clock-icon">🕒</span>
+                    <span><t t-esc="state.clock"/></span>
+                </div>
+
+                <div class="nsp-parking-live-monitor__slots rounded-pill d-flex align-items-center"
+                     t-att-class="slotBadgeClass">
+                    <span><t t-esc="slotLabel"/></span>
+                </div>
+            </footer>
+
+            <div class="nsp-parking-live-monitor__error alert alert-danger m-0 rounded-0" t-if="state.error">
+                <t t-esc="state.error"/>
+            </div>
+        </div>
+    </t>
+</templates>

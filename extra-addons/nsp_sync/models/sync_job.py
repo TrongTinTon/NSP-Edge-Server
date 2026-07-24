@@ -1329,11 +1329,19 @@ class NspSyncJob(models.Model):
 
         Parking = self.env["nsp.parking.area"].sudo()
         parking = Parking.search([("code", "=", area_code)], limit=1)
+        try:
+            motorbike_capacity = int(item.get("motorbike_capacity") or 0)
+        except (TypeError, ValueError) as exc:
+            raise UserError(_("Motorbike Capacity must be an integer.")) from exc
+        if motorbike_capacity < 0:
+            raise UserError(_("Motorbike Capacity cannot be negative."))
+
         parking_vals = {
             "code": area_code,
             "name": str(item.get("parking_area_name") or area_code).strip(),
             "branch_id": branch.id,
             "state": state,
+            "motorbike_capacity": motorbike_capacity,
         }
         if parking:
             self._write_changed(parking, parking_vals)

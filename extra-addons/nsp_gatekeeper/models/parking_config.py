@@ -44,6 +44,11 @@ class NspParkingArea(models.Model):
         required=True,
         index=True,
     )
+    motorbike_capacity = fields.Integer(
+        string="Motorbike Capacity",
+        default=0,
+        help="Number of internal motorbike spaces. Set 0 when capacity monitoring is not configured.",
+    )
 
     lane_ids = fields.One2many(
         "nsp.parking.lane", "parking_area_id", string="Parking Lanes"
@@ -154,6 +159,114 @@ class NspParkingArea(models.Model):
         if "code" in values:
             values["code"] = self._normalize_code(values.get("code"))
         return super().write(values)
+
+    @api.constrains("motorbike_capacity")
+    def _check_motorbike_capacity(self):
+        for rec in self:
+            if rec.motorbike_capacity < 0:
+                raise ValidationError(_("Motorbike Capacity cannot be negative."))
+
+    def action_open_live_monitor(self):
+        self.ensure_one()
+        return {
+            "type": "ir.actions.client",
+            "name": _("Parking Live Monitor"),
+            "tag": "nsp_parking_live_monitor",
+            "target": "fullscreen",
+            "params": {"parking_area_id": self.id},
+        }
+
+    def _motorbike_slot_snapshot(self):
+        """Return current motorbike occupancy using final allowed Parking Transactions.
+
+        The current location of each motorbike is determined from its latest
+        allowed transaction globally. This keeps the footer correct after a
+        page reload and avoids storing a second mutable occupancy table.
+        """
+        self.ensure_one()
+        capacity = max(int(self.motorbike_capacity or 0), 0)
+        if not capacity:
+            return {
+                "capacity_configured": False,
+                "motorbike_capacity": 0,
+                "motorbike_occupied": 0,
+                "available_slots": None,
+            }
+
+        self.env.cr.execute(
+            """
+            SELECT COUNT(*)
+              FROM (
+                    SELECT DISTINCT ON (tx.vehicle_id)
+                           tx.vehicle_id,
+                           tx.event_type,
+                           lane.parking_area_id
+                      FROM nsp_parking_transaction tx
+                      JOIN nsp_vehicle vehicle ON vehicle.id = tx.vehicle_id
+                      JOIN nsp_vehicle_type vehicle_type ON vehicle_type.id = vehicle.vehicle_type_id
+                      JOIN nsp_parking_lane lane ON lane.id = tx.lane_id
+                     WHERE tx.status = 'allowed'
+                       AND tx.vehicle_id IS NOT NULL
+                       AND vehicle_type.code = 'motorbike'
+                     ORDER BY tx.vehicle_id, tx.event_time DESC, tx.id DESC
+                   ) current_vehicle
+             WHERE current_vehicle.event_type = 'check_in'
+               AND current_vehicle.parking_area_id = %s
+            """,
+            [self.id],
+        )
+        occupied = int((self.env.cr.fetchone() or [0])[0] or 0)
+        return {
+            "capacity_configured": True,
+            "motorbike_capacity": capacity,
+            "motorbike_occupied": occupied,
+            "available_slots": max(capacity - occupied, 0),
+        }
+
+    @api.model
+    def get_live_monitor_snapshot(self, parking_area_id, limit=12):
+        """Initial/reconciliation payload for the customer-facing Live Monitor."""
+        if not (
+            self.env.user.has_group("nsp_core.group_nsp_operator")
+            or self.env.user.has_group("nsp_core.group_nsp_it_parking")
+            or self.env.user.has_group("base.group_system")
+        ):
+            from odoo.exceptions import AccessError
+            raise AccessError(_("You do not have access to the Parking Live Monitor."))
+
+        try:
+            parking_area_id = int(parking_area_id or 0)
+            limit = min(max(int(limit or 12), 3), 50)
+        except (TypeError, ValueError):
+            parking_area_id, limit = 0, 12
+        area = self.sudo().browse(parking_area_id).exists()
+        if not area:
+            return {"found": False}
+
+        slots = area._motorbike_slot_snapshot()
+        transactions = self.env["nsp.parking.transaction"].sudo().search(
+            [
+                ("lane_id.parking_area_id", "=", area.id),
+                ("event_type", "=", "check_in"),
+            ],
+            order="event_time desc, id desc",
+            limit=limit,
+        )
+        # Feed oldest -> newest so OWL can use the same rolling-stream logic
+        # for the initial snapshot and for realtime Bus events.
+        items = [
+            tx._live_monitor_payload(slot_snapshot=slots)
+            for tx in transactions[::-1]
+        ]
+        return {
+            "found": True,
+            "parking_area_id": area.id,
+            "parking_area_name": area.name,
+            "branch_name": area.branch_id.name or "",
+            "state": area.state,
+            **slots,
+            "items": items,
+        }
 
     def _controller_payload(self):
         """Return Reader technical configuration required by Edge.
@@ -406,6 +519,7 @@ class NspParkingArea(models.Model):
             "parking_area_name": self.name,
             "branch_code": self.branch_id.code or "",
             "state": self.state,
+            "motorbike_capacity": int(self.motorbike_capacity or 0),
             "controllers": self._controller_payload(),
             "lanes": self._lane_payload(),
         }

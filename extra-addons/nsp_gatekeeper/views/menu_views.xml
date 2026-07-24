@@ -88,9 +88,4 @@
               sequence="20"
               groups="nsp_core.group_nsp_it_parking"/>
 
-    <record id="action_nsp_parking_display" model="ir.actions.client">
-        <field name="name">Parking Realtime</field>
-        <field name="tag">nsp_parking_display</field>
-        <field name="target">fullscreen</field>
-    </record>
 </odoo>
