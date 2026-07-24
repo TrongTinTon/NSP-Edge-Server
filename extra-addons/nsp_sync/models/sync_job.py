@@ -620,24 +620,17 @@ class NspSyncJob(models.Model):
 
         if kind == "vehicle":
             vehicle_codes = {str(item.get("vehicle_code") or "").strip().upper() for item in rows}
-            plates = {str(item.get("license_plate") or "").strip().upper() for item in rows}
             owner_codes = {str(item.get("owner_user_code") or "").strip().upper() for item in rows}
-            vehicle_codes.discard(""); plates.discard(""); owner_codes.discard("")
+            vehicle_codes.discard(""); owner_codes.discard("")
             Vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False)
-            domain = []
-            if vehicle_codes and plates:
-                domain = ["|", ("vehicle_code", "in", list(vehicle_codes)), ("license_plate", "in", list(plates))]
-            elif vehicle_codes:
-                domain = [("vehicle_code", "in", list(vehicle_codes))]
-            elif plates:
-                domain = [("license_plate", "in", list(plates))]
-            vehicles = Vehicle.search(domain) if domain else Vehicle.browse()
+            vehicles = Vehicle.search([
+                ("vehicle_code", "in", list(vehicle_codes)),
+            ]) if vehicle_codes else Vehicle.browse()
             users = self.env["nsp.user"].sudo().with_context(active_test=False).search([
                 ("user_code", "in", list(owner_codes)),
             ]) if owner_codes else self.env["nsp.user"].browse()
             cache = {
                 "vehicle_by_code": {record.vehicle_code: record for record in vehicles if record.vehicle_code},
-                "vehicle_by_plate": {record.license_plate: record for record in vehicles if record.license_plate},
                 "user_by_code": {record.user_code: record for record in users},
             }
             master_specs = (
@@ -890,9 +883,6 @@ class NspSyncJob(models.Model):
             raise UserError(_("Vehicle Code and License Plate are required."))
         cache = cache or self._prepare_apply_cache("vehicle", [item])
         vehicle = cache.get("vehicle_by_code", {}).get(code)
-        if not vehicle:
-            # One-time upgrade adoption: old Edge records were keyed by plate.
-            vehicle = cache.get("vehicle_by_plate", {}).get(plate)
 
         owner_user_code = str(item.get("owner_user_code") or "").strip().upper()
         if not owner_user_code:
@@ -936,16 +926,12 @@ class NspSyncJob(models.Model):
         Vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False)
         if vehicle:
             old_code = vehicle.vehicle_code
-            old_plate = vehicle.license_plate
             self._write_changed(vehicle, vals)
             if old_code and old_code != code:
                 cache.get("vehicle_by_code", {}).pop(old_code, None)
-            if old_plate and old_plate != plate:
-                cache.get("vehicle_by_plate", {}).pop(old_plate, None)
         else:
             vehicle = Vehicle.create(vals)
         cache.setdefault("vehicle_by_code", {})[code] = vehicle
-        cache.setdefault("vehicle_by_plate", {})[plate] = vehicle
         return vehicle
 
     @api.model
