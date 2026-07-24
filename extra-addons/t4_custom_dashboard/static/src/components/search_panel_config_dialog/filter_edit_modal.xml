@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <t t-name="t4_custom_dashboard.FilterEditModal">
+        <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5);">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+
+                    <div class="modal-header">
+                        <h5 class="modal-title">
+                            <t t-if="props.initial and props.initial.id">Chỉnh sửa Filter</t>
+                            <t t-else="">Thêm Filter Mới</t>
+                        </h5>
+                        <button type="button" class="btn-close" t-on-click="props.onClose"/>
+                    </div>
+
+                    <div class="modal-body">
+
+                        <!-- Type selector -->
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Loại Filter *</label>
+                            <select class="form-select" t-on-change="onTypeChange">
+                                <t t-foreach="availableTypes" t-as="ftype" t-key="ftype">
+                                    <option t-att-value="ftype" t-att-selected="state.values.type === ftype">
+                                        <t t-esc="ftype"/>
+                                    </option>
+                                </t>
+                            </select>
+                        </div>
+
+                        <hr class="my-3"/>
+
+                        <!-- Common schema fields -->
+                        <h6 class="text-muted mb-3">Thông tin chung</h6>
+                        <t t-foreach="allSchemaFields" t-as="field" t-key="field.key">
+                            <div class="mb-3">
+                                <label class="form-label">
+                                    <t t-esc="field.label || field.key"/>
+                                    <span t-if="field.required" class="text-danger ms-1">*</span>
+                                </label>
+                                <DynamicFieldInput
+                                    schema="field"
+                                    value="getFieldValue(field.key)"
+                                    widgets="props.widgets"
+                                    onChange="(v) => this.setFieldValue(field.key, v)"
+                                />
+                                <div t-if="state.errors[field.key]" class="text-danger small mt-1">
+                                    <t t-esc="state.errors[field.key]"/>
+                                </div>
+                            </div>
+                        </t>
+
+                    </div>
+
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" t-on-click="props.onClose">
+                            Hủy
+                        </button>
+                        <button type="button" class="btn btn-primary" t-on-click="() => this.onSave()">
+                            Lưu Filter
+                        </button>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </t>
+
+</templates>

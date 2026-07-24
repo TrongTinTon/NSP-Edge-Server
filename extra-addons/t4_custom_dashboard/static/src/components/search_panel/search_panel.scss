@@ -1,0 +1,761 @@
+/* Make each search panel field look like a clear separate card */
+
+.custom-dashboard-wrapper {
+
+    .o_search_panel_field {
+        background: #f7f9fc;
+        /* light contrast background */
+        margin: 10px 12px;
+        padding: 12px 0 4px 0;
+        border-radius: 8px;
+        border: 1px solid #e3e6ef;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    }
+
+    /* Make the header stand out visually */
+    .o_search_panel_field>.o_search_panel_section_header {
+        background: #eef2f8 !important;
+        border-bottom: 1px solid #d6dae3;
+        border-radius: 8px 8px 0 0;
+    }
+
+    /* Inner content spacing */
+
+    /* Active filter chips background tweaks */
+    .active-filters-display {
+        background: #f0f4ff !important;
+        border-left: 3px solid #3b7bff !important;
+        border-radius: 6px;
+    }
+
+
+    /* Search Panel Wrapper */
+    .search-panel-wrapper {
+        position: relative;
+        display: flex;
+        height: 100%;
+        /* Định nghĩa biến CSS mặc định để tránh lỗi nếu JS chưa load */
+        --search-panel-width: 280px; 
+    }
+
+   /* Tối ưu Search Panel — đóng/mở instant, không animation */
+    .o_search_panel {
+        position: relative;
+        background: #ffffff;
+        border-right: 1px solid #dee2e6;
+
+        /* QUAN TRỌNG: Sử dụng biến CSS */
+        width: var(--search-panel-width) !important;
+
+        /* Đảm bảo nội dung không bị vỡ khi co lại */
+        white-space: nowrap;
+        z-index: 100;
+    }
+
+    .o_search_panel.collapsed {
+        width: 0 !important;
+        min-width: 0 !important;
+        overflow: hidden;
+        border: none;
+    }
+
+    /* Search Panel Section */
+    .o_search_panel_section {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+    }
+
+    /* Section Header */
+    .o_search_panel_section_header {
+        padding: 12px 16px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #495057;
+        border-bottom: 1px solid #e9ecef;
+        position: sticky;
+        top: 0;
+        background: white;
+        z-index: 10;
+    }
+
+    .o_search_panel_section_header.text-uppercase {
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    /* Search Panel Fields */
+    .o_search_panel_field {
+        border-bottom: 1px solid #f0f0f0;
+    }
+
+    .o_search_panel_field:last-child {
+        border-bottom: none;
+    }
+
+    /* Active Filters Display */
+    .active-filters-display {
+        margin: 8px 12px;
+        padding: 10px;
+        background: #f8f9fa;
+        border-radius: 6px;
+        border-left: 3px solid #0d6efd;
+    }
+
+    .filter-chip {
+        display: inline-block;
+        margin: 2px;
+    }
+
+    .filter-chip .badge {
+        padding: 6px 10px;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .filter-chip .badge:hover {
+        opacity: 0.9;
+        transform: scale(1.05);
+    }
+
+    .filter-chip .badge i.fa-times {
+        margin-left: 6px;
+        cursor: pointer;
+        opacity: 0.8;
+    }
+
+    .filter-chip .badge i.fa-times:hover {
+        opacity: 1;
+    }
+
+
+    .company-item {
+        margin-bottom: 4px;
+    }
+
+    /* Generic filter item row (schema-driven filter components) */
+    .t4-filter-item {
+        display: flex;
+        align-items: center;
+        transition: background-color 0.2s;
+        border-radius: 4px;
+        margin: 0 8px;
+        padding: 4px 8px;
+        cursor: pointer;
+    }
+
+    .t4-filter-item:hover {
+        background-color: #f8f9fa;
+    }
+
+    .t4-node-content {
+        cursor: pointer;
+    }
+
+    .t4-tree-node {
+        margin-bottom: 2px;
+    }
+
+    .company-row,
+    .location-row,
+    .warehouse-row {
+        display: flex;
+        align-items: center;
+        transition: background-color 0.2s;
+        border-radius: 4px;
+        margin: 0 8px;
+    }
+
+    .company-row:hover,
+    .location-row:hover,
+    .warehouse-row:hover {
+        background-color: #f8f9fa;
+    }
+
+    .o_search_panel_item_selected {
+        background-color: #e7f3ff !important;
+        border-left: 3px solid #0d6efd;
+    }
+
+    /* Expand Toggle */
+    .expand-toggle {
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        color: #6c757d;
+        transition: color 0.2s;
+    }
+
+    .expand-toggle:hover {
+        color: #495057;
+    }
+
+    .expand-toggle i {
+        font-size: 14px;
+    }
+
+    /* Company Content */
+    .company-content {
+        padding-left: 4px;
+    }
+
+    .company-name {
+        font-weight: 500;
+        font-size: 14px;
+        color: #212529;
+    }
+
+    /* Warehouse Info */
+    .warehouse-info {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .warehouse-name {
+        font-size: 13px;
+        color: #212529;
+    }
+
+    .warehouse-code {
+        font-size: 11px;
+        color: #6c757d;
+    }
+
+    /* Warehouses Container */
+    .warehouses-container {
+        margin-top: 4px;
+        margin-left: 20px;
+        padding-left: 12px;
+        border-left: 2px solid #e9ecef;
+    }
+
+    /* Tối ưu Nút Toggle */
+    .search-panel-toggle-btn {
+        position: absolute; /* Dùng absolute thay vì fixed để neo theo wrapper */
+        
+        /* QUAN TRỌNG: Vị trí dựa theo biến CSS */
+        left: var(--search-panel-width);
+        
+        top: 50%;
+        transform: translateY(-50%) translateZ(0); /* GPU */
+        z-index: 101;
+        
+        /* Style nút */
+        border-radius: 0 8px 8px 0;
+        padding: 16px 8px; /* Giảm padding ngang xíu cho gọn */
+        background: #0d6efd;
+        color: white;
+        border: none;
+        box-shadow: 2px 2px 8px rgba(0, 0, 0, 0.15);
+        cursor: pointer;
+
+        /* Đóng/mở panel: nút nhảy đến vị trí ngay (không transition left).
+           Chỉ giữ transition cho background-color khi hover. */
+        transition: background-color 0.2s;
+    }
+
+    .search-panel-toggle-btn:hover {
+        background: #0b5ed7;
+        width: 40px; /* Hiệu ứng hover nhẹ */
+    }
+
+    /* Ẩn nội dung bên trong khi đang đóng — không fade, dứt khoát */
+    .o_search_panel.collapsed .o_search_panel_section {
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    .o_search_panel:not(.collapsed) .o_search_panel_section {
+        opacity: 1;
+    }
+
+    /* Khi đóng, nút về vị trí 0 */
+    .search-panel-toggle-btn.collapsed {
+        left: 0 !important;
+    }
+
+    /* Resizer Handle */
+    .search-panel-resizer {
+        position: relative;
+        width: 8px;
+        cursor: ew-resize;
+        background: transparent;
+        transition: background-color 0.2s;
+        flex-shrink: 0;
+    }
+
+    .search-panel-resizer:hover,
+    .search-panel-resizer.resizing {
+        background: rgba(13, 110, 253, 0.1);
+    }
+
+    .search-panel-resizer.hidden {
+        display: none;
+    }
+
+    .resizer-handle {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 4px;
+        height: 60px;
+        background: #adb5bd;
+        border-radius: 2px;
+        opacity: 0;
+        transition: opacity 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .search-panel-resizer:hover .resizer-handle,
+    .search-panel-resizer.resizing .resizer-handle {
+        opacity: 0.6;
+    }
+
+    .resizer-handle i {
+        color: white;
+        font-size: 12px;
+    }
+
+    /* Form Controls */
+    .o_search_panel_category_value .form-control,
+    .o_search_panel_category_value .form-select {
+        font-size: 13px;
+        border-radius: 6px;
+        border: 1px solid #ced4da;
+    }
+
+    .o_search_panel_category_value .form-control:focus,
+    .o_search_panel_category_value .form-select:focus {
+        border-color: #80bdff;
+        box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+    }
+
+    .o_search_panel_category_value .form-control-sm {
+        font-size: 12px;
+        padding: 6px 10px;
+    }
+
+    .o_search_panel_category_value .form-label {
+        font-size: 12px;
+        font-weight: 600;
+        color: #495057;
+        margin-bottom: 6px;
+    }
+
+    .o_search_panel_category_value {
+        
+        /* 1. Ép label thành khối riêng biệt, chiếm hết dòng */
+        .form-label {
+            display: block !important;
+            width: 100%;
+            margin-bottom: 0.5rem; /* Khoảng cách giữa label và ô nhập */
+        }
+
+        /* 2. Ép Select2 container thành khối block và full chiều rộng */
+        .select2-container {
+            display: block !important;
+            width: 100% !important;
+            
+            /* Sửa lỗi z-index nếu nó bị đè lên các thành phần khác */
+            z-index: 10; 
+        }
+
+        /* 3. Tinh chỉnh giao diện ô input Select2 cho giống Bootstrap */
+        .select2-selection--multiple {
+            border: 1px solid #ced4da !important;
+            border-radius: 0.25rem !important;
+            min-height: 38px; /* Chiều cao chuẩn input */
+            padding: 2px;
+            width: 100% !important;
+            box-sizing: border-box; /* Đảm bảo padding không làm vỡ layout */
+        }
+
+        /* Khi focus thì đổi màu viền giống Bootstrap */
+        .select2-container--default.select2-container--focus .select2-selection--multiple {
+            border-color: #86b7fe !important;
+            box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+        }
+    }
+
+    /* Checkboxes */
+    input[type="checkbox"] {
+        cursor: pointer;
+        width: 16px;
+        height: 16px;
+    }
+
+    /* Badges */
+    .badge {
+        font-size: 11px;
+        padding: 4px 8px;
+        border-radius: 4px;
+    }
+
+    .badge.rounded-pill {
+        padding: 4px 10px;
+    }
+
+    /* Spinner */
+    .spinner-border-sm {
+        width: 1rem;
+        height: 1rem;
+        border-width: 0.15em;
+    }
+
+    /* Sticky Bottom */
+    .sticky-bottom {
+        position: sticky;
+        bottom: 0;
+        z-index: 10;
+    }
+
+    /* Scrollbar Styling */
+    .o_search_panel::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    .o_search_panel::-webkit-scrollbar-track {
+        background: #f1f1f1;
+    }
+
+    .o_search_panel::-webkit-scrollbar-thumb {
+        background: #888;
+        border-radius: 3px;
+    }
+
+    .o_search_panel::-webkit-scrollbar-thumb:hover {
+        background: #555;
+    }
+
+    /* Date Range Specific Styles */
+    .o_search_panel_category_value input[type="date"] {
+        cursor: pointer;
+    }
+
+    .o_search_panel_category_value input[type="date"]:disabled {
+        background-color: #e9ecef;
+        cursor: not-allowed;
+        opacity: 0.6;
+    }
+
+    /* Period Selection */
+    .o_search_panel_category_value select[name="period"] {
+        font-weight: 500;
+    }
+
+    /* Text Divider */
+    .text-center.text-muted {
+        font-size: 11px;
+        color: #adb5bd !important;
+        margin: 12px 0;
+    }
+
+    /* Responsive Design */
+    @media (max-width: 768px) {
+        .o_search_panel {
+            position: fixed;
+            left: 0;
+            top: 0;
+            height: 100vh;
+            z-index: 1050;
+            box-shadow: 4px 0 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .search-panel-toggle-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .search-panel-resizer {
+            display: none;
+        }
+    }
+
+    /* Animation */
+    @keyframes slideIn {
+        from {
+            transform: translateX(-100%);
+            opacity: 0;
+        }
+
+        to {
+            transform: translateX(0);
+            opacity: 1;
+        }
+    }
+
+    @keyframes slideOut {
+        from {
+            transform: translateX(0);
+            opacity: 1;
+        }
+
+        to {
+            transform: translateX(-100%);
+            opacity: 0;
+        }
+    }
+
+    /* Empty State */
+    .text-center.text-muted.py-4 {
+        padding: 24px 16px;
+    }
+
+    .text-center.text-muted.py-4 i {
+        opacity: 0.3;
+    }
+
+    /* Loading State */
+    .text-center.py-3 {
+        padding: 16px;
+    }
+
+    /* Button Styling */
+    .btn-secondary.w-100 {
+        font-weight: 500;
+        padding: 10px 16px;
+        transition: all 0.2s;
+    }
+
+    .btn-secondary.w-100:hover:not(:disabled) {
+        background-color: #5a6268;
+        border-color: #545b62;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .btn-secondary.w-100:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    /* Close Button in Header */
+    .o_search_panel_section_header .btn-link {
+        color: #6c757d;
+        text-decoration: none;
+        padding: 4px;
+        transition: color 0.2s;
+    }
+
+    .o_search_panel_section_header .btn-link:hover {
+        color: #dc3545;
+    }
+
+    /* Info Icons */
+    .fa-info-circle {
+        margin-right: 4px;
+    }
+
+    /* Small Text */
+    .small {
+        font-size: 12px;
+    }
+
+    /* Italic Text */
+    .fst-italic {
+        font-style: italic;
+    }
+
+    /* Opacity Classes */
+    .opacity-25 {
+        opacity: 0.25;
+    }
+
+    /* Utility Classes */
+    .me-1 {
+        margin-right: 0.25rem;
+    }
+
+    .me-2 {
+        margin-right: 0.5rem;
+    }
+
+    .ms-1 {
+        margin-left: 0.25rem;
+    }
+
+    .ms-2 {
+        margin-left: 0.5rem;
+    }
+
+    .ms-auto {
+        margin-left: auto;
+    }
+
+    .mb-1 {
+        margin-bottom: 0.25rem;
+    }
+
+    .mb-2 {
+        margin-bottom: 0.5rem;
+    }
+
+    .mb-3 {
+        margin-bottom: 1rem;
+    }
+
+    .mt-2 {
+        margin-top: 0.5rem;
+    }
+
+    .mt-3 {
+        margin-top: 1rem;
+    }
+
+    .mt-auto {
+        margin-top: auto;
+    }
+
+    .pt-3 {
+        padding-top: 1rem;
+    }
+
+    .pb-2 {
+        padding-bottom: 0.5rem;
+    }
+
+    .py-3 {
+        padding-top: 1rem;
+        padding-bottom: 1rem;
+    }
+
+    .py-4 {
+        padding-top: 1.5rem;
+        padding-bottom: 1.5rem;
+    }
+
+    .p-2 {
+        padding: 0.5rem;
+    }
+
+    .p-3 {
+        padding: 1rem;
+    }
+
+    .location-tree-hierarchy {
+        padding: 8px 0;
+    }
+
+    .location-item-hierarchy {
+        margin-bottom: 4px;
+        transition: margin-left 0.2s ease;
+    }
+
+    /* Highlight current active company */
+    .company-row.is-current-company {
+        background-color: #e7f3ff !important;
+        border-left: 3px solid #0d6efd;
+        font-weight: 600;
+    }
+
+    .company-row.is-current-company:hover {
+        background-color: #d0e8ff !important;
+    }
+
+    /* Child company indentation visual guide */
+    .location-item-hierarchy[style*="margin-left"] .location-row {
+        position: relative;
+    }
+
+    .location-item-hierarchy[style*="margin-left"] .location-row::before {
+        content: '';
+        position: absolute;
+        left: -10px;
+        top: 50%;
+        width: 8px;
+        height: 1px;
+        background: #dee2e6;
+    }
+
+    /* Nested locations under companies */
+    .locations-container {
+        margin-top: 4px;
+        padding: 4px 0;
+        background: #f8f9fa;
+        border-radius: 0 0 4px 4px;
+    }
+
+    .location-row {
+        margin: 2px 8px;
+        border-radius: 4px;
+        transition: all 0.2s;
+    }
+
+    .location-row:hover {
+        background-color: #e9ecef !important;
+    }
+
+    /* Badge for current company */
+    .badge.bg-primary.text-white {
+        animation: pulse-badge 2s infinite;
+    }
+
+    @keyframes pulse-badge {
+        0%, 100% {
+            opacity: 1;
+        }
+        50% {
+            opacity: 0.7;
+        }
+    }
+
+    /* Expand toggle animation */
+    .expand-toggle i {
+        transition: transform 0.2s ease;
+    }
+
+    .expand-toggle:hover i {
+        transform: scale(1.2);
+    }
+
+    /* Empty state for no companies */
+    .text-center.text-muted.py-4 {
+        padding: 32px 16px;
+    }
+
+    .text-center.text-muted.py-4 i.fa-building {
+        display: block;
+        margin: 0 auto 16px;
+    }
+
+    /* Company row hover state */
+    .company-row {
+        transition: all 0.2s ease;
+    }
+
+    .company-row:hover {
+        transform: translateX(2px);
+    }
+
+    /* Nút xuất PDF trên header "Bộ Lọc" — tròn nhỏ, vừa chiều cao header. */
+    .search-panel-pdf-btn {
+        width: 30px;
+        height: 30px;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        line-height: 1;
+
+        i {
+            font-size: 15px;
+        }
+
+        &:disabled {
+            opacity: 0.7;
+            cursor: progress;
+        }
+    }
+
+}

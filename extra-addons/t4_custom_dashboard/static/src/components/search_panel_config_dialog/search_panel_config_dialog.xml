@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <t t-name="t4_custom_dashboard.SearchPanelConfigDialog">
+        <div class="modal show d-block spc-overlay" tabindex="-1">
+            <div class="modal-dialog modal-lg modal-dialog-scrollable">
+                <div class="modal-content">
+
+                    <!-- Header -->
+                    <div class="modal-header">
+                        <h5 class="modal-title">
+                            <i class="fa fa-sliders me-2"/>
+                            Cấu hình bộ lọc
+                        </h5>
+                        <button type="button" class="btn-close" t-on-click="() => this.onClose()"/>
+                    </div>
+
+                    <!-- Tabs -->
+                    <div class="modal-body pb-0">
+                        <ul class="nav nav-tabs mb-3">
+                            <li class="nav-item">
+                                <a class="nav-link"
+                                   t-att-class="{active: state.activeTab === 'visual'}"
+                                   href="#" t-on-click.prevent="() => this.switchTab('visual')">
+                                    <i class="fa fa-list me-1"/>
+                                    Visual
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link"
+                                   t-att-class="{active: state.activeTab === 'json'}"
+                                   href="#" t-on-click.prevent="() => this.switchTab('json')">
+                                    <i class="fa fa-code me-1"/>
+                                    JSON
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
+
+                    <!-- Body -->
+                    <div class="modal-body pt-0" style="min-height: 300px;">
+
+                        <!-- Visual tab -->
+                        <div t-if="state.activeTab === 'visual'">
+                            <t t-if="state.filters.length === 0">
+                                <div class="text-center text-muted py-4">
+                                    <i class="fa fa-filter fa-2x mb-2 d-block"/>
+                                    Chưa có filter nào. Nhấn "+ Thêm filter" để bắt đầu.
+                                </div>
+                            </t>
+                            <t t-else="">
+                                <div class="spc-filter-list mb-3">
+                                    <t t-foreach="state.filters" t-as="filter" t-key="filter.id || filter_index">
+                                        <div class="spc-filter-row"
+                                             draggable="true"
+                                             t-on-dragstart="(ev) => this.onDragStart(ev, filter_index)"
+                                             t-on-dragover.prevent=""
+                                             t-on-drop="(ev) => this.onDrop(ev, filter_index)">
+                                            <span class="spc-drag-handle" title="Kéo để sắp xếp">
+                                                <i class="fa fa-bars"/>
+                                            </span>
+                                            <span class="spc-filter-id text-monospace small">
+                                                <t t-esc="filter.id"/>
+                                            </span>
+                                            <span class="spc-filter-label">
+                                                <t t-esc="filter.label"/>
+                                            </span>
+                                            <span class="badge bg-secondary">
+                                                <t t-esc="filter.type"/>
+                                            </span>
+                                            <span class="spc-applies text-muted small">
+                                                <t t-if="!filter.appliesTo">Tất cả</t>
+                                                <t t-else=""><t t-esc="filter.appliesTo.length"/>w</t>
+                                            </span>
+                                            <div class="spc-filter-actions">
+                                                <button class="btn btn-sm btn-outline-primary"
+                                                        t-on-click="() => this.editFilter(filter_index)"
+                                                        title="Chỉnh sửa">
+                                                    <i class="fa fa-pencil"/>
+                                                </button>
+                                                <button class="btn btn-sm btn-outline-danger"
+                                                        t-on-click="() => this.deleteFilter(filter_index)"
+                                                        title="Xóa">
+                                                    <i class="fa fa-trash"/>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </t>
+                                </div>
+                            </t>
+                            <button class="btn btn-outline-secondary btn-sm" t-on-click="() => this.addFilter()">
+                                <i class="fa fa-plus me-1"/>
+                                Thêm filter
+                            </button>
+                        </div>
+
+                        <!-- JSON tab -->
+                        <div t-if="state.activeTab === 'json'">
+                            <textarea class="form-control font-monospace spc-json-editor"
+                                      rows="18"
+                                      t-model="state.jsonText"
+                                      t-on-blur="() => this.validateJson()"
+                                      placeholder="[]"/>
+                            <div t-if="state.jsonError" class="text-danger small mt-2">
+                                <i class="fa fa-exclamation-triangle me-1"/>
+                                <t t-esc="state.jsonError"/>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- Footer -->
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" t-on-click="() => this.onClose()">
+                            Hủy
+                        </button>
+                        <button class="btn btn-primary"
+                                t-on-click="() => this.onSave()"
+                                t-att-disabled="!!state.jsonError">
+                            <i class="fa fa-save me-1"/>
+                            Lưu
+                        </button>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+        <div class="modal-backdrop show"/>
+
+        <!-- Edit modal (nested) -->
+        <FilterEditModal t-if="state.showEditModal"
+            initial="editingFilter"
+            widgets="props.widgets"
+            onSave.bind="onModalSave"
+            onClose="() => { state.showEditModal = false; state.editingIndex = null; }"/>
+    </t>
+
+</templates>

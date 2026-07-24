@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="t4_custom_dashboard.SearchPanel">
+        <t t-if="props.config and props.config.length">
+            <div class="search-panel-wrapper"
+                 t-att-style="'--search-panel-width: ' + state.panelWidth + 'px'">
+
+                <!-- Collapse toggle button -->
+                <button class="search-panel-toggle-btn"
+                        t-att-class="{ 'collapsed': state.isCollapsed }"
+                        t-on-click="() => this.togglePanel()"
+                        t-att-title="state.isCollapsed ? 'Mở bộ lọc' : 'Đóng bộ lọc'">
+                    <i t-att-class="{
+                        'fa': true,
+                        'fa-angle-right': state.isCollapsed,
+                        'fa-angle-left': !state.isCollapsed
+                    }"/>
+                </button>
+
+                <aside class="o_search_panel o_search_panel_resizable border-end d-flex flex-column overflow-auto h-100"
+                       t-ref="searchPanel"
+                       t-att-class="{ 'collapsed': state.isCollapsed }">
+
+                    <section class="o_search_panel_section">
+                        <!-- Panel header -->
+                        <header class="o_search_panel_section_header text-uppercase sticky-top bg-white d-flex justify-content-between align-items-center">
+                            <div>
+                                <i class="fa fa-filter me-2"/>
+                                <b>Bộ Lọc</b>
+                            </div>
+                            <!-- Nút xuất PDF: nằm ngay header bộ lọc (không nổi
+                                 đè nội dung). Ngoài .grid-stack nên không bị
+                                 capture vào PDF. -->
+                            <button t-if="props.onExportPdf"
+                                    class="btn btn-outline-danger btn-sm search-panel-pdf-btn"
+                                    t-on-click="() => props.onExportPdf()"
+                                    t-att-disabled="props.isExportingPdf"
+                                    title="Xuất Dashboard ra PDF">
+                                <i t-attf-class="fa {{props.isExportingPdf ? 'fa-spinner fa-spin' : 'fa-file-pdf-o'}}"/>
+                            </button>
+                        </header>
+
+                        <!-- Dynamic filter sections -->
+                        <t t-foreach="props.config" t-as="filter" t-key="filter.id">
+                            <t t-set="entry" t-value="getRegistryEntry(filter.type)"/>
+                            <t t-if="entry">
+                                <div class="o_search_panel_field">
+                                    <header class="o_search_panel_section_header pt-3 pb-2 text-uppercase">
+                                        <div class="d-flex align-items-center justify-content-between">
+                                            <b>
+                                                <i t-att-class="'fa me-1 ' + (filter.icon or 'fa-filter')"/>
+                                                <t t-esc="filter.label"/>
+                                            </b>
+                                        </div>
+                                    </header>
+                                    <t t-component="entry.component"
+                                       definition="filter"
+                                       value="state.values[filter.id]"
+                                       onChange="(v) => this.updateValue(filter.id, v)"
+                                       contextValues="state.values"/>
+                                </div>
+                            </t>
+                            <t t-else="">
+                                <!-- Unknown filter type: silently skip -->
+                            </t>
+                        </t>
+
+                        <!-- Reset button -->
+                        <div class="p-3 border-top mt-auto sticky-bottom bg-white">
+                            <button class="btn btn-secondary w-100"
+                                    t-on-click="() => this.resetFilters()"
+                                    t-att-disabled="!this.hasActiveFilters">
+                                <i class="fa fa-redo me-2"/>
+                                Đặt Lại Mặc Định
+                            </button>
+                        </div>
+                    </section>
+                </aside>
+
+                <!-- Resize handle -->
+                <div class="search-panel-resizer"
+                     t-ref="resizer"
+                     t-att-class="{ 'hidden': state.isCollapsed, 'resizing': state.isResizing }">
+                    <div class="resizer-handle">
+                        <i class="fa fa-grip-vertical"/>
+                    </div>
+                </div>
+            </div>
+        </t>
+    </t>
+</templates>

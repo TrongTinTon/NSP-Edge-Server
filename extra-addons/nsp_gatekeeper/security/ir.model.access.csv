@@ -19,7 +19,6 @@ access_nsp_edge_server_it,nsp.edge.server IT,nsp_gatekeeper.model_nsp_edge_serve
 access_nsp_edge_server_operator,nsp.edge.server Operator,nsp_gatekeeper.model_nsp_edge_server,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_controller_it,nsp.controller IT,nsp_gatekeeper.model_nsp_controller,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_controller_operator,nsp.controller Operator,nsp_gatekeeper.model_nsp_controller,nsp_core.group_nsp_operator,1,0,0,0
-access_nsp_parking_dashboard_metric_it,nsp.parking.dashboard.metric IT,nsp_gatekeeper.model_nsp_parking_dashboard_metric,nsp_core.group_nsp_it_parking,1,0,0,0
 access_nsp_device_whitelist_it,nsp.device.whitelist IT,model_nsp_device_whitelist,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_device_whitelist_operator,nsp.device.whitelist Operator,model_nsp_device_whitelist,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_measurement_session_it,nsp.measurement.session IT,nsp_gatekeeper.model_nsp_measurement_session,nsp_core.group_nsp_it_parking,1,1,1,1

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="action_custom_dashboard" model="ir.actions.client">
+        <field name="name">Dashboard</field>
+        <field name="tag">t4_custom_dashboard.dashboard</field>
+        <field name="target">current</field>
+    </record>
+
+    <!--
+        Top-level menu của application này — t4_sti cũng có thể gán
+        action_custom_dashboard vào menu structure riêng (ví dụ Trang Chủ
+        Quản Lý) mà không bị xung đột với menu dưới đây.
+    -->
+    <menuitem id="menu_custom_dashboard_root"
+              name="Dashboard"
+              groups="t4_custom_dashboard.group_dashboard_manager,base.group_system"
+              sequence="1"/>
+
+    <menuitem id="menu_custom_dashboard"
+              name="Analytics Dashboard"
+              parent="menu_custom_dashboard_root"
+              action="action_custom_dashboard"
+              sequence="1"/>
+</odoo>

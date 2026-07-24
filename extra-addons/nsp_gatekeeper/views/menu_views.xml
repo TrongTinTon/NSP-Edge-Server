@@ -93,11 +93,4 @@
         <field name="tag">nsp_parking_display</field>
         <field name="target">fullscreen</field>
     </record>
-
-    <menuitem id="menu_nsp_parking_it_dashboard"
-              name="IT Dashboard"
-              parent="nsp_device_root"
-              action="action_nsp_parking_it_dashboard"
-              sequence="1"
-              groups="nsp_core.group_nsp_it_parking"/>
 </odoo>

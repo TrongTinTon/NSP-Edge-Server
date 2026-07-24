@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="t4_custom_dashboard.HelpTooltip">
+        <span class="t4_help_tooltip"
+              t-on-mouseenter="onMouseEnter"
+              t-on-mouseleave="onMouseLeave">
+            <i t-ref="icon" class="fa fa-question-circle t4_help_icon"
+               t-att-style="iconStyle"
+               t-on-click="onClick"/>
+            <t t-if="state.open" t-portal="'body'">
+                <div class="t4_help_popup" t-att-style="popupStyle" t-on-click.stop="">
+                    <div class="t4_help_popup_arrow"/>
+                    <button t-if="state.pinned" class="t4_help_popup_close"
+                            t-on-click="() => this.close()" title="Đóng">
+                        <i class="fa fa-times"/>
+                    </button>
+                    <div class="t4_help_popup_body" t-esc="props.text"/>
+                </div>
+            </t>
+        </span>
+    </t>
+</templates>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="action_nsp_it_dashboard" model="ir.actions.client">
+        <field name="name">IT Dashboard</field>
+        <field name="tag">t4_custom_dashboard.dashboard</field>
+        <field name="target">current</field>
+        <field name="params" eval="{'dashboard_xml_id': 'nsp_it_dashboard.dashboard_nsp_it'}"/>
+    </record>
+
+    <menuitem id="menu_nsp_it_dashboard"
+              name="IT Dashboard"
+              parent="nsp_gatekeeper.nsp_device_root"
+              action="action_nsp_it_dashboard"
+              sequence="1"
+              groups="nsp_core.group_nsp_it_parking"/>
+</odoo>

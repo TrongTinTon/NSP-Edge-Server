@@ -1,0 +1,48 @@
+.kanban-embed-widget {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: var(--o-view-background-color, #ffffff);
+    border-radius: 8px;
+    padding: 12px;
+    overflow: hidden;
+    container-type: inline-size;  // children scale theo embed widget width
+
+    .kanban-embed-header {
+        flex: 0 0 auto;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--o-border-color, #dee2e6);
+        margin-bottom: 8px;
+
+        h5 {
+            color: var(--o-color-text-primary, #212529);
+            font-weight: 600;
+            font-size: clamp(13px, 2.2cqi, 18px);
+        }
+    }
+
+    .kanban-embed-body {
+        flex: 1 1 auto;
+        overflow: auto;
+        position: relative;
+
+        // Hide nested control panel khi widget KHÔNG bật show_search (default).
+        // Khi embed.show_search=true, JS truyền display.controlPanel=true →
+        // không apply class .kanban-embed-no-search → control panel hiện.
+        > .o_view_controller {
+            height: 100%;
+        }
+    }
+
+    &.kanban-embed-no-search .kanban-embed-body > .o_view_controller .o_control_panel {
+        display: none !important;
+    }
+
+    .kanban-embed-loading {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        color: var(--o-color-text-muted, #6c757d);
+    }
+}

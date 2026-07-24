@@ -1,0 +1,38 @@
+<t t-name="t4_custom_dashboard.StatsSummary">
+    <div class="stat-card" t-att-style="gradientStyle">
+        <div class="stat-body">
+            <div class="stat-icon-wrapper">
+                <i t-if="props.icon" 
+                   t-attf-class="fa {{props.icon}}"
+                   t-att-style="'color: ' + textColor + ';'"/>
+            </div>
+            
+            <div class="stat-title"
+                 t-att-style="'color: ' + textColor + '; opacity: 0.9;'">
+                <t t-esc="props.title"/>
+                <HelpTooltip t-if="props.help" text="props.help" color="textColor"/>
+            </div>
+            
+            <!-- Value với animation -->
+            <div class="stat-value" 
+                 t-ref="valueElement"
+                 t-att-style="'color: ' + textColor + ';'"
+                 t-att-class="{'value-animating': state.isAnimating}"
+                 t-esc="state.displayValue"/>
+            
+            <!-- 🆕 Hiển thị giá trị gốc nếu có -->
+            <div t-if="state.originalValue" 
+                 class="stat-original-value"
+                 t-att-style="'color: ' + textColor + '; opacity: 0.7; font-size: 0.85em;'"
+                 t-esc="'(' + state.originalValue + ')'"/>
+            
+            <div t-if="props.trendValue" class="stat-footer">
+                <span t-attf-class="stat-trend {{trendClass}}" 
+                      t-att-style="'color: ' + textColor + '; opacity: 0.85;'">
+                    <i t-attf-class="fa {{trendIcon}}"/>
+                    <t t-esc="props.trendValue"/>
+                </span>
+            </div>
+        </div>
+    </div>
+</t>

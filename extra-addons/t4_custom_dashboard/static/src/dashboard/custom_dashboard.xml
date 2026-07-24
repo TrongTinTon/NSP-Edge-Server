@@ -1,0 +1,357 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="t4_custom_dashboard.Dashboard">
+
+        <div class="custom-dashboard-wrapper">
+            <SearchPanel
+                config="state.searchPanelConfig"
+                widgets="state.widgets"
+                onFiltersChange="(filters) => this.onFiltersChange(filters)"
+                onPanelToggle="(isCollapsed) => this.onPanelToggle(isCollapsed)"
+                onExportPdf="() => this.exportDashboardPdf()"
+                isExportingPdf="state.isExportingPdf"/>
+
+            <div class="custom-dashboard" t-att-class="{'panel-collapsed': state.isPanelCollapsed, 'edit-mode': state.editMode}">
+
+                <t t-if="dashboardMgr.state.showDashboardDialog">
+                    <div class="modal show d-block" tabindex="-1">
+                        <DashboardSelector dashboards="dashboardMgr.state.dashboards" currentDashboardId="dashboardMgr.state.currentDashboardId" currentDashboardName="dashboardMgr.state.currentDashboardName" onSwitch="(id) => this.handleSwitchDashboard(id)" onDelete="(id) => this.handleDeleteDashboard(id)" onSetDefault="(id) => dashboardMgr.setDefault(id)" onDuplicate="(id) => dashboardMgr.duplicate(id)" onClose="() => dashboardMgr.closeDashboardDialog()"/>
+                    </div>
+                    <div class="modal-backdrop show"/>
+                </t>
+
+                <t t-if="dashboardMgr.state.showSaveDialog">
+                    <div class="modal show d-block" tabindex="-1">
+                        <SaveDashboardDialog currentDashboardId="dashboardMgr.state.currentDashboardId" currentDashboardName="dashboardMgr.state.currentDashboardName" onSave="(id, name, desc) => this.handleSaveDashboard(id, name, desc)" onCancel="() => dashboardMgr.closeSaveDialog()"/>
+                    </div>
+                    <div class="modal-backdrop show"/>
+                </t>
+
+                <t t-if="dashboardMgr.state.showImportExportDialog">
+                    <div class="modal show d-block" tabindex="-1">
+                        <ImportExportDialog mode="dashboardMgr.state.importExportMode" onExport="() => dashboardMgr.export()" onImport="(content, name) => dashboardMgr.import(content, name)" onClose="() => dashboardMgr.closeImportExportDialog()"/>
+                    </div>
+                    <div class="modal-backdrop show"/>
+                </t>
+
+                <t t-if="state.showConfigDialog">
+                    <div class="modal show d-block" tabindex="-1">
+                        <WidgetConfigDialog
+                            widget="state.editingWidget"
+                            searchPanelConfig="state.searchPanelConfig"
+                            onSave="(config) => this.saveWidgetConfig(config)"
+                            onCancel="() => this.closeConfigDialog()"/>
+                    </div>
+                    <div class="modal-backdrop show"/>
+                </t>
+
+                <SearchPanelConfigDialog t-if="state.showSearchPanelConfig"
+                    initialConfig="state.searchPanelConfig"
+                    widgets="state.widgets"
+                    onSave.bind="onSearchPanelConfigSave"
+                    onClose="() => { state.showSearchPanelConfig = false; }"/>
+
+                <t t-if="state.isLoading">
+                    <div class="loading-container">
+                        <i class="widget-loading-overlay "/>
+                    </div>
+                </t>
+                <t t-else="">
+                    <!-- Nút PDF đã chuyển vào header "Bộ Lọc" của SearchPanel
+                         (qua prop onExportPdf) — vẫn nằm NGOÀI .grid-stack nên
+                         KHÔNG bị capture vào PDF. -->
+                    <t t-if="state.is_admin">
+                    <div class="dashboard-header">
+                        <div class="d-flex align-items-center gap-2">
+                            <button t-if="state.is_admin" class="btn btn-outline-primary" t-on-click="() => dashboardMgr.openDashboardDialog()" title="Chuyển Dashboard">
+                                <i class="fa fa-th-large"/>
+                            </button>
+
+                            <div class="dashboard-name d-flex align-items-center gap-2"
+                                 t-on-mouseenter="triggerGreetingWave">
+                                <span class="dashboard-wave"
+                                      t-att-class="{ 'is-waving': state.isWaving }"
+                                      t-on-animationend="onGreetingWaveEnd"
+                                      role="img" aria-label="wave">👋</span>
+                                <div class="dashboard-greeting-block">
+                                    <div class="dashboard-greeting">Xin chào</div>
+                                    <div class="dashboard-username" t-esc="user.name"/>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="dashboard-actions">
+                            <div class="btn-group me-2">
+                                <button class="btn btn-sm btn-outline-success" t-on-click="() => dashboardMgr.openSaveDialog()" title="Lưu Dashboard">
+                                    <i class="fa fa-save"/>
+                                    Lưu
+                                </button>
+
+                                <button class="btn btn-sm btn-outline-info" t-on-click="() => dashboardMgr.openImportExportDialog('export')" t-att-disabled="!dashboardMgr.state.currentDashboardId" title="Xuất Dashboard">
+                                    <i class="fa fa-download"/>
+                                    Xuất
+                                </button>
+
+                                <button class="btn btn-sm btn-outline-info" t-on-click="() => dashboardMgr.openImportExportDialog('import')" title="Nhập Dashboard">
+                                    <i class="fa fa-upload"/>
+                                    Nhập
+                                </button>
+                            </div>
+
+                            <div class="auto-refresh-controls me-3">
+                                <div class="btn-group">
+                                    <button class="btn btn-sm" t-att-class="autoRefresh.state.enabled ? 'btn-success' : 'btn-outline-secondary'" t-on-click="() => autoRefresh.toggle()" t-att-title="autoRefresh.state.enabled ? 'Tự động làm mới đã bật' : 'Tự động làm mới đã tắt'">
+                                        <i class="fa fa-clock-o"/>
+                                        <t t-if="autoRefresh.state.enabled">
+                                            <span class="ms-1" t-esc="autoRefresh.getTimeText()"/>
+                                        </t>
+                                        <t t-else="">
+                                            <span class="ms-1">Tắt</span>
+                                        </t>
+                                    </button>
+
+                                    <Dropdown>
+                                        <button class="btn btn-sm btn-outline-secondary" title="Đặt khoảng thời gian làm mới">
+                                            <i class="fa fa-cog"/>
+                                        </button>
+
+                                        <t t-set-slot="content">
+                                            <DropdownItem onSelected="() => autoRefresh.setIntervalTime(10)">10 giây</DropdownItem>
+                                            <DropdownItem onSelected="() => autoRefresh.setIntervalTime(30)">30 giây</DropdownItem>
+                                            <DropdownItem onSelected="() => autoRefresh.setIntervalTime(60)">1 phút</DropdownItem>
+                                            <DropdownItem onSelected="() => autoRefresh.setIntervalTime(180)">3 phút</DropdownItem>
+                                            <DropdownItem onSelected="() => autoRefresh.setIntervalTime(300)">5 phút</DropdownItem>
+                                            <DropdownItem onSelected="() => autoRefresh.setIntervalTime(600)">10 phút</DropdownItem>
+                                        </t>
+                                    </Dropdown>
+                                </div>
+
+                                <div class="small text-muted mt-1" t-if="autoRefresh.state.lastRefresh">
+                                    Lần cuối: <t t-esc="autoRefresh.state.lastRefresh.toLocaleTimeString()"/>
+                                </div>
+                            </div>
+
+                            <button class="btn btn-light me-2" t-on-click="() => this.openSearchPanelConfig()" title="Cấu hình bộ lọc">
+                                <i class="fa fa-sliders"/>
+                            </button>
+
+                            <button class="btn btn-secondary me-2" t-on-click="() => this.loadAllWidgetData()" title="Refresh all widgets">
+                                <i class="fa fa-refresh"/>
+                            </button>
+
+                            <button class="btn btn-primary me-2" t-on-click="toggleEditMode">
+                                <i t-attf-class="fa {{state.editMode ? 'fa-check' : 'fa-edit'}}"/>
+                                <t t-if="state.editMode"> Lưu Bố Cục</t>
+                                <t t-else=""> Chỉnh Sửa</t>
+                            </button>
+
+                            <t t-if="state.editMode">
+                                <button class="btn btn-success" t-on-click="openAddWidgetDialog">
+                                    <i class="fa fa-plus"/>
+                                    Thêm Widget
+                                </button>
+                            </t>
+                        </div>
+                    </div>
+                    </t><!-- /admin: ẩn toàn bộ dashboard-header với non-admin -->
+
+                    <t t-if="state.widgets.length === 0 and !state.editMode">
+                        <div class="empty-state">
+                            <i class="fa fa-chart-line fa-4x text-muted mb-3"/>
+                            <h4>Chưa Có Widget</h4>
+                            <p class="text-muted">Nhấn "Chỉnh Sửa" để thêm widget đầu tiên</p>
+                        </div>
+                    </t>
+
+                    <div class="grid-stack" t-ref="grid">
+                        <t t-foreach="state.widgets" t-as="widget" t-key="widget.id">
+                            <t t-set="displayData" t-value="getWidgetDisplayData(widget)"/>
+                            <t t-set="isLoading" t-value="state.widgetLoading[widget.id]"/>
+
+                            <div class="grid-stack-item" t-att-gs-id="widget.id" t-att-gs-x="widget.x" t-att-gs-y="widget.y" t-att-gs-w="widget.w" t-att-gs-h="widget.h">
+                                <div class="grid-stack-item-content">
+
+                                    <t t-if="state.editMode">
+                                        <div class="widget-controls">
+                                            <button class="btn btn-sm btn-info" t-on-click="() => this.openEditWidgetDialog(widget)" title="Edit Widget">
+                                                <i class="fa fa-edit"/>
+                                            </button>
+                                            <button class="btn btn-sm btn-danger" t-on-click="() => this.removeWidget(widget.id)" title="Remove Widget">
+                                                <i class="fa fa-times"/>
+                                            </button>
+                                        </div>
+                                    </t>
+
+                                    <t t-if="widget.type === 'stat'">
+                                        <t t-if="displayData.error">
+                                            <div class="widget-error">
+                                                <i class="fa fa-exclamation-triangle"/>
+                                                <p t-esc="displayData.error"/>
+                                            </div>
+                                        </t>
+                                        <t t-else="">
+                                            <StatsSummary title="displayData.title" help="displayData.help" originalValue="displayData.originalValue" value="displayData.value" icon="displayData.icon" bgColor="displayData.bgColor" textColor="displayData.textColor" trend="displayData.trend" trendValue="displayData.trendValue" />
+                                        </t>
+                                    </t>
+
+                                    <!-- stat_chart: thẻ KPI nâng cấp = value (trái) + biểu đồ cột (phải) -->
+                                    <t t-if="widget.type === 'stat_chart'">
+                                        <t t-if="displayData.error">
+                                            <div class="widget-error">
+                                                <i class="fa fa-exclamation-triangle"/>
+                                                <p t-esc="displayData.error"/>
+                                            </div>
+                                        </t>
+                                        <t t-else="">
+                                            <div t-attf-class="stat-chart-card {{displayData.fullWidthChart ? 'fullwidth-chart' : ''}}"
+                                                 t-attf-style="background: linear-gradient(135deg, {{displayData.bgColor}} 0%, {{displayData.bgColor}} 100%); color: {{displayData.textColor}};">
+                                                <div class="stat-chart-left">
+                                                    <div class="stat-chart-head">
+                                                        <i t-if="displayData.icon" t-attf-class="fa {{displayData.icon}} stat-chart-icon"/>
+                                                        <span class="stat-chart-title">
+                                                            <t t-esc="displayData.title"/>
+                                                            <HelpTooltip t-if="displayData.help" text="displayData.help" color="displayData.textColor"/>
+                                                        </span>
+                                                    </div>
+                                                    <div class="stat-chart-value" t-esc="displayData.value"/>
+                                                    <div t-if="displayData.originalValue" class="stat-chart-original" t-esc="'(' + displayData.originalValue + ')'"/>
+                                                </div>
+                                                <div class="stat-chart-right">
+                                                    <t t-if="displayData.chartData and displayData.chartData.labels.length">
+                                                        <!-- Bọc vùng cuộn NGANG: nhiều cột → min-width lớn → cuộn được -->
+                                                        <div class="stat-chart-scroll"
+                                                             t-attf-style="{{displayData.chartMinWidth ? 'min-width:' + displayData.chartMinWidth + 'px;' : ''}}">
+                                                            <ChartComponent
+                                                                t-key="widget.id + '_sc'"
+                                                                type="'bar'"
+                                                                data="displayData.chartData"
+                                                                options="displayData.chartOptions"
+                                                                title="displayData.title"
+                                                                action="displayData.action"
+                                                                dataIds="displayData.dataIds"
+                                                                dataDates="displayData.dataDates"
+                                                                widgetId="widget.id"
+                                                                filters="state.searchFilters"
+                                                                searchPanelConfig="state.searchPanelConfig"
+                                                                dataSource="displayData.dataSource"/>
+                                                        </div>
+                                                    </t>
+                                                    <t t-else="">
+                                                        <div class="stat-chart-empty">Không có khoản đến hạn</div>
+                                                    </t>
+                                                </div>
+                                            </div>
+                                        </t>
+                                    </t>
+
+                                    <t t-if="widget.type === 'kanban_embed'">
+                                        <KanbanEmbed
+                                            t-key="embedKey(widget)"
+                                            embed="getEmbedConfig(widget)"
+                                            title="widget.data and widget.data.title or ''"/>
+                                    </t>
+
+                                    <t t-if="widget.type === 'stat_action'">
+                                        <t t-if="displayData.error">
+                                            <div class="widget-error">
+                                                <i class="fa fa-exclamation-triangle"/>
+                                                <p t-esc="displayData.error"/>
+                                            </div>
+                                        </t>
+                                        <t t-else="">
+                                            <StatAction
+                                                title="displayData.title"
+                                                originalValue="displayData.originalValue"
+                                                value="displayData.value"
+                                                icon="displayData.icon"
+                                                bgColor="displayData.bgColor"
+                                                textColor="displayData.textColor"
+                                                trend="displayData.trend"
+                                                trendValue="displayData.trendValue"
+                                                action="displayData.action"
+                                                dataSource="displayData.dataSource"
+                                                widgetId="widget.id"
+                                                filters="state.searchFilters"
+                                                searchPanelConfig="state.searchPanelConfig"/>
+                                        </t>
+                                    </t>
+
+                                    <t t-if="widget.type === 'chart'">
+                                        <div class="chart-widget">
+                                            <div class="chart-header">
+                                                <div class="d-flex align-items-center gap-2 mb-2">
+                                                    <!-- Chart Type Controls (ẩn cho combo — data shape khác).
+                                                         Mỗi nút có thể ẩn riêng qua widget.data.hiddenChartButtons. -->
+                                                    <t t-if="!displayData.isCombo">
+                                                        <div class="btn-group" role="toolbar">
+                                                            <button t-if="!isChartBtnHidden(widget, 'bar')" class="btn btn-sm btn-outline-primary fa fa-bar-chart" t-on-click="() => this.onChangeChartType(widget.id, 'bar')" t-att-class="displayData.currentChartType === 'bar' ? 'active' : ''" t-att-disabled="isLoading"/>
+                                                            <button t-if="!isChartBtnHidden(widget, 'line')" class="btn btn-sm btn-outline-primary fa fa-line-chart" t-on-click="() => this.onChangeChartType(widget.id, 'line')" t-att-class="displayData.currentChartType === 'line' ? 'active' : ''" t-att-disabled="isLoading"/>
+                                                            <button t-if="!isChartBtnHidden(widget, 'pie')" class="btn btn-sm btn-outline-primary fa fa-pie-chart" t-on-click="() => this.onChangeChartType(widget.id, 'pie')" t-att-class="displayData.currentChartType === 'pie' ? 'active' : ''" t-att-disabled="isLoading"/>
+                                                            <button t-if="!isChartBtnHidden(widget, 'doughnut')" class="btn btn-sm btn-outline-primary fa fa-circle-o" t-on-click="() => this.onChangeChartType(widget.id, 'doughnut')" t-att-class="displayData.currentChartType === 'doughnut' ? 'active' : ''" t-att-disabled="isLoading"/>
+                                                        </div>
+                                                    </t>
+
+                                                    <!-- Sort Controls -->
+                                                    <div class="btn-group" role="toolbar" t-if="!displayData.isCombo and !isChartBtnHidden(widget, 'sort')">
+                                                        <button t-att-class="displayData.sortOrder === 'desc' ? 'active' : ''" t-att-disabled="displayData.currentChartType === 'pie' || displayData.currentChartType === 'doughnut' || isLoading" class="btn btn-sm btn-outline-primary fa fa-sort-amount-desc" t-on-click="() => this.onToggleSortOrder(widget.id, 'desc')"/>
+                                                        <button t-att-class="displayData.sortOrder === 'asc' ? 'active' : ''" t-att-disabled="displayData.currentChartType === 'pie' || displayData.currentChartType === 'doughnut' || isLoading" class="btn btn-sm btn-outline-primary fa fa-sort-amount-asc" t-on-click="() => this.onToggleSortOrder(widget.id, 'asc')"/>
+                                                    </div>
+
+                                                    <!-- Stack Controls (ẩn cho combo) -->
+                                                    <div class="btn-group" role="toolbar" t-if="!displayData.isCombo and !isChartBtnHidden(widget, 'stack')">
+                                                        <button t-att-class="displayData.isStacked ? 'active' : ''" t-att-disabled="displayData.currentChartType !== 'line' || isLoading" class="btn btn-sm btn-outline-primary fa fa-area-chart" t-on-click="() => this.onToggleStacked(widget.id)"/>
+                                                    </div>
+
+                                                    <!-- 🆕 TOP Limit Input - CHỈ hiển thị nếu widget có enableTopLimit = true -->
+                                                    <t t-if="widget.data.enableTopLimit">
+                                                        <div class="input-group" style="width: 180px;">
+                                                            <span class="input-group-text" t-att-title="widget.data.topLimitLabel || 'Số lượng items hiển thị'">
+                                                                <i t-attf-class="fa {{widget.data.topLimitIcon || 'fa-list-ol'}}"/>
+                                                            </span>
+                                                            <input type="number" class="form-control form-control-sm" t-att-value="displayData.topLimit || ''" t-att-placeholder="widget.data.topLimitPlaceholder || 'Tất cả'" min="1" max="1000" t-att-disabled="isLoading" t-on-input="(ev) => this.onChangeTopLimit(widget.id, ev.target.value)" style="max-width: 70px;"/>
+                                                            <!-- <button class="btn btn-sm btn-outline-secondary" t-on-click="() => this.onChangeTopLimit(widget.id, null)" t-att-disabled="isLoading || !displayData.topLimit" title="Hiển thị tất cả">
+                                                                <i class="fa fa-infinity"/>
+                                                            </button> -->
+                                                        </div>
+                                                    </t>
+                                                </div>
+                                                <h5 class="chart-title mb-2 text-start">
+                                                    <t t-esc="displayData.title"/>
+                                                    <HelpTooltip t-if="displayData.help" text="displayData.help"/>
+                                                </h5>
+                                            </div>
+
+                                            <t t-if="displayData.error">
+                                                <div class="widget-error">
+                                                    <i class="fa fa-exclamation-triangle"/>
+                                                    <p t-esc="displayData.error"/>
+                                                </div>
+                                            </t>
+                                            <t t-else="">
+                                                <div class="chart-wrapper">
+                                                    <ChartComponent
+                                                        t-key="widget.id + '_' + displayData.currentChartType + '_' + displayData.sortOrder + '_' + displayData.isStacked"
+                                                        type="displayData.currentChartType"
+                                                        data="displayData.chartData"
+                                                        options="displayData.chartOptions"
+                                                        title="displayData.title"
+                                                        action="displayData.action"
+                                                        dataIds="displayData.dataIds"
+                                                        dataDates="displayData.dataDates"
+                                                        widgetId="widget.id"
+                                                        filters="state.searchFilters"
+                                                        searchPanelConfig="state.searchPanelConfig"
+                                                        dataSource="displayData.dataSource" />
+                                                </div>
+                                            </t>
+                                        </div>
+                                    </t>
+                                </div>
+                            </div>
+                        </t>
+                    </div>
+                </t>
+            </div>
+        </div>
+    </t>
+</templates>

@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="t4_custom_dashboard.ImportExportDialog">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <t t-if="props.mode === 'export'">
+                            <i class="fa fa-download me-2"/>
+                            Xuất Dashboard
+                        </t>
+                        <t t-else="">
+                            <i class="fa fa-upload me-2"/>
+                            Nhập Dashboard
+                        </t>
+                    </h5>
+                    <button type="button" class="btn-close" t-on-click="props.onClose"/>
+                </div>
+                
+                <div class="modal-body">
+                    <!-- Export Mode -->
+                    <t t-if="props.mode === 'export'">
+                        <div class="alert alert-info">
+                            <i class="fa fa-info-circle"/> 
+                            Nhấp vào "Xuất Dashboard" để tải cấu hình dashboard hiện tại dưới dạng tệp JSON.
+                        </div>
+                        <p>
+                            Điều này sẽ xuất:
+                        </p>
+                        <ul>
+                            <li>Tên và mô tả của bảng điều khiển</li>
+                            <li>Tất cả cấu hình của các tiện ích</li>
+                            <li>Bố cục và vị trí</li>
+                        </ul>
+                    </t>
+
+                    <!-- Import Mode -->
+                    <t t-else="">
+                        <div class="mb-3">
+                            <label class="form-label">Chọn Json File *</label>
+                            <input type="file" 
+                                   class="form-control" 
+                                   accept=".json"
+                                   t-ref="fileInput"
+                                   t-on-change="handleFileSelect"/>
+                            <t t-if="state.fileName">
+                                <small class="text-success">
+                                    <i class="fa fa-check"/> Chọn: <t t-esc="state.fileName"/>
+                                </small>
+                            </t>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Tên biểu đồ (Tùy chọn)</label>
+                            <input type="text" 
+                                   class="form-control" 
+                                   t-model="state.importName"
+                                   placeholder="Leave empty to use name from file"/>
+                            <small class="text-muted">
+                                Nếu để trống, sẽ sử dụng tên từ tệp đã nhập
+                            </small>
+                        </div>
+
+                        <div class="alert alert-warning">
+                            <i class="fa fa-exclamation-triangle"/> 
+                            Điều này sẽ tạo ra một bảng điều khiển mới. Các bảng điều khiển hiện có của bạn sẽ không bị ảnh hưởng.
+                        </div>
+                    </t>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" t-on-click="props.onClose">
+                        <i class="fa fa-times"/> Hủy
+                    </button>
+                    
+                    <t t-if="props.mode === 'export'">
+                        <button type="button" class="btn btn-primary" t-on-click="handleExport">
+                            <i class="fa fa-download"/> Xuất
+                        </button>
+                    </t>
+                    <t t-else="">
+                        <button type="button" 
+                                class="btn btn-primary" 
+                                t-on-click="handleImport"
+                                t-att-disabled="!state.fileContent">
+                            <i class="fa fa-upload"/> Nhập
+                        </button>
+                    </t>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

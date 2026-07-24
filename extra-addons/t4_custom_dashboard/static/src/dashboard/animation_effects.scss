@@ -1,0 +1,390 @@
+/* ==========================================
+   STAT CARD ANIMATIONS
+   ========================================== */
+
+/* Pulse effect khi đang update */
+.stat-card.stat-updating {
+    animation: statPulse 0.8s ease-in-out;
+}
+
+@keyframes statPulse {
+
+    0%,
+    100% {
+        transform: scale(1);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    50% {
+        transform: scale(1.02);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    }
+}
+
+/* Value animation - số đếm */
+.stat-value {
+    transition: opacity 0.15s ease;
+    font-variant-numeric: tabular-nums;
+    /* Giữ width cố định khi số thay đổi */
+}
+
+.stat-value.value-animating {
+    color: inherit;
+    text-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+}
+
+/* Fade in animation cho value mới */
+@keyframes fadeInScale {
+    from {
+        opacity: 0;
+        transform: scale(0.8);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* Glow effect cho icon khi updating */
+.stat-card.stat-updating .stat-icon-wrapper i {
+    animation: iconGlow 0.8s ease-in-out;
+}
+
+@keyframes iconGlow {
+
+    0%,
+    100% {
+        filter: drop-shadow(0 0 0 rgba(255, 255, 255, 0));
+    }
+
+    50% {
+        filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.8));
+    }
+}
+
+/* Trend animation */
+.stat-trend {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.3s ease;
+}
+
+.stat-trend i {
+    transition: transform 0.3s ease;
+}
+
+.stat-trend.trend-up {
+    color: #10b981 !important;
+}
+
+.stat-trend.trend-up i {
+    animation: bounceUp 0.6s ease-out;
+}
+
+.stat-trend.trend-down {
+    color: #ef4444 !important;
+}
+
+.stat-trend.trend-down i {
+    animation: bounceDown 0.6s ease-out;
+}
+
+@keyframes bounceUp {
+
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(-5px);
+    }
+}
+
+@keyframes bounceDown {
+
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(5px);
+    }
+}
+
+/* ==========================================
+   CHART ANIMATIONS
+   ========================================== */
+
+/* Chart container update state */
+.chart-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    transition: opacity 0.3s ease;
+}
+
+.chart-container.chart-updating {
+    /* Không làm mờ để người dùng vẫn thấy chart cũ */
+    opacity: 1;
+}
+
+/* Update indicator */
+.chart-update-indicator {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: rgba(124, 58, 237, 0.9);
+    color: white;
+    padding: 6px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    z-index: 10;
+    animation: slideInRight 0.3s ease;
+}
+
+@keyframes slideInRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.chart-update-indicator i {
+    font-size: 14px;
+}
+
+/* Canvas smooth transition */
+.chart-container canvas {
+    transition: filter 0.3s ease;
+}
+
+.chart-container.chart-updating canvas {
+    /* Subtle blur khi đang update */
+    filter: brightness(1.05);
+}
+
+/* ==========================================
+   WIDGET LOADING OVERLAY IMPROVEMENTS
+   ========================================== */
+
+   .widget-loading-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(255, 255, 255, 1); /* Nền trắng hoàn toàn lúc mới load */
+    z-index: 50; 
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.3s ease;
+}
+
+@keyframes fadeInOverlay {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+/* Spinner animation */
+.widget-loading-overlay i.fa-spinner {
+    animation: spinPulse 1s linear infinite;
+}
+
+@keyframes spinPulse {
+    0% {
+        transform: rotate(0deg) scale(1);
+    }
+
+    50% {
+        transform: rotate(180deg) scale(1.1);
+    }
+
+    100% {
+        transform: rotate(360deg) scale(1);
+    }
+}
+
+/* ==========================================
+   GENERAL SMOOTH TRANSITIONS
+   ========================================== */
+
+/* Hover effect — chỉ thay đổi shadow, không dùng transform (tránh xung đột với absolute positioning của GridStack) */
+.grid-stack-item-content {
+    transition: box-shadow 0.2s ease;
+}
+
+.grid-stack-item-content:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Prevent content shift during animations */
+.stat-card,
+.chart-widget {
+    will-change: auto;
+}
+
+/* Performance optimization */
+@media (prefers-reduced-motion: reduce) {
+
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+/* ==========================================
+   NUMBER COUNTER ANIMATION STYLES
+   ========================================== */
+
+/* Tabular numbers để width không nhảy */
+.stat-value {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+}
+
+/* Smooth color transition */
+.stat-card {
+    transition: background 0.5s ease;
+}
+
+/* Icon rotation on update */
+.stat-card.stat-updating .stat-icon-wrapper {
+    animation: iconRotate 0.8s ease;
+}
+
+@keyframes iconRotate {
+    0% {
+        transform: rotate(0deg);
+    }
+
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+/* ==========================================
+   CHART TYPE SPECIFIC ANIMATIONS
+   ========================================== */
+
+/* Pie/Doughnut chart animation */
+.chart-container[data-chart-type="pie"] canvas,
+.chart-container[data-chart-type="doughnut"] canvas {
+    animation: rotateIn 0.8s ease-out;
+}
+
+@keyframes rotateIn {
+    from {
+        transform: rotate(-90deg) scale(0.8);
+        opacity: 0;
+    }
+
+    to {
+        transform: rotate(0deg) scale(1);
+        opacity: 1;
+    }
+}
+
+/* Bar chart animation */
+.chart-container[data-chart-type="bar"] canvas {
+    animation: slideUpFade 0.6s ease-out;
+}
+
+@keyframes slideUpFade {
+    from {
+        transform: translateY(20px);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+/* Line chart animation */
+.chart-container[data-chart-type="line"] canvas {
+    animation: drawLine 0.8s ease-out;
+}
+
+@keyframes drawLine {
+    from {
+        clip-path: inset(0 100% 0 0);
+    }
+
+    to {
+        clip-path: inset(0 0 0 0);
+    }
+}
+
+/* ==========================================
+   MICRO INTERACTIONS
+   ========================================== */
+
+/* Button hover effects trong chart controls */
+.chart-header .btn-group button {
+    transition: all 0.2s ease;
+}
+
+.chart-header .btn-group button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.chart-header .btn-group button.active {
+    animation: buttonPop 0.3s ease;
+}
+
+@keyframes buttonPop {
+    0% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.1);
+    }
+
+    100% {
+        transform: scale(1);
+    }
+}
+
+/* Smooth scroll trong dashboard */
+.custom-dashboard {
+    scroll-behavior: smooth;
+}
+
+/* Widget appear animation khi thêm mới */
+@keyframes widgetAppear {
+    from {
+        opacity: 0;
+        transform: scale(0.9);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.grid-stack-item.new-widget {
+    animation: widgetAppear 0.5s ease-out;
+}

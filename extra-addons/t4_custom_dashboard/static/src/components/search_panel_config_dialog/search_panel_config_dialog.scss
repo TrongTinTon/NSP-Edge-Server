@@ -1,0 +1,87 @@
+// ============================================================
+// SearchPanelConfigDialog styles
+// ============================================================
+
+.spc-overlay {
+    background: rgba(0, 0, 0, 0.5);
+}
+
+.spc-json-editor {
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+// Filter list rows
+.spc-filter-list {
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.spc-filter-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: #fff;
+    border-bottom: 1px solid #dee2e6;
+    cursor: default;
+    transition: background 0.15s;
+
+    &:last-child {
+        border-bottom: none;
+    }
+
+    &:hover {
+        background: #f8f9fa;
+    }
+
+    &[draggable="true"] {
+        cursor: grab;
+
+        &:active {
+            cursor: grabbing;
+        }
+    }
+}
+
+.spc-drag-handle {
+    color: #adb5bd;
+    cursor: grab;
+    padding: 0 4px;
+
+    &:hover {
+        color: #6c757d;
+    }
+}
+
+.spc-filter-id {
+    min-width: 130px;
+    color: #6c757d;
+    font-family: monospace;
+    font-size: 12px;
+}
+
+.spc-filter-label {
+    flex: 1;
+    font-weight: 500;
+}
+
+.spc-applies {
+    min-width: 60px;
+    text-align: center;
+}
+
+.spc-filter-actions {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+// DynamicFieldInput widget picker chips
+.widget-picker-chips {
+    .btn {
+        font-size: 12px;
+        padding: 2px 8px;
+    }
+}

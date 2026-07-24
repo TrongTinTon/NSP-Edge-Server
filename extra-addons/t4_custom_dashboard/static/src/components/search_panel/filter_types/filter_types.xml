@@ -1,0 +1,235 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <!-- ================================================================== -->
+    <!-- CompanyFilter: multi-select checkboxes for res.company              -->
+    <!-- ================================================================== -->
+    <t t-name="t4_custom_dashboard.CompanyFilter">
+        <div class="t4-filter-company">
+            <t t-if="state.loading">
+                <div class="text-center py-2 small text-muted">
+                    <i class="fa fa-spinner fa-spin me-1"/>
+                    Đang tải...
+                </div>
+            </t>
+            <t t-else="">
+                <div t-if="state.companies.length === 0" class="small text-muted fst-italic ps-2 py-1">
+                    Không có công ty
+                </div>
+                <t t-foreach="state.companies" t-as="company" t-key="company.id">
+                    <div class="o_search_panel_item t4-filter-item"
+                         t-att-class="{ 'o_search_panel_item_selected': isSelected(company.id) }"
+                         t-on-click="() => this.toggleCompany(company.id)">
+                        <input type="checkbox"
+                               t-att-checked="isSelected(company.id)"
+                               class="me-2"
+                               t-on-click.stop="() => this.toggleCompany(company.id)"/>
+                        <i class="fa fa-building me-2 text-secondary"/>
+                        <span class="flex-grow-1" t-esc="company.name"/>
+                    </div>
+                </t>
+            </t>
+        </div>
+    </t>
+
+    <!-- ================================================================== -->
+    <!-- M2mFilter: multi-select via select2 for any model                  -->
+    <!-- ================================================================== -->
+    <t t-name="t4_custom_dashboard.M2mFilter">
+        <div class="t4-filter-m2m p-2">
+            <t t-if="state.loading">
+                <div class="text-center py-2 small text-muted">
+                    <i class="fa fa-spinner fa-spin me-1"/>
+                    Đang tải...
+                </div>
+            </t>
+            <t t-else="">
+                <div t-if="state.error" class="small text-danger mb-1">
+                    <i class="fa fa-exclamation-triangle me-1"/>
+                    <t t-esc="state.error"/>
+                </div>
+                <select t-ref="select"
+                        class="form-select"
+                        multiple="multiple"
+                        style="width: 100%;"/>
+                <div t-if="!state.error and state.options.length === 0"
+                     class="small text-muted fst-italic mt-1">
+                    Không có dữ liệu
+                </div>
+            </t>
+        </div>
+    </t>
+
+    <!-- ================================================================== -->
+    <!-- M2mTreeFilter: hierarchical checkbox tree                           -->
+    <!-- ================================================================== -->
+    <t t-name="t4_custom_dashboard.M2mTreeFilter">
+        <div class="t4-filter-m2m-tree">
+            <t t-if="state.loading">
+                <div class="text-center py-2 small text-muted">
+                    <i class="fa fa-spinner fa-spin me-1"/>
+                    Đang tải...
+                </div>
+            </t>
+            <t t-else="">
+                <div t-if="currentTree.length > 0" class="d-flex gap-1 px-2 pb-1">
+                    <button class="btn btn-link btn-sm p-0 small" t-on-click="() => this.selectAll()">Chọn tất cả</button>
+                    <span class="text-muted">|</span>
+                    <button class="btn btn-link btn-sm p-0 small" t-on-click="() => this.clearAll()">Bỏ chọn</button>
+                </div>
+                <div class="t4-tree-container">
+                    <t t-call="t4_custom_dashboard.M2mTreeNode"
+                       t-foreach="currentTree"
+                       t-as="node"
+                       t-key="node.id">
+                        <t t-set="level" t-value="0"/>
+                    </t>
+                </div>
+                <div t-if="currentTree.length === 0" class="small text-muted fst-italic ps-2 py-1">
+                    Không có dữ liệu
+                </div>
+            </t>
+        </div>
+    </t>
+
+    <!-- Recursive tree node sub-template -->
+    <t t-name="t4_custom_dashboard.M2mTreeNode">
+        <div class="t4-tree-node" t-att-style="'margin-left: ' + (level * 16) + 'px'">
+            <div class="o_search_panel_item t4-filter-item"
+                 t-att-class="{ 'o_search_panel_item_selected': isSelected(node.id) }">
+                <!-- Expand toggle -->
+                <div class="expand-toggle"
+                     t-if="node.children &amp;&amp; node.children.length > 0"
+                     t-on-click.stop="() => this.toggleExpand(node.id)">
+                    <i t-att-class="{
+                        'fa': true,
+                        'fa-caret-right': !isExpanded(node.id),
+                        'fa-caret-down': isExpanded(node.id)
+                    }"/>
+                </div>
+                <div class="expand-toggle" t-else=""/>
+
+                <input type="checkbox"
+                       t-att-checked="isSelected(node.id)"
+                       class="me-2"
+                       t-on-click.stop="() => this.toggleNode(node.id)"/>
+
+                <div class="flex-grow-1 d-flex align-items-center t4-node-content"
+                     t-on-click="() => this.toggleExpand(node.id)">
+                    <i class="fa fa-map-marker-alt me-2 text-danger" style="font-size: 11px;"/>
+                    <span class="small" t-esc="node.name"/>
+                    <span class="ms-auto badge rounded-pill bg-info"
+                          style="font-size: 9px;"
+                          t-if="node.children &amp;&amp; node.children.length > 0">
+                        <t t-esc="node.children.length"/>
+                    </span>
+                </div>
+            </div>
+
+            <!-- Recursive children -->
+            <t t-if="node.children &amp;&amp; node.children.length > 0 &amp;&amp; isExpanded(node.id)">
+                <t t-call="t4_custom_dashboard.M2mTreeNode"
+                   t-foreach="node.children"
+                   t-as="node"
+                   t-key="node.id">
+                    <t t-set="level" t-value="level + 1"/>
+                </t>
+            </t>
+        </div>
+    </t>
+
+    <!-- ================================================================== -->
+    <!-- DateRangeFilter: preset chips + manual from/to date inputs          -->
+    <!-- ================================================================== -->
+    <t t-name="t4_custom_dashboard.DateRangeFilter">
+        <div class="t4-filter-date-range p-2">
+            <!-- Active value display -->
+            <t t-if="hasValue">
+                <div class="active-filters-display mb-2">
+                    <div class="small text-muted mb-1">
+                        <i class="fa fa-filter me-1"/>
+                        Đang áp dụng:
+                    </div>
+                    <t t-if="activePreset">
+                        <span class="badge bg-success" style="color:#fff">
+                            <i class="fa fa-calendar-alt me-1"/>
+                            <t t-esc="availablePresets.find(p => p.key === activePreset).label"/>
+                            <i class="fa fa-times ms-1" style="cursor:pointer;"
+                               t-on-click="() => this.clearAll()"/>
+                        </span>
+                    </t>
+                    <t t-else="">
+                        <span class="badge bg-primary" style="color:#fff">
+                            <i class="fa fa-calendar me-1"/>
+                            <t t-if="currentValue.from">Từ: <t t-esc="currentValue.from"/></t>
+                            <t t-if="currentValue.from and currentValue.to"> — </t>
+                            <t t-if="currentValue.to">Đến: <t t-esc="currentValue.to"/></t>
+                            <i class="fa fa-times ms-1" style="cursor:pointer;"
+                               t-on-click="() => this.clearAll()"/>
+                        </span>
+                    </t>
+                </div>
+            </t>
+
+            <!-- Preset chips -->
+            <div class="mb-2">
+                <label class="form-label small fw-bold">Chọn Nhanh</label>
+                <div class="d-flex flex-wrap gap-1">
+                    <t t-foreach="availablePresets" t-as="preset" t-key="preset.key">
+                        <button class="btn btn-sm"
+                                t-att-class="activePreset === preset.key ? 'btn-success' : 'btn-outline-secondary'"
+                                t-on-click="() => this.selectPreset(preset.key)"
+                                style="font-size: 11px; padding: 2px 8px;">
+                            <t t-esc="preset.label"/>
+                        </button>
+                    </t>
+                </div>
+            </div>
+
+            <div class="text-center text-muted small my-1">— HOẶC —</div>
+
+            <!-- Manual date inputs - Odoo DateTimeInput respect user lang format -->
+            <div class="mb-1">
+                <label class="form-label small fw-bold">Từ Ngày</label>
+                <DateTimeInput
+                    type="'date'"
+                    value="fromDate"
+                    onChange="(d) => this.onFromDateChange(d)"
+                    class="'form-control form-control-sm'"
+                    placeholder="'dd/mm/yyyy'"/>
+            </div>
+            <div>
+                <label class="form-label small fw-bold">Đến Ngày</label>
+                <DateTimeInput
+                    type="'date'"
+                    value="toDate"
+                    onChange="(d) => this.onToDateChange(d)"
+                    class="'form-control form-control-sm'"
+                    placeholder="'dd/mm/yyyy'"/>
+            </div>
+        </div>
+    </t>
+
+    <!-- ================================================================== -->
+    <!-- SelectionFilter: radio (single) or checkbox group (multi)          -->
+    <!-- ================================================================== -->
+    <t t-name="t4_custom_dashboard.SelectionFilter">
+        <div class="t4-filter-selection p-2">
+            <t t-if="options.length === 0">
+                <div class="small text-muted fst-italic">Không có tùy chọn</div>
+            </t>
+            <t t-foreach="options" t-as="opt" t-key="opt.value">
+                <div class="o_search_panel_item t4-filter-item"
+                     t-att-class="{ 'o_search_panel_item_selected': isSelected(opt.value) }"
+                     t-on-click="() => this.toggleOption(opt.value)">
+                    <input t-att-type="isMulti ? 'checkbox' : 'radio'"
+                           t-att-checked="isSelected(opt.value)"
+                           class="me-2"
+                           t-on-click.stop="() => this.toggleOption(opt.value)"/>
+                    <span t-esc="opt.label"/>
+                </div>
+            </t>
+        </div>
+    </t>
+
+</templates>

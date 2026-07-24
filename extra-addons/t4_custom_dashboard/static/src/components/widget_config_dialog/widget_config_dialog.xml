@@ -1,0 +1,589 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<templates xml:space="preserve">
+    <t t-name="t4_custom_dashboard.WidgetConfigDialog">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <t t-if="props.widget">Chỉnh Sửa Widget</t>
+                        <t t-else="">Thêm Widget</t>
+                    </h5>
+                    <button type="button" class="btn-close" t-on-click="props.onCancel"/>
+                </div>
+                
+                <div class="modal-body">
+                    <t t-if="state.loading">
+                        <div class="text-center p-4">
+                            <i class="fa fa-spinner fa-spin fa-2x"/>
+                        </div>
+                    </t>
+                    <t t-else="">
+                        <div class="row">
+                            <!-- Left column: Configuration -->
+                            <div class="col-lg-7">
+                                <div class="mb-3">
+                                    <label class="form-label">Loại Widget</label>
+                                    <select class="form-select" t-model="state.widgetType">
+                                        <option value="stat">📊 Thẻ Thống Kê</option>
+                                        <option value="stat_action">🎯 Thẻ Thống Kê + Drill-Down</option>
+                                        <option value="chart">📈 Biểu Đồ</option>
+                                        <option value="kanban_embed">🗂️ Nhúng Kanban View</option>
+                                    </select>
+                                    <small class="form-text text-muted">
+                                        <t t-if="state.widgetType === 'stat_action'">Stat clickable — click số mở list view với domain filter.</t>
+                                        <t t-elif="state.widgetType === 'kanban_embed'">Nhúng kanban/list view của model bất kỳ vào dashboard cell.</t>
+                                    </small>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label class="form-label">Tiêu Đề *</label>
+                                    <input type="text" class="form-control" t-model="state.title" placeholder="Enter widget title"/>
+                                </div>
+
+                                <t t-if="needsDataSource">
+                                <div class="mb-3">
+                                    <label class="form-label">Loại Nguồn Dữ Liệu *</label>
+                                    <select class="form-select" t-model="state.dataSourceType">
+                                        <option value="python">🐍 Hàm Python</option>
+                                    </select>
+                                </div>
+                                </t>
+
+                                <t t-if="needsDataSource and isPythonSource">
+                                    <div class="mb-3">
+                                        <label class="form-label">Model Python *</label>
+                                        <input type="text" class="form-control font-monospace" t-model="state.pythonModel" placeholder="res.partner"/>
+                                        <small class="form-text text-muted">
+                                            Nhập tên model Odoo (ví dụ: res.partner)
+                                        </small>
+                                    </div>
+
+                                    <div class="mb-3">
+                                        <label class="form-label">Python Method *</label>
+                                        <input type="text" class="form-control font-monospace" t-model="state.pythonMethod" placeholder="get_dashboard_stats"/>
+                                        <small class="form-text text-muted">
+                                            Nhập tên phương thức để gọi trên model
+                                        </small>
+                                    </div>
+
+                                    <div class="mb-3">
+                                        <label class="form-label">Tham Số (JSON)</label>
+                                        <textarea class="form-control font-monospace" t-model="state.pythonParams" rows="4" placeholder="{&quot;date_from&quot;: &quot;2024-01-01&quot;, &quot;date_to&quot;: &quot;2024-12-31&quot;}"/>
+                                        <small class="form-text text-muted">
+                                            <strong>Cho Widget Thống Kê:</strong> Phương thức phải trả về {'value': số, 'trend': 'up'|'down'|'neutral', 'trend_value': '10%'}<br/>
+                                            <strong>Cho Widget Biểu Đồ:</strong> Phương thức phải trả về {'labels': [...], 'values': [...]}<br/>
+                                        </small>
+                                    </div>
+                                </t>
+
+                                <t t-if="isStatLikeWidget">
+                                    <h6 class="mt-4 mb-3">🎨 Cấu Hình Hiển Thị</h6>
+                                
+                                    <div class="mb-3">
+                                        <label class="form-label">Biểu Tượng</label>
+                                        <select class="form-select" t-model="state.icon" style="font-size: 14px;">
+                                            <option value="fa-chart-bar">📊 Biểu Đồ Cột</option>
+                                            <option value="fa-shopping-cart">🛒 Giỏ Hàng</option>
+                                            <option value="fa-users">👥 Người Dùng</option>
+                                            <option value="fa-dollar">💰 Đô La</option>
+                                            <option value="fa-file-text">📄 Tệp Văn Bản</option>
+                                            <option value="fa-briefcase">💼 Cặp Công Việc</option>
+                                            <option value="fa-tasks">✅ Nhiệm Vụ</option>
+                                            <option value="fa-trophy">🏆 Cúp</option>
+                                            <option value="fa-line-chart">📈 Biểu Đồ Đường</option>
+                                            <option value="fa-pie-chart">🥧 Biểu Đồ Tròn</option>
+                                            <option value="fa-cubes">📦 Khối (Tồn Kho)</option>
+                                            <option value="fa-truck">🚚 Xe Tải (Giao Hàng)</option>
+                                            <option value="fa-money">💵 Tiền</option>
+                                            <option value="fa-credit-card">💳 Thẻ Tín Dụng</option>
+                                            <option value="fa-archive">🗄️ Lưu Trữ</option>
+                                            <option value="fa-inbox">📥 Hộp Thư Đến</option>
+                                        </select>
+                                    </div>
+                                
+                                    <div class="mb-3">
+                                        <label class="form-label">Color Theme</label>
+                                        
+                                        <div class="mb-3">
+                                            <label class="form-label small text-muted">Mẫu Màu:</label>
+                                            <div class="d-flex flex-wrap gap-2">
+                                                <t t-foreach="colorSchemes" t-as="scheme" t-key="scheme.name">
+                                                    <button type="button" class="btn btn-sm p-0" style="width: 50px; height: 50px; border-radius: 8px; border: 2px solid #dee2e6;" t-att-style="'background-color: ' + scheme.bg + '; ' +                                                                         (state.bgColor === scheme.bg ? 'border-color: #000 !important; box-shadow: 0 0 0 2px ' + scheme.bg + ';' : '')" t-att-title="scheme.name" t-on-click="() =&gt; this.applyColorScheme(scheme)">
+                                                        <i class="fa fa-check" t-att-style="'color: ' + scheme.text + '; ' +                                                                        (state.bgColor === scheme.bg ? '' : 'opacity: 0;')"/>
+                                                    </button>
+                                                </t>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="row g-3">
+                                            <div class="col-6">
+                                                <label class="form-label small">Màu Nền</label>
+                                                <div class="input-group">
+                                                    <input type="color" class="form-control form-control-color" t-model="state.bgColor" title="Choose background color" style="height: 50px;"/>
+                                                    <input type="text" class="form-control font-monospace" t-model="state.bgColor" placeholder="#7c3aed" style="max-width: 100px;"/>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="col-6">
+                                                <label class="form-label small">Màu Chữ/Biểu Tượng</label>
+                                                <div class="input-group">
+                                                    <input type="color" class="form-control form-control-color" t-model="state.textColor" title="Choose text color" style="height: 50px;"/>
+                                                    <input type="text" class="form-control font-monospace" t-model="state.textColor" placeholder="#ffffff" style="max-width: 100px;"/>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </t>
+                                
+                                <t t-if="isChartWidget">
+                                    <h6 class="mt-4 mb-3">🎯 Drill-Down Cho Chart (Click Cột/Slice → List View)</h6>
+                                    <div class="mb-3 form-check form-switch">
+                                        <input type="checkbox" class="form-check-input" id="chartEnableDrill" t-model="state.chartEnableDrill"/>
+                                        <label class="form-check-label" for="chartEnableDrill">
+                                            Cho phép click cột/slice/point mở list view filter theo dữ liệu đó
+                                        </label>
+                                        <small class="form-text text-muted d-block">
+                                            Bật để truyền <code>clicked_id</code> (categorical) hoặc
+                                            <code>clicked_date</code> (time-series) vào domain method.
+                                            Backend phải trả thêm <code>ids</code> hoặc <code>dates</code>
+                                            trong payload chart.
+                                        </small>
+                                    </div>
+                                </t>
+
+                                <t t-if="actionConfigVisible">
+                                    <h6 class="mt-4 mb-3">🎯 Cấu Hình Drill-Down (Click → List View)</h6>
+                                    <div class="alert alert-info mb-3" style="font-size: 13px;">
+                                        <strong>🌟 Recommended:</strong> Dùng <code>Action XML ID</code> dưới đây để
+                                        tham chiếu action có sẵn của <code>t4_sti</code> (giữ nguyên context HID/RFID,
+                                        nút "Quét", view t4_ search bar). Bỏ trống → fallback build action từ
+                                        Model + Context.
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Action XML ID</label>
+                                        <input type="text" class="font-monospace form-control" t-model="state.actionXmlId" placeholder="base.action_partner_form"/>
+                                        <small class="form-text text-muted">
+                                            XML ID action <code>ir.actions.act_window</code> có sẵn. Frontend sẽ
+                                            load full action (views, context, domain mặc định) rồi AND-merge
+                                            drill domain. Ví dụ:
+                                            <code>base.action_partner_form</code>,
+                                            <code>t4_sti.action_t4_picking_incoming_list</code>,
+                                            <code>t4_sti.action_t4_product_tracking</code>.
+                                        </small>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Action Model (chỉ khi không có XML ID)</label>
+                                        <input type="text" class="form-control font-monospace" t-model="state.actionModel" placeholder="stock.picking"/>
+                                        <small class="form-text text-muted">Model sẽ mở list view khi user click stat. Bỏ qua nếu đã có Action XML ID.</small>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Tên Action (tiêu đề list)</label>
+                                        <input type="text" class="form-control" t-model="state.actionName" placeholder="Phiếu Trễ Hạn (mặc định = tiêu đề widget)"/>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Domain Method *</label>
+                                        <input type="text" class="form-control font-monospace" t-model="state.actionDomainMethod" placeholder="get_overdue_pickings_domain"/>
+                                        <small class="form-text text-muted">
+                                            Method trên Domain Model (default <code>t4tek.dashboard.report</code>)
+                                            trả về Odoo domain list cho drill-down. Method nhận
+                                            <code>filters</code>, <code>extra_domain</code>, +params.
+                                        </small>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Domain Model (optional)</label>
+                                        <input type="text" class="form-control font-monospace" t-model="state.actionDomainModel" placeholder="t4tek.dashboard.report (default)"/>
+                                        <small class="form-text text-muted">Model chứa <code>domain_method</code>. Default <code>t4tek.dashboard.report</code>.</small>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Domain Params (JSON)</label>
+                                        <textarea class="form-control font-monospace" t-model="state.actionDomainParams" rows="2" placeholder="{&quot;process_codes&quot;: [&quot;out_sale&quot;]}"/>
+                                        <small class="form-text text-muted">Tham số bổ sung truyền vào domain method.</small>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">View Mode</label>
+                                        <input type="text" class="form-control font-monospace" t-model="state.actionViewMode" placeholder="list,form"/>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Action Context (JSON)</label>
+                                        <textarea class="form-control font-monospace" t-model="state.actionContext" rows="2" placeholder="{&quot;list_view_ref&quot;: &quot;t4_sti.view_t4_picking_list&quot;, &quot;form_view_ref&quot;: &quot;t4_sti.view_t4_picking_form&quot;}"/>
+                                        <small class="form-text text-muted">
+                                            Context truyền vào action. Dùng <code>list_view_ref</code> /
+                                            <code>form_view_ref</code> để force mở view t4_* thay vì view default.
+                                        </small>
+                                    </div>
+                                </t>
+
+                                <t t-if="isKanbanEmbedWidget">
+                                    <h6 class="mt-4 mb-3">🗂️ Cấu Hình Kanban Embed</h6>
+                                    <div class="mb-3">
+                                        <label class="form-label">Model *</label>
+                                        <input type="text" class="form-control font-monospace" t-model="state.embedModel" placeholder="t4.picking.summary.card"/>
+                                        <small class="form-text text-muted">Model của view sẽ embed.</small>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">View XML ID</label>
+                                        <input type="text" class="form-control font-monospace" t-model="state.embedViewXmlId" placeholder="t4_sti.view_t4_picking_summary_kanban"/>
+                                        <small class="form-text text-muted">
+                                            XML ID của view (kanban/list). Để trống → dùng default view của model.
+                                        </small>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">View Type</label>
+                                        <select class="form-select" t-model="state.embedViewType">
+                                            <option value="kanban">Kanban</option>
+                                            <option value="list">List</option>
+                                        </select>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Context (JSON)</label>
+                                        <textarea class="form-control font-monospace" t-model="state.embedContext" rows="2" placeholder="{&quot;allowed_process_codes&quot;: [&quot;out_sale&quot;]}"/>
+                                        <small class="form-text text-muted">Context truyền vào view (filter động, scope...).</small>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Domain (JSON)</label>
+                                        <textarea class="form-control font-monospace" t-model="state.embedDomain" rows="2" placeholder="[[&quot;code&quot;, &quot;=&quot;, &quot;outgoing&quot;]]"/>
+                                        <small class="form-text text-muted">Domain filter view (định dạng Odoo polish notation).</small>
+                                    </div>
+                                </t>
+
+                                <t t-if="isChartWidget">
+                                    <h6 class="mt-4 mb-3">📊 Cấu Hình Biểu Đồ</h6>
+                                
+                                    <div class="mb-3">
+                                        <label class="form-label">Loại Biểu Đồ Mặc Định *</label>
+                                        <div class="row g-3">
+                                            <div class="col-6">
+                                                <button type="button" class="btn w-100 p-3 text-start" t-att-class="state.chartType === 'bar' ? 'btn-primary' : 'btn-outline-secondary'" t-on-click="() =&gt; this.state.chartType = 'bar'">
+                                                    <div class="d-flex align-items-center">
+                                                        <div style="font-size: 32px; margin-right: 12px;">📊</div>
+                                                        <div>
+                                                            <strong>Biểu Đồ Cột</strong><br/>
+                                                            <small class="text-muted">Các cột dọc để so sánh</small>
+                                                        </div>
+                                                    </div>
+                                                </button>
+                                            </div>
+                                            
+                                            <div class="col-6">
+                                                <button type="button" class="btn w-100 p-3 text-start" t-att-class="state.chartType === 'line' ? 'btn-primary' : 'btn-outline-secondary'" t-on-click="() =&gt; this.state.chartType = 'line'">
+                                                    <div class="d-flex align-items-center">
+                                                        <div style="font-size: 32px; margin-right: 12px;">📈</div>
+                                                        <div>
+                                                            <strong>Biểu Đồ Đường</strong><br/>
+                                                            <small class="text-muted">Đường xu hướng theo thời gian</small>
+                                                        </div>
+                                                    </div>
+                                                </button>
+                                            </div>
+                                            
+                                            <div class="col-6">
+                                                <button type="button" class="btn w-100 p-3 text-start" t-att-class="state.chartType === 'pie' ? 'btn-primary' : 'btn-outline-secondary'" t-on-click="() =&gt; this.state.chartType = 'pie'">
+                                                    <div class="d-flex align-items-center">
+                                                        <div style="font-size: 32px; margin-right: 12px;">🥧</div>
+                                                        <div>
+                                                            <strong>Biểu Đồ Tròn</strong><br/>
+                                                            <small class="text-muted">Phân đoạn hình tròn cho tỷ lệ</small>
+                                                        </div>
+                                                    </div>
+                                                </button>
+                                            </div>
+                                            
+                                            <div class="col-6">
+                                                <button type="button" class="btn w-100 p-3 text-start" t-att-class="state.chartType === 'doughnut' ? 'btn-primary' : 'btn-outline-secondary'" t-on-click="() =&gt; this.state.chartType = 'doughnut'">
+                                                    <div class="d-flex align-items-center">
+                                                        <div style="font-size: 32px; margin-right: 12px;">🍩</div>
+                                                        <div>
+                                                            <strong>Biểu Đồ Vòng</strong><br/>
+                                                            <small class="text-muted">Biểu đồ vòng với lỗ ở giữa</small>
+                                                        </div>
+                                                    </div>
+                                                </button>
+                                            </div>
+
+                                            <div class="col-12">
+                                                <button type="button" class="btn w-100 p-3 text-start" t-att-class="state.chartType === 'combo' ? 'btn-primary' : 'btn-outline-secondary'" t-on-click="() =&gt; this.state.chartType = 'combo'">
+                                                    <div class="d-flex align-items-center">
+                                                        <div style="font-size: 32px; margin-right: 12px;">📊📈</div>
+                                                        <div>
+                                                            <strong>Biểu Đồ Kết Hợp (2 Trục)</strong><br/>
+                                                            <small class="text-muted">Cột (trục trái) + Đường (trục phải) — 2 metric khác đơn vị</small>
+                                                        </div>
+                                                    </div>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <small class="form-text text-muted mt-2 d-block">
+                                            💡 Người dùng có thể chuyển đổi giữa các loại biểu đồ sau khi widget được tạo (trừ Combo)
+                                        </small>
+                                    </div>
+
+                                    <!-- Combo-specific config: label trục + màu dataset phải -->
+                                    <t t-if="isComboChart">
+                                        <div class="mb-3 border rounded p-3 bg-light">
+                                            <h6 class="mb-3">⚙️ Cấu Hình Combo</h6>
+                                            <div class="row g-2">
+                                                <div class="col-6">
+                                                    <label class="form-label small">Label Trục Trái (Bar)</label>
+                                                    <input type="text" class="form-control form-control-sm" t-model="state.labelLeft" placeholder="VD: Số lượng SP"/>
+                                                </div>
+                                                <div class="col-6">
+                                                    <label class="form-label small">Label Trục Phải (Line)</label>
+                                                    <input type="text" class="form-control form-control-sm" t-model="state.labelRight" placeholder="VD: Giá trị tồn (VND)"/>
+                                                </div>
+                                                <div class="col-6">
+                                                    <label class="form-label small">Màu Cột Trái</label>
+                                                    <input type="color" class="form-control form-control-color form-control-sm" t-model="state.chartBgColorRight" style="display: none;"/>
+                                                    <input type="color" class="form-control form-control-color" t-model="state.chartBgColor"/>
+                                                </div>
+                                                <div class="col-6">
+                                                    <label class="form-label small">Màu Đường Phải</label>
+                                                    <input type="color" class="form-control form-control-color" t-model="state.chartBorderColorRight"/>
+                                                </div>
+                                            </div>
+                                            <small class="form-text text-muted mt-2 d-block">
+                                                Method Python phải trả: <code>{labels, values_left, values_right, label_left, label_right}</code>
+                                            </small>
+                                        </div>
+                                    </t>
+                                
+                                    <div class="mb-3">
+                                        <label class="form-label">Màu Biểu Đồ</label>
+
+                                        <div class="mb-3">
+                                            <label class="form-label small text-muted">Mẫu màu:</label>
+                                            <div class="d-flex flex-wrap gap-2">
+                                                <t t-foreach="colorSchemes" t-as="scheme" t-key="scheme.name">
+                                                    <button type="button" class="btn btn-sm p-0" style="width: 50px; height: 50px; border-radius: 8px; border: 2px solid #dee2e6;" t-att-style="'background-color: ' + scheme.bg + '; ' +                                                                         (state.chartBgColor === scheme.bg ? 'border-color: #000 !important; box-shadow: 0 0 0 2px ' + scheme.bg + ';' : '')" t-att-title="scheme.name" t-on-click="() =&gt; this.applyColorScheme(scheme)">
+                                                        <i class="fa fa-check" t-att-style="'color: ' + scheme.text + '; ' +                                                                        (state.chartBgColor === scheme.bg ? '' : 'opacity: 0;')"/>
+                                                    </button>
+                                                </t>
+                                            </div>
+                                        </div>
+
+                                        <div class="row g-3">
+                                            <div class="col-6">
+                                                <label class="form-label small">Màu Nền</label>
+                                                <div class="input-group">
+                                                    <input type="color" class="form-control form-control-color" t-model="state.chartBgColor" title="Choose chart background color" style="height: 50px;"/>
+                                                    <input type="text" class="form-control font-monospace" t-model="state.chartBgColor" placeholder="#7c3aed" style="max-width: 100px;"/>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="col-6">
+                                                <label class="form-label small">Màu Viền</label>
+                                                <div class="input-group">
+                                                    <input type="color" class="form-control form-control-color" t-model="state.chartBorderColor" title="Choose chart border color" style="height: 50px;"/>
+                                                    <input type="text" class="form-control font-monospace" t-model="state.chartBorderColor" placeholder="#5b21b6" style="max-width: 100px;"/>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                     <div class="mb-3">
+                                        <div class="form-check form-switch mb-2">
+                                            <input class="form-check-input" type="checkbox" id="enableTopLimit" t-model="state.enableTopLimit"/>
+                                            <label class="form-check-label" for="enableTopLimit">
+                                                <strong>📊 Giới Hạn Số Lượng Hiển Thị</strong>
+                                            </label>
+                                        </div>
+                                        
+                                        <t t-if="state.enableTopLimit">
+                                            <div class="input-group">
+                                                <span class="input-group-text">
+                                                    <i class="fa fa-list-ol"/>
+                                                </span>
+                                                <input type="number" class="form-control" t-model.number="state.topLimit" placeholder="Nhập số lượng (mặc định: 10)" min="1" max="1000"/>
+                                                <span class="input-group-text">items</span>
+                                            </div>
+                                            
+                                            <small class="form-text text-muted d-block mt-2">
+                                                Số lượng items tối đa hiển thị trên biểu đồ. User có thể thay đổi sau trên dashboard.
+                                            </small>
+                                            
+                                            <!-- Quick buttons -->
+                                            <div class="btn-group mt-2" role="group">
+                                                <button type="button" class="btn btn-sm btn-outline-secondary" t-on-click="() =&gt; this.state.topLimit = 5">Top 5</button>
+                                                <button type="button" class="btn btn-sm btn-outline-secondary" t-on-click="() =&gt; this.state.topLimit = 10">Top 10</button>
+                                                <button type="button" class="btn btn-sm btn-outline-secondary" t-on-click="() =&gt; this.state.topLimit = 20">Top 20</button>
+                                                <button type="button" class="btn btn-sm btn-outline-secondary" t-on-click="() =&gt; this.state.topLimit = 50">Top 50</button>
+                                            </div>
+                                        </t>
+                                        
+                                        <t t-else="">
+                                            <small class="form-text text-muted">
+                                                <i class="fa fa-info-circle"/> Hiển thị tất cả dữ liệu (không giới hạn)
+                                            </small>
+                                        </t>
+                                    </div>
+
+                                    <div class="mb-3">
+                                        <label class="form-label">📊 Cấu Hình Nhãn Trục</label>
+                                        
+                                        <div class="row g-3">
+                                            <div class="col-6">
+                                                <label class="form-label small">Nhãn Trục X (Ngang)</label>
+                                                <input type="text" class="form-control" t-model="state.xAxisLabel" placeholder="e.g., Danh mục, Tháng, Sản phẩm"/>
+                                                <small class="form-text text-muted">
+                                                    Nhãn cho trục ngang (phía dưới)
+                                                </small>
+                                            </div>
+                                            
+                                            <div class="col-6">
+                                                <label class="form-label small">Nhãn Trục Y (Dọc)</label>
+                                                <input type="text" class="form-control" t-model="state.yAxisLabel" placeholder="e.g., Số lượng, Doanh thu, Giá trị"/>
+                                                <small class="form-text text-muted">
+                                                    Nhãn cho trục dọc (bên trái)
+                                                </small>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="alert alert-info mt-2 mb-0" style="font-size: 12px;">
+                                            <i class="fa fa-info-circle"/> 
+                                            <strong>Lưu ý:</strong> Nhãn trục chỉ áp dụng cho biểu đồ Cột và Đường. Biểu đồ Tròn/Vòng không sử dụng trục.
+                                        </div>
+                                    </div>
+                                </t>
+                            </div>
+                            
+                            <!-- Right column: Preview -->
+                            <div class="col-lg-5">
+                                <div class="sticky-top" style="top: 20px;">
+                                    <h6 class="mb-3">👁️ Xem Trước Trực Tiếp</h6>
+                                    <div class="border rounded p-3 bg-light" style="min-height: 300px;">
+                                        <!-- Stat + Stat Action Widget Preview -->
+                                        <t t-if="isStatLikeWidget">
+                                            <div class="stat-card" t-att-style="statGradientStyle" style="border-radius: 10px;">
+                                                <!-- Căn giữa toàn bộ content giống StatsSummary -->
+                                                <div class="stat-body">
+                                                    <div class="stat-icon-wrapper">
+                                                        <i t-if="state.icon" t-attf-class="fa {{state.icon}}" t-att-style="'color: ' + state.textColor + ';'"/>
+                                                    </div>
+                                                    
+                                                    <div class="stat-title" t-att-style="'color: ' + state.textColor + '; opacity: 0.9;'" t-esc="state.title || 'Widget Title'"/>
+                                                    
+                                                    <!-- Value với preview -->
+                                                    <div class="stat-value" t-att-style="'color: ' + state.textColor + ';'">
+                                                        1,234
+                                                    </div>
+                                                    
+                                                    <div class="stat-footer">
+                                                        <span class="stat-trend trend-up" t-att-style="'color: ' + state.textColor + '; opacity: 0.85;'">
+                                                            <i class="fa fa-arrow-up"/>
+                                                            +12% from last month
+                                                        </span>
+                                                    </div>
+                                                    <div t-if="isStatActionWidget" class="mt-2 small" t-att-style="'color: ' + state.textColor + '; opacity: 0.85;'">
+                                                        <i class="fa fa-arrow-right"/> Click → mở list view
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </t>
+
+                                        <!-- Kanban Embed Preview -->
+                                        <t t-if="isKanbanEmbedWidget">
+                                            <div class="p-3" style="background: white; border-radius: 10px; border: 1px dashed #cbd5e1;">
+                                                <h6 class="mb-3" t-esc="state.title || 'Kanban Embed'"/>
+                                                <div class="text-center text-muted">
+                                                    <i class="fa fa-th-large" style="font-size: 64px; color: #94a3b8;"/>
+                                                    <div class="mt-3">
+                                                        <strong>Model:</strong> <code t-esc="state.embedModel || '(chưa nhập)'"/>
+                                                    </div>
+                                                    <div class="mt-1 small">
+                                                        <strong>View:</strong> <code t-esc="state.embedViewXmlId || 'default'"/>
+                                                        <span class="ms-2 badge bg-secondary" t-esc="state.embedViewType"/>
+                                                    </div>
+                                                    <div class="mt-3 small">
+                                                        Kanban thực sẽ render trong dashboard cell với<br/>
+                                                        context + domain đã cấu hình.
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </t>
+
+                                        <!-- Chart Widget Preview -->
+                                        <t t-if="isChartWidget">
+                                            <div class="chart-preview-card p-3" style="background: white; border-radius: 10px;">
+                                                <h6 class="mb-3" t-esc="state.title || 'Chart Title'"/>
+                                                <div class="text-center">
+                                                    <i t-attf-class="fa {{chartTypeIcon}}" style="font-size: 80px;" t-att-style="'color: ' + state.chartBgColor + ';'"/>
+                                                    <div class="mt-3">
+                                                        <span class="badge badge-primary px-3 py-2" t-att-style="'background-color: ' + state.chartBgColor + '; border-color: ' + state.chartBorderColor + ';'">
+                                                            <t t-esc="chartTypeLabel"/>
+                                                        </span>
+                                                    </div>
+                                                    <div class="mt-3 text-muted small">
+                                                        Bản xem trước hiển thị loại biểu đồ và màu sắc đã chọn.<br/>
+                                                        Dữ liệu thực tế sẽ được tải từ truy vấn của bạn.
+                                                    </div>
+                                                    <div t-if="state.chartEnableDrill" class="mt-2 small text-primary">
+                                                        <i class="fa fa-mouse-pointer"/> Click cột/slice/point → mở list view
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </t>
+                                    </div>
+                                    
+                                    <div class="alert alert-info mt-3" style="font-size: 13px;">
+                                        <i class="fa fa-info-circle"/> 
+                                        <strong>Mẹo:</strong> Bản xem trước tự động cập nhật khi bạn thay đổi cài đặt.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </t>
+                </div>
+
+                <!-- Filter Overrides section — kanban_embed không dùng -->
+                <t t-if="needsDataSource and searchPanelFilters.length &gt; 0">
+                    <div class="border-top pt-3 mt-3 px-3">
+                        <div class="d-flex align-items-center mb-2" style="cursor:pointer;" t-on-click="() =&gt; this.state.showFilterOverrides = !this.state.showFilterOverrides">
+                            <i t-att-class="state.showFilterOverrides ? 'fa fa-chevron-down' : 'fa fa-chevron-right'" class="me-2 text-muted"/>
+                            <h6 class="mb-0">Filter Overrides</h6>
+                            <span class="badge bg-secondary ms-2">
+                                <t t-esc="searchPanelFilters.length"/>
+                            </span>
+                        </div>
+                        <div t-if="state.showFilterOverrides">
+                            <p class="text-muted small mb-2">
+                                Ghi đè field path mặc định của từng filter cho widget này.
+                                Để trống để dùng giá trị mặc định của filter.
+                            </p>
+                            <table class="table table-sm table-bordered mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Filter ID</th>
+                                        <th>Field mặc định</th>
+                                        <th>Override Field</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <t t-foreach="searchPanelFilters" t-as="spf" t-key="spf.id">
+                                        <tr>
+                                            <td class="font-monospace small align-middle">
+                                                <t t-esc="spf.id"/>
+                                            </td>
+                                            <td class="text-muted small align-middle">
+                                                <t t-esc="spf.field || '—'"/>
+                                            </td>
+                                            <td>
+                                                <input type="text" class="form-control form-control-sm" t-att-value="state.filterOverrides[spf.id] || ''" t-on-input="(ev) =&gt; this.setFilterOverride(spf.id, ev.target.value)" placeholder="e.g. product_id.categ_id"/>
+                                            </td>
+                                        </tr>
+                                    </t>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </t>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" t-on-click="props.onCancel">
+                        <i class="fa fa-times"/> Hủy
+                    </button>
+                    <button type="button" class="btn btn-primary" t-on-click="validateAndSave" t-att-disabled="state.loading">
+                        <i class="fa fa-save"/> Lưu Widget
+                    </button>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

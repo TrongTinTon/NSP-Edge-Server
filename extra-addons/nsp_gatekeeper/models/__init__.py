@@ -8,6 +8,5 @@ from . import parking_transaction
 from . import api_service
 
 from . import measurement
-from . import parking_dashboard
 from . import device_whitelist
 

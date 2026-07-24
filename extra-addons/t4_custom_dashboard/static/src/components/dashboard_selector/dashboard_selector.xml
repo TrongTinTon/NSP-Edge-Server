@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="t4_custom_dashboard.DashboardSelector">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="fa fa-th-large me-2"/>
+                        Chọn Dashboard
+                    </h5>
+                    <button type="button" class="btn-close" t-on-click="props.onClose"/>
+                </div>
+                
+                <div class="modal-body">
+                    <!-- Search -->
+                    <div class="mb-3">
+                        <input type="text" 
+                               class="form-control" 
+                               t-model="state.searchText"
+                               placeholder="🔍 Search dashboards..."/>
+                    </div>
+
+                    <!-- Dashboard List -->
+                    <div class="dashboard-list" style="max-height: 400px; overflow-y: auto;">
+                        <t t-if="filteredDashboards.length === 0">
+                            <div class="alert alert-info">
+                                <i class="fa fa-info-circle"/> Không tìm thấy Dashboard
+                            </div>
+                        </t>
+                        
+                        <t t-foreach="filteredDashboards" t-as="dashboard" t-key="dashboard.id">
+                            <div class="dashboard-item p-3 mb-2 border rounded"
+                                 t-att-class="dashboard.id === props.currentDashboardId ? 'bg-primary bg-opacity-10 border-primary' : 'bg-light'"
+                                 style="cursor: pointer;"
+                                 t-on-click="() => this.switchDashboard(dashboard.id)">
+                                
+                                <div class="d-flex align-items-center justify-content-between">
+                                    <div class="flex-grow-1">
+                                        <div class="d-flex align-items-center gap-2">
+                                            <h6 class="mb-0">
+                                                <t t-if="dashboard.id === props.currentDashboardId">
+                                                    <i class="fa fa-check-circle text-primary me-1"/>
+                                                </t>
+                                                <t t-esc="dashboard.name"/>
+                                            </h6>
+                                            
+                                            <t t-if="dashboard.is_default">
+                                                <span class="badge bg-success">Mặc định</span>
+                                            </t>
+                                            
+                                            <t t-if="dashboard.is_shared">
+                                                <span class="badge bg-info">Chia sẽ</span>
+                                            </t>
+                                            
+                                            <t t-if="!dashboard.is_owner">
+                                                <span class="badge bg-secondary">
+                                                    <i class="fa fa-user"/> <t t-esc="dashboard.owner_name"/>
+                                                </span>
+                                            </t>
+                                        </div>
+                                        
+                                        <t t-if="dashboard.description">
+                                            <small class="text-muted" t-esc="dashboard.description"/>
+                                        </t>
+                                    </div>
+                                    
+                                    <!-- Actions (only for owner) -->
+                                    <t t-if="dashboard.is_owner">
+                                        <div class="btn-group" role="group">
+                                            <button class="btn btn-sm btn-outline-success" 
+                                                    t-on-click="(e) => this.setDefaultDashboard(e, dashboard.id)"
+                                                    t-att-disabled="dashboard.is_default"
+                                                    title="Set as Default">
+                                                <i class="fa fa-star"/>
+                                            </button>
+                                            
+                                            <button class="btn btn-sm btn-outline-primary" 
+                                                    t-on-click="(e) => this.duplicateDashboard(e, dashboard.id)"
+                                                    title="Duplicate">
+                                                <i class="fa fa-copy"/>
+                                            </button>
+                                            
+                                            <button class="btn btn-sm btn-outline-danger" 
+                                                    t-on-click="(e) => this.deleteDashboard(e, dashboard.id)"
+                                                    title="Delete">
+                                                <i class="fa fa-trash"/>
+                                            </button>
+                                        </div>
+                                    </t>
+                                </div>
+                            </div>
+                        </t>
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" t-on-click="props.onClose">
+                        Close
+                    </button>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>
