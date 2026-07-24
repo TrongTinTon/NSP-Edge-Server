@@ -7,7 +7,7 @@
                 <field name="name"/>
                 <field name="phone"/>
                 <field name="email"/>
-                <field name="user_code" string="Technical User Code"/>
+                <field name="user_code" string="Technical Code"/>
                 <filter string="Active" name="active" domain="[('active','=',True)]"/>
                 <filter string="Archived" name="archived" domain="[('active','=',False)]"/>
             </search>
@@ -18,13 +18,13 @@
         <field name="name">nsp.user.list</field>
         <field name="model">nsp.user</field>
         <field name="arch" type="xml">
-            <list string="Users">
-                <field name="active" widget="boolean_toggle"/>
+            <list string="Users" decoration-muted="not active">
                 <field name="name" decoration-bf="1"/>
                 <field name="phone" optional="show"/>
                 <field name="email" optional="show"/>
                 <field name="user_rfid_tid" string="Primary User TID" optional="show"/>
                 <field name="active_user_card_count" optional="show"/>
+                <field name="active" readonly="1" optional="hide"/>
                 <field name="user_code" string="Technical Code" optional="hide"/>
             </list>
         </field>
@@ -38,6 +38,7 @@
                 <header>
                     <button name="action_archive" type="object" string="Archive" invisible="not active" class="btn-secondary"/>
                     <button name="action_unarchive" type="object" string="Unarchive" invisible="active" class="btn-primary"/>
+                    <field name="active" invisible="1"/>
                 </header>
                 <sheet>
                     <div class="oe_title">
@@ -46,7 +47,6 @@
                     </div>
                     <group>
                         <group string="Contact">
-                            <field name="active"/>
                             <field name="phone"/>
                             <field name="email"/>
                         </group>
@@ -59,7 +59,7 @@
                         <page string="User Cards">
                             <field name="user_card_ids" context="{'default_user_id': id}">
                                 <list editable="bottom">
-                                    <field name="card_id" options="{'no_create': True}"/>
+                                    <field name="card_id" options="{'no_create': True}" context="{'nsp_simple_card_name': True}"/>
                                     <field name="tid" readonly="1"/>
                                     <field name="state" widget="badge" readonly="1" decoration-success="state == 'active'" decoration-muted="state == 'revoked'"/>
                                     <field name="assigned_at" optional="hide"/>
@@ -70,39 +70,39 @@
                                 </list>
                             </field>
                         </page>
-                        <page string="Friends">
-                            <group>
-                                <field name="accepted_friend_ids" widget="many2many_tags" readonly="1"/>
-                            </group>
+                        <page string="Friends" groups="nsp_core.group_nsp_it_parking,base.group_system">
+                            <separator string="Accepted Friends"/>
+                            <field name="accepted_friendship_ids" nolabel="1">
+                                <list create="0" delete="0">
+                                    <field name="name" string="Friendship"/>
+                                    <field name="accepted_at" optional="show"/>
+                                    <button name="action_cancel" type="object" string="Remove"/>
+                                </list>
+                            </field>
                             <separator string="Sent Requests"/>
-                            <field name="friendship_sent_ids" context="{'default_requester_id': id}">
+                            <field name="friendship_sent_ids" domain="[('state','=','pending')]" context="{'default_requester_id': id}">
                                 <list editable="bottom">
                                     <field name="addressee_id" string="Friend" domain="[('id','!=',parent.id)]"/>
                                     <field name="state" widget="badge" readonly="1"/>
-                                    <field name="accepted_at" readonly="1" optional="hide"/>
-                                    <button name="action_cancel" type="object" string="Cancel" invisible="state != 'pending'"/>
-                                    <button name="action_cancel" type="object" string="Remove" invisible="state != 'accepted'"/>
+                                    <button name="action_cancel" type="object" string="Cancel"/>
                                 </list>
                             </field>
                             <separator string="Received Requests"/>
-                            <field name="friendship_received_ids">
+                            <field name="friendship_received_ids" domain="[('state','=','pending')]">
                                 <list create="0" delete="0">
                                     <field name="requester_id" string="From"/>
-                                    <field name="state" widget="badge"/>
-                                    <field name="accepted_at" optional="hide"/>
-                                    <button name="action_accept" type="object" string="Accept" class="btn-primary" invisible="state != 'pending'"/>
-                                    <button name="action_cancel" type="object" string="Decline" invisible="state != 'pending'"/>
-                                    <button name="action_cancel" type="object" string="Remove" invisible="state != 'accepted'"/>
+                                    <field name="state" widget="badge" readonly="1"/>
+                                    <button name="action_accept" type="object" string="Accept" class="btn-primary"/>
+                                    <button name="action_cancel" type="object" string="Decline"/>
                                 </list>
                             </field>
                         </page>
                         <page string="Note">
                             <field name="note" nolabel="1"/>
                         </page>
-                        <page string="Technical" groups="nsp_core.group_nsp_it_parking">
+                        <page string="Technical" groups="nsp_core.group_nsp_it_parking,base.group_system">
                             <group>
                                 <field name="user_code" readonly="1" widget="CopyClipboardChar"/>
-                                <field name="user_rfid_tids" readonly="1"/>
                             </group>
                         </page>
                     </notebook>

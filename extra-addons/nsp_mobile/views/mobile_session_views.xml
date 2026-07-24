@@ -12,6 +12,7 @@
                 <field name="create_date" string="Started At"/>
                 <field name="revoked_at" optional="hide"/>
                 <field name="session_uid" optional="hide"/>
+                <button name="revoke" type="object" string="Revoke" invisible="state != 'active'" class="btn-secondary"/>
             </list>
         </field>
     </record>

@@ -67,13 +67,17 @@ class NspMobileApiService(models.Model):
             raise ValidationError(_('Invalid %s timestamp.') % field_name)
 
     @api.model
-    def _user_data(self, user):
-        return {
+    def _user_data(self, user, include_contact=False):
+        data = {
             'id': user.id,
             'name': user.name,
-            'email': user.email or None,
-            'phone': user.phone or None,
         }
+        if include_contact:
+            data.update({
+                'email': user.email or None,
+                'phone': user.phone or None,
+            })
+        return data
 
     @api.model
     def _vehicle_data(self, vehicle, latest_tx=None, active_borrow=None):
@@ -155,7 +159,7 @@ class NspMobileApiService(models.Model):
     def api_me(self):
         user, device, session = self._mobile_context()
         return {'data': {
-            'user': self._user_data(user),
+            'user': self._user_data(user, include_contact=True),
             'device': {
                 'device_uid': device.device_uid, 'platform': device.platform,
                 'device_name': device.device_name or None, 'app_version': device.app_version or None,
@@ -178,7 +182,7 @@ class NspMobileApiService(models.Model):
                 vals[key] = str(body.get(key) or '').strip() or False
         if vals:
             user.sudo().write(vals)
-        return {'data': {'user': self._user_data(user)}, 'message': 'OK'}
+        return {'data': {'user': self._user_data(user, include_contact=True)}, 'message': 'OK'}
 
     @endpoint('NSP Mobile Devices Register', route_path='mobile/devices/register', methods='POST', code='nsp_mobile_device_register')
     def api_device_register(self):
@@ -433,14 +437,8 @@ class NspMobileApiService(models.Model):
         new_password = str(body.get('new_password') or '')
         if not user.check_mobile_password(current_password):
             raise AccessError(_('Current password is incorrect.'))
-        user._set_mobile_password(new_password)
-        # Revoke every other session after a credential change; current session remains valid.
         current_session_uid = self.env.context.get('core_api_session_uid')
-        other_sessions = self.env['nsp.mobile.session'].sudo().search([
-            ('user_id', '=', user.id), ('state', '=', 'active'), ('session_uid', '!=', current_session_uid),
-        ])
-        if other_sessions:
-            other_sessions.revoke()
+        user.with_context(keep_mobile_session_uid=current_session_uid)._set_mobile_password(new_password)
         return {'data': {}, 'message': 'OK'}
 
     @endpoint('NSP Mobile Realtime Events', route_path='mobile/realtime/events', methods='GET', code='nsp_mobile_realtime_events')

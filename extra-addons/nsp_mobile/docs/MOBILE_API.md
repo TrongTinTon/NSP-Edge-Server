@@ -18,7 +18,7 @@
 
 ```json
 {
-  "login": "user-technical-login",
+  "login": "user@example.com",
   "password": "********",
   "device": {
     "device_uid": "device-generated-stable-id",

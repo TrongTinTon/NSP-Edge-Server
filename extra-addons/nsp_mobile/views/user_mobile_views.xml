@@ -7,14 +7,15 @@
             <xpath expr="//notebook" position="inside">
                 <page string="Mobile" groups="nsp_core.group_nsp_it_parking,base.group_system">
                     <group>
-                        <group>
+                        <group string="Access">
                             <field name="mobile_enabled"/>
-                            <field name="mobile_login" placeholder="email / phone / username"/>
+                            <field name="mobile_login" required="mobile_enabled" placeholder="phone / email / username"/>
+                            <field name="mobile_password_set" readonly="1"/>
                             <field name="mobile_password" password="True" placeholder="Enter to set a new password"/>
                         </group>
-                        <group>
+                        <group string="Guidance">
                             <div class="text-muted" colspan="2">
-                                Mobile password is hashed and never stored as plaintext. Minimum 8 characters.
+                                Mobile access is disabled by default. Configure a readable login and password before enabling it. The password is hashed and plaintext is never stored.
                             </div>
                         </group>
                     </group>
@@ -22,4 +23,28 @@
             </xpath>
         </field>
     </record>
+
+    <record id="view_nsp_user_list_mobile" model="ir.ui.view">
+        <field name="name">nsp.user.list.mobile</field>
+        <field name="model">nsp.user</field>
+        <field name="inherit_id" ref="nsp_user.view_nsp_user_list"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='active_user_card_count']" position="after">
+                <field name="mobile_enabled" string="Mobile" optional="hide"/>
+                <field name="mobile_login" optional="hide" groups="nsp_core.group_nsp_it_parking,base.group_system"/>
+            </xpath>
+        </field>
+    </record>
+    <record id="view_nsp_user_search_mobile" model="ir.ui.view">
+        <field name="name">nsp.user.search.mobile</field>
+        <field name="model">nsp.user</field>
+        <field name="inherit_id" ref="nsp_user.view_nsp_user_search"/>
+        <field name="arch" type="xml">
+            <xpath expr="//search" position="inside">
+                <field name="mobile_login" groups="nsp_core.group_nsp_it_parking,base.group_system"/>
+                <filter string="Mobile Enabled" name="mobile_enabled" domain="[('mobile_enabled','=',True)]" groups="nsp_core.group_nsp_it_parking,base.group_system"/>
+            </xpath>
+        </field>
+    </record>
+
 </odoo>

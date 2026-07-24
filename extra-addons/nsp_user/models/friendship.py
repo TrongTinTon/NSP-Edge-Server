@@ -22,12 +22,26 @@ class NspUserFriendship(models.Model):
     state = fields.Selection([
         ("pending", "Pending"),
         ("accepted", "Accepted"),
-    ], default="pending", required=True, index=True)
-    accepted_at = fields.Datetime(readonly=True)
+    ], default="pending", required=True, readonly=True, index=True)
+    accepted_at = fields.Datetime(readonly=True, index=True)
 
     _sql_constraints = [
         ("friendship_pair_unique", "unique(pair_key)", "A friendship already exists between these users."),
     ]
+
+    def init(self):
+        self.env.cr.execute(
+            """
+            CREATE INDEX IF NOT EXISTS nsp_user_friendship_requester_state_idx
+                ON nsp_user_friendship (requester_id, state, id DESC)
+            """
+        )
+        self.env.cr.execute(
+            """
+            CREATE INDEX IF NOT EXISTS nsp_user_friendship_addressee_state_idx
+                ON nsp_user_friendship (addressee_id, state, id DESC)
+            """
+        )
 
     @api.depends("requester_id.name", "addressee_id.name")
     def _compute_name(self):
@@ -54,6 +68,9 @@ class NspUserFriendship(models.Model):
             if requester_id == addressee_id:
                 raise ValidationError(_("A user cannot add themselves as a friend."))
             vals["pair_key"] = self._make_pair_key(requester_id, addressee_id)
+            # A new relationship always starts as a request. Acceptance must use action_accept().
+            vals["state"] = "pending"
+            vals["accepted_at"] = False
             prepared.append(vals)
         return super().create(prepared)
 
@@ -64,7 +81,7 @@ class NspUserFriendship(models.Model):
                 raise ValidationError(_("A user cannot add themselves as a friend."))
 
     def action_accept(self):
-        pending = self.filtered(lambda rec: rec.state != "accepted")
+        pending = self.filtered(lambda rec: rec.state == "pending")
         if pending:
             pending.write({"state": "accepted", "accepted_at": fields.Datetime.now()})
         return True
@@ -76,7 +93,7 @@ class NspUserFriendship(models.Model):
 
     @api.model
     def accepted_friends_map(self, users):
-        """Return {user_id: [accepted_friend_ids]} with one friendship query."""
+        """Return {user_id: [friend_user_ids]} with one friendship query."""
         users = users.exists()
         result = {user_id: [] for user_id in users.ids}
         if not users:
@@ -84,7 +101,9 @@ class NspUserFriendship(models.Model):
         user_ids = set(users.ids)
         friendships = self.sudo().search([
             ("state", "=", "accepted"),
-            "|", ("requester_id", "in", list(user_ids)), ("addressee_id", "in", list(user_ids)),
+            "|",
+            ("requester_id", "in", list(user_ids)),
+            ("addressee_id", "in", list(user_ids)),
         ])
         mapped = defaultdict(set)
         for friendship in friendships:
