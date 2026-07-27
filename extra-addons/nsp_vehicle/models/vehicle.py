@@ -23,8 +23,8 @@ class Vehicle(models.Model):
         ondelete="restrict", index=True,
     )
     vehicle_type_id = fields.Many2one("nsp.vehicle.type", string="Vehicle Type", ondelete="set null", tracking=True)
-    brand_id = fields.Many2one("nsp.vehicle.brand", string="Brand", ondelete="set null", tracking=True)
-    model_id = fields.Many2one("nsp.vehicle.model", string="Model", ondelete="set null", tracking=True)
+    brand_id = fields.Many2one("nsp.reference.brand", string="Brand", ondelete="set null", tracking=True, index=True)
+    model_id = fields.Many2one("nsp.reference.model", string="Model", ondelete="set null", tracking=True, index=True)
     color_id = fields.Many2one("nsp.vehicle.color", string="Color", ondelete="set null", tracking=True)
     active = fields.Boolean(default=True, tracking=True, index=True)
 
@@ -89,6 +89,19 @@ class Vehicle(models.Model):
         if values.get("license_plate"):
             values["license_plate"] = self._normalize_license_plate(values["license_plate"])
         return super().write(values)
+
+    @api.onchange("brand_id")
+    def _onchange_brand_id(self):
+        for record in self:
+            if record.model_id and record.model_id.brand_id != record.brand_id:
+                record.model_id = False
+
+    @api.constrains("brand_id", "model_id")
+    def _check_model_brand(self):
+        for record in self:
+            if record.model_id and record.model_id.brand_id != record.brand_id:
+                from odoo.exceptions import ValidationError
+                raise ValidationError("Vehicle Model must belong to the selected Brand.")
 
     def action_archive(self):
         self.write({"active": False})

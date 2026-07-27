@@ -649,9 +649,8 @@ class NspGatekeeperApiService(models.AbstractModel):
         records = Whitelist.search([], order="serial_number asc, id asc")
         items = [{
             "serial_number": record.serial_number,
-            "model_number": record.model_number or "",
-            "vendor": record.device_vendor or "",
-            "device_type": record.device_type,
+            "device_type_code": record.device_type_id.code if record.device_type_id else False,
+            "device_type_name": record.device_type_id.name if record.device_type_id else False,
         } for record in records]
         return self._ok({
             "items": items,
@@ -675,8 +674,8 @@ class NspGatekeeperApiService(models.AbstractModel):
                 details={"unsupported_fields": unsupported},
             )
         VehicleType = self.env["nsp.vehicle.type"].sudo().with_context(active_test=False)
-        VehicleBrand = self.env["nsp.vehicle.brand"].sudo().with_context(active_test=False)
-        VehicleModel = self.env["nsp.vehicle.model"].sudo().with_context(active_test=False)
+        VehicleBrand = self.env["nsp.reference.brand"].sudo().with_context(active_test=False)
+        VehicleModel = self.env["nsp.reference.model"].sudo().with_context(active_test=False)
         VehicleColor = self.env["nsp.vehicle.color"].sudo().with_context(active_test=False)
         vehicle_types = VehicleType.search([], order="code asc, id asc")
         brands = VehicleBrand.search([], order="code asc, id asc")

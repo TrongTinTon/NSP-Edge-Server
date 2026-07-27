@@ -7,7 +7,7 @@
         'res.users is only an optional Odoo Web Access Account. Cloud is the '
         'source of truth and Edge receives only the business data required for runtime.'
     ),
-    'version': '19.0.11.0.0',
+    'version': '19.0.11.0.1',
     'sequence': 10,
     'author': 'BKU Team',
     'category': 'Services',

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_nsp_device_type_list" model="ir.ui.view">
+        <field name="name">nsp.device.type.list</field>
+        <field name="model">nsp.device.type</field>
+        <field name="arch" type="xml">
+            <list string="Device Types">
+                <field name="name"/>
+                <field name="code" optional="hide"/>
+                <field name="active" optional="hide"/>
+            </list>
+        </field>
+    </record>
+    <record id="view_nsp_device_type_form" model="ir.ui.view">
+        <field name="name">nsp.device.type.form</field>
+        <field name="model">nsp.device.type</field>
+        <field name="arch" type="xml">
+            <form string="Device Type">
+                <sheet>
+                    <group>
+                        <field name="name"/>
+                        <field name="code" readonly="1"/>
+                        <field name="active"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+    <record id="action_nsp_device_type" model="ir.actions.act_window">
+        <field name="name">Device Types</field>
+        <field name="res_model">nsp.device.type</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>

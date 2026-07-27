@@ -6,30 +6,28 @@
         <field name="arch" type="xml">
             <search string="Device Whitelist">
                 <field name="serial_number"/>
-                <field name="model_number"/>
-                <field name="device_vendor"/>
-                <field name="device_type"/>
+                <field name="device_type_id"/>
+                <field name="model_id"/>
+                <field name="vendor_id"/>
                 <group>
-                    <filter string="Device Type" name="group_type" context="{'group_by':'device_type'}"/>
-                    <filter string="Vendor" name="group_vendor" context="{'group_by':'device_vendor'}"/>
+                    <filter string="Device Type" name="group_type" context="{'group_by':'device_type_id'}"/>
+                    <filter string="Vendor" name="group_vendor" context="{'group_by':'vendor_id'}"/>
                 </group>
             </search>
         </field>
     </record>
-
     <record id="nsp_device_whitelist_list_view" model="ir.ui.view">
         <field name="name">nsp.device.whitelist.list</field>
         <field name="model">nsp.device.whitelist</field>
         <field name="arch" type="xml">
             <list string="Device Whitelist" editable="bottom">
                 <field name="serial_number" string="Serial"/>
-                <field name="model_number" string="Model"/>
-                <field name="device_vendor" string="Vendor"/>
-                <field name="device_type"/>
+                <field name="device_type_id" options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False}"/>
+                <field name="model_id" options="{'no_create': False, 'no_quick_create': True, 'no_create_edit': False}"/>
+                <field name="vendor_id" options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False}"/>
             </list>
         </field>
     </record>
-
     <record id="nsp_device_whitelist_form_view" model="ir.ui.view">
         <field name="name">nsp.device.whitelist.form</field>
         <field name="model">nsp.device.whitelist</field>
@@ -41,22 +39,21 @@
                         <h1><field name="serial_number" placeholder="24113001"/></h1>
                     </div>
                     <div class="alert alert-info" role="alert">
-                        A Serial is allowed as soon as it exists in this list. Devices not listed here are rejected and generate an NSP Notification.
+                        Search Device Type, Model or Vendor directly. Device Type and Vendor support quick create. For a new Model, use Create and Edit… to select its Brand.
                     </div>
                     <group string="Whitelist Entry">
                         <group>
-                            <field name="model_number" string="Model"/>
-                            <field name="device_vendor" string="Vendor"/>
+                            <field name="device_type_id" options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False}"/>
+                            <field name="model_id" options="{'no_create': False, 'no_quick_create': True, 'no_create_edit': False}"/>
                         </group>
                         <group>
-                            <field name="device_type"/>
+                            <field name="vendor_id" options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False}"/>
                         </group>
                     </group>
                 </sheet>
             </form>
         </field>
     </record>
-
     <record id="nsp_device_whitelist_action" model="ir.actions.act_window">
         <field name="name">Device Whitelist</field>
         <field name="res_model">nsp.device.whitelist</field>

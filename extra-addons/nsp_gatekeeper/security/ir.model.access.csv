@@ -27,3 +27,5 @@ access_nsp_measurement_event_it,nsp.measurement.event IT,nsp_gatekeeper.model_ns
 access_nsp_measurement_event_operator,nsp.measurement.event Operator,nsp_gatekeeper.model_nsp_measurement_event,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_measurement_reader_line_it,nsp.measurement.reader.line IT,nsp_gatekeeper.model_nsp_measurement_reader_line,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_measurement_reader_line_operator,nsp.measurement.reader.line Operator,nsp_gatekeeper.model_nsp_measurement_reader_line,nsp_core.group_nsp_operator,1,0,0,0
+access_nsp_device_type_it,nsp.device.type IT,nsp_gatekeeper.model_nsp_device_type,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_device_type_operator,nsp.device.type Operator,nsp_gatekeeper.model_nsp_device_type,nsp_core.group_nsp_operator,1,0,0,0

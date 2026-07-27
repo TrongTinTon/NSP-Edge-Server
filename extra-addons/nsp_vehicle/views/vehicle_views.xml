@@ -59,8 +59,8 @@
                             <field name="active"/>
                             <field name="owner_id" string="Owner"/>
                             <field name="vehicle_type_id" options="{'no_create': False, 'no_quick_create': False}"/>
-                            <field name="brand_id" options="{'no_create': False, 'no_quick_create': False}"/>
-                            <field name="model_id" options="{'no_create': False, 'no_quick_create': False}"/>
+                            <field name="brand_id" options="{'no_create': True, 'no_open': False}"/>
+                            <field name="model_id" domain="[('brand_id', '=', brand_id)]" options="{'no_create': True, 'no_open': False}"/>
                             <field name="color_id" options="{'no_create': False, 'no_quick_create': False}"/>
                         </group>
                         <group string="RFID Summary">

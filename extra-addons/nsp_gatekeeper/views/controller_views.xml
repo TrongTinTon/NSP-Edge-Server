@@ -180,9 +180,7 @@
                                     <field name="name" string="Reader"/>
                                     <field name="serial_number" string="Serial"/>
                                     <field name="device_code" string="Technical Code" optional="hide"/>
-                                    <field name="model_number"/>
-                                    <field name="device_vendor" string="Vendor"/>
-                                    <field name="connection_type" string="Physical Connection" optional="show"/>
+                                    <field name="connection_type" string="Physical Connection" widget="nsp_grouped_connection" optional="show"/>
                                     <field name="status" widget="badge" readonly="1"/>
                                     
                                     

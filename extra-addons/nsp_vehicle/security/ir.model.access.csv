@@ -7,10 +7,6 @@ access_nsp_vehicle_card_it,nsp.vehicle.card IT,model_nsp_vehicle_card,nsp_core.g
 access_nsp_vehicle_card_operator,nsp.vehicle.card Operator,model_nsp_vehicle_card,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_vehicle_type_hr,nsp.vehicle.type HR,model_nsp_vehicle_type,nsp_core.group_nsp_hr_parking,1,1,1,0
 access_nsp_vehicle_type_it,nsp.vehicle.type IT,model_nsp_vehicle_type,nsp_core.group_nsp_it_parking,1,1,1,1
-access_nsp_vehicle_brand_hr,nsp.vehicle.brand HR,model_nsp_vehicle_brand,nsp_core.group_nsp_hr_parking,1,1,1,0
-access_nsp_vehicle_brand_it,nsp.vehicle.brand IT,model_nsp_vehicle_brand,nsp_core.group_nsp_it_parking,1,1,1,1
-access_nsp_vehicle_model_hr,nsp.vehicle.model HR,model_nsp_vehicle_model,nsp_core.group_nsp_hr_parking,1,1,1,0
-access_nsp_vehicle_model_it,nsp.vehicle.model IT,model_nsp_vehicle_model,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_vehicle_color_hr,nsp.vehicle.color HR,model_nsp_vehicle_color,nsp_core.group_nsp_hr_parking,1,1,1,0
 access_nsp_vehicle_color_it,nsp.vehicle.color IT,model_nsp_vehicle_color,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_vehicle_borrow_hr,nsp.vehicle.borrow HR,model_nsp_vehicle_borrow,nsp_core.group_nsp_hr_parking,1,1,1,0

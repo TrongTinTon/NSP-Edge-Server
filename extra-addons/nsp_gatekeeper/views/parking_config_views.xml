@@ -4,7 +4,7 @@
         <field name="name">nsp.parking.operation.search</field>
         <field name="model">nsp.parking.area</field>
         <field name="arch" type="xml">
-            <search string="Parking Operation Configurations">
+            <search string="Parking Configuration">
                 <field name="name"/>
                 <field name="code"/>
                 <field name="branch_id"/>
@@ -26,7 +26,7 @@
         <field name="name">nsp.parking.operation.list</field>
         <field name="model">nsp.parking.area</field>
         <field name="arch" type="xml">
-            <list string="Parking Operation Configurations">
+            <list string="Parking Configuration">
                 <field name="state" widget="badge"
                        decoration-success="state == 'operational'"
                        decoration-warning="state == 'draft' or state == 'maintenance'"
@@ -157,7 +157,7 @@
     </record>
 
     <record id="action_nsp_parking_area" model="ir.actions.act_window">
-        <field name="name">Parking Operation Configurations</field>
+        <field name="name">Parking Configuration</field>
         <field name="res_model">nsp.parking.area</field>
         <field name="view_mode">list,form</field>
         <field name="search_view_id" ref="view_nsp_parking_area_search"/>

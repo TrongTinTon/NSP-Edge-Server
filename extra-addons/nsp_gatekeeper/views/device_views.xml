@@ -8,8 +8,6 @@
                 <field name="name"/>
                 <field name="serial_number"/>
                 <field name="device_code"/>
-                <field name="model_number"/>
-                <field name="device_vendor"/>
                 <field name="controller_id"/>
                 <field name="connection_type"/>
                 <filter string="Online" name="online" domain="[('status','=','online')]"/>
@@ -19,7 +17,6 @@
                 <group>
                     <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
                     <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
-                    <filter string="Vendor" name="group_vendor" context="{'group_by':'device_vendor'}"/>
                 </group>
             </search>
         </field>
@@ -37,8 +34,6 @@
                 <field name="name" string="Reader" decoration-bf="1"/>
                 <field name="serial_number" string="Serial"/>
                 <field name="device_code" string="Technical Code" optional="hide"/>
-                <field name="model_number"/>
-                <field name="device_vendor" string="Vendor"/>
                 <field name="controller_id"/>
                 <field name="connection_type" string="Physical Connection" optional="show"/>
                 <field name="last_seen" readonly="1" optional="show"/>
@@ -64,10 +59,8 @@
                     <group>
                         <group string="Device Declaration">
                             <field name="serial_number" string="Serial"/>
-                            <field name="model_number"/>
-                            <field name="device_vendor" string="Vendor"/>
                             <field name="controller_id" options="{'no_create': False, 'no_open': False}"/>
-                            <field name="connection_type" string="Physical Connection"/>
+                            <field name="connection_type" string="Physical Connection" widget="nsp_grouped_connection"/>
                             <field name="device_code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
                         <group string="Runtime Status">

@@ -10,13 +10,16 @@ class DeviceWhitelist(models.Model):
     _order = "serial_number, id"
 
     serial_number = fields.Char(string="Serial", required=True, index=True, copy=False)
-    model_number = fields.Char(string="Model")
-    device_vendor = fields.Char(string="Vendor")
-    device_type = fields.Selection([
-        ("rfid_reader", "RFID Reader"),
-        ("camera", "Camera"),
-        ("other", "Other"),
-    ], string="Device Type", required=True, default="rfid_reader", index=True)
+    device_type_id = fields.Many2one(
+        "nsp.device.type",
+        string="Device Type",
+        required=True,
+        ondelete="restrict",
+        index=True,
+        default=lambda self: self.env.ref("nsp_gatekeeper.device_type_rfid_reader", raise_if_not_found=False).id or False,
+    )
+    model_id = fields.Many2one("nsp.reference.model", string="Model", ondelete="set null", index=True)
+    vendor_id = fields.Many2one("nsp.reference.vendor", string="Vendor", ondelete="set null", index=True)
 
     _sql_constraints = [
         ("serial_number_unique", "unique(serial_number)", "Serial must be unique in Device Whitelist."),
@@ -32,8 +35,6 @@ class DeviceWhitelist(models.Model):
         for source in vals_list:
             vals = dict(source)
             vals["serial_number"] = self._normalize_serial(vals.get("serial_number"))
-            vals["model_number"] = str(vals.get("model_number") or "").strip() or False
-            vals["device_vendor"] = str(vals.get("device_vendor") or "").strip() or False
             prepared.append(vals)
         return super().create(prepared)
 
@@ -41,14 +42,10 @@ class DeviceWhitelist(models.Model):
         values = dict(vals)
         if "serial_number" in values:
             values["serial_number"] = self._normalize_serial(values.get("serial_number"))
-        if "model_number" in values:
-            values["model_number"] = str(values.get("model_number") or "").strip() or False
-        if "device_vendor" in values:
-            values["device_vendor"] = str(values.get("device_vendor") or "").strip() or False
         return super().write(values)
 
     @api.constrains("serial_number")
-    def _check_serial_number(self):
+    def _check_values(self):
         for record in self:
             if not self._normalize_serial(record.serial_number):
                 raise ValidationError(_("Serial is required."))

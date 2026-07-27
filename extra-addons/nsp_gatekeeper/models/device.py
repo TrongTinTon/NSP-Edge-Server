@@ -17,8 +17,6 @@ class Device(models.Model):
         string="Device Code", required=True, readonly=True, copy=False, index=True,
         default=lambda self: new_management_code("DEV"),
     )
-    model_number = fields.Char(string="Model Number")
-    device_vendor = fields.Char(string="Vendor")
     controller_id = fields.Many2one(
         "nsp.controller",
         string="Controller",
@@ -37,16 +35,16 @@ class Device(models.Model):
     last_seen = fields.Datetime(string="Last Seen", readonly=True, copy=False, index=True)
     firmware_version = fields.Char(string="Firmware Version", readonly=True, copy=False)
 
-    # Physical connection inventory. Wired/Wireless is represented in option labels only.
+    # Physical connection inventory. The Odoo field widget groups options as Wired / Wireless.
     connection_type = fields.Selection([
-        ("usb", "Wired — USB"),
-        ("rs232", "Wired — RS-232"),
-        ("rs485", "Wired — RS-485"),
-        ("ethernet", "Wired — Ethernet (RJ45)"),
-        ("wiegand", "Wired — Wiegand"),
-        ("bluetooth", "Wireless — Bluetooth"),
-        ("wifi", "Wireless — Wi-Fi"),
-        ("cellular", "Wireless — 4G/5G"),
+        ("usb", "USB"),
+        ("rs232", "RS-232"),
+        ("rs485", "RS-485"),
+        ("ethernet", "Ethernet (RJ45)"),
+        ("wiegand", "Wiegand"),
+        ("bluetooth", "Bluetooth"),
+        ("wifi", "Wi-Fi"),
+        ("cellular", "4G/5G"),
     ], string="Physical Connection", index=True)
 
     # Reader parameters controlled by the server
@@ -95,8 +93,6 @@ class Device(models.Model):
             vals["device_code"] = self._normalize_code(
                 vals.get("device_code") or new_management_code("DEV")
             )
-            vals["model_number"] = str(vals.get("model_number") or "").strip() or False
-            vals["device_vendor"] = str(vals.get("device_vendor") or "").strip() or False
             prepared.append(vals)
         return super().create(prepared)
 
@@ -108,10 +104,6 @@ class Device(models.Model):
             values["name"] = str(values.get("name") or "").strip() or "RFID Reader"
         if "device_code" in values:
             values["device_code"] = self._normalize_code(values.get("device_code"))
-        if "model_number" in values:
-            values["model_number"] = str(values.get("model_number") or "").strip() or False
-        if "device_vendor" in values:
-            values["device_vendor"] = str(values.get("device_vendor") or "").strip() or False
         return super().write(values)
 
     @api.constrains("serial_number", "device_code")
@@ -140,8 +132,8 @@ class Device(models.Model):
     def _build_config_payload(self):
         """Return technical Reader configuration for the Controller.
 
-        Device Code, model, vendor, physical connection and parking topology
-        remain server-owned. Transmit power is common to the Reader; each
+        Device Code, physical connection and parking topology remain server-owned.
+        Transmit power is common to the Reader; each
         antenna port may use its own RSSI acceptance threshold.
         """
         self.ensure_one()
@@ -162,8 +154,6 @@ class Device(models.Model):
         payload = self._build_config_payload()
         payload.update({
             "reader_name": self.name or self.serial_number or "RFID Reader",
-            "model_number": self.model_number or False,
-            "vendor": self.device_vendor or False,
             "physical_connection": self.connection_type or False,
         })
         return payload

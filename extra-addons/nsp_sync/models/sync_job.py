@@ -596,11 +596,19 @@ class NspSyncJob(models.Model):
         rows = [item for item in (items or []) if isinstance(item, dict)]
         if kind == "device_whitelist":
             serials = {str(item.get("serial_number") or "").strip().upper() for item in rows}
+            type_codes = {str(item.get("device_type_code") or "").strip().upper() for item in rows}
             serials.discard("")
+            type_codes.discard("")
             records = self.env["nsp.device.whitelist"].sudo().search([
                 ("serial_number", "in", list(serials)),
             ]) if serials else self.env["nsp.device.whitelist"].browse()
-            return {"records": {record.serial_number: record for record in records}}
+            device_types = self.env["nsp.device.type"].sudo().with_context(active_test=False).search([
+                ("code", "in", list(type_codes)),
+            ]) if type_codes else self.env["nsp.device.type"].browse()
+            return {
+                "records": {record.serial_number: record for record in records},
+                "device_types": {record.code: record for record in device_types},
+            }
 
         if kind == "branch":
             codes = {str(item.get("branch_code") or "").strip().upper() for item in rows}
@@ -635,8 +643,8 @@ class NspSyncJob(models.Model):
             }
             master_specs = (
                 ("type_by_code", "nsp.vehicle.type", "vehicle_type_code"),
-                ("brand_by_code", "nsp.vehicle.brand", "brand_code"),
-                ("model_by_code", "nsp.vehicle.model", "model_code"),
+                ("brand_by_code", "nsp.reference.brand", "brand_code"),
+                ("model_by_code", "nsp.reference.model", "model_code"),
                 ("color_by_code", "nsp.vehicle.color", "color_code"),
             )
             for cache_key, model_name, payload_field in master_specs:
@@ -674,20 +682,37 @@ class NspSyncJob(models.Model):
         serial = str(item.get("serial_number") or "").strip().upper()
         if not serial:
             raise UserError(_("Device Whitelist Serial is required."))
-        device_type = str(item.get("device_type") or "rfid_reader").strip().lower()
-        if device_type not in ("rfid_reader", "camera", "other"):
-            raise UserError(_("Invalid Device Type: %s") % device_type)
+
+        type_code = str(item.get("device_type_code") or "").strip().upper()
+        type_name = str(item.get("device_type_name") or type_code).strip()
+        if not type_code:
+            raise UserError(_("Device Type Code is required for Device Whitelist %(serial)s.") % {"serial": serial})
+
         cache = cache or self._prepare_apply_cache("device_whitelist", [item])
+        DeviceType = self.env["nsp.device.type"].sudo().with_context(active_test=False)
+        device_type = cache.get("device_types", {}).get(type_code)
+        if not device_type:
+            device_type = DeviceType.create({
+                "code": type_code,
+                "name": type_name or type_code,
+                "active": True,
+            })
+            cache.setdefault("device_types", {})[type_code] = device_type
+        elif type_name and device_type.name != type_name:
+            device_type.write({"name": type_name})
+
         Whitelist = self.env["nsp.device.whitelist"].sudo()
         record = cache.get("records", {}).get(serial)
         vals = {
             "serial_number": serial,
-            "model_number": str(item.get("model_number") or "").strip() or False,
-            "device_vendor": str(item.get("vendor") or item.get("device_vendor") or "").strip() or False,
-            "device_type": device_type,
+            "device_type_id": device_type.id,
         }
         if record:
-            changed = {name: value for name, value in vals.items() if record[name] != value}
+            changed = {}
+            for name, value in vals.items():
+                current = record[name].id if record._fields[name].type == "many2one" else record[name]
+                if current != value:
+                    changed[name] = value
             if changed:
                 record.write(changed)
             return record
@@ -818,11 +843,11 @@ class NspSyncJob(models.Model):
             applied.extend(("vehicle_type", item, record) for item, record in type_rows)
 
             brand_rows, codes["brands"] = self._vehicle_master_snapshot_group(
-                "nsp.vehicle.brand", groups["brands"]
+                "nsp.reference.brand", groups["brands"]
             )
             applied.extend(("brand", item, record) for item, record in brand_rows)
 
-            Brand = self.env["nsp.vehicle.brand"].sudo().with_context(active_test=False)
+            Brand = self.env["nsp.reference.brand"].sudo().with_context(active_test=False)
             brand_codes = {
                 str(item.get("brand_code") or "").strip().upper()
                 for item in groups["models"] if isinstance(item, dict)
@@ -842,7 +867,7 @@ class NspSyncJob(models.Model):
                 return {"brand_id": brand.id if brand else False}
 
             model_rows, codes["models"] = self._vehicle_master_snapshot_group(
-                "nsp.vehicle.model", groups["models"], extra_values=model_extra
+                "nsp.reference.model", groups["models"], extra_values=model_extra
             )
             applied.extend(("model", item, record) for item, record in model_rows)
 
@@ -853,8 +878,8 @@ class NspSyncJob(models.Model):
 
             removed = {
                 "vehicle_types": self._reconcile_vehicle_master_snapshot("nsp.vehicle.type", codes["vehicle_types"]),
-                "brands": self._reconcile_vehicle_master_snapshot("nsp.vehicle.brand", codes["brands"]),
-                "models": self._reconcile_vehicle_master_snapshot("nsp.vehicle.model", codes["models"]),
+                "brands": self._reconcile_vehicle_master_snapshot("nsp.reference.brand", codes["brands"]),
+                "models": self._reconcile_vehicle_master_snapshot("nsp.reference.model", codes["models"]),
                 "colors": self._reconcile_vehicle_master_snapshot("nsp.vehicle.color", codes["colors"]),
             }
 
@@ -1403,7 +1428,7 @@ class NspSyncJob(models.Model):
                 if not isinstance(device_item, dict):
                     raise UserError(_("Controller devices must contain objects."))
                 unsupported_device = set(device_item) - {
-                    "serial_number", "reader_name", "model_number", "vendor",
+                    "serial_number", "reader_name",
                     "physical_connection", "reader_parameters", "antennas",
                 }
                 if unsupported_device:
@@ -1430,8 +1455,6 @@ class NspSyncJob(models.Model):
                     reader_specs[serial] = {
                         "controller_code": controller_code,
                         "name": str(device_item.get("reader_name") or serial).strip(),
-                        "model_number": str(device_item.get("model_number") or "").strip() or False,
-                        "device_vendor": str(device_item.get("vendor") or "").strip() or False,
                         "connection_type": connection_type,
                         "power_dbm": int(
                             reader_parameters.get("power_dbm")
