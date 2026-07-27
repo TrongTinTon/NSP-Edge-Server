@@ -327,9 +327,16 @@ class NspMeasurementSession(models.Model):
         if self.status != "completed":
             raise ValidationError(_("Complete the Measurement before applying it to operation."))
         self._require_ready_configuration()
+        # The Measurement action is the Cloud-Master approval boundary.  A user
+        # who may operate Measurement does not necessarily have direct write ACL
+        # on Reader master records, therefore promote the already validated
+        # values with sudo instead of leaking Reader ACL details into the UI.
+        # Business authorization is still enforced above (Cloud role + completed
+        # session + valid Measurement scope).
         for line in self.reader_line_ids:
-            line.reader_id.write({"power_dbm": line.measurement_power_dbm})
-        self.with_context(measurement_sync=True).write({
+            line.reader_id.sudo().write({"power_dbm": int(line.measurement_power_dbm or 0)})
+
+        self.with_context(measurement_sync=True).sudo().write({
             "status": "applied",
             "applied_at": fields.Datetime.now(),
         })

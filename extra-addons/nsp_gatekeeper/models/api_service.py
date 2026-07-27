@@ -963,7 +963,10 @@ class NspGatekeeperApiService(models.AbstractModel):
         try:
             parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         except Exception:
-            parsed = fields.Datetime.to_datetime(text)
+            try:
+                parsed = fields.Datetime.to_datetime(text)
+            except Exception as exc:
+                raise ValueError("invalid_datetime") from exc
         if not parsed:
             raise ValueError("invalid_datetime")
         if parsed.tzinfo:
@@ -1383,7 +1386,10 @@ class NspGatekeeperApiService(models.AbstractModel):
             return self._measurement_error_response(exc)
 
     @api.model
-    def _measurement_event_values(self, session, item, allowed_antennas=None, accept_snapshot=False):
+    def _measurement_event_values(
+        self, session, item, allowed_antennas=None, accept_snapshot=False,
+        allow_historical_scope=False,
+    ):
         allowed = {
             "event_uid", "serial_number", "antenna_no", "tid", "read_at", "rssi_dbm",
             "revision", "power_dbm",
@@ -1399,13 +1405,33 @@ class NspGatekeeperApiService(models.AbstractModel):
             antenna_no = 0
         if antenna_no <= 0:
             raise ValueError("antenna_not_found")
-        if allowed_antennas is None:
-            allowed_antennas = session._allowed_antenna_pairs()
-        if (serial_number, antenna_no) not in allowed_antennas:
-            raise ValueError("antenna_not_found")
         reader_line = session._measurement_line_for_serial(serial_number)
-        if not reader_line:
-            raise ValueError("reader_not_in_scope")
+        if allow_historical_scope:
+            # Cloud receives durable Measurement observations from an authenticated
+            # Edge. Old observations may belong to a previous Measurement revision
+            # whose Reader/Antenna selection is no longer the current Session
+            # configuration. Validate against the immutable physical ownership
+            # boundary (Controller -> Reader -> Antenna), not only the current
+            # Measurement Reader lines.
+            reader = self.env["nsp.device"].sudo().search([
+                ("controller_id", "=", session.controller_id.id),
+                ("serial_number", "=", serial_number),
+            ], limit=1)
+            if not reader:
+                raise ValueError("reader_not_in_scope")
+            antenna = self.env["nsp.device.antenna"].sudo().search([
+                ("device_id", "=", reader.id),
+                ("antenna_no", "=", antenna_no),
+            ], limit=1)
+            if not antenna:
+                raise ValueError("antenna_not_found")
+        else:
+            if allowed_antennas is None:
+                allowed_antennas = session._allowed_antenna_pairs()
+            if (serial_number, antenna_no) not in allowed_antennas:
+                raise ValueError("antenna_not_found")
+            if not reader_line:
+                raise ValueError("reader_not_in_scope")
         read_at = self._measurement_datetime(item.get("read_at"), required=True)
         read_at_ms = self._measurement_millisecond(item.get("read_at"))
         if item.get("rssi_dbm") in (None, ""):
@@ -1418,10 +1444,15 @@ class NspGatekeeperApiService(models.AbstractModel):
         if accept_snapshot:
             try:
                 revision = int(item.get("revision") or session.revision or 1)
+                fallback_power = (
+                    reader_line.measurement_power_dbm
+                    if reader_line
+                    else session._measurement_power_for_serial(serial_number)
+                )
                 power_dbm = int(
                     item.get("power_dbm")
                     if item.get("power_dbm") is not None
-                    else reader_line.measurement_power_dbm
+                    else fallback_power
                 )
             except Exception as exc:
                 raise ValueError("invalid_measurement_snapshot") from exc
@@ -1461,7 +1492,7 @@ class NspGatekeeperApiService(models.AbstractModel):
     @api.model
     def _measurement_process_event_batch(
         self, session, items, allow_final=False, accept_snapshot=False,
-        enforce_current_snapshot=False,
+        enforce_current_snapshot=False, allow_historical_scope=False,
     ):
         """Store only the selected Target Tag, idempotently, with bounded queries."""
         Event = self.env["nsp.measurement.event"].sudo()
@@ -1489,6 +1520,7 @@ class NspGatekeeperApiService(models.AbstractModel):
                     item,
                     allowed_antennas=allowed_antennas,
                     accept_snapshot=accept_snapshot,
+                    allow_historical_scope=allow_historical_scope,
                 )
                 if enforce_current_snapshot and (
                     int(values["revision"] or 1) != int(session.revision or 1)
@@ -1719,7 +1751,8 @@ class NspGatekeeperApiService(models.AbstractModel):
             if not isinstance(items, list) or not items or len(items) > 100:
                 raise ValueError("invalid_payload")
             result, _records = self._measurement_process_event_batch(
-                session, items, allow_final=True, accept_snapshot=True
+                session, items, allow_final=True, accept_snapshot=True,
+                allow_historical_scope=True,
             )
             return self._ok(result, message="Measurement Events synchronized.")
         except Exception as exc:

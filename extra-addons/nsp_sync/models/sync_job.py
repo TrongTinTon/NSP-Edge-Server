@@ -1795,9 +1795,17 @@ class NspSyncJob(models.Model):
     # --------------------------- measurement push ---------------------
     @api.model
     def _measurement_event_payload(self, event):
-        read_at = self._iso_utc(event.read_at)
-        if read_at and int(event.read_at_ms or 0):
-            read_at = read_at[:-1] + ".%03dZ" % int(event.read_at_ms or 0)
+        read_at = False
+        if event.read_at:
+            parsed = fields.Datetime.to_datetime(event.read_at)
+            if parsed:
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                else:
+                    parsed = parsed.astimezone(timezone.utc)
+                millisecond = max(0, min(int(event.read_at_ms or 0), 999))
+                parsed = parsed.replace(microsecond=millisecond * 1000)
+                read_at = parsed.isoformat(timespec="milliseconds").replace("+00:00", "Z")
         payload = {
             "event_uid": event.event_uid,
             "revision": int(event.revision or 1),
@@ -1918,7 +1926,20 @@ class NspSyncJob(models.Model):
             )
             failed += int(rejected)
         if failed:
-            raise UserError(_("Cloud rejected %s Measurement Event(s).") % failed)
+            reasons = {}
+            for result in result_by_key.values():
+                if result.get("status") not in ("rejected", "failed", "error"):
+                    continue
+                code = str(result.get("error_code") or result.get("message") or "rejected").strip()
+                reasons[code] = reasons.get(code, 0) + 1
+            reason_text = ", ".join(
+                "%s: %s" % (code, count)
+                for code, count in sorted(reasons.items())
+            )
+            message = _("Cloud rejected %s Measurement Event(s).") % failed
+            if reason_text:
+                message += " " + _("Reasons: %s") % reason_text
+            raise UserError(message)
         self.last_push_at = fields.Datetime.now()
         return {
             "pushed": len(events),
@@ -1935,13 +1956,46 @@ class NspSyncJob(models.Model):
         return self._push_measurement_event_records(events)
 
     @api.model
-    def push_measurement_events_now(self, events):
-        job = self.sudo().search([
+    def _ensure_edge_sync_jobs(self):
+        """Repair missing default Sync Jobs for existing Edge connections.
+
+        New route types may be introduced after an Edge connection already
+        exists.  Do not require an operator to re-authenticate merely to create
+        those jobs: the scheduler and immediate Measurement forwarding can
+        self-heal the job set.
+        """
+        if self._deployment_role() != "edge_server":
+            return self.browse()
+        Auth = self.env["nsp.sync.auth"].sudo()
+        auth_records = Auth.search([])
+        if not auth_records:
+            return self.browse()
+        try:
+            return self.sudo().ensure_default_jobs(auth_records)
+        except Exception:
+            _logger.exception("Unable to repair missing NSP Sync Jobs automatically.")
+            return self.browse()
+
+    @api.model
+    def _measurement_push_job(self, route_suffix):
+        domain = [
             ("active", "=", True),
-            ("route_suffix", "=", "measurement-events/sync"),
+            ("route_suffix", "=", route_suffix),
             ("direction", "=", "push"),
-        ], order="sequence, id", limit=1)
+        ]
+        job = self.sudo().search(domain, order="sequence, id", limit=1)
         if not job:
+            self._ensure_edge_sync_jobs()
+            job = self.sudo().search(domain, order="sequence, id", limit=1)
+        return job
+
+    @api.model
+    def push_measurement_events_now(self, events):
+        job = self._measurement_push_job("measurement-events/sync")
+        if not job:
+            _logger.warning(
+                "Measurement Event forwarding deferred: no measurement-events/sync job is available."
+            )
             return False
         try:
             job._push_measurement_event_records(events, timeout=3)
@@ -2058,12 +2112,11 @@ class NspSyncJob(models.Model):
 
     @api.model
     def push_measurement_status_now(self, session):
-        job = self.sudo().search([
-            ("active", "=", True),
-            ("route_suffix", "=", "measurement-status/sync"),
-            ("direction", "=", "push"),
-        ], order="sequence, id", limit=1)
+        job = self._measurement_push_job("measurement-status/sync")
         if not job:
+            _logger.warning(
+                "Measurement status forwarding deferred: no measurement-status/sync job is available."
+            )
             return False
         try:
             job._push_measurement_status_records(session, timeout=3)
@@ -2306,6 +2359,10 @@ class NspSyncJob(models.Model):
 
     @api.model
     def run_due_jobs(self):
+        # Existing Cloud Connections may predate newer Sync routes (notably
+        # Measurement Events/Status).  Repair the default job set before every
+        # scheduler pass so pending Edge records always gain a durable retry path.
+        self._ensure_edge_sync_jobs()
         now = fields.Datetime.now()
         jobs = self.sudo().search([
             ("active", "=", True),
