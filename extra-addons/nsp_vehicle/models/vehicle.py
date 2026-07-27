@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from odoo import api, fields, models, _
+from odoo import api, fields, models
 from odoo.addons.nsp_core.utils import new_management_code
 
 
@@ -8,7 +8,7 @@ class Vehicle(models.Model):
 
     _name = "nsp.vehicle"
     _description = "Vehicle Management"
-    _inherit = ["mail.thread", "mail.activity.mixin"]
+    _inherit = ["mail.thread", "mail.activity.mixin", "image.mixin"]
     _rec_name = "license_plate"
     _order = "license_plate, id"
 
@@ -97,18 +97,3 @@ class Vehicle(models.Model):
     def action_unarchive(self):
         self.write({"active": True})
         return True
-
-    def action_open_grant_card_wizard(self):
-        """Open the scan/assign helper for operators who grant a card by TID."""
-        self.ensure_one()
-        return {
-            "name": _("Grant RFID Card for vehicle %s") % self.license_plate,
-            "type": "ir.actions.act_window",
-            "res_model": "nsp.grant.card.wizard",
-            "view_mode": "form",
-            "target": "new",
-            "context": {
-                "default_vehicle_id": self.id,
-                "default_current_tid": self.tid,
-            },
-        }

@@ -25,6 +25,7 @@
         <field name="model">nsp.vehicle</field>
         <field name="arch" type="xml">
             <list string="Vehicles">
+                <field name="image_128" string="Photo" widget="image" class="o_avatar" optional="show"/>
                 <field name="license_plate" decoration-bf="1"/>
                 <field name="owner_id" string="Owner"/>
                 <field name="vehicle_type_id"/>
@@ -46,9 +47,9 @@
                 <header>
                     <button name="action_archive" type="object" string="Archive" invisible="not active" class="btn-secondary"/>
                     <button name="action_unarchive" type="object" string="Unarchive" invisible="active" class="btn-primary"/>
-                    <button name="action_open_grant_card_wizard" string="Grant Card by Scan" type="object" class="btn-secondary" icon="fa-id-card-o"/>
                 </header>
                 <sheet>
+                    <field name="image_1920" widget="image" class="oe_avatar" options="{'preview_image': 'image_128'}"/>
                     <div class="oe_title">
                         <label for="license_plate" string="License Plate"/>
                         <h1><field name="license_plate"/></h1>

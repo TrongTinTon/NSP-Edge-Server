@@ -2,14 +2,14 @@
 from collections import defaultdict
 
 from odoo import api, fields, models, _
-from odoo.exceptions import ValidationError
+from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.addons.nsp_core.utils import new_management_code
 
 
 class NspUser(models.Model):
     _name = "nsp.user"
     _description = "NSP User"
-    _inherit = ["mail.thread"]
+    _inherit = ["mail.thread", "image.mixin"]
     _rec_name = "name"
     _order = "name, id"
 
@@ -27,6 +27,21 @@ class NspUser(models.Model):
     email = fields.Char(string="Email", index=True)
     phone = fields.Char(string="Phone", index=True)
     note = fields.Text(string="Note")
+
+    web_user_id = fields.Many2one(
+        "res.users",
+        string="Odoo Web Account",
+        copy=False,
+        tracking=True,
+        ondelete="set null",
+        domain=[("share", "=", False)],
+        groups="base.group_system",
+        help=(
+            "Optional Odoo backend account for this NSP business user. "
+            "Web login, groups, ACLs and record rules remain owned by res.users. "
+            "Mobile authentication and NSP business ownership remain on nsp.user."
+        ),
+    )
 
     user_card_ids = fields.One2many(
         "nsp.user.card",
@@ -58,6 +73,11 @@ class NspUser(models.Model):
 
     _sql_constraints = [
         ("user_code_unique", "unique(user_code)", "User Technical Code must be unique."),
+        (
+            "web_user_unique",
+            "unique(web_user_id)",
+            "An Odoo Web Account can be linked to only one NSP User.",
+        ),
     ]
 
     @api.model
@@ -152,6 +172,29 @@ class NspUser(models.Model):
         for rec in self:
             if not rec._normalize_code(rec.user_code):
                 raise ValidationError(_("User Technical Code is required."))
+
+    @api.constrains("web_user_id")
+    def _check_web_user(self):
+        for rec in self:
+            if rec.web_user_id and rec.web_user_id.share:
+                raise ValidationError(
+                    _("Odoo Web Account must be an internal user, not a portal/shared user.")
+                )
+
+    def action_open_web_user(self):
+        self.ensure_one()
+        if not self.env.user.has_group("base.group_system"):
+            raise AccessError(_("Only Odoo administrators can manage Odoo Web Accounts."))
+        if not self.web_user_id:
+            raise UserError(_("This NSP User is not linked to an Odoo Web Account."))
+        return {
+            "type": "ir.actions.act_window",
+            "name": _("Odoo Web Account"),
+            "res_model": "res.users",
+            "view_mode": "form",
+            "res_id": self.web_user_id.id,
+            "target": "current",
+        }
 
     def action_archive(self):
         active = self.filtered("active")

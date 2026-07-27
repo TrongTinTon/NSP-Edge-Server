@@ -8,7 +8,9 @@
                 <field name="phone"/>
                 <field name="email"/>
                 <field name="user_code" string="Technical Code"/>
+                <field name="web_user_id" groups="base.group_system"/>
                 <filter string="Active" name="active" domain="[('active','=',True)]"/>
+                <filter string="Web Access" name="web_access" domain="[('web_user_id','!=',False)]" groups="base.group_system"/>
                 <filter string="Archived" name="archived" domain="[('active','=',False)]"/>
             </search>
         </field>
@@ -19,12 +21,14 @@
         <field name="model">nsp.user</field>
         <field name="arch" type="xml">
             <list string="Users" decoration-muted="not active">
+                <field name="image_128" string="Avatar" widget="image" class="o_avatar" optional="show"/>
                 <field name="name" decoration-bf="1"/>
                 <field name="phone" optional="show"/>
                 <field name="email" optional="show"/>
                 <field name="user_rfid_tid" string="Primary User TID" optional="show"/>
                 <field name="active_user_card_count" optional="show"/>
                 <field name="active" readonly="1" optional="hide"/>
+                <field name="web_user_id" string="Web Account" optional="hide" groups="base.group_system"/>
                 <field name="user_code" string="Technical Code" optional="hide"/>
             </list>
         </field>
@@ -41,6 +45,7 @@
                     <field name="active" invisible="1"/>
                 </header>
                 <sheet>
+                    <field name="image_1920" widget="image" class="oe_avatar" options="{'preview_image': 'image_128'}"/>
                     <div class="oe_title">
                         <label for="name"/>
                         <h1><field name="name" placeholder="User name"/></h1>
@@ -96,6 +101,28 @@
                                     <button name="action_cancel" type="object" string="Decline"/>
                                 </list>
                             </field>
+                        </page>
+                        <page string="Web Access" groups="base.group_system">
+                            <group>
+                                <group string="Odoo Backend Account">
+                                    <field name="web_user_id" options="{'no_create': True}"/>
+                                    <button
+                                        name="action_open_web_user"
+                                        type="object"
+                                        string="Open Web Account"
+                                        icon="fa-external-link"
+                                        class="btn-secondary"
+                                        invisible="not web_user_id"
+                                    />
+                                </group>
+                                <group string="Identity Boundary">
+                                    <div class="text-muted" colspan="2">
+                                        Link an internal Odoo account only when this NSP User needs backend access.
+                                        Odoo Web login, Groups, ACLs and Record Rules are managed on the linked Web Account.
+                                        RFID, Vehicle, Parking, Mobile and Notification ownership remain on this NSP User.
+                                    </div>
+                                </group>
+                            </group>
                         </page>
                         <page string="Note">
                             <field name="note" nolabel="1"/>

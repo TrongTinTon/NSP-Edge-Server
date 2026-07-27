@@ -86,9 +86,7 @@ class NspUserMobile(models.Model):
         plaintext = str(plaintext or "")
         if len(plaintext) < 8:
             raise ValidationError(_("Mobile password must contain at least 8 characters."))
-        # Use direct field write with a context flag so the credential update itself does not
-        # trigger the login-change session revocation path.
-        self.sudo().with_context(nsp_mobile_password_write=True).write({
+        self.sudo().write({
             "mobile_password_hash": MOBILE_PASSWORD_CONTEXT.hash(plaintext),
         })
 

@@ -1,14 +1,24 @@
 {
     'name': 'NSP Mobile',
     'summary': 'Cloud Mobile API, authentication, sessions and device registry for NSP',
-    'description': 'Cloud-only Mobile API layer. Uses T4 Core API Mobile Tokens for user-bound access to profile, vehicles, parking history, friends, vehicle borrowing and notifications.',
-    'version': '19.0.2.0.0',
+    'description': (
+        'Cloud-only Mobile API layer. Authenticates nsp.user directly and issues '
+        'T4 Core API Mobile Tokens for user-bound access to profile, vehicles, '
+        'parking history, friends, vehicle borrowing and notifications. '
+        'Odoo res.users accounts are not required for Mobile access.'
+    ),
+    'version': '19.0.2.0.1',
     'sequence': 45,
     'author': 'BKU Team',
     'category': 'Services',
     'depends': [
-        'base', 'nsp_core', 't4_coreapi', 'nsp_user', 'nsp_vehicle',
-        'nsp_gatekeeper', 'nsp_notification',
+        'base',
+        'nsp_core',
+        't4_coreapi',
+        'nsp_user',
+        'nsp_vehicle',
+        'nsp_gatekeeper',
+        'nsp_notification',
     ],
     'data': [
         'security/ir.model.access.csv',

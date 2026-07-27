@@ -2,8 +2,6 @@ id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_nsp_vehicle_hr,nsp.vehicle HR,model_nsp_vehicle,nsp_core.group_nsp_hr_parking,1,1,1,0
 access_nsp_vehicle_it,nsp.vehicle IT,model_nsp_vehicle,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_vehicle_operator,nsp.vehicle Operator,model_nsp_vehicle,nsp_core.group_nsp_operator,1,0,0,0
-access_nsp_grant_card_wizard_hr,nsp.grant.card.wizard HR,model_nsp_grant_card_wizard,nsp_core.group_nsp_hr_parking,1,1,1,1
-access_nsp_grant_card_wizard_it,nsp.grant.card.wizard IT,model_nsp_grant_card_wizard,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_vehicle_card_hr,nsp.vehicle.card HR,model_nsp_vehicle_card,nsp_core.group_nsp_hr_parking,1,1,1,0
 access_nsp_vehicle_card_it,nsp.vehicle.card IT,model_nsp_vehicle_card,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_vehicle_card_operator,nsp.vehicle.card Operator,model_nsp_vehicle_card,nsp_core.group_nsp_operator,1,0,0,0
