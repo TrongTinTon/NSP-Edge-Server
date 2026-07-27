@@ -1215,92 +1215,110 @@ class NspSyncJob(models.Model):
         self.ensure_one()
         code = str(item.get("measurement_code") or "").strip().upper()
         controller_code = str(item.get("controller_code") or "").strip().upper()
-        if not code or not controller_code:
-            raise UserError(_("Measurement Code and Controller Code are required."))
-        status = str(item.get("status") or "ready").strip().lower()
-        if status not in ("ready", "running", "completed", "failed", "cancelled"):
-            raise UserError(_("Invalid Measurement Session status: %s") % status)
-        controller = self._find_or_create_controller(controller_code)
+        target_tid = self.env["nsp.rfid.card"].sudo()._normalize_tid(item.get("target_tid"))
+        reader_payloads = item.get("readers")
+        if not code or not controller_code or not target_tid:
+            raise UserError(
+                _("Measurement Code, Controller Code and Target TID are required.")
+            )
+        if not isinstance(reader_payloads, list) or not reader_payloads:
+            raise UserError(_("Measurement Configuration must contain at least one Reader."))
 
-        keys = set()
-        for device_item in item.get("measurement_antennas") or []:
-            if not isinstance(device_item, dict):
-                raise UserError(_("Measurement Antennas must contain objects."))
-            serial = str(device_item.get("serial_number") or "").strip().upper()
-            numbers = device_item.get("antennas")
-            if not serial or not isinstance(numbers, list) or not numbers:
-                raise UserError(_("Each Measurement Reader requires serial_number and antennas."))
+        status = str(item.get("status") or "ready").strip().lower()
+        if status not in ("ready", "running", "completed", "applied", "failed", "cancelled"):
+            raise UserError(_("Invalid Measurement Session status: %s") % status)
+        try:
+            revision = max(int(item.get("revision") or 1), 1)
+        except (TypeError, ValueError) as exc:
+            raise UserError(_("Invalid Measurement revision.")) from exc
+
+        controller = self._find_or_create_controller(controller_code)
+        Card = self.env["nsp.rfid.card"].sudo()
+        target_card = Card.search([("tid", "=", target_tid)], limit=1)
+        if not target_card:
+            raise UserError(_("Target RFID Tag %s has not been synchronized to this Edge Server.") % target_tid)
+
+        Device = self.env["nsp.device"].sudo()
+        Antenna = self.env["nsp.device.antenna"].sudo()
+        line_commands = []
+        seen_serials = set()
+        for reader_payload in reader_payloads:
+            if not isinstance(reader_payload, dict):
+                raise UserError(_("Measurement Reader must be an object."))
+            reader_serial = str(reader_payload.get("serial_number") or "").strip().upper()
+            if not reader_serial or reader_serial in seen_serials:
+                raise UserError(_("Measurement Reader Serial is missing or duplicated."))
+            seen_serials.add(reader_serial)
+            try:
+                measurement_power = int(
+                    reader_payload.get("power_dbm")
+                    if reader_payload.get("power_dbm") is not None
+                    else 30
+                )
+            except (TypeError, ValueError) as exc:
+                raise UserError(_("Invalid Measurement Reader power.")) from exc
+            if measurement_power < 0 or measurement_power > 40:
+                raise UserError(_("Measurement Reader power must be between 0 and 40 dBm."))
+
+            reader = Device.search([
+                ("serial_number", "=", reader_serial),
+                ("controller_id", "=", controller.id),
+            ], limit=1)
+            if not reader:
+                reader = Device.create({
+                    "serial_number": reader_serial,
+                    "name": reader_serial,
+                    "controller_id": controller.id,
+                })
+
+            numbers = reader_payload.get("antennas")
+            if not isinstance(numbers, list) or not numbers:
+                raise UserError(_("Measurement Reader %s has no antennas.") % reader_serial)
+            keys = set()
             for raw_number in numbers:
                 try:
                     antenna_no = int(raw_number)
                 except Exception as exc:
                     raise UserError(_("Invalid Measurement Antenna number.")) from exc
-                key = (serial, antenna_no)
-                if antenna_no <= 0 or key in keys:
-                    raise UserError(
-                        _("Invalid or duplicate Measurement Antenna %s/%s.")
-                        % (serial, raw_number)
-                    )
-                keys.add(key)
-        if not keys:
-            raise UserError(_("Measurement Configuration has no antennas."))
+                if antenna_no <= 0 or antenna_no in keys:
+                    raise UserError(_("Invalid or duplicate Measurement Antenna %s.") % raw_number)
+                keys.add(antenna_no)
 
-        Device = self.env["nsp.device"].sudo()
-        serials = {serial for serial, _antenna_no in keys}
-        existing_devices = Device.search([("serial_number", "in", list(serials))])
-        device_by_serial = {device.serial_number: device for device in existing_devices}
-        missing_serials = sorted(serials - set(device_by_serial))
-        if missing_serials:
-            created_devices = Device.create([
-                {"serial_number": serial, "controller_id": controller.id}
-                for serial in missing_serials
+            existing = Antenna.search([
+                ("device_id", "=", reader.id),
+                ("antenna_no", "in", list(keys)),
             ])
-            device_by_serial.update({device.serial_number: device for device in created_devices})
-        for device in device_by_serial.values():
-            self._write_changed(device, {"controller_id": controller.id})
-
-        Antenna = self.env["nsp.device.antenna"].sudo()
-        device_ids = [device.id for device in device_by_serial.values()]
-        antenna_numbers = {antenna_no for _serial, antenna_no in keys}
-        existing_antennas = Antenna.search([
-            ("device_id", "in", device_ids),
-            ("antenna_no", "in", list(antenna_numbers)),
-        ])
-        antenna_by_key = {
-            (antenna.device_id.serial_number, int(antenna.antenna_no or 0)): antenna
-            for antenna in existing_antennas
-        }
-        missing_keys = sorted(keys - set(antenna_by_key))
-        if missing_keys:
-            created_antennas = Antenna.create([
-                {
-                    "device_id": device_by_serial[serial].id,
-                    "antenna_no": antenna_no,
-                }
-                for serial, antenna_no in missing_keys
-            ])
-            antenna_by_key.update({
-                (antenna.device_id.serial_number, int(antenna.antenna_no or 0)): antenna
-                for antenna in created_antennas
-            })
-        antenna_refs = Antenna.browse([antenna_by_key[key].id for key in sorted(keys)])
+            antenna_by_no = {int(antenna.antenna_no): antenna for antenna in existing}
+            missing = sorted(keys - set(antenna_by_no))
+            if missing:
+                created = Antenna.create([
+                    {"device_id": reader.id, "antenna_no": antenna_no}
+                    for antenna_no in missing
+                ])
+                antenna_by_no.update({int(antenna.antenna_no): antenna for antenna in created})
+            antenna_refs = Antenna.browse([antenna_by_no[number].id for number in sorted(keys)])
+            line_commands.append((0, 0, {
+                "reader_id": reader.id,
+                "measurement_power_dbm": measurement_power,
+                "antenna_ids": [(6, 0, antenna_refs.ids)],
+            }))
 
         Session = self.env["nsp.measurement.session"].sudo().with_context(measurement_sync=True)
         session = Session.search([("measurement_code", "=", code)], limit=1)
         vals = {
             "measurement_code": code,
             "controller_id": controller.id,
+            "target_card_id": target_card.id,
+            "revision": revision,
             "status": status,
             "planned_start_at": self._remote_datetime(item.get("planned_start_at")),
             "planned_end_at": self._remote_datetime(item.get("planned_end_at")),
             "note": str(item.get("note") or "").strip() or False,
+            "reader_line_ids": [(5, 0, 0)] + line_commands,
         }
         if session:
-            self._write_changed(session, vals)
-            if set(session.antenna_ids.ids) != set(antenna_refs.ids):
-                session.write({"antenna_ids": [(6, 0, antenna_refs.ids)]})
+            session.write(vals)
         else:
-            vals["antenna_ids"] = [(6, 0, antenna_refs.ids)]
             session = Session.create(vals)
         return session
 
@@ -1335,6 +1353,12 @@ class NspSyncJob(models.Model):
             raise UserError(_("Motorbike Capacity must be an integer.")) from exc
         if motorbike_capacity < 0:
             raise UserError(_("Motorbike Capacity cannot be negative."))
+        try:
+            live_monitor_columns = int(item.get("live_monitor_columns") or 2)
+        except (TypeError, ValueError) as exc:
+            raise UserError(_("Live Monitor Columns must be an integer.")) from exc
+        if live_monitor_columns < 1 or live_monitor_columns > 4:
+            raise UserError(_("Live Monitor Columns must be between 1 and 4."))
 
         parking_vals = {
             "code": area_code,
@@ -1342,6 +1366,7 @@ class NspSyncJob(models.Model):
             "branch_id": branch.id,
             "state": state,
             "motorbike_capacity": motorbike_capacity,
+            "live_monitor_columns": live_monitor_columns,
         }
         if parking:
             self._write_changed(parking, parking_vals)
@@ -1770,12 +1795,21 @@ class NspSyncJob(models.Model):
     # --------------------------- measurement push ---------------------
     @api.model
     def _measurement_event_payload(self, event):
+        read_at = self._iso_utc(event.read_at)
+        if read_at and int(event.read_at_ms or 0):
+            read_at = read_at[:-1] + ".%03dZ" % int(event.read_at_ms or 0)
         payload = {
             "event_uid": event.event_uid,
+            "revision": int(event.revision or 1),
             "serial_number": event.serial_number,
             "antenna_no": int(event.antenna_no),
             "tid": event.tid,
-            "read_at": self._iso_utc(event.read_at),
+            "read_at": read_at,
+            "power_dbm": int(
+                event.power_dbm
+                if event.power_dbm is not None
+                else event.session_id._measurement_power_for_serial(event.serial_number)
+            ),
         }
         if event.rssi_dbm not in (False, None):
             payload["rssi_dbm"] = float(event.rssi_dbm)

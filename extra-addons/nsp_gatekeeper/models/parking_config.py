@@ -49,6 +49,16 @@ class NspParkingArea(models.Model):
         default=0,
         help="Number of internal motorbike spaces. Set 0 when capacity monitoring is not configured.",
     )
+    live_monitor_columns = fields.Integer(
+        string="Live Monitor Columns",
+        default=2,
+        required=True,
+        help=(
+            "Number of vehicle columns shown on the customer-facing Parking Live Monitor. "
+            "Allowed range: 1-4. The monitor keeps four rows, so one page displays "
+            "4, 8, 12 or 16 vehicles respectively."
+        ),
+    )
 
     lane_ids = fields.One2many(
         "nsp.parking.lane", "parking_area_id", string="Parking Lanes"
@@ -166,6 +176,12 @@ class NspParkingArea(models.Model):
             if rec.motorbike_capacity < 0:
                 raise ValidationError(_("Motorbike Capacity cannot be negative."))
 
+    @api.constrains("live_monitor_columns")
+    def _check_live_monitor_columns(self):
+        for rec in self:
+            if rec.live_monitor_columns < 1 or rec.live_monitor_columns > 4:
+                raise ValidationError(_("Live Monitor Columns must be between 1 and 4."))
+
     def action_open_live_monitor(self):
         self.ensure_one()
         return {
@@ -173,7 +189,10 @@ class NspParkingArea(models.Model):
             "name": _("Parking Live Monitor"),
             "tag": "nsp_parking_live_monitor",
             "target": "fullscreen",
-            "params": {"parking_area_id": self.id},
+            "params": {
+                "parking_area_id": self.id,
+                "live_monitor_columns": int(self.live_monitor_columns or 2),
+            },
         }
 
     def _motorbike_slot_snapshot(self):
@@ -224,7 +243,7 @@ class NspParkingArea(models.Model):
         }
 
     @api.model
-    def get_live_monitor_snapshot(self, parking_area_id, limit=12):
+    def get_live_monitor_snapshot(self, parking_area_id, limit=16):
         """Initial/reconciliation payload for the customer-facing Live Monitor."""
         if not (
             self.env.user.has_group("nsp_core.group_nsp_operator")
@@ -264,6 +283,7 @@ class NspParkingArea(models.Model):
             "parking_area_name": area.name,
             "branch_name": area.branch_id.name or "",
             "state": area.state,
+            "live_monitor_columns": int(area.live_monitor_columns or 2),
             **slots,
             "items": items,
         }
@@ -520,6 +540,7 @@ class NspParkingArea(models.Model):
             "branch_code": self.branch_id.code or "",
             "state": self.state,
             "motorbike_capacity": int(self.motorbike_capacity or 0),
+            "live_monitor_columns": int(self.live_monitor_columns or 2),
             "controllers": self._controller_payload(),
             "lanes": self._lane_payload(),
         }

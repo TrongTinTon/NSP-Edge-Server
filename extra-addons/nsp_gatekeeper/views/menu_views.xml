@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
+    <!-- Use the NSP Gatekeeper app icon in the Odoo app switcher. -->
+    <record id="nsp_core.menu_nsp_root" model="ir.ui.menu">
+        <field name="web_icon">nsp_gatekeeper,static/description/icon.png</field>
+    </record>
     <menuitem id="nsp_device_root"
               name="Gatekeeper"
               parent="nsp_core.menu_nsp_configuration"

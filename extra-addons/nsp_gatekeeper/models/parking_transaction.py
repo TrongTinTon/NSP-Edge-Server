@@ -329,27 +329,68 @@ class ParkingTransaction(models.Model):
             _logger.exception("Unable to broadcast NSP Parking Live Monitor event")
         return records
 
+    def _live_monitor_display_meta(self):
+        """Return customer-facing display policy for one final transaction.
+
+        Operational warnings such as duplicate continuity are intentionally not
+        shown as red stop messages. They remain auditable in Parking Transaction
+        and IT Dashboard, but they are not actionable for a driver at the gate.
+        """
+        self.ensure_one()
+        if self.event_type != "check_in":
+            return {"display_kind": "none", "display_title": "", "display_reason": ""}
+        if self.status == "allowed":
+            return {
+                "display_kind": "entry",
+                "display_title": _("MỜI VÀO"),
+                "display_reason": "",
+            }
+
+        code = self.error_code or "unknown"
+        _category, severity = self._error_catalog().get(code, ("unknown", "warning"))
+        if severity != "critical":
+            return {"display_kind": "ignore", "display_title": "", "display_reason": ""}
+
+        reasons = {
+            "vehicle_not_found": _("THẺ XE CHƯA ĐƯỢC CẤP"),
+            "parking_area_not_operational": _("BÃI XE TẠM NGƯNG VẬN HÀNH"),
+            "missing_user_tid": _("THIẾU THẺ NGƯỜI DÙNG"),
+            "user_not_assigned": _("THẺ NGƯỜI DÙNG CHƯA ĐƯỢC CẤP"),
+            "unauthorized_vehicle_user": _("NGƯỜI DÙNG KHÔNG ĐƯỢC PHÉP SỬ DỤNG XE"),
+        }
+        return {
+            "display_kind": "alert",
+            "display_title": _("VUI LÒNG DỪNG LẠI"),
+            "display_reason": reasons.get(code, _("VUI LÒNG LIÊN HỆ NHÂN VIÊN BẢO VỆ")),
+        }
+
     def _live_monitor_payload(self, slot_snapshot=None):
-        """Serialize one final transaction for the customer-facing monitor."""
+        """Serialize one final transaction for the customer-facing monitor.
+
+        Realtime bus payloads use ``slot_delta`` so a burst of transactions does
+        not execute an occupancy SQL query for every vehicle. The initial and
+        periodic snapshot remains authoritative and heals any missed bus event.
+        """
         self.ensure_one()
         area = self.parking_area_id
         vehicle = self.vehicle_id
         owner = vehicle.owner_id if vehicle else self.env["nsp.user"].browse()
         vehicle_type = vehicle.vehicle_type_id if vehicle else self.env["nsp.vehicle.type"].browse()
         vehicle_type_code = str(vehicle_type.code or "").strip().lower() if vehicle_type else ""
-        icon = {
-            "motorbike": "🛵",
-            "car": "🚗",
-            "truck": "🚚",
-        }.get(vehicle_type_code, "🚙")
-        slots = slot_snapshot or (
-            area._motorbike_slot_snapshot() if area else {
-                "capacity_configured": False,
-                "motorbike_capacity": 0,
-                "motorbike_occupied": 0,
-                "available_slots": None,
-            }
-        )
+        capacity = max(int(area.motorbike_capacity or 0), 0) if area else 0
+        slots = slot_snapshot if slot_snapshot is not None else {
+            "capacity_configured": bool(capacity),
+            "motorbike_capacity": capacity,
+            "motorbike_occupied": None,
+            "available_slots": None,
+        }
+        slot_delta = 0
+        if vehicle_type_code == "motorbike" and self.status == "allowed":
+            if self.event_type == "check_in":
+                slot_delta = -1
+            elif self.event_type == "check_out":
+                slot_delta = 1
+
         license_plate = (self.license_plate or self.vehicle_tid or "-").strip().upper()
         employee_name = (owner.name or _("Unknown employee")).strip().upper() if owner else _("Unknown employee").upper()
         return {
@@ -369,29 +410,27 @@ class ParkingTransaction(models.Model):
             "vehicle_id": vehicle.id if vehicle else False,
             "vehicle_key": str(vehicle.id if vehicle else (self.vehicle_tid or self.transaction_uid)),
             "vehicle_type": vehicle_type_code or "other",
-            "vehicle_icon": icon,
             "license_plate": license_plate,
             "employee_name": employee_name,
+            "slot_delta": slot_delta,
+            **self._live_monitor_display_meta(),
             **slots,
         }
 
     def _broadcast_live_monitor(self):
-        """Broadcast final transactions; screens filter by Parking Area.
+        """Broadcast final transactions without per-vehicle occupancy SQL.
 
-        Check-out events are broadcast as well because they change available
-        motorbike slots even though the rolling entry rows only show Check-in.
+        Check-out events are also sent because they change the local slot count.
+        The Live Monitor reconciles against an authoritative snapshot every 15s.
         """
+        bus = self.env["bus.bus"]
         for transaction in self:
-            area = transaction.parking_area_id
-            if not area:
+            if not transaction.parking_area_id:
                 continue
-            payload = transaction._live_monitor_payload(
-                slot_snapshot=area._motorbike_slot_snapshot()
-            )
-            self.env["bus.bus"]._sendone(
+            bus._sendone(
                 "broadcast",
                 "nsp_parking_live_transaction",
-                payload,
+                transaction._live_monitor_payload(),
             )
         return True
 

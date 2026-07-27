@@ -973,6 +973,17 @@ class NspGatekeeperApiService(models.AbstractModel):
         return fields.Datetime.to_string(parsed)
 
     @api.model
+    def _measurement_millisecond(self, value):
+        text = str(value or "").strip()
+        if not text:
+            return 0
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            return int(parsed.microsecond / 1000)
+        except Exception:
+            return 0
+
+    @api.model
     def _measurement_session(self, measurement_code):
         code = str(measurement_code or "").strip().upper()
         if not code:
@@ -989,29 +1000,24 @@ class NspGatekeeperApiService(models.AbstractModel):
         return bool(session.controller_id and session.controller_id.edge_server_id == edge_server)
 
     @api.model
-    def _measurement_antenna_payload(self, session):
-        grouped = {}
-        for antenna in session.antenna_ids.sorted(
-            key=lambda item: (
-                item.device_id.serial_number or "",
-                item.antenna_no or 0,
-                item.id,
-            )
-        ):
-            grouped.setdefault(antenna.device_id.serial_number, []).append(int(antenna.antenna_no))
-        return [
-            {"serial_number": serial_number, "antennas": sorted(set(numbers))}
-            for serial_number, numbers in sorted(grouped.items())
-        ]
-
-    @api.model
     def _measurement_config_payload(self, session):
+        readers = []
+        for line in session.reader_line_ids.sorted(
+            key=lambda item: ((item.reader_id.serial_number or ""), item.id)
+        ):
+            readers.append({
+                "serial_number": line.reader_id.serial_number or "",
+                "power_dbm": int(line.measurement_power_dbm or 0),
+                "antennas": sorted(line.antenna_ids.mapped("antenna_no")),
+            })
         payload = {
             "measurement_code": session.measurement_code,
             "controller_code": session.controller_id.controller_id,
             "status": session.status,
             "desired_state": "running" if session.status in ("ready", "running") else "stopped",
-            "measurement_antennas": self._measurement_antenna_payload(session),
+            "revision": int(session.revision or 1),
+            "target_tid": session.target_tid or "",
+            "readers": readers,
         }
         if session.planned_start_at:
             payload["planned_start_at"] = self._iso_datetime(session.planned_start_at)
@@ -1041,7 +1047,6 @@ class NspGatekeeperApiService(models.AbstractModel):
                 }
                 for row in session._antenna_summary()
             ]
-            payload["transition_summary"] = session._transition_summary()
         return payload
 
     @api.model
@@ -1059,54 +1064,98 @@ class NspGatekeeperApiService(models.AbstractModel):
         return controller
 
     @api.model
-    def _measurement_resolve_antennas(self, controller, values):
-        if not isinstance(values, list) or not values:
-            raise ValueError("missing_measurement_antennas")
+    def _measurement_resolve_target_card(self, target_tid, required=True):
+        tid = self.env["nsp.rfid.card"].sudo()._normalize_tid(target_tid)
+        if not tid:
+            if required:
+                raise ValueError("missing_target_tid")
+            return self.env["nsp.rfid.card"].browse()
+        card = self.env["nsp.rfid.card"].sudo().search([("tid", "=", tid)], limit=1)
+        if not card:
+            raise ValueError("target_tag_not_found")
+        return card
 
-        keys = set()
+    @api.model
+    def _measurement_resolve_reader(self, controller, serial_number):
+        serial = str(serial_number or "").strip().upper()
+        if not serial:
+            raise ValueError("missing_reader_serial_number")
+        reader = self.env["nsp.device"].sudo().search([
+            ("controller_id", "=", controller.id),
+            ("serial_number", "=", serial),
+        ], limit=1)
+        if not reader:
+            raise ValueError("reader_not_found")
+        if not self.env["nsp.device.whitelist"].sudo().search_count([
+            ("serial_number", "=", serial),
+        ]):
+            raise ValueError("device_not_whitelisted")
+        return reader
+
+    @api.model
+    def _measurement_resolve_reader_lines(self, controller, values):
+        if not isinstance(values, list) or not values:
+            raise ValueError("missing_measurement_readers")
+        result = []
+        seen_readers = set()
         for item in values:
             if not isinstance(item, dict):
                 raise ValueError("invalid_payload")
-            self._measurement_reject_unknown_fields(item, {"serial_number", "antennas"})
-            serial_number = str(item.get("serial_number") or "").strip().upper()
-            antenna_numbers = item.get("antennas")
-            if not serial_number or not isinstance(antenna_numbers, list) or not antenna_numbers:
-                raise ValueError("invalid_payload")
-            for raw_number in antenna_numbers:
+            self._measurement_reject_unknown_fields(
+                item, {"serial_number", "power_dbm", "antennas"}
+            )
+            reader = self._measurement_resolve_reader(controller, item.get("serial_number"))
+            if reader.id in seen_readers:
+                raise ValueError("duplicate_measurement_reader")
+            seen_readers.add(reader.id)
+            try:
+                power = int(
+                    item.get("power_dbm")
+                    if item.get("power_dbm") is not None
+                    else reader.power_dbm
+                )
+            except Exception as exc:
+                raise ValueError("invalid_measurement_power") from exc
+            if power < 0 or power > 40:
+                raise ValueError("invalid_measurement_power")
+
+            numbers = item.get("antennas")
+            if not isinstance(numbers, list) or not numbers:
+                raise ValueError("missing_measurement_antennas")
+            antenna_numbers = []
+            seen_numbers = set()
+            for raw_number in numbers:
                 try:
                     antenna_no = int(raw_number)
-                except Exception:
-                    antenna_no = 0
-                key = (serial_number, antenna_no)
-                if antenna_no <= 0:
-                    raise ValueError("antenna_not_found")
-                if key in keys:
+                except Exception as exc:
+                    raise ValueError("antenna_not_found") from exc
+                if antenna_no <= 0 or antenna_no in seen_numbers:
                     raise ValueError("duplicate_antenna_mapping")
-                keys.add(key)
+                seen_numbers.add(antenna_no)
+                antenna_numbers.append(antenna_no)
+            antennas = self.env["nsp.device.antenna"].sudo().search([
+                ("device_id", "=", reader.id),
+                ("antenna_no", "in", antenna_numbers),
+            ])
+            if len(antennas) != len(antenna_numbers):
+                raise ValueError("antenna_not_found")
+            result.append({
+                "reader": reader,
+                "power_dbm": power,
+                "antennas": antennas,
+            })
+        return result
 
-        serials = {serial for serial, _antenna_no in keys}
-        whitelisted = set(
-            self.env["nsp.device.whitelist"].sudo().search([
-                ("serial_number", "in", list(serials)),
-            ]).mapped("serial_number")
-        ) if serials else set()
-        missing_whitelist = serials - whitelisted
-        if missing_whitelist:
-            raise ValueError("device_not_whitelisted")
-
-        antenna_numbers = {antenna_no for _serial, antenna_no in keys}
-        antennas = self.env["nsp.device.antenna"].sudo().search([
-            ("device_id.controller_id", "=", controller.id),
-            ("device_id.serial_number", "in", list(serials)),
-            ("antenna_no", "in", list(antenna_numbers)),
-        ])
-        by_key = {
-            (antenna.device_id.serial_number, int(antenna.antenna_no or 0)): antenna
-            for antenna in antennas
-        }
-        if any(key not in by_key for key in keys):
-            raise ValueError("antenna_not_found")
-        return self.env["nsp.device.antenna"].browse([by_key[key].id for key in sorted(keys)])
+    @api.model
+    def _measurement_reader_commands(self, resolved_lines):
+        return [
+            (0, 0, {
+                "reader_id": item["reader"].id,
+                "measurement_power_dbm": item["power_dbm"],
+                "antenna_ids": [(6, 0, item["antennas"].ids)],
+            })
+            for item in resolved_lines
+        ]
 
     @api.model
     def _measurement_error_response(self, exc):
@@ -1165,25 +1214,33 @@ class NspGatekeeperApiService(models.AbstractModel):
             return error
         try:
             allowed = {
-                "controller_code", "planned_start_at", "planned_end_at",
-                "note", "measurement_antennas",
+                "controller_code", "target_tid", "readers",
+                "planned_start_at", "planned_end_at", "note",
             }
             self._measurement_reject_unknown_fields(data, allowed)
-            self._measurement_require_fields(data, ["controller_code", "measurement_antennas"])
+            self._measurement_require_fields(
+                data, ["controller_code", "target_tid", "readers"]
+            )
             controller = self._measurement_resolve_controller(data)
-            antennas = self._measurement_resolve_antennas(controller, data.get("measurement_antennas"))
+            target_card = self._measurement_resolve_target_card(data.get("target_tid"))
+            resolved_lines = self._measurement_resolve_reader_lines(controller, data.get("readers"))
             planned_start = self._measurement_datetime(data.get("planned_start_at"))
             planned_end = self._measurement_datetime(data.get("planned_end_at"))
             if planned_start and planned_end and planned_end <= planned_start:
                 raise ValueError("invalid_planned_time_range")
             session = self.env["nsp.measurement.session"].sudo().create({
                 "controller_id": controller.id,
+                "target_card_id": target_card.id,
                 "planned_start_at": planned_start,
                 "planned_end_at": planned_end,
                 "note": str(data.get("note") or "").strip() or False,
-                "antenna_ids": [(6, 0, antennas.ids)],
+                "reader_line_ids": self._measurement_reader_commands(resolved_lines),
             })
-            return self._ok({"data": self._measurement_session_payload(session, include_detail=True)}, status_code=201, message="Measurement Session created.")
+            return self._ok(
+                {"data": self._measurement_session_payload(session, include_detail=True)},
+                status_code=201,
+                message="Measurement Session created.",
+            )
         except Exception as exc:
             return self._measurement_error_response(exc)
 
@@ -1195,8 +1252,8 @@ class NspGatekeeperApiService(models.AbstractModel):
             return error
         try:
             allowed = {
-                "measurement_code", "controller_code", "planned_start_at", "planned_end_at",
-                "note", "measurement_antennas",
+                "measurement_code", "controller_code", "target_tid", "readers",
+                "planned_start_at", "planned_end_at", "note",
             }
             self._measurement_reject_unknown_fields(data, allowed)
             self._measurement_require_fields(data, ["measurement_code"])
@@ -1207,18 +1264,35 @@ class NspGatekeeperApiService(models.AbstractModel):
             vals = {}
             if "controller_code" in data:
                 vals["controller_id"] = controller.id
+            if "target_tid" in data:
+                vals["target_card_id"] = self._measurement_resolve_target_card(data.get("target_tid")).id
+            if "readers" in data:
+                resolved_lines = self._measurement_resolve_reader_lines(controller, data.get("readers"))
+                vals["reader_line_ids"] = [(5, 0, 0)] + self._measurement_reader_commands(resolved_lines)
+            elif "controller_code" in data:
+                invalid = session.reader_line_ids.filtered(
+                    lambda line: line.reader_id.controller_id != controller
+                )
+                if invalid:
+                    raise ValueError("reader_not_in_scope")
             if "planned_start_at" in data:
                 vals["planned_start_at"] = self._measurement_datetime(data.get("planned_start_at"))
             if "planned_end_at" in data:
                 vals["planned_end_at"] = self._measurement_datetime(data.get("planned_end_at"))
             if "note" in data:
                 vals["note"] = str(data.get("note") or "").strip() or False
-            if "measurement_antennas" in data:
-                antennas = self._measurement_resolve_antennas(controller, data.get("measurement_antennas"))
-                vals["antenna_ids"] = [(6, 0, antennas.ids)]
             if vals:
                 session.write(vals)
-            return self._ok({"data": self._measurement_session_payload(session, include_detail=True)}, message="Measurement Session updated.")
+            if (
+                session.planned_start_at
+                and session.planned_end_at
+                and session.planned_end_at <= session.planned_start_at
+            ):
+                raise ValueError("invalid_planned_time_range")
+            return self._ok(
+                {"data": self._measurement_session_payload(session, include_detail=True)},
+                message="Measurement Session updated.",
+            )
         except Exception as exc:
             return self._measurement_error_response(exc)
 
@@ -1248,9 +1322,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             target = str(data.get("status") or "").strip().lower()
             occurred_at = self._measurement_datetime(data.get("occurred_at"), default_now=True)
             if target == "ready":
-                if not session.antenna_ids:
-                    raise ValueError("missing_measurement_antennas")
-                session._check_antenna_scope()
+                session._require_ready_configuration()
             self._measurement_set_status(session, target, occurred_at, data.get("message"))
             return self._ok({"data": self._measurement_session_payload(session)}, message="Measurement Session state updated.")
         except Exception as exc:
@@ -1311,13 +1383,16 @@ class NspGatekeeperApiService(models.AbstractModel):
             return self._measurement_error_response(exc)
 
     @api.model
-    def _measurement_event_values(self, session, item, allowed_antennas=None):
-        allowed = {"event_uid", "serial_number", "antenna_no", "tid", "read_at", "rssi_dbm"}
+    def _measurement_event_values(self, session, item, allowed_antennas=None, accept_snapshot=False):
+        allowed = {
+            "event_uid", "serial_number", "antenna_no", "tid", "read_at", "rssi_dbm",
+            "revision", "power_dbm",
+        }
         self._measurement_reject_unknown_fields(item, allowed)
         self._measurement_require_fields(item, ["event_uid", "serial_number", "antenna_no", "tid", "read_at"])
         event_uid = str(item.get("event_uid") or "").strip()
         serial_number = str(item.get("serial_number") or "").strip().upper()
-        tid = str(item.get("tid") or "").strip().upper()
+        tid = self.env["nsp.rfid.card"].sudo()._normalize_tid(item.get("tid"))
         try:
             antenna_no = int(item.get("antenna_no") or 0)
         except Exception:
@@ -1325,13 +1400,14 @@ class NspGatekeeperApiService(models.AbstractModel):
         if antenna_no <= 0:
             raise ValueError("antenna_not_found")
         if allowed_antennas is None:
-            allowed_antennas = {
-                (antenna.device_id.serial_number, int(antenna.antenna_no or 0))
-                for antenna in session.antenna_ids
-            }
+            allowed_antennas = session._allowed_antenna_pairs()
         if (serial_number, antenna_no) not in allowed_antennas:
             raise ValueError("antenna_not_found")
+        reader_line = session._measurement_line_for_serial(serial_number)
+        if not reader_line:
+            raise ValueError("reader_not_in_scope")
         read_at = self._measurement_datetime(item.get("read_at"), required=True)
+        read_at_ms = self._measurement_millisecond(item.get("read_at"))
         if item.get("rssi_dbm") in (None, ""):
             rssi = False
         else:
@@ -1339,41 +1415,58 @@ class NspGatekeeperApiService(models.AbstractModel):
                 rssi = float(item.get("rssi_dbm"))
             except Exception:
                 raise ValueError("invalid_rssi")
+        if accept_snapshot:
+            try:
+                revision = int(item.get("revision") or session.revision or 1)
+                power_dbm = int(
+                    item.get("power_dbm")
+                    if item.get("power_dbm") is not None
+                    else reader_line.measurement_power_dbm
+                )
+            except Exception as exc:
+                raise ValueError("invalid_measurement_snapshot") from exc
+        else:
+            revision = int(session.revision or 1)
+            power_dbm = int(reader_line.measurement_power_dbm or 0)
+        if revision <= 0 or power_dbm < 0 or power_dbm > 40:
+            raise ValueError("invalid_measurement_snapshot")
         return {
             "event_uid": event_uid,
             "session_id": session.id,
+            "revision": revision,
             "serial_number": serial_number,
             "antenna_no": antenna_no,
             "tid": tid,
             "read_at": read_at,
+            "read_at_ms": read_at_ms,
             "rssi_dbm": rssi,
+            "power_dbm": power_dbm,
         }
 
     @api.model
     def _measurement_event_matches(self, event, values):
         return (
             event.session_id.id == values["session_id"]
+            and int(event.revision or 1) == int(values["revision"] or 1)
             and event.serial_number == values["serial_number"]
             and int(event.antenna_no or 0) == int(values["antenna_no"] or 0)
             and event.tid == values["tid"]
             and fields.Datetime.to_string(event.read_at) == fields.Datetime.to_string(values["read_at"])
+            and int(event.read_at_ms or 0) == int(values["read_at_ms"] or 0)
             and (False if event.rssi_dbm in (False, None) else float(event.rssi_dbm))
             == (False if values["rssi_dbm"] in (False, None) else float(values["rssi_dbm"]))
+            and int(event.power_dbm or 0) == int(values["power_dbm"] or 0)
         )
 
     @api.model
-    def _measurement_process_event_batch(self, session, items, allow_final=False):
-        """Validate/idempotently store one Measurement batch with bounded queries.
-
-        Event UIDs are preloaded once and new valid Events are created in one ORM
-        batch. Repeated UIDs inside the same request are treated idempotently when
-        their payload is identical and rejected when their payload conflicts.
-        """
+    def _measurement_process_event_batch(
+        self, session, items, allow_final=False, accept_snapshot=False,
+        enforce_current_snapshot=False,
+    ):
+        """Store only the selected Target Tag, idempotently, with bounded queries."""
         Event = self.env["nsp.measurement.event"].sudo()
-        allowed_antennas = {
-            (antenna.device_id.serial_number, int(antenna.antenna_no or 0))
-            for antenna in session.antenna_ids
-        }
+        allowed_antennas = session._allowed_antenna_pairs()
+        target_tid = str(session.target_tid or "").strip().upper()
         prepared = []
         results = [None] * len(items)
 
@@ -1382,9 +1475,33 @@ class NspGatekeeperApiService(models.AbstractModel):
             try:
                 if not isinstance(item, dict):
                     raise ValueError("invalid_payload")
+                incoming_tid = self.env["nsp.rfid.card"].sudo()._normalize_tid(item.get("tid"))
+                if target_tid and incoming_tid != target_tid:
+                    results[index] = {
+                        "index": index,
+                        "record_key": key,
+                        "status": "ignored",
+                        "message": "Non-target RFID Tag ignored",
+                    }
+                    continue
                 values = self._measurement_event_values(
-                    session, item, allowed_antennas=allowed_antennas
+                    session,
+                    item,
+                    allowed_antennas=allowed_antennas,
+                    accept_snapshot=accept_snapshot,
                 )
+                if enforce_current_snapshot and (
+                    int(values["revision"] or 1) != int(session.revision or 1)
+                    or int(values["power_dbm"] or 0)
+                    != int(session._measurement_power_for_serial(values["serial_number"]) or 0)
+                ):
+                    results[index] = {
+                        "index": index,
+                        "record_key": key,
+                        "status": "ignored",
+                        "message": "Stale Measurement revision/power ignored",
+                    }
+                    continue
                 prepared.append((index, key, values))
             except Exception as exc:
                 results[index] = {
@@ -1424,12 +1541,15 @@ class NspGatekeeperApiService(models.AbstractModel):
             if first is not None:
                 same = (
                     first["session_id"] == values["session_id"]
+                    and first["revision"] == values["revision"]
                     and first["serial_number"] == values["serial_number"]
                     and int(first["antenna_no"]) == int(values["antenna_no"])
                     and first["tid"] == values["tid"]
                     and fields.Datetime.to_string(first["read_at"]) == fields.Datetime.to_string(values["read_at"])
+                    and int(first["read_at_ms"] or 0) == int(values["read_at_ms"] or 0)
                     and (False if first["rssi_dbm"] in (False, None) else float(first["rssi_dbm"]))
                     == (False if values["rssi_dbm"] in (False, None) else float(values["rssi_dbm"]))
+                    and int(first["power_dbm"] or 0) == int(values["power_dbm"] or 0)
                 )
                 if same:
                     duplicate_indices.setdefault(uid, []).append((index, key))
@@ -1440,7 +1560,7 @@ class NspGatekeeperApiService(models.AbstractModel):
                     }
                 continue
 
-            if not allow_final and session.status in ("completed", "failed", "cancelled"):
+            if not allow_final and session.status in ("completed", "applied", "failed", "cancelled"):
                 results[index] = {
                     "index": index, "record_key": key, "status": "rejected",
                     "error_code": "measurement_not_running", "message": "measurement_not_running",
@@ -1464,8 +1584,6 @@ class NspGatekeeperApiService(models.AbstractModel):
                             "message": "Processed",
                         }
             except Exception:
-                # Rare concurrent UID collisions or DB-level failures are isolated
-                # per Event so one bad item does not reject the rest of the batch.
                 created_records = Event.browse()
                 for uid, (index, key, values) in pending_by_uid.items():
                     try:
@@ -1510,10 +1628,12 @@ class NspGatekeeperApiService(models.AbstractModel):
 
         final_results = [row for row in results if row is not None]
         failed = sum(1 for row in final_results if row["status"] == "rejected")
-        processed = len(final_results) - failed
+        ignored = sum(1 for row in final_results if row["status"] == "ignored")
+        processed = len(final_results) - failed - ignored
         return {
             "received": len(items),
             "processed": processed,
+            "ignored": ignored,
             "failed": failed,
             "results": final_results,
         }, created_records
@@ -1553,7 +1673,9 @@ class NspGatekeeperApiService(models.AbstractModel):
             items = data.get("events")
             if not isinstance(items, list) or not items or len(items) > 100:
                 raise ValueError("invalid_payload")
-            result, records = self._measurement_process_event_batch(session, items)
+            result, records = self._measurement_process_event_batch(
+                session, items, accept_snapshot=True, enforce_current_snapshot=True
+            )
             if result["processed"] and session.status == "ready":
                 self._measurement_set_status(session, "running", fields.Datetime.now())
                 self._forward_measurement_status_now(session)
@@ -1597,7 +1719,7 @@ class NspGatekeeperApiService(models.AbstractModel):
             if not isinstance(items, list) or not items or len(items) > 100:
                 raise ValueError("invalid_payload")
             result, _records = self._measurement_process_event_batch(
-                session, items, allow_final=True
+                session, items, allow_final=True, accept_snapshot=True
             )
             return self._ok(result, message="Measurement Events synchronized.")
         except Exception as exc:

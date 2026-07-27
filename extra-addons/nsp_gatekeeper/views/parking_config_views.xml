@@ -100,6 +100,7 @@
                             <field name="branch_id" options="{'no_create': False, 'no_open': False}"/>
                             <field name="state" readonly="1"/>
                             <field name="motorbike_capacity" string="Motorbike Capacity"/>
+                            <field name="live_monitor_columns" string="Live Monitor Columns"/>
                             <field name="code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
                         <group string="Derived Infrastructure">
