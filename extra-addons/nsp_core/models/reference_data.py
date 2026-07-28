@@ -14,7 +14,15 @@ class NspReferenceBase(models.AbstractModel):
     _label = "Reference"
 
     name = fields.Char(required=True, index=True)
-    code = fields.Char(required=True, readonly=True, copy=False, index=True)
+    code = fields.Char(
+        string="Technical Code",
+        required=True,
+        readonly=True,
+        copy=False,
+        index=True,
+        default=lambda self: self._new_reference_code(),
+        help="Stable technical identifier used for synchronization. It is generated automatically and is independent from the display Name.",
+    )
     active = fields.Boolean(default=True, index=True)
 
     @api.model
@@ -37,6 +45,13 @@ class NspReferenceBase(models.AbstractModel):
             values["name"] = str(values.get("name") or "").strip()
         if "code" in values:
             values["code"] = str(values.get("code") or "").strip().upper()
+
+        # Self-heal records created by an older source where Technical Code was blank.
+        if not self.env.context.get("nsp_skip_code_self_heal"):
+            for record in self.filtered(lambda item: not (item.code or "").strip()):
+                record.with_context(nsp_skip_code_self_heal=True).write({
+                    "code": record._new_reference_code().strip().upper(),
+                })
         return super().write(values)
 
     @api.constrains("name", "code")

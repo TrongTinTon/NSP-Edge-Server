@@ -215,7 +215,7 @@ class NspParkingArea(models.Model):
                       JOIN nsp_parking_lane lane ON lane.id = tx.lane_id
                      WHERE tx.status = 'allowed'
                        AND tx.vehicle_id IS NOT NULL
-                       AND vehicle_type.code = 'motorbike'
+                       AND LOWER(vehicle_type.code) = 'motorbike'
                      ORDER BY tx.vehicle_id, tx.event_time DESC, tx.id DESC
                    ) current_vehicle
              WHERE current_vehicle.event_type = 'check_in'

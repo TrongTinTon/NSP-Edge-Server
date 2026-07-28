@@ -6,7 +6,7 @@
         <field name="arch" type="xml">
             <list string="Brands">
                 <field name="name"/>
-                <field name="code" optional="hide"/>
+                <field name="code" string="Technical Code"/>
                 <field name="active" optional="hide"/>
             </list>
         </field>
@@ -19,17 +19,28 @@
                 <sheet>
                     <group>
                         <field name="name"/>
-                        <field name="code" readonly="1" groups="nsp_core.group_nsp_it_parking"/>
+                        <field name="code" string="Technical Code" readonly="1" widget="CopyClipboardChar"/>
                         <field name="active"/>
                     </group>
                 </sheet>
             </form>
         </field>
     </record>
+    <record id="view_nsp_reference_brand_search" model="ir.ui.view">
+        <field name="name">nsp.reference.brand.search</field>
+        <field name="model">nsp.reference.brand</field>
+        <field name="arch" type="xml">
+            <search string="Brands">
+                <field name="name"/>
+                <field name="code" string="Technical Code"/>
+            </search>
+        </field>
+    </record>
     <record id="action_nsp_reference_brand" model="ir.actions.act_window">
         <field name="name">Brands</field>
         <field name="res_model">nsp.reference.brand</field>
         <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_nsp_reference_brand_search"/>
     </record>
 
     <record id="view_nsp_reference_model_list" model="ir.ui.view">
@@ -39,7 +50,7 @@
             <list string="Models">
                 <field name="brand_id"/>
                 <field name="name"/>
-                <field name="code" optional="hide"/>
+                <field name="code" string="Technical Code"/>
                 <field name="active" optional="hide"/>
             </list>
         </field>
@@ -53,17 +64,30 @@
                     <group>
                         <field name="brand_id"/>
                         <field name="name"/>
-                        <field name="code" readonly="1" groups="nsp_core.group_nsp_it_parking"/>
+                        <field name="code" string="Technical Code" readonly="1" widget="CopyClipboardChar"/>
                         <field name="active"/>
                     </group>
                 </sheet>
             </form>
         </field>
     </record>
+    <record id="view_nsp_reference_model_search" model="ir.ui.view">
+        <field name="name">nsp.reference.model.search</field>
+        <field name="model">nsp.reference.model</field>
+        <field name="arch" type="xml">
+            <search string="Models">
+                <field name="name"/>
+                <field name="code" string="Technical Code"/>
+                <field name="brand_id"/>
+                <filter string="Brand" name="groupby_brand" context="{'group_by': 'brand_id'}"/>
+            </search>
+        </field>
+    </record>
     <record id="action_nsp_reference_model" model="ir.actions.act_window">
         <field name="name">Models</field>
         <field name="res_model">nsp.reference.model</field>
         <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_nsp_reference_model_search"/>
     </record>
 
     <record id="view_nsp_reference_vendor_list" model="ir.ui.view">
@@ -72,7 +96,7 @@
         <field name="arch" type="xml">
             <list string="Vendors">
                 <field name="name"/>
-                <field name="code" optional="hide"/>
+                <field name="code" string="Technical Code"/>
                 <field name="active" optional="hide"/>
             </list>
         </field>
@@ -85,17 +109,28 @@
                 <sheet>
                     <group>
                         <field name="name"/>
-                        <field name="code" readonly="1" groups="nsp_core.group_nsp_it_parking"/>
+                        <field name="code" string="Technical Code" readonly="1" widget="CopyClipboardChar"/>
                         <field name="active"/>
                     </group>
                 </sheet>
             </form>
         </field>
     </record>
+    <record id="view_nsp_reference_vendor_search" model="ir.ui.view">
+        <field name="name">nsp.reference.vendor.search</field>
+        <field name="model">nsp.reference.vendor</field>
+        <field name="arch" type="xml">
+            <search string="Vendors">
+                <field name="name"/>
+                <field name="code" string="Technical Code"/>
+            </search>
+        </field>
+    </record>
     <record id="action_nsp_reference_vendor" model="ir.actions.act_window">
         <field name="name">Vendors</field>
         <field name="res_model">nsp.reference.vendor</field>
         <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_nsp_reference_vendor_search"/>
     </record>
 
     <menuitem id="menu_nsp_reference_data" name="Reference Data" parent="nsp_core.menu_nsp_configuration" sequence="30" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking"/>

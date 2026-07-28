@@ -12,12 +12,13 @@ class NspDeviceType(models.Model):
 
     name = fields.Char(required=True, index=True)
     code = fields.Char(
+        string="Technical Code",
         required=True,
         readonly=True,
         copy=False,
         index=True,
         default=lambda self: new_management_code("DTYPE"),
-        help="Stable identifier used for Cloud/Edge synchronization.",
+        help="Stable technical identifier used for Cloud/Edge synchronization. It is independent from the display Name.",
     )
     active = fields.Boolean(default=True, index=True)
 
