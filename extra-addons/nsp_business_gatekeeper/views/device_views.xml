@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="nsp_device_view_search" model="ir.ui.view">
+        <field name="name">nsp.reader.search</field>
+        <field name="model">nsp.device</field>
+        <field name="arch" type="xml">
+            <search string="Readers">
+                <field name="name"/>
+                <field name="serial_number"/>
+                <field name="device_code"/>
+                <field name="controller_id"/>
+                <field name="connection_type"/>
+                <filter string="Online" name="online" domain="[('status','=','online')]"/>
+                <filter string="Offline" name="offline" domain="[('status','=','offline')]"/>
+                <filter string="Degraded" name="degraded" domain="[('status','=','degraded')]"/>
+                <separator/>
+                <group>
+                    <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
+                    <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="nsp_device_view_list" model="ir.ui.view">
+        <field name="name">nsp.reader.list</field>
+        <field name="model">nsp.device</field>
+        <field name="arch" type="xml">
+            <list string="Readers" create="0" edit="0" delete="0">
+                <field name="status" widget="badge"
+                       decoration-success="status == 'online'"
+                       decoration-danger="status == 'offline'"
+                       decoration-warning="status == 'degraded'"/>
+                <field name="name" string="Reader" decoration-bf="1"/>
+                <field name="serial_number" string="Serial"/>
+                <field name="device_code" string="Technical Code" optional="hide"/>
+                <field name="controller_id"/>
+                <field name="connection_type" string="Physical Connection" optional="show"/>
+                <field name="last_seen" readonly="1" optional="show"/>
+                <field name="firmware_version" readonly="1" optional="hide"/>
+                <field name="antennas" string="Antennas" readonly="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="nsp_device_view_form" model="ir.ui.view">
+        <field name="name">nsp.reader.form</field>
+        <field name="model">nsp.device</field>
+        <field name="arch" type="xml">
+            <form string="Reader" create="0" edit="0" delete="0">
+                <header>
+                    <field name="status" widget="statusbar" statusbar_visible="offline,online,degraded" readonly="1"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <label for="name" string="Reader Name"/>
+                        <h1><field name="name" placeholder="Entry Reader 01"/></h1>
+                    </div>
+                    <group>
+                        <group string="Device Declaration">
+                            <field name="serial_number" string="Serial"/>
+                            <field name="controller_id" options="{'no_create': False, 'no_open': False}"/>
+                            <field name="connection_type" string="Physical Connection" widget="nsp_grouped_connection"/>
+                            <field name="device_code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
+                        </group>
+                        <group string="Runtime Status">
+                            <field name="status" widget="badge" readonly="1"
+                                   decoration-success="status == 'online'"
+                                   decoration-danger="status == 'offline'"
+                                   decoration-warning="status == 'degraded'"/>
+                            <field name="last_seen" readonly="1"/>
+                            <field name="firmware_version" readonly="1"/>
+
+                        </group>
+                    </group>
+                    <group string="Reader Parameters">
+                        <group>
+                            <field name="power_dbm" string="Power (dBm)"/>
+                            <field name="read_interval_ms" string="Read Interval ms"/>
+                        </group>
+                        <group>
+                            <field name="tid_addr" string="TID Start Address"/>
+                            <field name="tid_len" string="TID Length"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page name="antennas" string="Antennas">
+                            <div class="alert alert-info" role="alert">
+                                Power is configured once on the Reader and applies to all antenna ports. Minimum RSSI can be tuned per antenna to reject weak detections from farther or adjacent lanes.
+                            </div>
+                            <field name="antennas_ids" context="{'default_device_id': id}">
+                                <list string="Antennas" editable="bottom" create="0" edit="0" delete="0">
+                                    <field name="antenna_no" string="Antenna No"/>
+                                    <field name="minimum_rssi_dbm" string="Minimum RSSI dBm"/>
+                                    <field name="lane_count" string="Mapped Lanes" readonly="1"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="nsp_device_action" model="ir.actions.act_window">
+        <field name="name">Readers</field>
+        <field name="res_model">nsp.device</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="nsp_device_view_search"/>
+        <field name="view_ids" eval="[(5,0,0),
+            (0,0, {'view_mode': 'list', 'view_id': ref('nsp_device_view_list')}),
+            (0,0, {'view_mode': 'form', 'view_id': ref('nsp_device_view_form')})]"/>
+    </record>
+
+    <record id="nsp_device_heartbeat_view_list" model="ir.ui.view">
+        <field name="name">nsp.reader.runtime.list</field>
+        <field name="model">nsp.device</field>
+        <field name="arch" type="xml">
+            <list string="Reader Runtime Status" create="0" edit="0">
+                <field name="status" widget="badge"
+                       decoration-success="status == 'online'"
+                       decoration-danger="status == 'offline'"
+                       decoration-warning="status == 'degraded'"/>
+                <field name="name" string="Reader"/>
+                <field name="serial_number"/>
+                <field name="controller_id"/>
+                <field name="device_code" string="Technical Code" optional="hide"/>
+                <field name="last_seen"/>
+                <field name="firmware_version"/>
+
+            </list>
+        </field>
+    </record>
+
+    <record id="action_nsp_device_heartbeat" model="ir.actions.act_window">
+        <field name="name">Reader Runtime Status</field>
+        <field name="res_model">nsp.device</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="nsp_device_view_search"/>
+        <field name="view_ids" eval="[(5,0,0),
+            (0,0, {'view_mode': 'list', 'view_id': ref('nsp_device_heartbeat_view_list')}),
+            (0,0, {'view_mode': 'form', 'view_id': ref('nsp_device_view_form')})]"/>
+    </record>
+
+    <record id="view_nsp_device_antenna_search" model="ir.ui.view">
+        <field name="name">nsp.reader.antenna.search</field>
+        <field name="model">nsp.device.antenna</field>
+        <field name="arch" type="xml">
+            <search string="Antennas">
+                <field name="antenna_no" string="Antenna No"/>
+                <field name="device_id" string="Reader"/>
+                <field name="device_serial" string="Reader Serial"/>
+                <field name="controller_id"/>
+                <filter string="Mapped to Lane" name="mapped" domain="[('lane_rule_ids','!=',False)]"/>
+                <separator/>
+                <group>
+                    <filter string="Reader" name="group_device" context="{'group_by':'device_id'}"/>
+                    <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_device_antenna_list" model="ir.ui.view">
+        <field name="name">nsp.reader.antenna.list</field>
+        <field name="model">nsp.device.antenna</field>
+        <field name="arch" type="xml">
+            <list string="Antennas" create="0" edit="0" delete="0">
+                <field name="controller_id" readonly="1"/>
+                <field name="device_id" string="Reader"/>
+                <field name="antenna_no" string="Antenna No"/>
+                <field name="minimum_rssi_dbm" string="Minimum RSSI dBm"/>
+                <field name="lane_count" string="Mapped Lanes" readonly="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_device_antenna_form" model="ir.ui.view">
+        <field name="name">nsp.reader.antenna.form</field>
+        <field name="model">nsp.device.antenna</field>
+        <field name="arch" type="xml">
+            <form string="Antenna" create="0" edit="0" delete="0">
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="display_name" readonly="1"/></h1>
+                    </div>
+                    <group>
+                        <group string="Antenna Configuration">
+                            <field name="device_id" string="Reader" options="{'no_create': False, 'no_open': False}"/>
+                            <field name="antenna_no" string="Antenna No"/>
+                            <field name="minimum_rssi_dbm" string="Minimum RSSI dBm"/>
+                        </group>
+                        <group string="Ownership">
+                            <field name="controller_id" readonly="1"/>
+                            <field name="device_serial" string="Reader Serial" readonly="1"/>
+                            <field name="lane_count" string="Mapped Lanes" readonly="1"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Parking Lane Antenna Mapping">
+                            <field name="lane_rule_ids" readonly="1">
+                                <list string="Parking Lane Antenna Mapping" create="0" edit="0" delete="0">
+                                    <field name="parking_area_id" string="Parking Area"/>
+                                    <field name="lane_id"/>
+                                    <field name="zone" widget="badge"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_nsp_device_antenna" model="ir.actions.act_window">
+        <field name="name">Antennas</field>
+        <field name="res_model">nsp.device.antenna</field>
+        <field name="view_mode">list,form</field>
+        <field name="view_ids" eval="[(5,0,0),
+            (0,0, {'view_mode': 'list', 'view_id': ref('view_nsp_device_antenna_list')}),
+            (0,0, {'view_mode': 'form', 'view_id': ref('view_nsp_device_antenna_form')})]"/>
+        <field name="search_view_id" ref="view_nsp_device_antenna_search"/>
+    </record>
+</odoo>

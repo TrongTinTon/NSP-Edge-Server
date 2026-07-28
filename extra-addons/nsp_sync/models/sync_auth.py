@@ -80,36 +80,6 @@ class NspSyncAuth(models.Model):
         if self._deployment_role() != "edge_server":
             raise UserError(_("Cloud Connections and outbound Sync Jobs are configured only on the Edge Server."))
 
-    def _ensure_edge_server_node(self, previous_code=False):
-        """Create or rename the local Edge Server identity from its assigned code."""
-        EdgeServer = self.env["nsp.edge.server"].sudo().with_context(active_test=False)
-        for rec in self:
-            code = str(rec.edge_server_code or "").strip().upper()
-            if not code:
-                continue
-            edge = EdgeServer.search([("edge_server_code", "=", code)], limit=1)
-            if edge:
-                if not edge.active:
-                    edge.write({"active": True})
-                continue
-            old_code = str(previous_code or "").strip().upper()
-            old_edge = EdgeServer.search([("edge_server_code", "=", old_code)], limit=1) if old_code else EdgeServer.browse()
-            other_auth = self.search_count([("id", "!=", rec.id), ("edge_server_code", "=", old_code)]) if old_code else 0
-            if old_edge and not other_auth:
-                old_edge.write({
-                    "edge_server_code": code,
-                    "name": old_edge.name or ("Edge Server %s" % code),
-                    "active": True,
-                })
-            else:
-                EdgeServer.create({
-                    "edge_server_code": code,
-                    "name": "Edge Server %s" % code,
-                    "status": "offline",
-                    "active": True,
-                })
-        return True
-
     @api.model_create_multi
     def create(self, vals_list):
         self._ensure_edge_server_instance()
@@ -120,7 +90,6 @@ class NspSyncAuth(models.Model):
             vals.setdefault("name", "NSP Cloud")
             prepared.append(vals)
         records = super().create(prepared)
-        records._ensure_edge_server_node()
         self.env["nsp.sync.job"].ensure_default_jobs(records)
         return records
 
@@ -134,14 +103,9 @@ class NspSyncAuth(models.Model):
             self._ensure_edge_server_instance()
         values = dict(vals)
         values.pop("remote_base_url", None)
-        old_codes = {rec.id: rec.edge_server_code for rec in self}
         if "edge_server_code" in values:
             values["edge_server_code"] = str(values.get("edge_server_code") or "").strip().upper()
-        result = super().write(values)
-        if "edge_server_code" in values:
-            for rec in self:
-                rec._ensure_edge_server_node(previous_code=old_codes.get(rec.id))
-        return result
+        return super().write(values)
 
     @api.depends("edge_server_code", "remote_base_url")
     def _compute_display_name(self):

@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_nsp_measurement_session_search" model="ir.ui.view">
+        <field name="name">nsp.measurement.session.search</field>
+        <field name="model">nsp.measurement.session</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="measurement_code" string="Measurement Code"/>
+                <field name="target_card_id"/>
+                <field name="controller_id"/>
+                <filter string="Draft" name="draft" domain="[('status','=','draft')]"/>
+                <filter string="Ready" name="ready" domain="[('status','=','ready')]"/>
+                <filter string="Running" name="running" domain="[('status','=','running')]"/>
+                <filter string="Completed" name="completed" domain="[('status','=','completed')]"/>
+                <filter string="Applied" name="applied" domain="[('status','=','applied')]"/>
+                <filter string="Failed" name="failed" domain="[('status','=','failed')]"/>
+                <group>
+                    <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
+                    <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_measurement_session_list" model="ir.ui.view">
+        <field name="name">nsp.measurement.session.list</field>
+        <field name="model">nsp.measurement.session</field>
+        <field name="arch" type="xml">
+            <list string="Measurement Sessions"
+                  decoration-info="status == 'running'"
+                  decoration-success="status in ('completed','applied')"
+                  decoration-danger="status == 'failed'">
+                <field name="measurement_code" readonly="1"/>
+                <field name="revision"/>
+                <field name="target_card_id"/>
+                <field name="controller_id"/>
+                <field name="reader_count" string="Readers"/>
+                <field name="status" widget="badge"/>
+                <field name="event_count" string="Current Reads"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_measurement_session_form" model="ir.ui.view">
+        <field name="name">nsp.measurement.session.form</field>
+        <field name="model">nsp.measurement.session</field>
+        <field name="arch" type="xml">
+            <form string="Measurement Session">
+                <header>
+                    <button name="action_ready" type="object" string="Release to Controller" icon="fa-cloud-upload"
+                            class="oe_highlight" invisible="status != 'draft'"/>
+                    <button name="action_open_live" type="object" string="Live Measurement" icon="fa-line-chart"
+                            class="oe_highlight" invisible="status == 'draft'"/>
+                    <button name="action_complete" type="object" string="Complete" icon="fa-check-circle"
+                            invisible="status != 'running'"/>
+                    <button name="action_cancel" type="object" string="Cancel" icon="fa-times-circle"
+                            invisible="status in ('completed','applied','failed','cancelled')"/>
+                    <field name="status" widget="statusbar"
+                           statusbar_visible="draft,ready,running,completed,applied"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_view_events" type="object" class="oe_stat_button" icon="fa-list-ol">
+                            <field name="event_count" widget="statinfo" string="Current Reads"/>
+                        </button>
+                    </div>
+                    <div class="oe_title">
+                        <label for="measurement_code" string="Measurement Code"/>
+                        <h1><field name="measurement_code" readonly="1" widget="CopyClipboardChar"/></h1>
+                        <div class="text-muted">Revision <field name="revision" readonly="1" class="oe_inline"/></div>
+                    </div>
+                    <group>
+                        <group string="Measurement Target">
+                            <field name="target_card_id"
+                                   context="{'nsp_simple_card_name': False}"
+                                   readonly="status != 'draft'"/>
+                            <field name="target_tid" readonly="1" widget="CopyClipboardChar"/>
+                        </group>
+                        <group string="Controller">
+                            <field name="controller_id" readonly="status != 'draft'"/>
+                            <field name="reader_count" readonly="1"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Schedule">
+                            <field name="planned_start_at" readonly="status != 'draft'"/>
+                            <field name="planned_end_at" readonly="status != 'draft'"/>
+                        </group>
+                        <group string="Runtime">
+                            <field name="started_at" readonly="1"/>
+                            <field name="ended_at" readonly="1"/>
+                            <field name="applied_at" readonly="1"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Readers">
+                            <field name="reader_line_ids" readonly="status != 'draft'">
+                                <list editable="bottom">
+                                    <field name="reader_id"
+                                           domain="[('controller_id','=',parent.controller_id)]"/>
+                                    <field name="serial_number" readonly="1"/>
+                                    <field name="reader_status" readonly="1"/>
+                                    <field name="operation_power_dbm" readonly="1"/>
+                                    <field name="measurement_power_dbm"/>
+                                    <field name="available_antenna_ids" column_invisible="True"/>
+                                    <field name="available_antenna_count" string="Ports" readonly="1"/>
+                                    <field name="antenna_ids"
+                                           string="Measurement Antennas"
+                                           widget="many2many_tags"
+                                           domain="[('id','in',available_antenna_ids)]"
+                                           options="{'no_create': True, 'no_open': True}"
+                                           required="1"/>
+                                </list>
+                            </field>
+                            <div class="text-muted mt-2">Select a Reader to load its configured antenna ports automatically. All ports are selected by default; remove any antennas that should not participate in this Measurement.</div>
+                        </page>
+                        <page string="Notes">
+                            <field name="note" placeholder="Measurement purpose or notes" readonly="status not in ('draft','completed')"/>
+                        </page>
+                    </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_nsp_measurement_event_search" model="ir.ui.view">
+        <field name="name">nsp.measurement.event.search</field>
+        <field name="model">nsp.measurement.event</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="event_uid"/>
+                <field name="session_id"/>
+                <field name="revision"/>
+                <field name="serial_number"/>
+                <field name="antenna_no"/>
+                <field name="tid"/>
+                <filter string="Session" name="group_session" context="{'group_by':'session_id'}"/>
+                <filter string="Revision" name="group_revision" context="{'group_by':'revision'}"/>
+                <filter string="Reader" name="group_reader" context="{'group_by':'serial_number'}"/>
+                <filter string="Antenna" name="group_antenna" context="{'group_by':'antenna_no'}"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_measurement_event_list" model="ir.ui.view">
+        <field name="name">nsp.measurement.event.list</field>
+        <field name="model">nsp.measurement.event</field>
+        <field name="arch" type="xml">
+            <list string="Measurement Observations" create="0" edit="0" delete="0">
+                <field name="read_at"/>
+                <field name="session_id"/>
+                <field name="revision"/>
+                <field name="serial_number"/>
+                <field name="antenna_no"/>
+                <field name="power_dbm"/>
+                <field name="tid"/>
+                <field name="rssi_dbm"/>
+                <field name="event_uid" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_measurement_event_form" model="ir.ui.view">
+        <field name="name">nsp.measurement.event.form</field>
+        <field name="model">nsp.measurement.event</field>
+        <field name="arch" type="xml">
+            <form string="Measurement Observation" create="0" edit="0" delete="0">
+                <sheet>
+                    <group>
+                        <field name="event_uid"/>
+                        <field name="session_id"/>
+                        <field name="revision"/>
+                        <field name="serial_number"/>
+                        <field name="antenna_no"/>
+                        <field name="power_dbm"/>
+                        <field name="tid"/>
+                        <field name="read_at"/>
+                        <field name="rssi_dbm"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_nsp_measurement_session" model="ir.actions.act_window">
+        <field name="name">Measurement Sessions</field>
+        <field name="res_model">nsp.measurement.session</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_nsp_measurement_session_search"/>
+    </record>
+
+    <record id="action_nsp_measurement_event" model="ir.actions.act_window">
+        <field name="name">Measurement Observations</field>
+        <field name="res_model">nsp.measurement.event</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_nsp_measurement_event_search"/>
+    </record>
+</odoo>

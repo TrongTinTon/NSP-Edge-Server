@@ -13,14 +13,12 @@ _logger = logging.getLogger(__name__)
 
 SYNC_ROUTE_DIRECTIONS = {
     "edge-server/status": "push",
-    "device-whitelist/sync": "pull",
-    "branches/sync": "pull",
+    "gatekeeper-config/sync": "pull",
     "users/sync": "pull",
     "vehicle-config/sync": "pull",
     "vehicles/sync": "pull",
     "cards/sync": "pull",
     "vehicle-borrow/sync": "pull",
-    "parking-config/sync": "pull",
     "measurement-config/sync": "pull",
     "measurement-events/sync": "push",
     "measurement-status/sync": "push",
@@ -30,14 +28,12 @@ NSP_SYNC_ALLOWED_ROUTES = tuple(SYNC_ROUTE_DIRECTIONS)
 JOB_SEQUENCE = {route: sequence * 10 for sequence, route in enumerate(NSP_SYNC_ALLOWED_ROUTES, start=1)}
 DEFAULT_JOB_SETTINGS = {
     "edge-server/status": {"schedule_interval_minutes": 1, "batch_size": 1},
-    "device-whitelist/sync": {"schedule_interval_minutes": 1, "batch_size": 1000},
-    "branches/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
+    "gatekeeper-config/sync": {"schedule_interval_minutes": 1, "batch_size": 1},
     "users/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
     "vehicle-config/sync": {"schedule_interval_minutes": 5, "batch_size": 1000},
     "vehicles/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
     "cards/sync": {"schedule_interval_minutes": 5, "batch_size": 1000},
     "vehicle-borrow/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
-    "parking-config/sync": {"schedule_interval_minutes": 5, "batch_size": 100},
     "measurement-config/sync": {"schedule_interval_minutes": 1, "batch_size": 100},
     "measurement-events/sync": {"schedule_interval_minutes": 1, "batch_size": 100},
     "measurement-status/sync": {"schedule_interval_minutes": 1, "batch_size": 100},
@@ -45,14 +41,12 @@ DEFAULT_JOB_SETTINGS = {
 }
 ACTION_KINDS = {
     "edge-server/status": "edge_server_status",
-    "device-whitelist/sync": "device_whitelist",
-    "branches/sync": "branch",
+    "gatekeeper-config/sync": "gatekeeper_config",
     "users/sync": "user",
     "vehicle-config/sync": "vehicle_config",
     "vehicles/sync": "vehicle",
     "cards/sync": "card",
     "vehicle-borrow/sync": "vehicle_borrow",
-    "parking-config/sync": "parking_config",
     "measurement-config/sync": "measurement_config",
     "measurement-events/sync": "measurement_event",
     "measurement-status/sync": "measurement_status",
@@ -106,6 +100,7 @@ class NspSyncJob(models.Model):
         copy=False,
         help="Internal cursor for incremental Pull jobs. It is preserved after the last page and is not user-managed.",
     )
+    snapshot_revision = fields.Integer(string="Applied Snapshot Revision", readonly=True, copy=False, default=0)
     last_push_at = fields.Datetime(readonly=True)
     last_push_record_id = fields.Integer(readonly=True, copy=False)
     last_pull_at = fields.Datetime(readonly=True)
@@ -416,57 +411,26 @@ class NspSyncJob(models.Model):
         return fields.Datetime.to_string(parsed)
 
     # --------------------------- local identity -----------------------
-    def _edge_server_record(self):
-        self.ensure_one()
-        return self.env["nsp.edge.server"].sudo().with_context(active_test=False).search(
-            [("edge_server_code", "=", self.edge_server_code)], limit=1
-        )
-
     def _require_edge_server_record(self):
+        """One Edge database represents exactly one Edge node.
+
+        Edge Server is a Cloud master object and is deliberately not stored on Edge.
+        Runtime scope is the local database plus auth_id.edge_server_code.
+        """
         self.ensure_one()
-        edge = self._edge_server_record()
-        if not edge:
-            self.auth_id._ensure_edge_server_node()
-            edge = self._edge_server_record()
-        if not edge:
-            raise UserError(_("Edge Server Code %s is not configured.") % self.edge_server_code)
-        return edge
+        return False
 
     # --------------------------- push payloads ------------------------
     def _serialize_edge_server_status(self):
-        """Serialize one complete Edge runtime snapshot without server management codes."""
         self.ensure_one()
-        edge = self._require_edge_server_record()
-        controllers = []
-        for controller in edge.controller_ids.filtered("active").sorted(
-            key=lambda record: (record.controller_id or "", record.id)
-        ):
-            devices = []
-            for device in controller.device_ids.sorted(
-                key=lambda record: (record.serial_number or "", record.id)
-            ):
-                status = str(device.status or "offline").lower()
-                devices.append({
-                    "serial_number": device.serial_number or "",
-                    "antennas": sorted(int(number) for number in device.antennas_ids.mapped("antenna_no")),
-                    "device_status": status if status in ("online", "offline", "degraded") else "offline",
-                    "last_seen_at": self._dt(device.last_seen) if device.last_seen else False,
-                    **({"firmware_version": device.firmware_version} if device.firmware_version else {}),
-                })
-            controller_status = str(controller.status or "offline").lower()
-            controllers.append({
-                "controller_code": controller.controller_id or "",
-                "current_status": controller_status,
-                "last_seen_at": self._dt(controller.timestamp) if controller.timestamp else False,
-                "devices": devices,
-            })
-        return {
-            "record_key": self.edge_server_code,
-            "edge_server_code": self.edge_server_code,
-            "current_status": "online",
-            "last_seen_at": self._dt(fields.Datetime.now()),
-            "controllers": controllers,
-        }
+        controllers=[]
+        for controller in self.env["nsp.controller"].sudo().search([("active","=",True)], order="controller_id,id"):
+            devices=[]
+            for device in controller.device_ids.filtered("active").sorted(key=lambda r:(r.serial_number or "",r.id)):
+                status=str(device.status or "offline").lower()
+                devices.append({"serial_number":device.serial_number or "","antennas":sorted(int(n) for n in device.antennas_ids.filtered("active").mapped("antenna_no")),"device_status":status if status in ("online","offline","degraded") else "offline","last_seen_at":self._dt(device.last_seen) if device.last_seen else False,**({"firmware_version":device.firmware_version} if device.firmware_version else {})})
+            controllers.append({"controller_code":controller.controller_id or "","current_status":str(controller.status or "offline").lower(),"last_seen_at":self._dt(controller.timestamp) if controller.timestamp else False,"devices":devices})
+        return {"record_key":self.edge_server_code,"edge_server_code":self.edge_server_code,"current_status":"online","last_seen_at":self._dt(fields.Datetime.now()),"controllers":controllers}
 
     @api.model
     def _serialize_parking_transaction(self, record):
@@ -485,6 +449,7 @@ class NspSyncJob(models.Model):
             "event_type": record.event_type,
             "event_time": self._dt(record.event_time),
             "vehicle_tid": record.vehicle_tid or "",
+            "license_plate": record.vehicle_id.license_plate if record.vehicle_id else "",
             "user_tid": record.user_tid or "",
             "decision": decision,
         }
@@ -516,11 +481,10 @@ class NspSyncJob(models.Model):
                 "cursor_id": 0,
                 "has_more": False,
             }
-        edge = self._require_edge_server_record()
         domain = self._push_cursor_domain()
         if kind == "parking_transaction":
             records = self.env["nsp.parking.transaction"].sudo().search(
-                domain + [("controller_id.edge_server_id", "=", edge.id)],
+                domain,
                 order="write_date asc, id asc",
                 limit=limit + 1,
             )
@@ -572,23 +536,12 @@ class NspSyncJob(models.Model):
 
     # --------------------------- pull application ---------------------
     def _find_or_create_controller(self, code, name=False):
-        self.ensure_one()
-        code = str(code or "").strip().upper()
-        if not code:
-            return self.env["nsp.controller"].browse()
-        edge = self._require_edge_server_record()
-        Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
-        controller = Controller.search([("controller_id", "=", code)], limit=1)
-        vals = {
-            "controller_name": name or (controller.controller_name if controller else code),
-            "edge_server_id": edge.id,
-            "active": True,
-        }
-        if controller:
-            self._write_changed(controller, vals)
-            return controller
-        vals["controller_id"] = code
-        return Controller.create(vals)
+        self.ensure_one(); code=str(code or "").strip().upper(); Controller=self.env["nsp.controller"].sudo().with_context(active_test=False)
+        if not code: return Controller.browse()
+        controller=Controller.search([("controller_id","=",code)],limit=1)
+        vals={"controller_name":name or (controller.controller_name if controller else code),"active":True,"cloud_removed":False}
+        if controller: self._write_changed(controller,vals); return controller
+        vals["controller_id"]=code; return Controller.create(vals)
 
     @api.model
     def _prepare_apply_cache(self, kind, items):
@@ -609,14 +562,6 @@ class NspSyncJob(models.Model):
                 "records": {record.serial_number: record for record in records},
                 "device_types": {record.code: record for record in device_types},
             }
-
-        if kind == "branch":
-            codes = {str(item.get("branch_code") or "").strip().upper() for item in rows}
-            codes.discard("")
-            records = self.env["nsp.branch"].sudo().with_context(active_test=False).search([
-                ("code", "in", list(codes)),
-            ]) if codes else self.env["nsp.branch"].browse()
-            return {"records": {record.code: record for record in records}}
 
         if kind == "user":
             codes = {str(item.get("user_code") or "").strip().upper() for item in rows}
@@ -732,27 +677,6 @@ class NspSyncJob(models.Model):
         if stale:
             stale.unlink()
         return len(stale)
-
-    @api.model
-    def _apply_branch(self, item, cache=None):
-        code = str(item.get("branch_code") or "").strip().upper()
-        if not code:
-            raise UserError(_("Branch Code is required."))
-        cache = cache or self._prepare_apply_cache("branch", [item])
-        Branch = self.env["nsp.branch"].sudo().with_context(active_test=False)
-        branch = cache.get("records", {}).get(code)
-        vals = {
-            "code": code,
-            "name": item.get("branch_name") or code,
-            "timezone": item.get("timezone") or "Asia/Ho_Chi_Minh",
-            "status": "active" if bool(item.get("active", True)) else "inactive",
-        }
-        if branch:
-            self._write_changed(branch, vals)
-            return branch
-        branch = Branch.create(vals)
-        cache.setdefault("records", {})[code] = branch
-        return branch
 
     @api.model
     def _apply_user(self, item, cache=None):
@@ -1366,7 +1290,7 @@ class NspSyncJob(models.Model):
         )
         if not branch:
             raise UserError(
-                _("Branch %(code)s was not found. Run branches/sync before parking-config/sync.")
+                _("Branch %(code)s was not found in the current Gatekeeper configuration snapshot.")
                 % {"code": branch_code}
             )
 
@@ -1492,7 +1416,6 @@ class NspSyncJob(models.Model):
                         raise UserError(_("Invalid or duplicate Antenna No for Reader %s.") % serial)
                     antenna_specs[key] = {"minimum_rssi_dbm": minimum_rssi}
 
-        edge = self._require_edge_server_record()
         Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
         existing_controllers = Controller.search([
             ("controller_id", "in", list(controller_specs)),
@@ -1504,7 +1427,6 @@ class NspSyncJob(models.Model):
                 {
                     "controller_id": code,
                     "controller_name": controller_specs[code]["name"],
-                    "edge_server_id": edge.id,
                     "active": True,
                 }
                 for code in missing_controller_codes
@@ -1513,7 +1435,6 @@ class NspSyncJob(models.Model):
         for code, spec in controller_specs.items():
             self._write_changed(controller_by_code[code], {
                 "controller_name": spec["name"],
-                "edge_server_id": edge.id,
                 "active": True,
             })
 
@@ -1720,24 +1641,89 @@ class NspSyncJob(models.Model):
             stale.write({"state": "blocked"})
         return len(stale)
 
+    def _apply_gatekeeper_config_snapshot(self, data, request_payload=False):
+        """Atomically apply the Cloud-authoritative Gatekeeper snapshot.
+
+        Absence from the snapshot is the delete signal. Historical Controller/Reader
+        rows are archived (active=False/cloud_removed=True); transient topology rows
+        are removed/blocked in dependency-safe order.
+        """
+        self.ensure_one()
+        if not isinstance(data, dict): raise UserError(_("Gatekeeper Configuration response must be an object."))
+        revision=int(data.get("revision") or 0)
+        if revision <= 0: raise UserError(_("Gatekeeper Configuration revision is required."))
+        if revision < int(self.snapshot_revision or 0):
+            return {"applied":0,"removed":0,"revision":revision,"stale":True}
+        controllers=data.get("controllers") or []; areas=data.get("parking_areas") or []; branches=data.get("branches") or []; whitelist=data.get("device_whitelist") or []
+        for name,val in (("controllers",controllers),("parking_areas",areas),("branches",branches),("device_whitelist",whitelist)):
+            if not isinstance(val,list): raise UserError(_("Gatekeeper Configuration %s must be an array.") % name)
+        with self.env.cr.savepoint():
+            # Branch cache first.
+            Branch=self.env["nsp.branch"].sudo().with_context(active_test=False); incoming_branch=set()
+            existing={r.code:r for r in Branch.search([])}
+            for item in branches:
+                code=str(item.get("branch_code") or "").strip().upper();
+                if not code: raise UserError(_("Branch Code is required."))
+                incoming_branch.add(code); vals={"name":item.get("branch_name") or code,"code":code,"timezone":item.get("timezone") or "Asia/Ho_Chi_Minh","status":"active" if item.get("active",True) else "inactive"}
+                rec=existing.get(code); self._write_changed(rec,vals) if rec else Branch.create(vals)
+            stale_branch=Branch.search([("code","not in",list(incoming_branch))]) if incoming_branch else Branch.search([])
+            if stale_branch: stale_branch.write({"status":"inactive"})
+            # Device whitelist is a small pure cache: hard-delete stale.
+            cache=self._prepare_apply_cache("device_whitelist",whitelist)
+            for item in whitelist: self._apply_device_whitelist(item,cache=cache)
+            self._reconcile_device_whitelist_snapshot(whitelist)
+            # Controllers/readers/antennas independent of Parking Area assignment.
+            Controller=self.env["nsp.controller"].sudo().with_context(active_test=False); Device=self.env["nsp.device"].sudo().with_context(active_test=False); Antenna=self.env["nsp.device.antenna"].sudo().with_context(active_test=False)
+            incoming_ctrl=set(); incoming_serial=set(); incoming_ant=set()
+            ctrl_by={r.controller_id:r for r in Controller.search([])}; dev_by={r.serial_number:r for r in Device.search([])}
+            for c in controllers:
+                code=str(c.get("controller_code") or "").strip().upper();
+                if not code: raise UserError(_("Controller Code is required."))
+                incoming_ctrl.add(code); ctrl=ctrl_by.get(code)
+                vals={"controller_name":c.get("controller_name") or code,"active":bool(c.get("active",True)),"cloud_removed":False}
+                if ctrl: self._write_changed(ctrl,vals)
+                else: vals["controller_id"]=code; ctrl=Controller.create(vals); ctrl_by[code]=ctrl
+                for d in c.get("devices") or []:
+                    serial=str(d.get("serial_number") or "").strip().upper();
+                    if not serial: raise UserError(_("Reader Serial Number is required."))
+                    incoming_serial.add(serial); rp=d.get("reader_parameters") or {}; conn=d.get("physical_connection") or False
+                    vals={"name":d.get("reader_name") or serial,"controller_id":ctrl.id,"connection_type":conn,"power_dbm":int(rp.get("power_dbm") if rp.get("power_dbm") is not None else 30),"read_interval_ms":int(rp.get("read_interval_ms") or 200),"tid_addr":int(rp.get("tid_start_address") or 0),"tid_len":int(rp.get("tid_length") or 4),"active":True,"cloud_removed":False}
+                    dev=dev_by.get(serial)
+                    if dev: self._write_changed(dev,vals)
+                    else: vals["serial_number"]=serial; dev=Device.create(vals); dev_by[serial]=dev
+                    existing_ant={(a.antenna_no):a for a in dev.antennas_ids.with_context(active_test=False)}
+                    for a in d.get("antennas") or []:
+                        no=int(a.get("antenna_no") or 0); incoming_ant.add((serial,no)); av={"minimum_rssi_dbm":float(a.get("minimum_rssi_dbm") if a.get("minimum_rssi_dbm") is not None else -65.0),"active":True,"cloud_removed":False}
+                        ant=existing_ant.get(no)
+                        if ant: self._write_changed(ant,av)
+                        else: av.update({"device_id":dev.id,"antenna_no":no}); Antenna.create(av)
+            stale_ant=Antenna.search([]).filtered(lambda a:(a.device_id.serial_number,int(a.antenna_no or 0)) not in incoming_ant)
+            if stale_ant: stale_ant.write({"active":False,"cloud_removed":True})
+            stale_dev=Device.search([]).filtered(lambda d:d.serial_number not in incoming_serial)
+            if stale_dev: stale_dev.write({"active":False,"cloud_removed":True,"status":"offline"})
+            stale_ctrl=Controller.search([]).filtered(lambda c:c.controller_id not in incoming_ctrl)
+            if stale_ctrl: stale_ctrl.write({"active":False,"cloud_removed":True,"status":"revoked"})
+            # Apply parking topology after physical cache exists.
+            for area in areas: self._apply_parking_config(area)
+            removed_area=self._reconcile_parking_config_snapshot(areas)
+            self.write({"snapshot_revision":revision,"last_pull_at":fields.Datetime.now(),"sync_cursor":False})
+        return {"applied":len(controllers)+len(areas)+len(whitelist),"removed":len(stale_ctrl)+len(stale_dev)+len(stale_ant)+removed_area,"revision":revision,"stale":False}
+
     def _apply_items(self, kind, items, request_payload=False):
         self.ensure_one()
         results, failed = [], []
         Record = self.env["nsp.sync.record"].sudo()
         handlers = {
-            "device_whitelist": self._apply_device_whitelist,
-            "branch": self._apply_branch,
             "user": self._apply_user,
             "vehicle": self._apply_vehicle,
             "vehicle_borrow": self._apply_vehicle_borrow,
-            "parking_config": self._apply_parking_config,
             "measurement_config": self._apply_measurement_config,
         }
         handler = handlers.get(kind)
         if not handler:
             raise UserError(_("Unsupported pull route: %s") % self.route_suffix)
         normalized_items = items if isinstance(items, list) else []
-        cached_kinds = {"device_whitelist", "branch", "user", "vehicle", "vehicle_borrow"}
+        cached_kinds = {"user", "vehicle", "vehicle_borrow"}
         apply_cache = self._prepare_apply_cache(kind, normalized_items) if kind in cached_kinds else None
         for index, item in enumerate(normalized_items):
             key = self._record_key_from_item(item)
@@ -1782,6 +1768,46 @@ class NspSyncJob(models.Model):
                 failed.append({"index": index, "record_key": key, "error": message})
         return results, failed
 
+    def _reconcile_measurement_snapshot(self, items):
+        """Stop/remove Edge Measurement runtime records absent from Cloud snapshot.
+
+        A deleted Cloud Measurement must stop physical execution on Edge. Sessions
+        that still own observations are kept only as short-lived history and are
+        removed by the normal retention cleanup after their observations expire.
+        """
+        self.ensure_one()
+        rows = [item for item in (items or []) if isinstance(item, dict)]
+        incoming = {
+            str(item.get("measurement_code") or "").strip().upper()
+            for item in rows
+            if item.get("measurement_code")
+        }
+        Session = self.env["nsp.measurement.session"].sudo()
+        stale = Session.search([("measurement_code", "not in", list(incoming))]) if incoming else Session.search([])
+        if not stale:
+            return 0
+        now = fields.Datetime.now()
+        running = stale.filtered(lambda rec: rec.status in ("ready", "running"))
+        if running:
+            running.with_context(measurement_sync=True).write({"status": "cancelled", "ended_at": now})
+        disposable = stale.filtered(
+            lambda rec: rec.status in ("completed", "applied", "failed", "cancelled") and not rec.event_ids
+        )
+        if disposable:
+            disposable.with_context(measurement_sync=True).unlink()
+        return len(stale)
+
+    def _reconcile_business_snapshot(self, kind, items):
+        """Archive/remove records absent from full Cloud master snapshots."""
+        rows=[i for i in (items or []) if isinstance(i,dict)]
+        if kind=="user":
+            keys={str(i.get("user_code") or "").strip().upper() for i in rows}; Model=self.env["nsp.user"].sudo().with_context(active_test=False); stale=Model.search([("user_code","not in",list(keys)),("active","=",True)]) if keys else Model.search([("active","=",True)]); stale.write({"active":False}) if stale else None; return len(stale)
+        if kind=="vehicle":
+            keys={str(i.get("vehicle_code") or "").strip().upper() for i in rows}; Model=self.env["nsp.vehicle"].sudo().with_context(active_test=False); stale=Model.search([("vehicle_code","not in",list(keys)),("active","=",True)]) if keys else Model.search([("active","=",True)]); stale.write({"active":False}) if stale else None; return len(stale)
+        if kind=="vehicle_borrow":
+            keys={str(i.get("borrow_uid") or "").strip() for i in rows}; Model=self.env["nsp.vehicle.borrow"].sudo(); stale=Model.search([("borrow_code","not in",list(keys))]) if keys else Model.search([]); stale.unlink() if stale else None; return len(stale)
+        return 0
+
     # --------------------------- protocol adapters --------------------
     @api.model
     def _items_from_response(self, data):
@@ -1794,7 +1820,7 @@ class NspSyncJob(models.Model):
         self.ensure_one()
         # Full snapshots do not use incremental cursors. This guarantees that
         # deletions, revocations and assignment changes are reflected on Edge.
-        if self._action_kind() in ("device_whitelist", "vehicle_config", "card", "parking_config"):
+        if self._action_kind() in ("gatekeeper_config", "vehicle_config", "card", "user", "vehicle", "vehicle_borrow", "measurement_config"):
             return {"edge_server_code": self.edge_server_code}
         payload = {"edge_server_code": self.edge_server_code, "limit": self.batch_size}
         if self.sync_cursor:
@@ -1847,38 +1873,10 @@ class NspSyncJob(models.Model):
         return payload
 
     def _pending_measurement_events(self, limit):
-        self.ensure_one()
-        edge = self._require_edge_server_record()
-        source_code = str(self.edge_server_code or "NSP").strip() or "NSP"
-        action_code = str(self.sync_action_code or "").strip()
-        self.env.cr.execute(
-            """
-            SELECT event.id
-              FROM nsp_measurement_event event
-              JOIN nsp_measurement_session session ON session.id = event.session_id
-              JOIN nsp_controller controller ON controller.id = session.controller_id
-             WHERE controller.edge_server_id = %s
-               AND NOT EXISTS (
-                    SELECT 1
-                      FROM nsp_sync_record record
-                     WHERE record.source_code = %s
-                       AND record.sync_action_code = %s
-                       AND record.operation = 'push'
-                       AND record.record_key = event.event_uid
-                       AND record.status = 'synced'
-               )
-             ORDER BY event.id
-             LIMIT %s
-            """,
-            (edge.id, source_code, action_code, max(1, int(limit or 1))),
-        )
-        ids = [row[0] for row in self.env.cr.fetchall()]
-        if not ids:
-            return self.env["nsp.measurement.event"].browse()
-        first = self.env["nsp.measurement.event"].sudo().browse(ids[0])
-        return self.env["nsp.measurement.event"].sudo().browse(ids).filtered(
-            lambda event: event.session_id == first.session_id
-        )
+        self.ensure_one(); Record=self.env["nsp.sync.record"].sudo(); Event=self.env["nsp.measurement.event"].sudo(); action_code=str(self.sync_action_code or "").strip(); source_code=str(self.edge_server_code or "NSP").strip() or "NSP"
+        synced=Record.search([("source_code","=",source_code),("sync_action_code","=",action_code),("operation","=","push"),("status","=","synced")]).mapped("record_key")
+        domain=[("event_uid","not in",synced)] if synced else []
+        return Event.search(domain,order="read_at,id",limit=max(1,int(limit or 1)))
 
     def _push_measurement_event_records(self, events, timeout=120):
         self.ensure_one()
@@ -2038,35 +2036,13 @@ class NspSyncJob(models.Model):
         }
 
     def _pending_measurement_status_sessions(self, limit):
-        self.ensure_one()
-        edge = self._require_edge_server_record()
-        source_code = str(self.edge_server_code or "NSP").strip() or "NSP"
-        action_code = str(self.sync_action_code or "").strip()
-        self.env.cr.execute(
-            """
-            SELECT session.id
-              FROM nsp_measurement_session session
-              JOIN nsp_controller controller ON controller.id = session.controller_id
-             WHERE controller.edge_server_id = %s
-               AND session.status != 'draft'
-               AND NOT EXISTS (
-                    SELECT 1
-                      FROM nsp_sync_record record
-                     WHERE record.source_code = %s
-                       AND record.sync_action_code = %s
-                       AND record.operation = 'push'
-                       AND record.record_key = session.measurement_code
-                       AND record.status = 'synced'
-                       AND record.last_synced_at >= session.write_date
-               )
-             ORDER BY session.write_date, session.id
-             LIMIT %s
-            """,
-            (edge.id, source_code, action_code, max(1, int(limit or 1))),
-        )
-        return self.env["nsp.measurement.session"].sudo().browse(
-            [row[0] for row in self.env.cr.fetchall()]
-        )
+        self.ensure_one(); Session=self.env["nsp.measurement.session"].sudo(); Record=self.env["nsp.sync.record"].sudo(); result=Session.search([("status","!=","draft")],order="write_date,id")
+        pending=[]
+        for session in result:
+            synced=Record.search([("sync_action_code","=",self.sync_action_code),("operation","=","push"),("record_key","=",session.measurement_code),("status","=","synced"),("last_synced_at",">=",session.write_date)],limit=1)
+            if not synced: pending.append(session.id)
+            if len(pending)>=max(1,int(limit or 1)): break
+        return Session.browse(pending)
 
     def _push_measurement_status_records(self, sessions, timeout=120):
         self.ensure_one()
@@ -2258,6 +2234,10 @@ class NspSyncJob(models.Model):
         )
         kind = self._action_kind()
 
+        if kind == "gatekeeper_config":
+            result = self._apply_gatekeeper_config_snapshot(data, request_payload=request_payload)
+            return {"pulled": result["applied"], "failed": 0, "has_more": False, "message": "Gatekeeper snapshot revision %s applied; %s stale record(s) removed/archived." % (result["revision"], result["removed"])}
+
         if kind == "vehicle_config":
             records, removed = self._apply_vehicle_config_snapshot(
                 data, request_payload=request_payload
@@ -2301,21 +2281,19 @@ class NspSyncJob(models.Model):
         items = self._items_from_response(data)
         next_cursor = data.get("next_sync_cursor") or False
         has_more = bool(data.get("has_more"))
-        full_snapshot = kind in ("device_whitelist", "parking_config")
+        full_snapshot = kind in ("user", "vehicle", "vehicle_borrow", "measurement_config")
         if not items:
             removed = 0
-            if kind == "device_whitelist":
-                removed = self._reconcile_device_whitelist_snapshot([])
-            elif kind == "parking_config":
-                removed = self._reconcile_parking_config_snapshot([])
+            if kind in ("user", "vehicle", "vehicle_borrow"):
+                removed = self._reconcile_business_snapshot(kind, [])
+            elif kind == "measurement_config":
+                removed = self._reconcile_measurement_snapshot([])
             self.write({
                 "last_pull_at": fields.Datetime.now(),
                 "sync_cursor": False if full_snapshot else (next_cursor or self.sync_cursor),
             })
-            if kind == "device_whitelist":
-                message = "Device Whitelist snapshot is empty; removed %s stale record(s)." % removed
-            elif kind == "parking_config":
-                message = "Parking Configuration snapshot is empty; blocked %s stale area(s)." % removed
+            if full_snapshot:
+                message = "%s snapshot is empty; removed/archived %s stale record(s)." % (self.sync_action_name or kind, removed)
             else:
                 message = "No changed records to pull."
             return {
@@ -2327,19 +2305,18 @@ class NspSyncJob(models.Model):
         results, failed = self._apply_items(kind, items, request_payload=request_payload)
         if failed:
             raise UserError(json.dumps(failed, ensure_ascii=False))
-        removed = 0
-        if kind == "device_whitelist":
-            removed = self._reconcile_device_whitelist_snapshot(items)
-        elif kind == "parking_config":
-            removed = self._reconcile_parking_config_snapshot(items)
+        if kind in ("user", "vehicle", "vehicle_borrow"):
+            removed = self._reconcile_business_snapshot(kind, items)
+        elif kind == "measurement_config":
+            removed = self._reconcile_measurement_snapshot(items)
+        else:
+            removed = 0
         self.write({
             "last_pull_at": fields.Datetime.now(),
             "sync_cursor": False if full_snapshot else (next_cursor or self.sync_cursor),
         })
-        if kind == "device_whitelist":
-            message = "Pulled %s Device Whitelist record(s); removed %s stale record(s)." % (len(results), removed)
-        elif kind == "parking_config":
-            message = "Applied %s Parking Configuration record(s); blocked %s stale area(s)." % (len(results), removed)
+        if full_snapshot:
+            message = "Pulled %s record(s); removed/archived %s stale record(s)." % (len(results), removed)
         else:
             message = "Pulled %s record(s)." % len(results)
         return {

@@ -60,8 +60,8 @@ class NspNotification(models.Model):
             return self.browse()
 
         event_type = transaction.event_type
-        plate = vehicle.license_plate or transaction.vehicle_tid or _("Vehicle")
-        lane = transaction.lane_id.display_name if transaction.lane_id else _("Parking lane")
+        plate = transaction.license_plate or (vehicle.license_plate if vehicle else False) or transaction.vehicle_tid or _("Vehicle")
+        lane = transaction.lane_display or _("Parking lane")
         denied = transaction.status == "denied"
         if event_type == "check_in":
             title = _("Vehicle checked in: %s") % plate
@@ -96,7 +96,7 @@ class NspNotification(models.Model):
             "severity": "warning" if denied else "info",
             "state": "unread",
             "event_time": transaction.event_time or fields.Datetime.now(),
-            "controller_code": transaction.controller_id.controller_id if transaction.controller_id else False,
+            "controller_code": transaction.controller_id.controller_id if transaction.controller_id else transaction.controller_code or False,
             "source_model": transaction._name,
             "source_record_id": transaction.id,
             "recipient_user_id": owner.id,

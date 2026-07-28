@@ -9,7 +9,7 @@
 
     <menuitem id="menu_nsp_it_dashboard"
               name="IT Dashboard"
-              parent="nsp_gatekeeper.nsp_device_root"
+              parent="nsp_master_gatekeeper.nsp_device_root"
               action="action_nsp_it_dashboard"
               sequence="1"
               groups="nsp_core.group_nsp_it_parking"/>

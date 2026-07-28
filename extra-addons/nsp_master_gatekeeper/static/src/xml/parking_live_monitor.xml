@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="nsp_master_gatekeeper.ParkingLiveMonitor">
+        <div t-att-class="rootClass">
+            <header class="nsp-parking-live-monitor__header">
+                <div class="nsp-parking-live-monitor__identity min-w-0">
+                    <span class="nsp-parking-live-monitor__identity-icon" aria-hidden="true"><img src="/nsp_master_gatekeeper/static/src/img/icons/live_monitor.svg" alt=""/></span>
+                    <div class="nsp-parking-live-monitor__identity-copy min-w-0">
+                    <div class="nsp-parking-live-monitor__eyebrow">NSP PARKING</div>
+                    <div class="nsp-parking-live-monitor__title text-truncate">
+                        <t t-esc="state.parkingAreaName || 'Bãi xe'"/>
+                    </div>
+                    <div class="nsp-parking-live-monitor__subtitle text-truncate">
+                        <t t-esc="state.branchName || ''"/>
+                        <t t-if="state.areaState"> · <t t-esc="areaStateLabel"/></t>
+                    </div>
+                    </div>
+                </div>
+
+                <div class="nsp-parking-live-monitor__header-status">
+                    <div class="nsp-parking-live-monitor__pill is-live">
+                        <span class="nsp-parking-live-monitor__live-dot"/>
+                        <span>TRỰC TUYẾN</span>
+                    </div>
+                    <div class="nsp-parking-live-monitor__pill" t-att-class="isBurstMode ? 'is-traffic-burst' : ''">
+                        <span><t t-esc="burstLabel"/></span>
+                    </div>
+                </div>
+            </header>
+
+            <main class="nsp-parking-live-monitor__content">
+                <section class="nsp-parking-live-monitor__alerts" t-if="visibleAlerts.length">
+                    <t t-foreach="visibleAlerts" t-as="alert" t-key="alert.transaction_uid || alert.id">
+                        <div class="nsp-parking-live-monitor__alert-card">
+                            <div class="nsp-parking-live-monitor__alert-mark">!</div>
+                            <div class="nsp-parking-live-monitor__alert-plate">
+                                <t t-esc="alert.license_plate || '-'"/>
+                            </div>
+                            <div class="nsp-parking-live-monitor__alert-copy min-w-0">
+                                <div class="nsp-parking-live-monitor__alert-title text-truncate">
+                                    <t t-esc="alert.display_title || 'VUI LÒNG DỪNG LẠI'"/>
+                                </div>
+                                <div class="nsp-parking-live-monitor__alert-reason text-truncate">
+                                    <t t-esc="alert.display_reason || 'Vui lòng liên hệ nhân viên bảo vệ'"/>
+                                </div>
+                            </div>
+                            <div class="nsp-parking-live-monitor__alert-lane text-truncate" t-if="alert.lane_name">
+                                <t t-esc="alert.lane_name"/>
+                            </div>
+                        </div>
+                    </t>
+                    <div class="nsp-parking-live-monitor__alert-more" t-if="hiddenAlertCount">
+                        +<t t-esc="hiddenAlertCount"/> cảnh báo
+                    </div>
+                </section>
+
+                <section class="nsp-parking-live-monitor__grid" t-att-style="gridStyle">
+                    <t t-foreach="visibleEntries" t-as="row" t-key="row.key">
+                        <article class="nsp-parking-live-monitor__entry-card" t-att-class="row.classes">
+                            <t t-if="row.item">
+                                <div class="nsp-parking-live-monitor__vehicle-icon">
+                                    <i t-att-class="vehicleIconClass(row.item)"/>
+                                </div>
+                                <div class="nsp-parking-live-monitor__plate">
+                                    <t t-esc="row.item.license_plate || '-'"/>
+                                </div>
+                                <div class="nsp-parking-live-monitor__person min-w-0">
+                                    <div class="nsp-parking-live-monitor__person-name text-truncate">
+                                        <t t-esc="row.item.employee_name || 'KHÔNG XÁC ĐỊNH'"/>
+                                    </div>
+                                    <div class="nsp-parking-live-monitor__meta text-truncate">
+                                        <span t-if="row.item.lane_name"><t t-esc="row.item.lane_name"/></span>
+                                        <span t-if="row.item.event_time"> · <t t-esc="formatEventTime(row.item.event_time)"/></span>
+                                    </div>
+                                </div>
+                                <div class="nsp-parking-live-monitor__entry-status">
+                                    <span class="nsp-parking-live-monitor__ok-dot"/>
+                                    <span>VÀO</span>
+                                </div>
+                            </t>
+                            <t t-else="">
+                                <div class="nsp-parking-live-monitor__empty-mark"/>
+                            </t>
+                        </article>
+                    </t>
+                </section>
+            </main>
+
+            <footer class="nsp-parking-live-monitor__footer">
+                <div class="nsp-parking-live-monitor__clock">
+                    <i class="fa fa-clock-o"/>
+                    <span><t t-esc="state.clock"/></span>
+                </div>
+
+                <div class="nsp-parking-live-monitor__flow-info">
+                    <strong><t t-esc="queueLabel"/></strong>
+                    <span t-if="state.alerts.length"> · <t t-esc="state.alerts.length"/> cảnh báo đang giữ</span>
+                </div>
+
+                <div class="nsp-parking-live-monitor__slots" t-att-class="slotBadgeClass">
+                    <i class="fa fa-motorcycle"/>
+                    <span><t t-esc="slotLabel"/></span>
+                </div>
+            </footer>
+
+            <div class="nsp-parking-live-monitor__error" t-if="state.error">
+                <i class="fa fa-exclamation-triangle me-2"/>
+                <t t-esc="state.error"/>
+            </div>
+        </div>
+    </t>
+</templates>

@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="nsp_master_gatekeeper.MeasurementLive">
+        <div class="nsp-ml">
+            <div class="nsp-ml__page-header">
+                <div>
+                    <div class="nsp-ml__breadcrumb" t-on-click="goToSession"><i class="fa fa-chevron-left nsp-ml__icon" aria-hidden="true"/> Measurement Sessions / <strong><t t-esc="state.measurementCode || '...'"/></strong></div>
+                    <div class="nsp-ml__title-row">
+                        <span class="nsp-ml__title-icon" aria-hidden="true">
+                            <img src="/nsp_master_gatekeeper/static/src/img/icons/live_measurement.svg" alt=""/>
+                        </span>
+                        <h1>Live Measurement</h1>
+                        <span t-att-class="statusClass()"><t t-esc="statusLabel()"/></span>
+                    </div>
+                    <div class="nsp-ml__subtitle">
+                        Session Code: <strong><t t-esc="state.measurementCode || '-'"/></strong>
+                        <span class="nsp-ml__divider">|</span>
+                        Revision: <strong><t t-esc="state.revision"/></strong>
+                        <button class="btn btn-sm btn-outline-primary ms-2" t-on-click="openRevisionHistory"><i class="fa fa-history me-1" aria-hidden="true"/>Revision History</button>
+                    </div>
+                </div>
+                <div class="nsp-ml__header-actions">
+                    <div class="nsp-ml__started"><i class="fa fa-clock-o me-1" aria-hidden="true"/>Started At: <strong><t t-esc="formatDateTime(state.startedAt)"/></strong></div>
+                    <button t-if="canStop()" class="btn btn-outline-danger" t-on-click="stopMeasurement"><i class="fa fa-stop me-1" aria-hidden="true"/>Stop Measurement</button>
+                </div>
+            </div>
+
+            <div class="alert alert-danger" t-if="state.error"><t t-esc="state.error"/></div>
+
+            <div class="nsp-ml__top-grid nsp-ml__top-grid--summary">
+                <section class="nsp-ml-card nsp-ml-card--entity">
+                    <span class="nsp-ml__entity-icon-frame nsp-ml__entity-icon-frame--tag" aria-hidden="true">
+                        <img src="/nsp_master_gatekeeper/static/src/img/icons/rfid_tag.svg" alt=""/>
+                    </span>
+                    <div class="nsp-ml-card__body">
+                        <div class="nsp-ml-card__label">Target RFID Tag</div>
+                        <div class="nsp-ml-card__value nsp-ml__mono"><t t-esc="state.targetTag.tid || '-'"/></div>
+                        <div class="nsp-ml-card__sub"><t t-esc="targetDescription()"/></div>
+                    </div>
+                </section>
+                <section class="nsp-ml-card nsp-ml-card--entity">
+                    <span class="nsp-ml__entity-icon-frame nsp-ml__entity-icon-frame--controller" aria-hidden="true">
+                        <img src="/nsp_master_gatekeeper/static/src/img/icons/controller.svg" alt=""/>
+                    </span>
+                    <div class="nsp-ml-card__body">
+                        <div class="nsp-ml-card__label">Controller</div>
+                        <div class="nsp-ml-card__value"><t t-esc="state.controllerCode || '-'"/></div>
+                        <div class="nsp-ml-card__sub"><t t-esc="state.controllerName || '-'"/></div>
+                    </div>
+                </section>
+                <section class="nsp-ml-card nsp-ml-card--entity">
+                    <span class="nsp-ml__entity-icon-frame nsp-ml__entity-icon-frame--reader" aria-hidden="true">
+                        <img src="/nsp_master_gatekeeper/static/src/img/icons/reader.svg" alt=""/>
+                    </span>
+                    <div class="nsp-ml-card__body">
+                        <div class="nsp-ml-card__label">Measurement Readers</div>
+                        <div class="nsp-ml-card__value"><t t-esc="state.readerCount"/> Reader(s)</div>
+                        <div class="nsp-ml-card__sub">Each Reader has an independent temporary power and antenna scope.</div>
+                    </div>
+                </section>
+            </div>
+
+            <section class="nsp-ml__reader-section nsp-ml-reader-power">
+                <div class="nsp-ml__section-heading">
+                    <div>
+                        <h3 class="nsp-ml__heading-with-icon"><img src="/nsp_master_gatekeeper/static/src/img/icons/measurement.svg" alt="" aria-hidden="true"/>Reader Configuration</h3>
+                        <div class="nsp-ml-card__sub">Adjust power for each Reader, then use Measure Again to release one new Revision.</div>
+                    </div>
+                    <span class="nsp-ml__reader-count"><t t-esc="state.readerCount"/> Reader(s)</span>
+                </div>
+                <div class="nsp-ml__reader-grid">
+                    <t t-foreach="state.readers" t-as="reader" t-key="reader.reader_line_id">
+                        <article t-att-class="readerPowerMatches(reader) ? 'nsp-ml-reader-card' : 'nsp-ml-reader-card nsp-ml-reader-card--changed'">
+                            <div class="nsp-ml-reader-card__head">
+                                <div class="nsp-ml-reader-card__identity">
+                                    <span class="nsp-ml-reader-card__icon" aria-hidden="true"><img src="/nsp_master_gatekeeper/static/src/img/icons/reader.svg" alt=""/></span>
+                                    <div class="min-w-0">
+                                    <div class="nsp-ml-reader-card__name"><t t-esc="reader.name || reader.serial_number || '-'"/></div>
+                                    <div class="nsp-ml-reader-card__serial">Serial: <span class="nsp-ml__mono"><t t-esc="reader.serial_number || '-'"/></span></div>
+                                    </div>
+                                </div>
+                                <span class="nsp-ml-reader-card__status"><t t-esc="reader.status || '-'"/></span>
+                            </div>
+                            <div class="nsp-ml-reader-card__antennas">Antennas: <strong><t t-esc="antennaList(reader)"/></strong></div>
+                            <div class="nsp-ml-reader-card__power-label">Measurement Power</div>
+                            <div class="nsp-ml__power-row">
+                                <div>
+                                    <div class="nsp-ml__power-value"><t t-esc="reader.powerDraft"/> dBm</div>
+                                    <div class="nsp-ml-card__sub">Operation: <t t-esc="reader.operation_power_dbm || 0"/> dBm</div>
+                                </div>
+                                <div class="nsp-ml__stepper">
+                                    <button class="btn btn-outline-primary"
+                                            t-att-data-reader-line-id="reader.reader_line_id"
+                                            t-on-click="decreaseReaderPower"
+                                            t-att-disabled="!canAdjustPower()"
+                                            title="Decrease power"><i class="fa fa-minus" aria-hidden="true"/></button>
+                                    <span><t t-esc="reader.powerDraft"/></span>
+                                    <button class="btn btn-outline-primary"
+                                            t-att-data-reader-line-id="reader.reader_line_id"
+                                            t-on-click="increaseReaderPower"
+                                            t-att-disabled="!canAdjustPower()"
+                                            title="Increase power"><i class="fa fa-plus" aria-hidden="true"/></button>
+                                </div>
+                            </div>
+                            <div class="nsp-ml-reader-card__foot">
+                                <span>Detection Steps: <strong><t t-esc="readerDetectionCount(reader)"/></strong></span>
+                                <span t-if="readerPowerMatches(reader)" class="text-success"><i class="fa fa-check-circle me-1" aria-hidden="true"/>Current revision</span>
+                                <span t-else="" class="text-warning"><i class="fa fa-exclamation-circle me-1" aria-hidden="true"/>Changed</span>
+                            </div>
+                        </article>
+                    </t>
+                    <div class="nsp-ml__empty-readers" t-if="!state.readers.length">No Reader is configured for this Measurement Session.</div>
+                </div>
+            </section>
+
+            <div class="nsp-ml__content-grid">
+                <main>
+                    <div class="nsp-ml__tabs">
+                        <button t-att-class="tabClass('timeline')" t-on-click="setTimelineTab"><img class="nsp-ml__tab-entity-icon" src="/nsp_master_gatekeeper/static/src/img/icons/live_measurement.svg" alt="" aria-hidden="true"/>Detection Timeline</button>
+                        <button t-att-class="tabClass('reader')" t-on-click="setReaderTab"><img class="nsp-ml__tab-entity-icon" src="/nsp_master_gatekeeper/static/src/img/icons/reader.svg" alt="" aria-hidden="true"/>Reader Status</button>
+                        <button t-att-class="tabClass('session')" t-on-click="setSessionTab"><img class="nsp-ml__tab-entity-icon" src="/nsp_master_gatekeeper/static/src/img/icons/measurement.svg" alt="" aria-hidden="true"/>Session Info</button>
+                        <button t-att-class="tabClass('notes')" t-on-click="setNotesTab"><i class="fa fa-sticky-note-o me-1" aria-hidden="true"/>Notes</button>
+                    </div>
+
+                    <t t-if="state.activeTab === 'timeline'">
+                        <section class="nsp-ml-panel">
+                            <div class="nsp-ml-panel__header">
+                                <div>
+                                    <h3><i class="fa fa-clock-o me-2" aria-hidden="true"/>Detection Timeline <span class="nsp-ml__hint">(Target Tag Only)</span></h3>
+                                    <div class="nsp-ml-card__sub">All Reader/Antenna detections are merged and sorted by physical detection time.</div>
+                                </div>
+                                <button class="btn btn-outline-secondary btn-sm" t-on-click="exportCsv"><i class="fa fa-download me-1" aria-hidden="true"/>Export</button>
+                            </div>
+                            <div class="table-responsive nsp-ml__table-wrap">
+                                <table class="table nsp-ml__table">
+                                    <thead>
+                                        <tr>
+                                            <th>#</th>
+                                            <th>Detected At</th>
+                                            <th>Controller</th>
+                                            <th>Reader</th>
+                                            <th>Antenna</th>
+                                            <th>Power</th>
+                                            <th>Peak RSSI</th>
+                                            <th>Reads</th>
+                                            <th>Duration</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <t t-foreach="state.steps" t-as="step" t-key="step.sequence_no">
+                                            <tr>
+                                                <td><span t-att-class="sequenceClass(step.sequence_no)"><t t-esc="step.sequence_no"/></span></td>
+                                                <td class="nsp-ml__mono"><t t-esc="formatTime(step.first_seen_at)"/></td>
+                                                <td><t t-esc="step.controller_code"/></td>
+                                                <td><t t-esc="step.reader_name"/></td>
+                                                <td><span class="nsp-ml__antenna">ANT<t t-esc="step.antenna_no"/></span></td>
+                                                <td><t t-esc="step.power_dbm"/> dBm</td>
+                                                <td><t t-esc="formatRssi(step.peak_rssi_dbm)"/></td>
+                                                <td><t t-esc="step.read_count"/></td>
+                                                <td><t t-esc="stepDuration(step)"/></td>
+                                            </tr>
+                                        </t>
+                                        <tr t-if="!state.steps.length">
+                                            <td colspan="9" class="text-center text-muted py-5">Waiting for the selected RFID Tag...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="nsp-ml-panel__footer">
+                                <span>Showing <strong><t t-esc="state.steps.length"/></strong> detection steps</span>
+                                <span>Raw reads: <strong><t t-esc="state.rawEventCount"/></strong></span>
+                            </div>
+                        </section>
+
+                        <section class="nsp-ml-panel nsp-ml__chart-panel">
+                            <div class="nsp-ml-panel__header">
+                                <h3>RSSI Over Time</h3>
+                                <span class="nsp-ml-card__sub">Current revision • all Readers</span>
+                            </div>
+                            <div class="nsp-ml__chart" t-if="state.steps.length">
+                                <svg viewBox="0 0 900 220" preserveAspectRatio="none">
+                                    <line x1="55" y1="25" x2="55" y2="185" class="nsp-ml__axis"/>
+                                    <line x1="55" y1="185" x2="875" y2="185" class="nsp-ml__axis"/>
+                                    <t t-foreach="chartGrid()" t-as="grid" t-key="grid.value">
+                                        <line x1="55" t-att-y1="grid.y" x2="875" t-att-y2="grid.y" class="nsp-ml__grid"/>
+                                        <text x="10" t-att-y="grid.y + 4" class="nsp-ml__chart-label"><t t-esc="grid.value"/></text>
+                                    </t>
+                                    <t t-foreach="chartSeries()" t-as="series" t-key="series.key">
+                                        <polyline t-att-points="series.points" t-att-stroke="series.color" class="nsp-ml__line"/>
+                                        <t t-foreach="series.circles" t-as="point" t-key="point.key">
+                                            <circle t-att-cx="point.x" t-att-cy="point.y" r="5" t-att-stroke="series.color" class="nsp-ml__dot"/>
+                                        </t>
+                                    </t>
+                                </svg>
+                            </div>
+                            <div class="text-center text-muted py-5" t-else="">No RSSI data yet.</div>
+                            <div class="nsp-ml__legend">
+                                <t t-foreach="chartSeries()" t-as="series" t-key="series.key">
+                                    <span><i t-att-style="'background:' + series.color"/> <t t-esc="series.label"/></span>
+                                </t>
+                            </div>
+                        </section>
+                    </t>
+
+                    <section class="nsp-ml-panel" t-if="state.activeTab === 'reader'">
+                        <div class="nsp-ml-panel__header"><h3>Reader Status</h3></div>
+                        <div class="nsp-ml__reader-status-grid">
+                            <t t-foreach="state.readers" t-as="reader" t-key="reader.reader_line_id">
+                                <div class="nsp-ml__reader-status-item">
+                                    <strong><t t-esc="reader.name || reader.serial_number"/></strong>
+                                    <div><span>Serial</span><b><t t-esc="reader.serial_number || '-'"/></b></div>
+                                    <div><span>Status</span><b><t t-esc="reader.status || '-'"/></b></div>
+                                    <div><span>Firmware</span><b><t t-esc="reader.firmware_version || '-'"/></b></div>
+                                    <div><span>Measurement Power</span><b><t t-esc="reader.powerDraft"/> dBm</b></div>
+                                    <div><span>Operation Power</span><b><t t-esc="reader.operation_power_dbm || 0"/> dBm</b></div>
+                                    <div><span>Antennas</span><b><t t-esc="antennaList(reader)"/></b></div>
+                                </div>
+                            </t>
+                        </div>
+                    </section>
+
+                    <section class="nsp-ml-panel" t-if="state.activeTab === 'session'">
+                        <div class="nsp-ml-panel__header"><h3>Session Information</h3></div>
+                        <div class="nsp-ml__details-grid">
+                            <div><span>Measurement Code</span><strong><t t-esc="state.measurementCode"/></strong></div>
+                            <div><span>Revision</span><strong><t t-esc="state.revision"/></strong></div>
+                            <div><span>Status</span><strong><t t-esc="statusLabel()"/></strong></div>
+                            <div><span>Readers</span><strong><t t-esc="state.readerCount"/></strong></div>
+                            <div><span>Edge Server</span><strong><t t-esc="state.edgeServerCode || '-'"/></strong></div>
+                            <div><span>Started</span><strong><t t-esc="formatDateTime(state.startedAt)"/></strong></div>
+                            <div><span>Ended</span><strong><t t-esc="formatDateTime(state.endedAt)"/></strong></div>
+                        </div>
+                    </section>
+
+                    <section class="nsp-ml-panel" t-if="state.activeTab === 'notes'">
+                        <div class="nsp-ml-panel__header"><h3>Notes</h3></div>
+                        <div class="nsp-ml__notes"><t t-esc="state.note || 'No notes.'"/></div>
+                    </section>
+                </main>
+
+                <aside class="nsp-ml__sidebar">
+                    <section class="nsp-ml-panel nsp-ml-side-card">
+                        <h3>Detection Summary</h3>
+                        <div class="nsp-ml__metric"><span>Total Detections</span><strong><t t-esc="state.detectionCount"/></strong></div>
+                        <div class="nsp-ml__metric"><span>Readers Detected</span><strong><t t-esc="state.uniqueReaders"/> / <t t-esc="state.readerCount"/></strong></div>
+                        <div class="nsp-ml__metric"><span>Unique Antennas</span><strong><t t-esc="state.uniqueAntennas"/></strong></div>
+                        <div class="nsp-ml__metric"><span>First Detected At</span><strong><t t-esc="formatTime(firstDetectedAt())"/></strong></div>
+                        <div class="nsp-ml__metric"><span>Last Detected At</span><strong><t t-esc="formatTime(lastDetectedAt())"/></strong></div>
+                        <div class="nsp-ml__metric"><span>Measurement Duration</span><strong><t t-esc="measurementDuration()"/></strong></div>
+                    </section>
+
+                    <section class="nsp-ml-panel nsp-ml-side-card nsp-ml-side-card--first">
+                        <h3><i class="fa fa-flag me-2" aria-hidden="true"/>First Detection</h3>
+                        <t t-if="firstStep()">
+                            <div class="nsp-ml__detection-time"><t t-esc="formatTime(firstStep().first_seen_at)"/></div>
+                            <strong><t t-esc="firstStep().controller_code"/></strong>
+                            <div><t t-esc="firstStep().reader_name"/></div>
+                            <div class="nsp-ml__detection-row"><span class="nsp-ml__antenna">ANT<t t-esc="firstStep().antenna_no"/></span><span>RSSI <strong><t t-esc="formatRssi(firstStep().peak_rssi_dbm)"/></strong></span></div>
+                            <div class="nsp-ml__detection-row"><span>Power <strong><t t-esc="firstStep().power_dbm"/> dBm</strong></span><span>Reads <strong><t t-esc="firstStep().read_count"/></strong></span></div>
+                        </t>
+                        <div t-else="" class="text-muted">Waiting...</div>
+                    </section>
+
+                    <section class="nsp-ml-panel nsp-ml-side-card nsp-ml-side-card--last">
+                        <h3><i class="fa fa-flag-checkered me-2" aria-hidden="true"/>Last Detection</h3>
+                        <t t-if="lastStep()">
+                            <div class="nsp-ml__detection-time"><t t-esc="formatTime(lastStep().last_seen_at)"/></div>
+                            <strong><t t-esc="lastStep().controller_code"/></strong>
+                            <div><t t-esc="lastStep().reader_name"/></div>
+                            <div class="nsp-ml__detection-row"><span class="nsp-ml__antenna">ANT<t t-esc="lastStep().antenna_no"/></span><span>RSSI <strong><t t-esc="formatRssi(lastStep().peak_rssi_dbm)"/></strong></span></div>
+                            <div class="nsp-ml__detection-row"><span>Power <strong><t t-esc="lastStep().power_dbm"/> dBm</strong></span><span>Reads <strong><t t-esc="lastStep().read_count"/></strong></span></div>
+                        </t>
+                        <div t-else="" class="text-muted">Waiting...</div>
+                    </section>
+
+                    <section class="nsp-ml-panel nsp-ml-side-card">
+                        <h3>Quick Actions</h3>
+                        <div class="nsp-ml__quick-grid">
+                            <button class="btn btn-outline-secondary" t-on-click="focusPower" t-att-disabled="!canAdjustPower()" title="Go to Reader power controls"><i class="fa fa-sliders me-1" aria-hidden="true"/>Adjust Power</button>
+                            <button class="btn btn-primary" t-on-click="measureAgain" t-att-disabled="!canMeasureAgain()" title="Create a new revision using the current Reader powers"><i class="fa fa-refresh me-1" aria-hidden="true"/>Measure Again</button>
+                            <button class="btn btn-outline-success" t-on-click="completeMeasurement" t-att-disabled="state.status !== 'running'" title="Finish this measurement revision"><i class="fa fa-check-circle me-1" aria-hidden="true"/>Complete Measurement</button>
+                        </div>
+                        <button class="btn btn-success w-100 mt-2 nsp-ml__apply" t-on-click="applyToOperation" t-att-disabled="!canApply()"><i class="fa fa-check-square-o me-1" aria-hidden="true"/>Apply to Operation</button>
+                        <div class="nsp-ml-card__sub text-center mt-2" t-if="allReaderPowersMatch()">Apply the current Measurement Power of all Readers to their operation profiles.</div>
+                        <div class="nsp-ml-card__sub text-center mt-2 text-warning" t-else="">One or more Reader powers changed. Run Measure Again before applying.</div>
+                    </section>
+                </aside>
+            </div>
+
+            <footer class="nsp-ml__footer">
+                <span><i class="fa fa-cloud me-1" aria-hidden="true"/><i t-att-class="edgeDotClass()"/> Live data from Edge: <strong><t t-esc="state.edgeServerCode || '-'"/></strong></span>
+                <span>Last update: <strong><t t-esc="formatDateTime(state.serverTime)"/></strong></span>
+                <span><i class="fa fa-refresh me-1" aria-hidden="true"/>Auto refresh: 1s</span>
+            </footer>
+        </div>
+    </t>
+</templates>
