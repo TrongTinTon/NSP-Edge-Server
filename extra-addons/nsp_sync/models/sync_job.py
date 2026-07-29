@@ -56,6 +56,25 @@ ACTION_KINDS = {
 class NspSyncJob(models.Model):
     _name = "nsp.sync.job"
     _description = "NSP Sync Job"
+
+    @api.model
+    def api_client_route_not_available(self):
+        """Reject inbound calls on Edge-only remote-route metadata.
+
+        The records in ``sync_route_definitions.xml`` are local descriptors used
+        by outbound jobs to build Cloud URLs. Cloud implementations live in
+        ``nsp_master_gatekeeper`` and are not provided by this Edge transport.
+        """
+        return {
+            "status_code": 403,
+            "message": "NSP Sync routes are outbound-only on Edge",
+            "data": {
+                "success": False,
+                "error_code": "route_not_allowed",
+                "message": "NSP Sync routes are outbound-only on Edge",
+                "details": {},
+            },
+        }
     _order = "sequence, sync_action_name, id"
     _rec_name = "display_name"
 
@@ -1272,10 +1291,25 @@ class NspSyncJob(models.Model):
         return session
 
     def _apply_parking_config(self, item):
-        """Apply one full Parking Area snapshot without per-row lookup queries."""
+        """Apply one Parking Area topology snapshot against existing physical cache.
+
+        Controller/Reader/Antenna declarations are synchronized once at the top-level
+        Gatekeeper snapshot. Parking areas carry only business topology, avoiding the
+        previous duplicate physical configuration inside every Parking Area payload.
+        """
         self.ensure_one()
         if not isinstance(item, dict):
             raise UserError(_("Parking Configuration item must be an object."))
+
+        unsupported = set(item) - {
+            "parking_area_code", "parking_area_name", "branch_code", "state",
+            "motorbike_capacity", "live_monitor_columns", "lanes",
+        }
+        if unsupported:
+            raise UserError(
+                _("Unsupported Parking Configuration field(s): %s")
+                % ", ".join(sorted(unsupported))
+            )
 
         branch_code = str(item.get("branch_code") or "").strip().upper()
         area_code = str(item.get("parking_area_code") or "").strip().upper()
@@ -1294,21 +1328,18 @@ class NspSyncJob(models.Model):
                 % {"code": branch_code}
             )
 
-        Parking = self.env["nsp.parking.area"].sudo()
-        parking = Parking.search([("code", "=", area_code)], limit=1)
         try:
             motorbike_capacity = int(item.get("motorbike_capacity") or 0)
-        except (TypeError, ValueError) as exc:
-            raise UserError(_("Motorbike Capacity must be an integer.")) from exc
-        if motorbike_capacity < 0:
-            raise UserError(_("Motorbike Capacity cannot be negative."))
-        try:
             live_monitor_columns = int(item.get("live_monitor_columns") or 2)
         except (TypeError, ValueError) as exc:
-            raise UserError(_("Live Monitor Columns must be an integer.")) from exc
+            raise UserError(_("Parking capacity and monitor columns must be integers.")) from exc
+        if motorbike_capacity < 0:
+            raise UserError(_("Motorbike Capacity cannot be negative."))
         if live_monitor_columns < 1 or live_monitor_columns > 4:
             raise UserError(_("Live Monitor Columns must be between 1 and 4."))
 
+        Parking = self.env["nsp.parking.area"].sudo()
+        parking = Parking.search([("code", "=", area_code)], limit=1)
         parking_vals = {
             "code": area_code,
             "name": str(item.get("parking_area_name") or area_code).strip(),
@@ -1322,255 +1353,142 @@ class NspSyncJob(models.Model):
         else:
             parking = Parking.create(parking_vals)
 
-        controllers_data = item.get("controllers") or []
-        if not isinstance(controllers_data, list):
-            raise UserError(_("Parking controllers must be an array."))
-        controller_specs = {}
-        reader_specs = {}
-        antenna_specs = {}
-        allowed_connections = {
-            key for key, _label in self.env["nsp.device"]._fields["connection_type"].selection
-        }
-        for controller_item in controllers_data:
-            if not isinstance(controller_item, dict):
-                raise UserError(_("Parking controllers must contain objects."))
-            unsupported = set(controller_item) - {"controller_code", "controller_name", "devices"}
-            if unsupported:
-                raise UserError(
-                    _("Unsupported Parking Controller field(s): %s") % ", ".join(sorted(unsupported))
-                )
-            controller_code = str(controller_item.get("controller_code") or "").strip().upper()
-            if not controller_code or controller_code in controller_specs:
-                raise UserError(_("Parking Controller Code is missing or duplicated."))
-            controller_specs[controller_code] = {
-                "name": str(controller_item.get("controller_name") or controller_code).strip(),
-            }
-            devices_data = controller_item.get("devices") or []
-            if not isinstance(devices_data, list):
-                raise UserError(_("Controller devices must be an array."))
-            for device_item in devices_data:
-                if not isinstance(device_item, dict):
-                    raise UserError(_("Controller devices must contain objects."))
-                unsupported_device = set(device_item) - {
-                    "serial_number", "reader_name",
-                    "physical_connection", "reader_parameters", "antennas",
-                }
-                if unsupported_device:
-                    raise UserError(
-                        _("Unsupported Reader field(s): %s") % ", ".join(sorted(unsupported_device))
-                    )
-                serial = str(device_item.get("serial_number") or "").strip().upper()
-                if not serial or serial in reader_specs:
-                    raise UserError(_("Reader Serial Number is missing or duplicated in Parking Configuration."))
-                reader_parameters = device_item.get("reader_parameters") or {}
-                if not isinstance(reader_parameters, dict):
-                    raise UserError(_("reader_parameters must be an object."))
-                unsupported_params = set(reader_parameters) - {
-                    "power_dbm", "read_interval_ms", "tid_start_address", "tid_length",
-                }
-                if unsupported_params:
-                    raise UserError(
-                        _("Unsupported Reader parameter(s): %s") % ", ".join(sorted(unsupported_params))
-                    )
-                connection_type = device_item.get("physical_connection") or False
-                if connection_type and connection_type not in allowed_connections:
-                    raise UserError(_("Invalid Physical Connection for Reader %s.") % serial)
-                try:
-                    reader_specs[serial] = {
-                        "controller_code": controller_code,
-                        "name": str(device_item.get("reader_name") or serial).strip(),
-                        "connection_type": connection_type,
-                        "power_dbm": int(
-                            reader_parameters.get("power_dbm")
-                            if reader_parameters.get("power_dbm") is not None else 30
-                        ),
-                        "read_interval_ms": int(reader_parameters.get("read_interval_ms") or 200),
-                        "tid_addr": int(reader_parameters.get("tid_start_address") or 0),
-                        "tid_len": int(reader_parameters.get("tid_length") or 4),
-                    }
-                except (TypeError, ValueError) as exc:
-                    raise UserError(_("Invalid Reader technical parameter for %s.") % serial) from exc
-
-                antennas_data = device_item.get("antennas") or []
-                if not isinstance(antennas_data, list):
-                    raise UserError(_("Reader antennas must be an array."))
-                for antenna_item in antennas_data:
-                    if not isinstance(antenna_item, dict):
-                        raise UserError(_("Reader antennas must contain objects."))
-                    unsupported_antenna = set(antenna_item) - {"antenna_no", "minimum_rssi_dbm"}
-                    if unsupported_antenna:
-                        raise UserError(
-                            _("Unsupported Reader Antenna field(s): %s")
-                            % ", ".join(sorted(unsupported_antenna))
-                        )
-                    try:
-                        antenna_no = int(antenna_item.get("antenna_no") or 0)
-                        minimum_rssi = float(
-                            antenna_item.get("minimum_rssi_dbm")
-                            if antenna_item.get("minimum_rssi_dbm") is not None else -65.0
-                        )
-                    except (TypeError, ValueError) as exc:
-                        raise UserError(_("Invalid Antenna configuration for Reader %s.") % serial) from exc
-                    key = (serial, antenna_no)
-                    if antenna_no <= 0 or key in antenna_specs:
-                        raise UserError(_("Invalid or duplicate Antenna No for Reader %s.") % serial)
-                    antenna_specs[key] = {"minimum_rssi_dbm": minimum_rssi}
-
         Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
-        existing_controllers = Controller.search([
-            ("controller_id", "in", list(controller_specs)),
-        ]) if controller_specs else Controller.browse()
-        controller_by_code = {controller.controller_id: controller for controller in existing_controllers}
-        missing_controller_codes = sorted(set(controller_specs) - set(controller_by_code))
-        if missing_controller_codes:
-            created_controllers = Controller.create([
-                {
-                    "controller_id": code,
-                    "controller_name": controller_specs[code]["name"],
-                    "active": True,
-                }
-                for code in missing_controller_codes
-            ])
-            controller_by_code.update({controller.controller_id: controller for controller in created_controllers})
-        for code, spec in controller_specs.items():
-            self._write_changed(controller_by_code[code], {
-                "controller_name": spec["name"],
-                "active": True,
-            })
+        controllers = Controller.search([])
+        controller_by_code = {record.controller_id: record for record in controllers}
 
-        Device = self.env["nsp.device"].sudo()
-        existing_devices = Device.search([
-            ("serial_number", "in", list(reader_specs)),
-        ]) if reader_specs else Device.browse()
-        device_by_serial = {device.serial_number: device for device in existing_devices}
-        missing_serials = sorted(set(reader_specs) - set(device_by_serial))
-        if missing_serials:
-            created_devices = Device.create([
-                {
-                    "serial_number": serial,
-                    "name": reader_specs[serial]["name"],
-                    "controller_id": controller_by_code[reader_specs[serial]["controller_code"]].id,
-                }
-                for serial in missing_serials
-            ])
-            device_by_serial.update({device.serial_number: device for device in created_devices})
-        for serial, spec in reader_specs.items():
-            values = dict(spec)
-            controller_code = values.pop("controller_code")
-            values["controller_id"] = controller_by_code[controller_code].id
-            self._write_changed(device_by_serial[serial], values)
-
-        Antenna = self.env["nsp.device.antenna"].sudo()
-        antenna_numbers = {number for _serial, number in antenna_specs}
-        existing_antennas = Antenna.search([
-            ("device_id", "in", [device.id for device in device_by_serial.values()]),
-            ("antenna_no", "in", list(antenna_numbers)),
-        ]) if device_by_serial and antenna_numbers else Antenna.browse()
+        Antenna = self.env["nsp.device.antenna"].sudo().with_context(active_test=False)
+        antennas = Antenna.search([])
         antenna_by_key = {
-            (antenna.device_id.serial_number, int(antenna.antenna_no or 0)): antenna
-            for antenna in existing_antennas
+            (record.device_id.serial_number, int(record.antenna_no or 0)): record
+            for record in antennas
         }
-        missing_antenna_keys = sorted(set(antenna_specs) - set(antenna_by_key))
-        if missing_antenna_keys:
-            created_antennas = Antenna.create([
-                {
-                    "device_id": device_by_serial[serial].id,
-                    "antenna_no": antenna_no,
-                    "minimum_rssi_dbm": antenna_specs[(serial, antenna_no)]["minimum_rssi_dbm"],
-                }
-                for serial, antenna_no in missing_antenna_keys
-            ])
-            antenna_by_key.update({
-                (antenna.device_id.serial_number, int(antenna.antenna_no or 0)): antenna
-                for antenna in created_antennas
-            })
-        for key, spec in antenna_specs.items():
-            self._write_changed(antenna_by_key[key], spec)
 
         lanes_data = item.get("lanes") or []
         if not isinstance(lanes_data, list):
             raise UserError(_("Parking lanes must be an array."))
+
         lane_specs = {}
-        desired_mapping_specs = []
-        desired_antenna_ids = set()
+        transition_specs = []
         for lane_index, lane_item in enumerate(lanes_data, start=1):
             if not isinstance(lane_item, dict):
                 raise UserError(_("Parking lanes must contain objects."))
             unsupported_lane = set(lane_item) - {
-                "lane_code", "lane_name", "lane_no", "controller_code", "direction",
-                "transition_window_seconds", "grouping_window_seconds",
-                "repeat_suppression_seconds", "antenna_mappings",
+                "lane_code", "lane_name", "lane_no", "controller_code",
+                "antenna_transitions",
             }
             if unsupported_lane:
                 raise UserError(
-                    _("Unsupported Parking Lane field(s): %s") % ", ".join(sorted(unsupported_lane))
+                    _("Unsupported Parking Lane field(s): %s")
+                    % ", ".join(sorted(unsupported_lane))
                 )
+
             lane_code = str(lane_item.get("lane_code") or "").strip().upper()
             controller_code = str(lane_item.get("controller_code") or "").strip().upper()
-            direction = str(lane_item.get("direction") or "").strip().lower()
             if not lane_code or lane_code in lane_specs or not controller_code:
                 raise UserError(_("Parking Lane Code is missing or duplicated."))
-            if controller_code not in controller_by_code:
+            controller = controller_by_code.get(controller_code)
+            if not controller or not controller.active or controller.cloud_removed:
                 raise UserError(
-                    _("Controller %s is missing from Parking controller configuration.") % controller_code
+                    _("Controller %s is missing or inactive in Gatekeeper configuration.")
+                    % controller_code
                 )
-            if direction not in ("entry", "exit", "both"):
-                raise UserError(_("Parking Lane direction must be entry, exit or both."))
             try:
-                transition_window = int(lane_item.get("transition_window_seconds") or 10)
-                grouping_window = int(lane_item.get("grouping_window_seconds") or 3)
-                repeat_suppression = int(lane_item.get("repeat_suppression_seconds") or 1)
                 lane_no = int(lane_item.get("lane_no") or lane_index)
             except (TypeError, ValueError) as exc:
-                raise UserError(_("Parking Lane timing and lane number values must be integers.")) from exc
-            if min(transition_window, grouping_window, repeat_suppression, lane_no) < 1:
-                raise UserError(_("Parking Lane timing values and Lane No. must be at least one."))
+                raise UserError(_("Parking Lane No. must be an integer.")) from exc
+            if lane_no < 1:
+                raise UserError(_("Parking Lane No. must be at least one."))
+
             lane_specs[lane_code] = {
                 "parking_area_id": parking.id,
                 "code": lane_code,
                 "name": str(lane_item.get("lane_name") or lane_code).strip(),
-                "controller_id": controller_by_code[controller_code].id,
+                "controller_id": controller.id,
                 "lane_no": lane_no,
-                "direction": direction,
-                "transition_window_seconds": transition_window,
-                "grouping_window_seconds": grouping_window,
-                "repeat_suppression_seconds": repeat_suppression,
                 "active": True,
             }
 
-            mappings_data = lane_item.get("antenna_mappings") or []
-            if not isinstance(mappings_data, list):
-                raise UserError(_("Antenna mappings must be an array."))
-            for mapping_item in mappings_data:
-                if not isinstance(mapping_item, dict):
-                    raise UserError(_("Antenna mappings must contain objects."))
-                unsupported_mapping = set(mapping_item) - {"serial_number", "antenna_no", "zone"}
-                if unsupported_mapping:
+            transitions_data = lane_item.get("antenna_transitions") or []
+            if not isinstance(transitions_data, list):
+                raise UserError(_("Antenna transitions must be an array."))
+            if state == "operational" and not transitions_data:
+                raise UserError(
+                    _("Operational Lane %s requires at least one Antenna Transition.")
+                    % lane_code
+                )
+
+            seen_paths = set()
+            for transition_item in transitions_data:
+                if not isinstance(transition_item, dict):
+                    raise UserError(_("Antenna transitions must contain objects."))
+                unsupported_transition = set(transition_item) - {
+                    "from_serial_number", "from_antenna_no",
+                    "to_serial_number", "to_antenna_no",
+                    "event_type", "duration_seconds",
+                }
+                if unsupported_transition:
                     raise UserError(
-                        _("Unsupported Antenna Mapping field(s): %s")
-                        % ", ".join(sorted(unsupported_mapping))
+                        _("Unsupported Antenna Transition field(s): %s")
+                        % ", ".join(sorted(unsupported_transition))
                     )
-                serial = str(mapping_item.get("serial_number") or "").strip().upper()
+
+                from_serial = str(transition_item.get("from_serial_number") or "").strip().upper()
+                to_serial = str(transition_item.get("to_serial_number") or "").strip().upper()
+                event_type = str(transition_item.get("event_type") or "").strip().lower()
                 try:
-                    antenna_no = int(mapping_item.get("antenna_no") or 0)
+                    from_no = int(transition_item.get("from_antenna_no") or 0)
+                    to_no = int(transition_item.get("to_antenna_no") or 0)
+                    duration = float(transition_item.get("duration_seconds") or 0.0)
                 except (TypeError, ValueError) as exc:
-                    raise UserError(_("Invalid antenna_no in Parking Lane mapping.")) from exc
-                mapping_zone = str(mapping_item.get("zone") or "").strip().lower()
-                antenna = antenna_by_key.get((serial, antenna_no))
-                if not antenna:
+                    raise UserError(_("Invalid Antenna Transition number or Duration.")) from exc
+                if not from_serial or not to_serial or from_no <= 0 or to_no <= 0:
+                    raise UserError(_("Antenna Transition requires valid From/To antennas."))
+                if event_type not in ("check_in", "check_out"):
+                    raise UserError(_("Antenna Transition Event Type must be check_in or check_out."))
+                if duration <= 0:
+                    raise UserError(_("Antenna Transition Duration must be greater than zero."))
+
+                from_antenna = antenna_by_key.get((from_serial, from_no))
+                to_antenna = antenna_by_key.get((to_serial, to_no))
+                if not from_antenna or not to_antenna:
                     raise UserError(
-                        _("Antenna %s/%s is missing from Reader configuration.") % (serial, antenna_no)
+                        _("Antenna Transition references an antenna missing from Reader configuration.")
                     )
-                if antenna.device_id.controller_id.id != controller_by_code[controller_code].id:
-                    raise UserError(_("Antenna must belong to the Controller assigned to this Lane."))
-                if direction == "both" and mapping_zone not in ("outside", "inside"):
-                    raise UserError(_("A Two-way Lane antenna mapping requires zone outside or inside."))
-                if direction != "both" and mapping_zone:
-                    raise UserError(_("A one-way Lane antenna mapping must not define zone."))
-                if antenna.id in desired_antenna_ids:
-                    raise UserError(_("An antenna can be mapped to only one Parking Lane."))
-                desired_antenna_ids.add(antenna.id)
-                desired_mapping_specs.append((lane_code, antenna.id, mapping_zone or False))
+                if (
+                    not from_antenna.active
+                    or from_antenna.cloud_removed
+                    or not from_antenna.device_id.active
+                    or from_antenna.device_id.cloud_removed
+                    or not to_antenna.active
+                    or to_antenna.cloud_removed
+                    or not to_antenna.device_id.active
+                    or to_antenna.device_id.cloud_removed
+                ):
+                    raise UserError(
+                        _("Antenna Transition references an inactive or removed Reader/Antenna.")
+                    )
+                if from_antenna == to_antenna:
+                    raise UserError(_("From Antenna and To Antenna must be different."))
+                if (
+                    from_antenna.device_id.controller_id != controller
+                    or to_antenna.device_id.controller_id != controller
+                ):
+                    raise UserError(
+                        _("Both transition antennas must belong to the Lane Controller.")
+                    )
+
+                path_key = (from_antenna.id, to_antenna.id)
+                if path_key in seen_paths:
+                    raise UserError(_("Duplicate directed Antenna Transition in Lane %s.") % lane_code)
+                seen_paths.add(path_key)
+                transition_specs.append({
+                    "lane_code": lane_code,
+                    "from_antenna_id": from_antenna.id,
+                    "to_antenna_id": to_antenna.id,
+                    "event_type": event_type,
+                    "duration_seconds": duration,
+                })
 
         Lane = self.env["nsp.parking.lane"].sudo().with_context(active_test=False)
         existing_lanes = Lane.search([
@@ -1586,38 +1504,51 @@ class NspSyncJob(models.Model):
                 lane = Lane.create(lane_vals)
                 lane_by_code[lane_code] = lane
 
-        Mapping = self.env["nsp.parking.lane.antenna.mapping"].sudo()
-        desired_mappings = Mapping.search([
-            ("antenna_ref_id", "in", list(desired_antenna_ids)),
-        ]) if desired_antenna_ids else Mapping.browse()
-        mapping_by_antenna = {mapping.antenna_ref_id.id: mapping for mapping in desired_mappings}
-        create_mapping_vals = []
-        for lane_code, antenna_id, zone in desired_mapping_specs:
-            mapping_vals = {
-                "lane_id": lane_by_code[lane_code].id,
-                "antenna_ref_id": antenna_id,
-                "zone": zone,
-            }
-            mapping = mapping_by_antenna.get(antenna_id)
-            if mapping:
-                self._write_changed(mapping, mapping_vals)
-            else:
-                create_mapping_vals.append(mapping_vals)
-        if create_mapping_vals:
-            Mapping.create(create_mapping_vals)
-
+        Transition = self.env["nsp.parking.antenna.transition"].sudo()
         area_lanes = Lane.search([("parking_area_id", "=", parking.id)])
-        current_area_mappings = Mapping.search([("lane_id", "in", area_lanes.ids)]) if area_lanes else Mapping.browse()
-        stale_mappings = current_area_mappings.filtered(
-            lambda mapping: mapping.antenna_ref_id.id not in desired_antenna_ids
+        existing_transitions = Transition.search([
+            ("lane_id", "in", area_lanes.ids)
+        ]) if area_lanes else Transition.browse()
+        transition_by_key = {
+            (rule.lane_id.code, rule.from_antenna_id.id, rule.to_antenna_id.id): rule
+            for rule in existing_transitions
+        }
+        desired_keys = set()
+        create_vals = []
+        for spec in transition_specs:
+            key = (
+                spec["lane_code"], spec["from_antenna_id"], spec["to_antenna_id"]
+            )
+            desired_keys.add(key)
+            vals = {
+                "lane_id": lane_by_code[spec["lane_code"]].id,
+                "from_antenna_id": spec["from_antenna_id"],
+                "to_antenna_id": spec["to_antenna_id"],
+                "event_type": spec["event_type"],
+                "duration_seconds": spec["duration_seconds"],
+            }
+            rule = transition_by_key.get(key)
+            if rule:
+                self._write_changed(rule, vals)
+            else:
+                create_vals.append(vals)
+        if create_vals:
+            Transition.create(create_vals)
+
+        stale_transitions = existing_transitions.filtered(
+            lambda rule: (
+                rule.lane_id.code,
+                rule.from_antenna_id.id,
+                rule.to_antenna_id.id,
+            ) not in desired_keys
         )
-        if stale_mappings:
-            stale_mappings.unlink()
+        if stale_transitions:
+            stale_transitions.unlink()
 
         incoming_codes = set(lane_specs)
         stale_lanes = area_lanes.filtered(lambda lane: lane.code not in incoming_codes and lane.active)
         if stale_lanes:
-            stale_lanes.mapped("antenna_mapping_ids").unlink()
+            stale_lanes.mapped("antenna_transition_ids").unlink()
             stale_lanes.write({"active": False})
 
         if parking.state == "operational":
@@ -1636,7 +1567,7 @@ class NspSyncJob(models.Model):
         Parking = self.env["nsp.parking.area"].sudo()
         stale = Parking.search([("code", "not in", list(incoming_codes))]) if incoming_codes else Parking.search([])
         if stale:
-            stale.mapped("lane_ids.antenna_mapping_ids").unlink()
+            stale.mapped("lane_ids.antenna_transition_ids").unlink()
             stale.mapped("lane_ids").write({"active": False})
             stale.write({"state": "blocked"})
         return len(stale)
@@ -1691,9 +1622,17 @@ class NspSyncJob(models.Model):
                     dev=dev_by.get(serial)
                     if dev: self._write_changed(dev,vals)
                     else: vals["serial_number"]=serial; dev=Device.create(vals); dev_by[serial]=dev
-                    existing_ant={(a.antenna_no):a for a in dev.antennas_ids.with_context(active_test=False)}
+                    existing_ant = {
+                        int(a.antenna_no): a
+                        for a in Antenna.search([("device_id", "=", dev.id)])
+                    }
                     for a in d.get("antennas") or []:
-                        no=int(a.get("antenna_no") or 0); incoming_ant.add((serial,no)); av={"minimum_rssi_dbm":float(a.get("minimum_rssi_dbm") if a.get("minimum_rssi_dbm") is not None else -65.0),"active":True,"cloud_removed":False}
+                        if not isinstance(a, dict) or set(a) - {"antenna_no"}:
+                            raise UserError(_("Reader antenna supports only antenna_no."))
+                        no=int(a.get("antenna_no") or 0)
+                        if no <= 0:
+                            raise UserError(_("Antenna No must be greater than zero."))
+                        incoming_ant.add((serial,no)); av={"active":True,"cloud_removed":False}
                         ant=existing_ant.get(no)
                         if ant: self._write_changed(ant,av)
                         else: av.update({"device_id":dev.id,"antenna_no":no}); Antenna.create(av)

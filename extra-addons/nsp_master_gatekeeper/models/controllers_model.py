@@ -28,18 +28,54 @@ class NspEdgeServer(models.Model):
     status = fields.Selection(NODE_STATUS, default="offline", required=True, index=True, tracking=True)
     active = fields.Boolean(default=True, index=True)
     controller_ids = fields.One2many("nsp.controller", "edge_server_id", string="Controllers")
-    controller_count = fields.Integer(string="Controllers", compute="_compute_controller_count")
-    reader_count = fields.Integer(string="Readers", compute="_compute_controller_count")
+    reader_ids = fields.Many2many(
+        "nsp.device",
+        string="Readers",
+        compute="_compute_inventory",
+        readonly=True,
+        help="Readers managed by the Controllers assigned to this Edge Server.",
+    )
+    antenna_ids = fields.Many2many(
+        "nsp.device.antenna",
+        string="Antennas",
+        compute="_compute_inventory",
+        readonly=True,
+        help="Physical antennas declared on Readers managed by this Edge Server.",
+    )
+    controller_count = fields.Integer(string="Controllers", compute="_compute_inventory")
+    reader_count = fields.Integer(string="Readers", compute="_compute_inventory")
+    antenna_count = fields.Integer(string="Antennas", compute="_compute_inventory")
 
     _sql_constraints = [
         ("edge_server_code_unique", "unique(edge_server_code)", "Edge Server Code must be unique."),
     ]
 
-    @api.depends("controller_ids", "controller_ids.device_ids")
-    def _compute_controller_count(self):
+    @api.depends(
+        "controller_ids",
+        "controller_ids.device_ids",
+        "controller_ids.device_ids.antennas_ids",
+    )
+    def _compute_inventory(self):
         for record in self:
+            readers = record.controller_ids.mapped("device_ids")
+            antennas = readers.mapped("antennas_ids")
+            record.reader_ids = readers
+            record.antenna_ids = antennas
             record.controller_count = len(record.controller_ids)
-            record.reader_count = len(record.controller_ids.mapped("device_ids"))
+            record.reader_count = len(readers)
+            record.antenna_count = len(antennas)
+
+    @api.model
+    def name_search(self, name="", domain=None, operator="ilike", limit=100):
+        search_domain = list(domain or [])
+        if name:
+            search_domain = [
+                "|",
+                ("name", operator, name),
+                ("edge_server_code", operator, name),
+            ] + search_domain
+        records = self.search(search_domain, limit=limit)
+        return [(record.id, record.display_name) for record in records]
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -58,26 +94,6 @@ class NspEdgeServer(models.Model):
         if values.get("edge_server_code"):
             values["edge_server_code"] = str(values["edge_server_code"]).strip().upper()
         return super().write(values)
-
-    def action_open_controllers(self):
-        self.ensure_one()
-        action = self.env.ref("nsp_master_gatekeeper.action_nsp_controllers").sudo().read()[0]
-        action.update({
-            "name": _("Controllers"),
-            "domain": [("edge_server_id", "=", self.id)],
-            "context": {"default_edge_server_id": self.id},
-        })
-        return action
-
-    def action_open_readers(self):
-        self.ensure_one()
-        action = self.env.ref("nsp_master_gatekeeper.nsp_device_action").sudo().read()[0]
-        action.update({
-            "name": _("Readers"),
-            "domain": [("controller_id.edge_server_id", "=", self.id)],
-            "context": {},
-        })
-        return action
 
     def unlink(self):
         if self.controller_ids:
@@ -117,25 +133,56 @@ class NspController(models.Model):
             record.reader_count = len(record.device_ids)
             record.antenna_count = len(record.device_ids.mapped("antennas_ids"))
 
-    def action_open_readers(self):
-        self.ensure_one()
-        action = self.env.ref("nsp_master_gatekeeper.nsp_device_action").sudo().read()[0]
-        action.update({
-            "name": _("Readers"),
-            "domain": [("controller_id", "=", self.id)],
-            "context": {"default_controller_id": self.id},
-        })
-        return action
+    @api.onchange("device_ids")
+    def _onchange_reader_serials_unique(self):
+        Device = self.env["nsp.device"]
+        for controller in self:
+            seen = set()
+            for reader in controller.device_ids:
+                serial = Device._normalize_serial(reader.serial_number)
+                if not serial:
+                    continue
+                if serial in seen:
+                    Device._raise_serial_conflict(serial)
+                seen.add(serial)
 
-    def action_open_antennas(self):
-        self.ensure_one()
-        action = self.env.ref("nsp_master_gatekeeper.action_nsp_device_antenna").sudo().read()[0]
-        action.update({
-            "name": _("Antennas"),
-            "domain": [("controller_id", "=", self.id)],
-            "context": {},
+    @api.model
+    def name_search(self, name="", domain=None, operator="ilike", limit=100):
+        search_domain = list(domain or [])
+        if name:
+            search_domain = [
+                "|",
+                ("controller_name", operator, name),
+                ("controller_id", operator, name),
+            ] + search_domain
+        records = self.search(search_domain, limit=limit)
+        return [(record.id, record.display_name) for record in records]
+
+    @api.model
+    def name_create(self, name):
+        controller_name = str(name or "").strip()
+        if not controller_name:
+            raise UserError(_("Controller Name is required."))
+
+        edge = self.env["nsp.edge.server"]
+        edge_id = self.env.context.get("default_edge_server_id")
+        if edge_id:
+            edge = edge.browse(int(edge_id)).exists()
+        else:
+            candidates = edge.search([("active", "=", True)], limit=2)
+            if len(candidates) == 1:
+                edge = candidates
+
+        if len(edge) != 1:
+            raise UserError(_(
+                "Select an Edge Server first, or use Create and Edit... to create the Controller with its Edge Server."
+            ))
+
+        record = self.create({
+            "controller_name": controller_name,
+            "edge_server_id": edge.id,
         })
-        return action
+        return record.id, record.display_name
 
     @api.model_create_multi
     def create(self, vals_list):

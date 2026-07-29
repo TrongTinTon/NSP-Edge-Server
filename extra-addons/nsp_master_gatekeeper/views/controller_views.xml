@@ -31,6 +31,7 @@
                 <field name="edge_server_code" string="Technical Code" optional="hide"/>
                 <field name="controller_count"/>
                 <field name="reader_count"/>
+                <field name="antenna_count"/>
                 <field name="timestamp" string="Last Heartbeat"/>
                 <field name="active" optional="hide"/>
             </list>
@@ -46,14 +47,6 @@
                     <field name="status" widget="statusbar" statusbar_visible="offline,online,error,block,revoked" readonly="1"/>
                 </header>
                 <sheet>
-                    <div class="oe_button_box" name="button_box">
-                        <button name="action_open_controllers" type="object" class="oe_stat_button" icon="fa-sitemap">
-                            <field name="controller_count" widget="statinfo" string="Controllers"/>
-                        </button>
-                        <button name="action_open_readers" type="object" class="oe_stat_button" icon="fa-rss">
-                            <field name="reader_count" widget="statinfo" string="Readers"/>
-                        </button>
-                    </div>
                     <div class="oe_title">
                         <label for="name"/>
                         <h1><field name="name" placeholder="Main Edge Server"/></h1>
@@ -72,18 +65,25 @@
                         </group>
                     </group>
                     <notebook>
-                        <page string="Controllers">
+                        <page name="infrastructure" string="Infrastructure">
                             <div class="alert alert-info" role="alert">
-                                Declare the Controllers connected through this Edge Server. Each Controller manages its own Readers.
+                                Configure infrastructure in ownership order: Edge Server → Controller → Reader → Antenna. Create each Reader from its Controller and each Antenna from its Reader so parent relations are assigned automatically.
                             </div>
-                            <field name="controller_ids" context="{'default_edge_server_id': id}">
-                                <list editable="bottom">
+                            <div class="text-muted mb-2">
+                                Use Add a line to open the Controller popup. Inside it, add Readers directly in the list and declare their Antenna numbers on the same line.
+                            </div>
+                            <field name="controller_ids" mode="list,form"
+                                   context="{'default_edge_server_id': id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_controllers_form'}">
+                                <list string="Controllers" create="1" edit="1" delete="1">
+                                    <control>
+                                        <create string="Add a line"/>
+                                    </control>
                                     <field name="controller_name" string="Controller"/>
                                     <field name="controller_id" string="Technical Code" optional="hide"/>
                                     <field name="status" widget="badge" readonly="1"/>
                                     <field name="reader_count" readonly="1"/>
                                     <field name="antenna_count" readonly="1"/>
-                                    <field name="timestamp" string="Last Heartbeat" readonly="1"/>
+                                    <field name="timestamp" string="Last Heartbeat" readonly="1" optional="hide"/>
                                     <field name="active"/>
                                 </list>
                             </field>
@@ -144,21 +144,16 @@
                     <field name="status" widget="statusbar" statusbar_visible="offline,online,error,block,revoked" readonly="1"/>
                 </header>
                 <sheet>
-                    <div class="oe_button_box" name="button_box">
-                        <button name="action_open_readers" type="object" class="oe_stat_button" icon="fa-rss">
-                            <field name="reader_count" widget="statinfo" string="Readers"/>
-                        </button>
-                        <button name="action_open_antennas" type="object" class="oe_stat_button" icon="fa-signal">
-                            <field name="antenna_count" widget="statinfo" string="Antennas"/>
-                        </button>
-                    </div>
                     <div class="oe_title">
                         <label for="controller_name"/>
                         <h1><field name="controller_name" placeholder="Main Gate Controller"/></h1>
                     </div>
                     <group>
                         <group string="Controller Declaration">
-                            <field name="edge_server_id" options="{'no_create': False, 'no_open': False}"/>
+                            <field name="edge_server_id"
+                                   readonly="context.get('default_edge_server_id')"
+                                   options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                   context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_edge_servers_form'}"/>
                             <field name="active"/>
                             <field name="controller_id" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
@@ -171,25 +166,34 @@
                         </group>
                     </group>
                     <notebook>
-                        <page string="Readers">
+                        <page name="readers" string="Readers">
                             <div class="alert alert-info" role="alert">
-                                Declare only the Readers directly controlled by this Controller. Parking area and lane topology are configured on the server.
+                                Every Reader belongs to this Controller. Create Antennas from the owning Reader; do not create standalone Antennas.
                             </div>
-                            <field name="device_ids" context="{'default_controller_id': id}">
-                                <list editable="bottom">
-                                    <field name="name" string="Reader"/>
-                                    <field name="serial_number" string="Serial"/>
-                                    <field name="device_code" string="Technical Code" optional="hide"/>
+                            <div class="text-muted mb-2">
+                                Use Add a line to enter Reader information directly. Enter Antenna Nos. as 1,2,3,4 or 1-4; the Antenna records are created automatically when the Controller is saved.
+                            </div>
+                            <field name="device_ids"
+                                   context="{'default_controller_id': id, 'default_edge_server_id': edge_server_id}">
+                                <list string="Readers" editable="bottom" create="1" edit="1" delete="1" open_form_view="0">
+                                    <control>
+                                        <create string="Add a line"/>
+                                    </control>
+                                    <field name="name" string="Reader" required="1"/>
+                                    <field name="serial_number" string="Serial" required="1"/>
                                     <field name="connection_type" string="Physical Connection" widget="nsp_grouped_connection" optional="show"/>
-                                    <field name="status" widget="badge" readonly="1"/>
-                                    
-                                    
-                                    <field name="antennas" string="Antennas" readonly="1"/>
+                                    <field name="power_dbm" string="Power (dBm)" optional="show"/>
+                                    <field name="antenna_numbers" string="Antenna Nos." placeholder="1-4" optional="show"/>
+                                    <field name="device_code" string="Technical Code" readonly="1" optional="hide"/>
+                                    <field name="status" widget="badge" readonly="1" optional="hide"/>
                                 </list>
                             </field>
                         </page>
                     </notebook>
                 </sheet>
+                <footer>
+                    <button string="Save" special="save" class="btn-primary"/>
+                </footer>
                 <chatter/>
             </form>
         </field>

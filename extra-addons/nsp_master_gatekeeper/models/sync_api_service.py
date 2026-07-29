@@ -10,9 +10,9 @@ from odoo.addons.t4_coreapi.utils import endpoint, get_params, get_body
 
 _logger = logging.getLogger(__name__)
 
-class NspSyncApiService(models.AbstractModel):
-    _name = 'nsp.sync.api.service'
-    _description = 'NspSyncApiService'
+class NspMasterGatekeeperSyncApiService(models.AbstractModel):
+    _name = 'nsp.master.gatekeeper.sync.api.service'
+    _description = 'NSP Master Gatekeeper Sync API Service'
 
     @api.model
     def _ok(self, payload=None, message="OK", status_code=200, **extra):

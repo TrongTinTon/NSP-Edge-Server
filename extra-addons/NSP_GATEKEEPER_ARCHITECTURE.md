@@ -49,3 +49,24 @@ Cloud does not re-run current Parking topology rules when receiving a final Park
 
 Configuration revision hooks extend existing Odoo models using `models.Model` only. Plain Python mixins must not be added as additional bases to `_inherit` extension classes because Odoo rebuilds model bases dynamically during registry setup. Shared revision behavior is implemented with module-level helper functions instead.
 
+## Parking antenna transition timing
+
+Parking movement validation is configured as directed antenna transitions on Cloud and synchronized to Edge.
+
+Example:
+
+```text
+ANT 1 -- Check-in / 2.0s --> ANT 2
+ANT 2 -- Check-out / 2.0s --> ANT 1
+```
+
+Each transition stores only the source antenna, destination antenna, business event type, and measured Duration. Edge creates a Parking Transaction only when the same Vehicle RFID is detected on the configured source antenna and then on the configured destination antenna within that transition Duration. There is no lane-level fixed timing window. Antenna records contain physical antenna identity only; RSSI remains observation/measurement data and is not an operational validity threshold.
+
+The transition Event Type is authoritative for Check-in/Check-out. Lane direction is not stored. Raw Detection Events remain Edge-only.
+
+
+## Module dependency boundary
+
+- `nsp_master_gatekeeper` is standalone Cloud master/API and does not depend on `nsp_sync`.
+- `nsp_business_gatekeeper` depends on `nsp_sync`; installing Business Gatekeeper installs Edge synchronization automatically.
+- `nsp_sync` is Edge-only transport. Cloud sync endpoints are owned by `nsp_master_gatekeeper`.

@@ -85,7 +85,7 @@
                     </div>
 
                     <div class="alert alert-info" role="alert">
-                        Parking topology is synchronized from Cloud and used by the Edge business engine. Each lane selects one Controller and one lane direction. For Two-way lanes, map Reader antenna ports to Outside or Inside zones; One-way lanes do not require zones. Controllers receive only Reader parameters and per-antenna RF settings; branch, parking area and lane business rules remain on the server.
+                        Parking topology is synchronized from Cloud and used by the Edge business engine. Each lane selects one Controller and receives directed Antenna Transitions from Cloud. Every transition carries From Antenna, To Antenna, Event Type and Duration; fixed lane timing windows are not used.
                     </div>
 
                     <group>
@@ -106,7 +106,7 @@
                     <notebook>
                         <page string="1. Parking Lanes">
                             <div class="alert alert-secondary" role="alert">
-                                Assign one Controller and one operating direction to each lane. Vehicle RFID is always required. Check-in never requires User RFID. Check-out always requires exactly one User RFID; Edge pairs the nearest unused User detection by timestamp within the grouping window. For a Two-way lane, map antennas to Outside and Inside zones to resolve movement.
+                                Assign one Controller to each Lane. Check-in or Check-out is not stored on the Lane; it is defined by each directed Antenna Transition.
                             </div>
                             <field name="lane_ids" context="{'default_parking_area_id': id}">
                                 <list editable="bottom" create="0" edit="0" delete="0">
@@ -114,31 +114,25 @@
                                     <field name="name" string="Lane Name"/>
                                     <field name="code" string="Technical Code" optional="hide" readonly="1"/>
                                     <field name="controller_id" options="{'no_create': False, 'no_open': False}"/>
-                                    <field name="direction"/>
-                                    <field name="transition_window_seconds" optional="hide"/>
-                                    <field name="grouping_window_seconds" optional="hide"/>
-                                    <field name="repeat_suppression_seconds" optional="hide"/>
                                     <field name="active" widget="boolean_toggle"/>
-                                    <field name="antenna_count" string="Mapped Antennas" readonly="1"/>
+                                    <field name="transition_count" string="Transitions" readonly="1"/>
                                 </list>
                             </field>
                         </page>
 
-                        <page string="2. Antenna Mapping">
+                        <page string="2. Antenna Transitions">
                             <div class="alert alert-secondary" role="alert">
-                                For a Two-way lane, configure each antenna as Outside or Inside. Outside → Inside means Entry/Check-in; Inside → Outside means Exit/Check-out. One-way lanes do not require antenna zones.
+                                Define the physical path used to validate a vehicle movement. Example: Antenna 1 → Antenna 2, Check-in, Duration 2 seconds. The Edge uses this configured Duration as the valid movement window.
                             </div>
-                            <button name="action_open_antenna_mappings" type="object"
-                                    string="Configure Antenna Mappings" class="oe_highlight" icon="fa-exchange"/>
-                            <field name="lane_antenna_mapping_ids" readonly="1">
+                            <button name="action_open_antenna_transitions" type="object"
+                                    string="Configure Antenna Transitions" class="oe_highlight" icon="fa-exchange"/>
+                            <field name="antenna_transition_ids" readonly="1">
                                 <list create="0" delete="0">
                                     <field name="lane_id"/>
-                                    <field name="zone"/>
-                                    <field name="controller_id"/>
-                                    <field name="device_id" string="Reader"/>
-                                    <field name="serial_number" string="Reader Serial" optional="hide"/>
-                                    <field name="antenna_no" string="Antenna No"/>
-                                    <field name="minimum_rssi_dbm" string="Minimum RSSI dBm"/>
+                                    <field name="event_type" widget="badge"/>
+                                    <field name="from_antenna_id" string="From Antenna"/>
+                                    <field name="to_antenna_id" string="To Antenna"/>
+                                    <field name="duration_seconds" string="Duration (s)"/>
                                 </list>
                             </field>
                         </page>
@@ -165,8 +159,7 @@
                 <field name="name" string="Lane Name" decoration-bf="1"/>
                 <field name="code" string="Technical Code" optional="hide" readonly="1"/>
                 <field name="controller_id"/>
-                <field name="direction"/>
-                <field name="antenna_count" string="Antennas"/>
+                <field name="transition_count" string="Transitions" readonly="1"/>
                 <field name="active" widget="boolean_toggle"/>
             </list>
         </field>
@@ -180,7 +173,7 @@
                 <sheet>
                     <div class="oe_title">
                         <label for="name"/>
-                        <h1><field name="name" placeholder="Entry Lane 01"/></h1>
+                        <h1><field name="name" placeholder="Parking Lane 01"/></h1>
                     </div>
                     <group>
                         <group string="Lane Declaration">
@@ -189,30 +182,23 @@
                             <field name="lane_no" string="Lane No"/>
                             <field name="active"/>
                         </group>
-                        <group string="Event Processing">
-                            <field name="direction"/>
-                            <field name="transition_window_seconds" invisible="direction != 'both'"/>
-                            <field name="grouping_window_seconds"/>
-                            <field name="repeat_suppression_seconds"/>
-                            <field name="antenna_count" readonly="1"/>
+                        <group string="Identity">
+                            <field name="transition_count" string="Antenna Transitions" readonly="1"/>
                             <field name="code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
                     </group>
                     <notebook>
-                        <page string="Antenna Mapping">
+                        <page string="Antenna Transitions">
                             <div class="alert alert-info" role="alert">
-                                Select only antennas belonging to the Lane Controller. Two-way lanes require Outside/Inside zones. One-way lanes leave Zone empty. Reader Power and Minimum RSSI remain Reader/Antenna technical settings.
+                                Configure the ordered antenna path directly. Event Type defines Check-in or Check-out. Duration is the maximum time allowed from the first antenna detection to the next antenna detection for the same Vehicle RFID.
                             </div>
-                            <field name="antenna_mapping_ids" context="{'default_lane_id': id}">
+                            <field name="antenna_transition_ids" context="{'default_lane_id': id}">
                                 <list editable="bottom" create="0" edit="0" delete="0">
                                     <field name="lane_controller_id" column_invisible="1"/>
-                                    <field name="zone"/>
-                                    <field name="antenna_ref_id" string="Antenna"
-                                           domain="[('device_id.controller_id','=',parent.controller_id)]"/>
-                                    <field name="device_id" string="Reader" readonly="1"/>
-                                    <field name="serial_number" string="Reader Serial" readonly="1" optional="hide"/>
-                                    <field name="antenna_no" string="Antenna No" readonly="1"/>
-                                    <field name="minimum_rssi_dbm" string="Minimum RSSI dBm" readonly="1"/>
+                                    <field name="event_type"/>
+                                    <field name="from_antenna_id" string="From Antenna" domain="[('device_id.controller_id','=',parent.controller_id)]"/>
+                                    <field name="to_antenna_id" string="To Antenna" domain="[('device_id.controller_id','=',parent.controller_id)]"/>
+                                    <field name="duration_seconds" string="Duration (s)"/>
                                 </list>
                             </field>
                         </page>
@@ -228,50 +214,44 @@
         <field name="view_mode">list,form</field>
     </record>
 
-    <record id="view_nsp_parking_lane_antenna_mapping_list" model="ir.ui.view">
-        <field name="name">nsp.parking.lane.antenna.mapping.list</field>
-        <field name="model">nsp.parking.lane.antenna.mapping</field>
+    <record id="view_nsp_parking_antenna_transition_list" model="ir.ui.view">
+        <field name="name">nsp.parking.antenna.transition.list</field>
+        <field name="model">nsp.parking.antenna.transition</field>
         <field name="arch" type="xml">
-            <list string="Parking Lane Antenna Mapping" editable="bottom" create="0" edit="0" delete="0">
+            <list string="Antenna Transitions" editable="bottom" create="0" edit="0" delete="0">
                 <field name="lane_controller_id" column_invisible="1"/>
                 <field name="parking_area_id" readonly="1"/>
                 <field name="lane_id"/>
-                <field name="zone"/>
-                <field name="antenna_ref_id" string="Antenna"
-                       domain="[('device_id.controller_id','=',lane_controller_id)]"/>
-                <field name="controller_id" readonly="1"/>
-                <field name="device_id" string="Reader" readonly="1"/>
-                <field name="serial_number" string="Reader Serial" readonly="1" optional="hide"/>
-                <field name="antenna_no" string="Antenna No" readonly="1"/>
-                <field name="minimum_rssi_dbm" string="Minimum RSSI dBm" readonly="1"/>
+                <field name="event_type" widget="badge"/>
+                <field name="from_antenna_id" string="From Antenna" domain="[('device_id.controller_id','=',lane_controller_id)]"/>
+                <field name="to_antenna_id" string="To Antenna" domain="[('device_id.controller_id','=',lane_controller_id)]"/>
+                <field name="duration_seconds" string="Duration (s)"/>
             </list>
         </field>
     </record>
 
-    <record id="view_nsp_parking_lane_antenna_mapping_form" model="ir.ui.view">
-        <field name="name">nsp.parking.lane.antenna.mapping.form</field>
-        <field name="model">nsp.parking.lane.antenna.mapping</field>
+    <record id="view_nsp_parking_antenna_transition_form" model="ir.ui.view">
+        <field name="name">nsp.parking.antenna.transition.form</field>
+        <field name="model">nsp.parking.antenna.transition</field>
         <field name="arch" type="xml">
-            <form string="Parking Lane Antenna Mapping" create="0" edit="0" delete="0">
+            <form string="Antenna Transition" create="0" edit="0" delete="0">
                 <sheet>
                     <div class="oe_title">
                         <h1><field name="rule_name" readonly="1"/></h1>
                     </div>
                     <group>
-                        <group string="Lane">
+                        <group string="Movement">
                             <field name="lane_id"/>
                             <field name="parking_area_id" readonly="1"/>
                             <field name="lane_controller_id" readonly="1"/>
-                            <field name="zone"/>
+                            <field name="event_type"/>
+                            <field name="duration_seconds" string="Duration (Seconds)"/>
                         </group>
-                        <group string="Antenna">
-                            <field name="antenna_ref_id"
-                                   domain="[('device_id.controller_id','=',lane_controller_id)]"/>
-                            <field name="controller_id" readonly="1"/>
-                            <field name="device_id" string="Reader" readonly="1"/>
-                            <field name="serial_number" string="Reader Serial" readonly="1"/>
-                            <field name="antenna_no" string="Antenna No" readonly="1"/>
-                                        <field name="minimum_rssi_dbm" string="Minimum RSSI dBm" readonly="1"/>
+                        <group string="Antenna Path">
+                            <field name="from_antenna_id" domain="[('device_id.controller_id','=',lane_controller_id)]"/>
+                            <field name="to_antenna_id" domain="[('device_id.controller_id','=',lane_controller_id)]"/>
+                            <field name="from_serial_number" string="From Reader Serial" readonly="1"/>
+                            <field name="to_serial_number" string="To Reader Serial" readonly="1"/>
                         </group>
                     </group>
                 </sheet>
@@ -279,9 +259,9 @@
         </field>
     </record>
 
-    <record id="action_nsp_parking_lane_antenna_mapping" model="ir.actions.act_window">
-        <field name="name">Parking Lane Antenna Mapping</field>
-        <field name="res_model">nsp.parking.lane.antenna.mapping</field>
+    <record id="action_nsp_parking_antenna_transition" model="ir.actions.act_window">
+        <field name="name">Antenna Transitions</field>
+        <field name="res_model">nsp.parking.antenna.transition</field>
         <field name="view_mode">list,form</field>
     </record>
 </odoo>

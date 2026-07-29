@@ -392,7 +392,10 @@ class NspSyncAuth(models.Model):
 
     def action_authenticate(self):
         self._ensure_edge_server_instance()
-        self._ensure_edge_server_node()
+        # The Edge identity is the configured edge_server_code on this Cloud
+        # Connection. nsp_business_gatekeeper intentionally has no local
+        # nsp.edge.server model; the corresponding node is owned by Cloud in
+        # nsp_master_gatekeeper and is resolved there by the sync payload.
         for rec in self:
             rec.get_access_token(force=True)
         created_jobs = self.env["nsp.sync.job"].ensure_default_jobs(self)

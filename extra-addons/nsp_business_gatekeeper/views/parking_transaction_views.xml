@@ -109,9 +109,6 @@
                             <field name="detection_event_ids" readonly="1">
                                 <list create="0" edit="0" delete="0">
                                     <field name="detected_at"/>
-                                    <field name="zone" widget="badge"
-                                           decoration-info="zone == 'outside'"
-                                           decoration-success="zone == 'inside'"/>
                                     <field name="card_id" context="{'nsp_simple_card_name': True}"/>
                                     <field name="antenna_id"/>
                                 </list>

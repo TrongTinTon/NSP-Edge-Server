@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from odoo import api, fields, models, _
-from odoo.exceptions import ValidationError
+from odoo.exceptions import UserError, ValidationError
 from odoo.addons.nsp_core.utils import new_management_code
 
 
@@ -12,7 +12,13 @@ class Device(models.Model):
 
     # Device declaration
     name = fields.Char(string="Reader Name", required=True, default="RFID Reader", index=True)
-    serial_number = fields.Char(string="Serial", required=True, copy=False, index=True)
+    serial_number = fields.Char(
+        string="Serial",
+        required=True,
+        copy=False,
+        index=True,
+        help="Physical Reader serial number. It must be globally unique across all Edge Servers and Controllers.",
+    )
     device_code = fields.Char(
         string="Device Code", required=True, readonly=True, copy=False, index=True,
         default=lambda self: new_management_code("DEV"),
@@ -64,6 +70,12 @@ class Device(models.Model):
         "device_id",
         string="Antennas",
     )
+    antenna_numbers = fields.Char(
+        string="Antenna Nos.",
+        compute="_compute_antenna_numbers",
+        inverse="_inverse_antenna_numbers",
+        help="Comma-separated antenna numbers or ranges, for example: 1,2,3,4 or 1-4.",
+    )
 
     _sql_constraints = [
         ("serial_number_unique", "unique(serial_number)", "Reader Serial must be unique."),
@@ -82,29 +94,152 @@ class Device(models.Model):
     def _normalize_code(self, value):
         return str(value or "").strip().upper()
 
+    @api.model
+    def _serial_conflict(self, serial, exclude_ids=None):
+        normalized = self._normalize_serial(serial)
+        if not normalized:
+            return self.browse()
+        domain = [("serial_number", "=", normalized)]
+        if exclude_ids:
+            domain.append(("id", "not in", list(exclude_ids)))
+        return self.with_context(active_test=False).search(domain, limit=1)
+
+    @api.model
+    def _raise_serial_conflict(self, serial, conflict=None):
+        normalized = self._normalize_serial(serial)
+        if conflict:
+            raise ValidationError(_(
+                "Reader Serial '%(serial)s' already exists on Reader '%(reader)s' "
+                "under Controller '%(controller)s'. Reader Serial must be globally unique."
+            ) % {
+                "serial": normalized,
+                "reader": conflict.display_name,
+                "controller": conflict.controller_id.display_name,
+            })
+        raise ValidationError(_(
+            "Reader Serial '%s' is entered more than once. Reader Serial must be globally unique."
+        ) % normalized)
+
+    @api.onchange("serial_number")
+    def _onchange_serial_number_unique(self):
+        for reader in self:
+            serial = self._normalize_serial(reader.serial_number)
+            if not serial:
+                continue
+            reader.serial_number = serial
+
+            origin_ids = reader._origin.ids if reader._origin else []
+            conflict = self._serial_conflict(serial, exclude_ids=origin_ids)
+            if conflict:
+                self._raise_serial_conflict(serial, conflict)
+
+            controller = reader.controller_id
+            if controller:
+                for sibling in controller.device_ids:
+                    if sibling == reader:
+                        continue
+                    if self._normalize_serial(sibling.serial_number) == serial:
+                        self._raise_serial_conflict(serial)
+
+    @api.model
+    def name_search(self, name="", domain=None, operator="ilike", limit=100):
+        search_domain = list(domain or [])
+        if name:
+            search_domain = [
+                "|", "|",
+                ("name", operator, name),
+                ("serial_number", operator, name),
+                ("device_code", operator, name),
+            ] + search_domain
+        records = self.search(search_domain, limit=limit)
+        return [(record.id, record.display_name) for record in records]
+
+    @api.model
+    def name_create(self, name):
+        serial = self._normalize_serial(name)
+        if not serial:
+            raise UserError(_("Reader Serial is required for Quick Create."))
+
+        controller = self.env["nsp.controller"]
+        controller_id = self.env.context.get("default_controller_id")
+        if controller_id:
+            controller = controller.browse(int(controller_id)).exists()
+        else:
+            controller_domain = [("active", "=", True)]
+            edge_id = self.env.context.get("default_edge_server_id")
+            if edge_id:
+                controller_domain.append(("edge_server_id", "=", int(edge_id)))
+            candidates = controller.search(controller_domain, limit=2)
+            if len(candidates) == 1:
+                controller = candidates
+
+        if len(controller) != 1:
+            raise UserError(_(
+                "Select a Controller first, or use Create and Edit... to create the Reader with its Controller and Serial."
+            ))
+
+        record = self.create({
+            "name": serial,
+            "serial_number": serial,
+            "controller_id": controller.id,
+        })
+        return record.id, record.display_name
+
     @api.model_create_multi
     def create(self, vals_list):
         prepared = []
+        antenna_inputs = []
+        serials = set()
         for source in vals_list:
             vals = dict(source)
+            antenna_inputs.append(vals.pop("antenna_numbers", None))
             serial = self._normalize_serial(vals.get("serial_number"))
+            if not serial:
+                raise ValidationError(_("Reader Serial is required."))
+            if serial in serials:
+                self._raise_serial_conflict(serial)
+            serials.add(serial)
             vals["serial_number"] = serial
             vals["name"] = str(vals.get("name") or serial or "RFID Reader").strip()
             vals["device_code"] = self._normalize_code(
                 vals.get("device_code") or new_management_code("DEV")
             )
             prepared.append(vals)
-        return super().create(prepared)
+
+        existing = self.with_context(active_test=False).search([
+            ("serial_number", "in", sorted(serials)),
+        ], limit=1)
+        if existing:
+            self._raise_serial_conflict(existing.serial_number, existing)
+
+        records = super().create(prepared)
+        for record, antenna_input in zip(records, antenna_inputs):
+            if antenna_input is not None:
+                record._apply_antenna_numbers(antenna_input)
+        return records
 
     def write(self, vals):
         values = dict(vals)
+        antenna_input = values.pop("antenna_numbers", None)
         if "serial_number" in values:
-            values["serial_number"] = self._normalize_serial(values.get("serial_number"))
+            serial = self._normalize_serial(values.get("serial_number"))
+            if not serial:
+                raise ValidationError(_("Reader Serial is required."))
+            if len(self) > 1:
+                self._raise_serial_conflict(serial)
+            conflict = self._serial_conflict(serial, exclude_ids=self.ids)
+            if conflict:
+                self._raise_serial_conflict(serial, conflict)
+            values["serial_number"] = serial
         if "name" in values:
             values["name"] = str(values.get("name") or "").strip() or "RFID Reader"
         if "device_code" in values:
             values["device_code"] = self._normalize_code(values.get("device_code"))
-        return super().write(values)
+        result = super().write(values)
+        if antenna_input is not None:
+            for record in self:
+                record._apply_antenna_numbers(antenna_input)
+        return result
 
     @api.constrains("serial_number", "device_code")
     def _check_declaration(self):
@@ -119,13 +254,84 @@ class Device(models.Model):
         for record in self:
             record.antennas = len(record.antennas_ids)
 
+    @api.depends("antennas_ids.antenna_no")
+    def _compute_antenna_numbers(self):
+        for record in self:
+            numbers = sorted(set(record.antennas_ids.mapped("antenna_no")))
+            record.antenna_numbers = ",".join(str(number) for number in numbers)
+
+    @api.model
+    def _parse_antenna_numbers(self, value):
+        """Parse compact Antenna input without storing a duplicate representation.
+
+        Accepted examples: ``1,2,3,4``, ``1 2 3 4``, ``1-4`` and
+        ``1,3-5``. The physical Antenna rows remain the source of truth.
+        """
+        raw = str(value or "").strip()
+        if not raw:
+            return []
+
+        normalized = raw.replace(";", ",").replace(" ", ",")
+        numbers = set()
+        for token in (part.strip() for part in normalized.split(",")):
+            if not token:
+                continue
+            if "-" in token:
+                pieces = [part.strip() for part in token.split("-", 1)]
+                if len(pieces) != 2 or not all(piece.isdigit() for piece in pieces):
+                    raise ValidationError(_(
+                        "Invalid Antenna range '%s'. Use values such as 1,2,3,4 or 1-4."
+                    ) % token)
+                start, end = (int(piece) for piece in pieces)
+                if start <= 0 or end <= 0 or end < start:
+                    raise ValidationError(_(
+                        "Invalid Antenna range '%s'. Antenna numbers must be positive and ascending."
+                    ) % token)
+                numbers.update(range(start, end + 1))
+            else:
+                if not token.isdigit() or int(token) <= 0:
+                    raise ValidationError(_(
+                        "Invalid Antenna number '%s'. Use positive whole numbers."
+                    ) % token)
+                numbers.add(int(token))
+
+        if len(numbers) > 64:
+            raise ValidationError(_("A Reader cannot declare more than 64 Antennas."))
+        return sorted(numbers)
+
+    def _inverse_antenna_numbers(self):
+        for record in self:
+            record._apply_antenna_numbers(record.antenna_numbers)
+
+    def _apply_antenna_numbers(self, value):
+        """Reconcile physical Antenna rows from compact inline Reader input."""
+        Antenna = self.env["nsp.device.antenna"]
+        for record in self:
+            record.ensure_one()
+            desired = set(record._parse_antenna_numbers(value))
+            existing_by_number = {
+                int(antenna.antenna_no): antenna
+                for antenna in record.antennas_ids
+            }
+
+            stale = record.antennas_ids.filtered(
+                lambda antenna: int(antenna.antenna_no) not in desired
+            )
+            if stale:
+                stale.unlink()
+
+            missing = sorted(desired - set(existing_by_number))
+            if missing:
+                Antenna.create([
+                    {"device_id": record.id, "antenna_no": number}
+                    for number in missing
+                ])
+        return True
+
     def _antenna_config_payload(self):
         self.ensure_one()
         return [
-            {
-                "antenna_no": int(antenna.antenna_no),
-                "minimum_rssi_dbm": float(antenna.minimum_rssi_dbm),
-            }
+            {"antenna_no": int(antenna.antenna_no)}
             for antenna in self.antennas_ids.sorted(key=lambda item: (item.antenna_no, item.id))
         ]
 
@@ -133,8 +339,8 @@ class Device(models.Model):
         """Return technical Reader configuration for the Controller.
 
         Device Code, physical connection and parking topology remain server-owned.
-        Transmit power is common to the Reader; each
-        antenna port may use its own RSSI acceptance threshold.
+        Transmit power is common to the Reader. Antenna declarations contain only
+        the physical antenna number; parking timing belongs to Parking Configuration.
         """
         self.ensure_one()
         return {

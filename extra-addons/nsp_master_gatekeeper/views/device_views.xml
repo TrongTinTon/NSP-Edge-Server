@@ -59,7 +59,11 @@
                     <group>
                         <group string="Device Declaration">
                             <field name="serial_number" string="Serial"/>
-                            <field name="controller_id" options="{'no_create': False, 'no_open': False}"/>
+                            <field name="controller_id"
+                                   readonly="context.get('default_controller_id')"
+                                   domain="[('edge_server_id', '=', context.get('default_edge_server_id'))] if context.get('default_edge_server_id') else []"
+                                   options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                   context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_controllers_form', 'default_edge_server_id': context.get('default_edge_server_id')}"/>
                             <field name="connection_type" string="Physical Connection" widget="nsp_grouped_connection"/>
                             <field name="device_code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
@@ -86,13 +90,18 @@
                     <notebook>
                         <page name="antennas" string="Antennas">
                             <div class="alert alert-info" role="alert">
-                                Power is configured once on the Reader and applies to all antenna ports. Minimum RSSI can be tuned per antenna to reject weak detections from farther or adjacent lanes.
+                                Antennas are physical ports owned by this Reader. Reader power applies to all ports; movement timing is configured separately in Parking Configuration.
                             </div>
-                            <field name="antennas_ids" context="{'default_device_id': id}">
-                                <list string="Antennas" editable="bottom">
+                            <div class="text-muted mb-2">
+                                Use Add a line to add physical Antennas while creating or editing this Reader.
+                            </div>
+                            <field name="antennas_ids"
+                                   context="{'default_device_id': id, 'default_controller_id': controller_id, 'default_edge_server_id': context.get('default_edge_server_id')}">
+                                <list string="Antennas" editable="bottom" create="1" edit="1" delete="1">
+                                    <control>
+                                        <create string="Add a line"/>
+                                    </control>
                                     <field name="antenna_no" string="Antenna No"/>
-                                    <field name="minimum_rssi_dbm" string="Minimum RSSI dBm"/>
-                                    <field name="lane_count" string="Mapped Lanes" readonly="1"/>
                                 </list>
                             </field>
                         </page>
@@ -151,7 +160,6 @@
                 <field name="device_id" string="Reader"/>
                 <field name="device_serial" string="Reader Serial"/>
                 <field name="controller_id"/>
-                <filter string="Mapped to Lane" name="mapped" domain="[('lane_rule_ids','!=',False)]"/>
                 <separator/>
                 <group>
                     <filter string="Reader" name="group_device" context="{'group_by':'device_id'}"/>
@@ -169,8 +177,6 @@
                 <field name="controller_id" readonly="1"/>
                 <field name="device_id" string="Reader"/>
                 <field name="antenna_no" string="Antenna No"/>
-                <field name="minimum_rssi_dbm" string="Minimum RSSI dBm"/>
-                <field name="lane_count" string="Mapped Lanes" readonly="1"/>
             </list>
         </field>
     </record>
@@ -186,27 +192,17 @@
                     </div>
                     <group>
                         <group string="Antenna Configuration">
-                            <field name="device_id" string="Reader" options="{'no_create': False, 'no_open': False}"/>
+                            <field name="device_id" string="Reader"
+                                   domain="[('controller_id', '=', context.get('default_controller_id'))] if context.get('default_controller_id') else ([('controller_id.edge_server_id', '=', context.get('default_edge_server_id'))] if context.get('default_edge_server_id') else [])"
+                                   options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                   context="{'form_view_ref': 'nsp_master_gatekeeper.nsp_device_view_form', 'default_controller_id': context.get('default_controller_id'), 'default_edge_server_id': context.get('default_edge_server_id')}"/>
                             <field name="antenna_no" string="Antenna No"/>
-                            <field name="minimum_rssi_dbm" string="Minimum RSSI dBm"/>
                         </group>
                         <group string="Ownership">
                             <field name="controller_id" readonly="1"/>
                             <field name="device_serial" string="Reader Serial" readonly="1"/>
-                            <field name="lane_count" string="Mapped Lanes" readonly="1"/>
                         </group>
                     </group>
-                    <notebook>
-                        <page string="Parking Lane Antenna Mapping">
-                            <field name="lane_rule_ids" readonly="1">
-                                <list string="Parking Lane Antenna Mapping">
-                                    <field name="parking_area_id" string="Parking Area"/>
-                                    <field name="lane_id"/>
-                                    <field name="zone" widget="badge"/>
-                                </list>
-                            </field>
-                        </page>
-                    </notebook>
                 </sheet>
             </form>
         </field>

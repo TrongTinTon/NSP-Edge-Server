@@ -12,7 +12,13 @@ class Device(models.Model):
 
     # Device declaration
     name = fields.Char(string="Reader Name", required=True, default="RFID Reader", index=True)
-    serial_number = fields.Char(string="Serial", required=True, copy=False, index=True)
+    serial_number = fields.Char(
+        string="Serial",
+        required=True,
+        copy=False,
+        index=True,
+        help="Physical Reader serial number. It must be globally unique across all Edge Servers and Controllers.",
+    )
     device_code = fields.Char(
         string="Device Code", required=True, readonly=True, copy=False, index=True,
         default=lambda self: new_management_code("DEV"),
@@ -34,6 +40,8 @@ class Device(models.Model):
     ], string="Status", required=True, default="offline", index=True)
     last_seen = fields.Datetime(string="Last Seen", readonly=True, copy=False, index=True)
     firmware_version = fields.Char(string="Firmware Version", readonly=True, copy=False)
+    active = fields.Boolean(default=True, index=True)
+    cloud_removed = fields.Boolean(default=False, readonly=True, index=True, copy=False)
 
     # Physical connection inventory. The Odoo field widget groups options as Wired / Wireless.
     connection_type = fields.Selection([
@@ -82,24 +90,70 @@ class Device(models.Model):
     def _normalize_code(self, value):
         return str(value or "").strip().upper()
 
+    @api.model
+    def _serial_conflict(self, serial, exclude_ids=None):
+        normalized = self._normalize_serial(serial)
+        if not normalized:
+            return self.browse()
+        domain = [("serial_number", "=", normalized)]
+        if exclude_ids:
+            domain.append(("id", "not in", list(exclude_ids)))
+        return self.with_context(active_test=False).search(domain, limit=1)
+
+    @api.model
+    def _raise_serial_conflict(self, serial, conflict=None):
+        normalized = self._normalize_serial(serial)
+        if conflict:
+            raise ValidationError(_(
+                "Reader Serial '%(serial)s' already exists on Reader '%(reader)s' "
+                "under Controller '%(controller)s'. Reader Serial must be globally unique."
+            ) % {
+                "serial": normalized,
+                "reader": conflict.display_name,
+                "controller": conflict.controller_id.display_name,
+            })
+        raise ValidationError(_(
+            "Reader Serial '%s' is entered more than once. Reader Serial must be globally unique."
+        ) % normalized)
+
     @api.model_create_multi
     def create(self, vals_list):
         prepared = []
+        serials = set()
         for source in vals_list:
             vals = dict(source)
             serial = self._normalize_serial(vals.get("serial_number"))
+            if not serial:
+                raise ValidationError(_("Reader Serial is required."))
+            if serial in serials:
+                self._raise_serial_conflict(serial)
+            serials.add(serial)
             vals["serial_number"] = serial
             vals["name"] = str(vals.get("name") or serial or "RFID Reader").strip()
             vals["device_code"] = self._normalize_code(
                 vals.get("device_code") or new_management_code("DEV")
             )
             prepared.append(vals)
+
+        existing = self.with_context(active_test=False).search([
+            ("serial_number", "in", sorted(serials)),
+        ], limit=1)
+        if existing:
+            self._raise_serial_conflict(existing.serial_number, existing)
         return super().create(prepared)
 
     def write(self, vals):
         values = dict(vals)
         if "serial_number" in values:
-            values["serial_number"] = self._normalize_serial(values.get("serial_number"))
+            serial = self._normalize_serial(values.get("serial_number"))
+            if not serial:
+                raise ValidationError(_("Reader Serial is required."))
+            if len(self) > 1:
+                self._raise_serial_conflict(serial)
+            conflict = self._serial_conflict(serial, exclude_ids=self.ids)
+            if conflict:
+                self._raise_serial_conflict(serial, conflict)
+            values["serial_number"] = serial
         if "name" in values:
             values["name"] = str(values.get("name") or "").strip() or "RFID Reader"
         if "device_code" in values:
@@ -122,10 +176,7 @@ class Device(models.Model):
     def _antenna_config_payload(self):
         self.ensure_one()
         return [
-            {
-                "antenna_no": int(antenna.antenna_no),
-                "minimum_rssi_dbm": float(antenna.minimum_rssi_dbm),
-            }
+            {"antenna_no": int(antenna.antenna_no)}
             for antenna in self.antennas_ids.sorted(key=lambda item: (item.antenna_no, item.id))
         ]
 
@@ -133,8 +184,8 @@ class Device(models.Model):
         """Return technical Reader configuration for the Controller.
 
         Device Code, physical connection and parking topology remain server-owned.
-        Transmit power is common to the Reader; each
-        antenna port may use its own RSSI acceptance threshold.
+        Transmit power is common to the Reader. Antenna declarations contain only
+        the physical antenna number; parking timing belongs to Parking Configuration.
         """
         self.ensure_one()
         return {

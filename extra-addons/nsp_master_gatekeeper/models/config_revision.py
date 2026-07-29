@@ -15,7 +15,7 @@ def _edge_ids(records):
             ids.update(rec.edge_server_ids.ids)
         elif rec._name == "nsp.parking.lane" and rec.controller_id.edge_server_id:
             ids.add(rec.controller_id.edge_server_id.id)
-        elif rec._name == "nsp.parking.lane.antenna.mapping" and rec.lane_id.controller_id.edge_server_id:
+        elif rec._name == "nsp.parking.antenna.transition" and rec.lane_id.controller_id.edge_server_id:
             ids.add(rec.lane_id.controller_id.edge_server_id.id)
         elif rec._name == "nsp.branch":
             ids.update(rec.parking_area_ids.mapped("edge_server_ids").ids)
@@ -99,8 +99,8 @@ class NspParkingLaneRevision(models.Model):
     def unlink(self):
         ids = _edge_ids(self); result = super().unlink(); _bump_edge_revisions(self.env, ids); return result
 
-class NspParkingMappingRevision(models.Model):
-    _inherit = "nsp.parking.lane.antenna.mapping"
+class NspParkingTransitionRevision(models.Model):
+    _inherit = "nsp.parking.antenna.transition"
     @api.model_create_multi
     def create(self, vals_list):
         records = super().create(vals_list); _bump_edge_revisions(self.env, _edge_ids(records)); return records

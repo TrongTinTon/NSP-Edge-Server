@@ -569,11 +569,6 @@ class NspMeasurementSession(models.Model):
             limit=5000,
         )
         count = len(events)
-        if events and "nsp.sync.record" in self.env.registry.models:
-            self.env["nsp.sync.record"].sudo().search([
-                ("record_model", "=", "nsp.measurement.event"),
-                ("record_key", "in", events.mapped("event_uid")),
-            ]).unlink()
         events.unlink()
         return count
 

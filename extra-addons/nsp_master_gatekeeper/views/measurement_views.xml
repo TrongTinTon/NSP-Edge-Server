@@ -77,7 +77,9 @@
                             <field name="target_tid" readonly="1" widget="CopyClipboardChar"/>
                         </group>
                         <group string="Controller">
-                            <field name="controller_id" readonly="status != 'draft'"/>
+                            <field name="controller_id" readonly="status != 'draft'"
+                                   options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                   context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_controllers_form'}"/>
                             <field name="reader_count" readonly="1"/>
                         </group>
                     </group>
@@ -97,7 +99,9 @@
                             <field name="reader_line_ids" readonly="status != 'draft'">
                                 <list editable="bottom">
                                     <field name="reader_id"
-                                           domain="[('controller_id','=',parent.controller_id)]"/>
+                                           domain="[('controller_id','=',parent.controller_id)]"
+                                           options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                           context="{'default_controller_id': parent.controller_id, 'form_view_ref': 'nsp_master_gatekeeper.nsp_device_view_form'}"/>
                                     <field name="serial_number" readonly="1"/>
                                     <field name="reader_status" readonly="1"/>
                                     <field name="operation_power_dbm" readonly="1"/>

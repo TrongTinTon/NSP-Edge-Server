@@ -283,13 +283,6 @@ class ParkingTransaction(models.Model):
             ) % label
         return True, ""
 
-    @api.model
-    def _resolve_event_type(self, direction):
-        """Map a resolved physical movement direction to the business event."""
-        event_type = {"entry": "check_in", "exit": "check_out"}.get(direction)
-        if not event_type:
-            raise ValidationError(_("unresolved_movement_direction"))
-        return event_type
 
     @api.model
     def _business_values(self, source):
@@ -470,13 +463,13 @@ class ParkingTransaction(models.Model):
 
     @api.model
     def create_from_detection_group(
-        self, detections, resolved_direction=False, vehicle_by_card=None, user_by_card=None
+        self, detections, resolved_event_type=False, vehicle_by_card=None, user_by_card=None
     ):
         """Create one vehicle-centric Parking Transaction.
 
+        Event Type is resolved directly by the configured directed Antenna Transition.
         Check-in never uses User RFID. Check-out requires exactly one User RFID
-        detection selected by the detection processor using nearest timestamp
-        pairing and 1:1 consumption.
+        detection selected by the detection processor inside that transition's Duration.
         """
         detections = detections.filtered(lambda rec: rec.state == "pending")
         if not detections:
@@ -487,13 +480,9 @@ class ParkingTransaction(models.Model):
         if any(rec.lane_id != lane for rec in detections):
             raise ValidationError(_("mixed_detection_group"))
 
-        direction = resolved_direction or lane.direction
-        if direction not in ("entry", "exit"):
-            raise ValidationError(_("unresolved_movement_direction"))
-        if lane.direction != "both" and direction != lane.direction:
-            raise ValidationError(_("movement_direction_not_allowed"))
-
-        event_type = self._resolve_event_type(direction)
+        event_type = str(resolved_event_type or "").strip().lower()
+        if event_type not in ("check_in", "check_out"):
+            raise ValidationError(_("unresolved_parking_event_type"))
         vehicle_events = detections.filtered(
             lambda rec: rec.card_id.card_type == "vehicle_card"
         )

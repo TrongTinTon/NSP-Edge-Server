@@ -86,13 +86,11 @@
                     <notebook>
                         <page name="antennas" string="Antennas">
                             <div class="alert alert-info" role="alert">
-                                Power is configured once on the Reader and applies to all antenna ports. Minimum RSSI can be tuned per antenna to reject weak detections from farther or adjacent lanes.
+                                Power is configured once on the Reader and applies to all antenna ports. Antenna movement timing is configured in Parking Configuration as directed Antenna Transitions.
                             </div>
                             <field name="antennas_ids" context="{'default_device_id': id}">
                                 <list string="Antennas" editable="bottom" create="0" edit="0" delete="0">
                                     <field name="antenna_no" string="Antenna No"/>
-                                    <field name="minimum_rssi_dbm" string="Minimum RSSI dBm"/>
-                                    <field name="lane_count" string="Mapped Lanes" readonly="1"/>
                                 </list>
                             </field>
                         </page>
@@ -151,7 +149,6 @@
                 <field name="device_id" string="Reader"/>
                 <field name="device_serial" string="Reader Serial"/>
                 <field name="controller_id"/>
-                <filter string="Mapped to Lane" name="mapped" domain="[('lane_rule_ids','!=',False)]"/>
                 <separator/>
                 <group>
                     <filter string="Reader" name="group_device" context="{'group_by':'device_id'}"/>
@@ -169,8 +166,6 @@
                 <field name="controller_id" readonly="1"/>
                 <field name="device_id" string="Reader"/>
                 <field name="antenna_no" string="Antenna No"/>
-                <field name="minimum_rssi_dbm" string="Minimum RSSI dBm"/>
-                <field name="lane_count" string="Mapped Lanes" readonly="1"/>
             </list>
         </field>
     </record>
@@ -188,25 +183,12 @@
                         <group string="Antenna Configuration">
                             <field name="device_id" string="Reader" options="{'no_create': False, 'no_open': False}"/>
                             <field name="antenna_no" string="Antenna No"/>
-                            <field name="minimum_rssi_dbm" string="Minimum RSSI dBm"/>
                         </group>
                         <group string="Ownership">
                             <field name="controller_id" readonly="1"/>
                             <field name="device_serial" string="Reader Serial" readonly="1"/>
-                            <field name="lane_count" string="Mapped Lanes" readonly="1"/>
                         </group>
                     </group>
-                    <notebook>
-                        <page string="Parking Lane Antenna Mapping">
-                            <field name="lane_rule_ids" readonly="1">
-                                <list string="Parking Lane Antenna Mapping" create="0" edit="0" delete="0">
-                                    <field name="parking_area_id" string="Parking Area"/>
-                                    <field name="lane_id"/>
-                                    <field name="zone" widget="badge"/>
-                                </list>
-                            </field>
-                        </page>
-                    </notebook>
                 </sheet>
             </form>
         </field>

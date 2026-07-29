@@ -4,7 +4,7 @@ from odoo.exceptions import ValidationError
 
 
 class DeviceAntenna(models.Model):
-    """A numbered RFID antenna port with an optional RSSI acceptance threshold."""
+    """A numbered physical RFID antenna port owned by one Reader."""
 
     _name = "nsp.device.antenna"
     _description = "NSP Reader Antenna"
@@ -13,12 +13,6 @@ class DeviceAntenna(models.Model):
 
     display_name = fields.Char(string="Antenna", compute="_compute_display_name", store=True)
     antenna_no = fields.Integer(string="Antenna No", required=True, index=True)
-    minimum_rssi_dbm = fields.Float(
-        string="Minimum RSSI (dBm)",
-        required=True,
-        default=-65.0,
-        help="The Controller ignores detections weaker than this threshold. A value closer to 0 accepts only stronger, usually nearer, tags.",
-    )
     device_id = fields.Many2one(
         "nsp.device",
         string="Reader",
@@ -37,13 +31,6 @@ class DeviceAntenna(models.Model):
         related="device_id.controller_id",
         readonly=True,
     )
-    lane_rule_ids = fields.One2many(
-        "nsp.parking.lane.antenna.mapping",
-        "antenna_ref_id",
-        string="Parking Lane Antenna Mapping",
-        readonly=True,
-    )
-    lane_count = fields.Integer(string="Mapped Lanes", compute="_compute_lane_count")
 
     _sql_constraints = [
         (
@@ -56,11 +43,6 @@ class DeviceAntenna(models.Model):
             "CHECK(antenna_no > 0)",
             "Antenna number must be greater than zero.",
         ),
-        (
-            "antenna_rssi_range",
-            "CHECK(minimum_rssi_dbm >= -120 AND minimum_rssi_dbm <= 0)",
-            "Minimum RSSI must be between -120 and 0 dBm.",
-        ),
     ]
 
     @api.depends("device_id.name", "device_id.serial_number", "antenna_no")
@@ -71,10 +53,16 @@ class DeviceAntenna(models.Model):
                 antenna.antenna_no or "",
             )
 
-    @api.depends("lane_rule_ids")
-    def _compute_lane_count(self):
-        for antenna in self:
-            antenna.lane_count = len(antenna.lane_rule_ids)
+    @api.model
+    def default_get(self, fields_list):
+        values = super().default_get(fields_list)
+        if "antenna_no" in fields_list and not values.get("antenna_no"):
+            device_id = self.env.context.get("default_device_id")
+            device = self.env["nsp.device"].browse(int(device_id)).exists() if device_id else self.env["nsp.device"]
+            if device:
+                existing_numbers = device.antennas_ids.mapped("antenna_no")
+                values["antenna_no"] = max(existing_numbers or [0]) + 1
+        return values
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -95,7 +83,3 @@ class DeviceAntenna(models.Model):
         if "antenna_no" in values or not partial:
             if int(values.get("antenna_no") or 0) <= 0:
                 raise ValidationError(_("Antenna number must be greater than zero."))
-        if "minimum_rssi_dbm" in values:
-            rssi = float(values.get("minimum_rssi_dbm") or 0.0)
-            if rssi < -120 or rssi > 0:
-                raise ValidationError(_("Minimum RSSI must be between -120 and 0 dBm."))
