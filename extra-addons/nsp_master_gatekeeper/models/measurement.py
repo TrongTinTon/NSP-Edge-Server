@@ -39,6 +39,16 @@ class NspMeasurementSession(models.Model):
         tracking=True,
         help="Controller that manages all Readers participating in this Measurement Session.",
     )
+    target_scan_tid = fields.Char(
+        string="Target RFID Tag",
+        store=False,
+        copy=False,
+        help=(
+            "Focus this field and scan one registered RFID Tag using a keyboard-emulating "
+            "reader. A successful validation sets Target RFID Tag; the scan input itself is "
+            "not stored."
+        ),
+    )
     target_card_id = fields.Many2one(
         "nsp.rfid.card",
         string="Target RFID Tag",

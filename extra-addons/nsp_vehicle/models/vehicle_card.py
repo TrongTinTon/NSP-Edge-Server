@@ -13,6 +13,15 @@ class NspVehicleCard(models.Model):
     vehicle_id = fields.Many2one(
         "nsp.vehicle", string="Vehicle", required=True, ondelete="cascade", index=True,
     )
+    scan_tid = fields.Char(
+        string="Master Card",
+        store=False,
+        copy=False,
+        help=(
+            "Keyboard-scanned RFID TID used only to resolve Master Card. "
+            "The scan value is not stored."
+        ),
+    )
     card_id = fields.Many2one(
         "nsp.rfid.card", string="Master Card", required=True,
         ondelete="cascade", index=True,
@@ -47,6 +56,37 @@ class NspVehicleCard(models.Model):
             rec.display_name = "%s - %s" % (
                 rec.vehicle_id.license_plate or _("Vehicle"), rec.card_id.tid or _("Card")
             )
+
+    @api.model
+    def _prepare_scanned_card_values(self, vals):
+        """Resolve scan_tid to Master Card before required-field validation."""
+        values = dict(vals)
+        if values.get("card_id"):
+            return values
+
+        normalized = self.env["nsp.rfid.card"]._normalize_tid(values.get("scan_tid"))
+        if not normalized:
+            return values
+
+        result = self.env["nsp.rfid.card"].nsp_validate_scan(
+            normalized,
+            expected_card_type="vehicle_card",
+            require_available=True,
+        )
+        if not result.get("valid") or not result.get("card_id"):
+            raise ValidationError(result.get("message") or _("Invalid Vehicle Card."))
+
+        values["card_id"] = result["card_id"]
+        values["scan_tid"] = result.get("tid") or normalized
+        return values
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        prepared = [self._prepare_scanned_card_values(vals) for vals in vals_list]
+        card_ids = [vals.get("card_id") for vals in prepared if vals.get("card_id")]
+        if len(card_ids) != len(set(card_ids)):
+            raise ValidationError(_("The same Master Card is entered more than once."))
+        return super().create(prepared)
 
     @api.constrains("card_id", "state")
     def _check_card_assignment(self):

@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 from odoo import api, fields, models
-from odoo.addons.nsp_core.utils import new_management_code
+from odoo.addons.nsp_core.utils import (
+    new_management_code,
+    strip_empty_x2many_create_commands,
+)
 
 
 class Vehicle(models.Model):
@@ -69,6 +72,68 @@ class Vehicle(models.Model):
             return value
         return " ".join(str(value).strip().upper().split())
 
+    def _sanitize_vehicle_card_commands(self, commands):
+        commands = strip_empty_x2many_create_commands(
+            commands,
+            required_field="card_id",
+            ignored_fields={
+                "vehicle_id",
+                "state",
+                "assigned_at",
+                "revoked_at",
+            },
+        )
+        if not commands:
+            return commands
+
+        assignments = self.mapped("vehicle_card_ids") if self else self.env["nsp.vehicle.card"]
+        removed_ids = {
+            int(command[1])
+            for command in commands
+            if isinstance(command, (list, tuple))
+            and len(command) > 1
+            and command[0] in (2, 3)
+            and command[1]
+        }
+        existing_cards = assignments.filtered(lambda rec: rec.id not in removed_ids).mapped("card_id")
+        seen_card_ids = set(existing_cards.ids)
+        seen_tids = {
+            self.env["nsp.rfid.card"]._normalize_tid(tid)
+            for tid in existing_cards.mapped("tid")
+            if tid
+        }
+
+        cleaned = []
+        Card = self.env["nsp.rfid.card"]
+        for command in commands:
+            if not isinstance(command, (list, tuple)) or len(command) < 3 or command[0] != 0:
+                cleaned.append(command)
+                continue
+
+            values = command[2] if isinstance(command[2], dict) else {}
+            card_id = values.get("card_id")
+            if isinstance(card_id, (list, tuple)):
+                card_id = card_id[0] if card_id else False
+            card_id = int(card_id) if card_id else False
+            tid = Card._normalize_tid(values.get("scan_tid"))
+            if not card_id and tid:
+                card = Card.search([("tid", "=", tid)], limit=1)
+                card_id = card.id or False
+
+            if (card_id and card_id in seen_card_ids) or (tid and tid in seen_tids):
+                continue
+
+            cleaned.append(command)
+            if card_id:
+                seen_card_ids.add(card_id)
+                card = Card.browse(card_id)
+                if card.exists() and card.tid:
+                    seen_tids.add(Card._normalize_tid(card.tid))
+            if tid:
+                seen_tids.add(tid)
+
+        return cleaned
+
     @api.model_create_multi
     def create(self, vals_list):
         prepared = []
@@ -77,6 +142,10 @@ class Vehicle(models.Model):
             vals["vehicle_code"] = str(
                 vals.get("vehicle_code") or new_management_code("VEH")
             ).strip().upper()
+            if "vehicle_card_ids" in vals:
+                vals["vehicle_card_ids"] = self._sanitize_vehicle_card_commands(
+                    vals.get("vehicle_card_ids")
+                )
             if vals.get("license_plate"):
                 vals["license_plate"] = self._normalize_license_plate(vals["license_plate"])
             prepared.append(vals)
@@ -84,6 +153,10 @@ class Vehicle(models.Model):
 
     def write(self, vals):
         values = dict(vals)
+        if "vehicle_card_ids" in values:
+            values["vehicle_card_ids"] = self._sanitize_vehicle_card_commands(
+                values.get("vehicle_card_ids")
+            )
         if values.get("vehicle_code"):
             values["vehicle_code"] = str(values["vehicle_code"]).strip().upper()
         if values.get("license_plate"):

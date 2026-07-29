@@ -70,10 +70,18 @@
                     </group>
                     <notebook>
                         <page string="Vehicle Cards">
+                            <div class="alert alert-info" role="alert">
+                                Click <strong>Add a line</strong>, focus <strong>Master Card</strong>, then scan one Vehicle Card. A valid scan automatically creates and focuses the next row; an invalid scan stays on the current row and shows the reason.
+                            </div>
                             <field name="vehicle_card_ids" context="{'default_vehicle_id': id}">
                                 <list editable="bottom">
-                                    <field name="card_id" domain="[('card_type','=','vehicle_card'), ('usage_state','=','available')]" options="{'no_create': True}"/>
-                                    <field name="tid" readonly="1"/>
+                                    <field name="scan_tid"
+                                           string="Master Card"
+                                           widget="nsp_rfid_scan"
+                                           options="{'target_field': 'card_id', 'resolved_value_field': 'tid', 'expected_card_type': 'vehicle_card', 'require_available': True, 'auto_next_row': True}"
+                                           placeholder="Scan Vehicle Card TID and press Enter"/>
+                                    <field name="card_id" column_invisible="True"/>
+                                    <field name="tid" column_invisible="True"/>
                                     <field name="state" widget="badge" readonly="1" decoration-success="state == 'active'" decoration-muted="state == 'revoked'"/>
                                     <field name="assigned_at" optional="hide"/>
                                     <field name="revoked_at" optional="hide" readonly="1"/>

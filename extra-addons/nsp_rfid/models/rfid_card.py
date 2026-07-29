@@ -133,6 +133,102 @@ class RfidCard(models.Model):
             if card.tid != normalized:
                 raise ValidationError(_("TID must be normalized uppercase without spaces."))
 
+
+    @api.model
+    def nsp_validate_scan(
+        self,
+        tid,
+        expected_card_type=False,
+        require_available=False,
+        allow_card_id=False,
+    ):
+        """Validate one keyboard-scanned RFID TID for interactive forms.
+
+        The result is intentionally compact and does not persist scan state.
+        Business ownership remains in nsp.user.card / nsp.vehicle.card, while
+        Measurement only stores target_card_id after a successful validation.
+        """
+        normalized = self._normalize_tid(tid)
+        if not normalized:
+            return {
+                "valid": False,
+                "message": _("Scan or enter an RFID TID first."),
+            }
+
+        card = self.sudo().search([("tid", "=", normalized)], limit=1)
+        if not card:
+            return {
+                "valid": False,
+                "tid": normalized,
+                "message": _("RFID Tag %s does not exist in Master Cards.") % normalized,
+            }
+
+        expected = str(expected_card_type or "").strip()
+        if expected and card.card_type != expected:
+            expected_label = dict(self._fields["card_type"].selection).get(expected, expected)
+            actual_label = dict(self._fields["card_type"].selection).get(
+                card.card_type, card.card_type
+            )
+            return {
+                "valid": False,
+                "tid": normalized,
+                "card_id": card.id,
+                "message": _(
+                    "RFID Tag %(tid)s is %(actual)s, but this field requires %(expected)s."
+                ) % {
+                    "tid": normalized,
+                    "actual": actual_label,
+                    "expected": expected_label,
+                },
+            }
+
+        allow_id = int(allow_card_id or 0)
+        if require_available and card.id != allow_id:
+            assignments = []
+            if self._model_ready("nsp.user.card"):
+                user_line = self.env["nsp.user.card"].sudo().search([
+                    ("card_id", "=", card.id),
+                    ("state", "=", "active"),
+                ], limit=1)
+                if user_line:
+                    assignments.append(_("User: %s") % user_line.user_id.display_name)
+            if self._model_ready("nsp.vehicle.card"):
+                vehicle_line = self.env["nsp.vehicle.card"].sudo().search([
+                    ("card_id", "=", card.id),
+                    ("state", "=", "active"),
+                ], limit=1)
+                if vehicle_line:
+                    assignments.append(
+                        _("Vehicle: %s") % vehicle_line.vehicle_id.display_name
+                    )
+            if assignments:
+                return {
+                    "valid": False,
+                    "tid": normalized,
+                    "card_id": card.id,
+                    "message": _(
+                        "RFID Tag %(tid)s is already assigned to %(owner)s."
+                    ) % {
+                        "tid": normalized,
+                        "owner": ", ".join(assignments),
+                    },
+                }
+
+        card_type_label = dict(self._fields["card_type"].selection).get(
+            card.card_type, card.card_type
+        )
+        return {
+            "valid": True,
+            "card_id": card.id,
+            "tid": card.tid,
+            "card_type": card.card_type,
+            "display_name": card.display_name,
+            "message": _("Valid %(type)s: %(tid)s") % {
+                "type": card_type_label,
+                "tid": card.tid,
+            },
+        }
+
     def name_get(self):
         result = []
         simple_name = bool(self.env.context.get("nsp_simple_card_name"))

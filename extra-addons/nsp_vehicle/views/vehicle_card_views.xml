@@ -14,7 +14,6 @@
           <group>
             <field name="vehicle_id"/>
             <field name="card_id" domain="[('card_type','=','vehicle_card'), ('usage_state','=','available')]" options="{'no_create': True}"/>
-            <field name="tid" readonly="1"/>
             <field name="assigned_at" readonly="1"/>
             <field name="revoked_at" readonly="1"/>
             <field name="note"/>

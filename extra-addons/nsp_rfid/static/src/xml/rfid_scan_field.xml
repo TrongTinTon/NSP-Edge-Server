@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="nsp_rfid.RfidScanField">
+        <div class="nsp-rfid-scan" t-att-class="statusClass">
+            <t t-if="props.readonly">
+                <span class="nsp-rfid-scan__readonly" t-esc="readonlyLabel"/>
+            </t>
+            <t t-else="">
+                <input class="o_input nsp-rfid-scan__input"
+                       type="text"
+                       autocomplete="off"
+                       t-ref="input"
+                       t-att-id="props.id"
+                       t-att-value="state.value"
+                       t-att-placeholder="props.placeholder"
+                       t-on-input="onInput"
+                       t-on-keydown="onKeydown"
+                       t-on-focus="onFocus"/>
+                <div t-if="state.status === 'error' &amp;&amp; state.message"
+                     class="nsp-rfid-scan__feedback"
+                     role="status"
+                     aria-live="polite"
+                     t-esc="state.message"/>
+            </t>
+        </div>
+    </t>
+</templates>

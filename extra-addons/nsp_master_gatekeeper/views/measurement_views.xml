@@ -71,10 +71,14 @@
                     </div>
                     <group>
                         <group string="Measurement Target">
-                            <field name="target_card_id"
-                                   context="{'nsp_simple_card_name': False}"
-                                   readonly="status != 'draft'"/>
-                            <field name="target_tid" readonly="1" widget="CopyClipboardChar"/>
+                            <field name="target_scan_tid"
+                                   widget="nsp_rfid_scan"
+                                   options="{'target_field': 'target_card_id', 'resolved_value_field': 'target_tid', 'require_available': False, 'autofocus': True}"
+                                   placeholder="Focus here and scan one registered RFID Tag, then press Enter"
+                                   readonly="status != 'draft'"
+                                   default_focus="1"/>
+                            <field name="target_card_id" invisible="1"/>
+                            <field name="target_tid" invisible="1"/>
                         </group>
                         <group string="Controller">
                             <field name="controller_id" readonly="status != 'draft'"
