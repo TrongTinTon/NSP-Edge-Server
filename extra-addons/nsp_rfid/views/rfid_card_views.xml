@@ -7,6 +7,7 @@
                 <field name="tid"/>
                 <field name="card_type"/>
                 <field name="assigned_to"/>
+                <filter string="Measurement / Test Cards" name="measurement_cards" domain="[('is_measurement_card','=',True)]"/>
                 <filter string="Available" name="available" domain="[('is_used','=',False)]"/>
                 <filter string="Used" name="used" domain="[('is_used','=',True)]"/>
                 <filter string="User Cards" name="user_cards" domain="[('card_type','=','user_card')]"/>
@@ -24,7 +25,8 @@
             <list string="RFID Cards">
                 <field name="card_type" widget="badge" class="nsp-card-type-badge" decoration-primary="card_type == 'user_card'" decoration-info="card_type == 'vehicle_card'"/>
                 <field name="tid"/>
-                <field name="usage_state" widget="badge" class="nsp-card-status-badge" decoration-success="usage_state == 'available'" decoration-muted="usage_state == 'used'"/>
+                <field name="is_measurement_card" widget="boolean_toggle"/>
+                <field name="usage_state" widget="badge" class="nsp-card-status-badge" decoration-success="usage_state == 'available'" decoration-muted="usage_state == 'used'" decoration-info="usage_state == 'measurement'"/>
                 <field name="assigned_to"/>
                 <field name="note"/>
             </list>
@@ -44,7 +46,8 @@
                     <group>
                         <group>
                             <field name="card_type"/>
-                            <field name="usage_state" readonly="1" widget="badge" class="nsp-card-status-badge" decoration-success="usage_state == 'available'" decoration-muted="usage_state == 'used'"/>
+                            <field name="is_measurement_card" widget="boolean_toggle"/>
+                            <field name="usage_state" readonly="1" widget="badge" class="nsp-card-status-badge" decoration-success="usage_state == 'available'" decoration-muted="usage_state == 'used'" decoration-info="usage_state == 'measurement'"/>
                             <field name="assigned_to" readonly="1"/>
                         </group>
                         <group>
@@ -61,6 +64,5 @@
         <field name="res_model">nsp.rfid.card</field>
         <field name="view_mode">list,form</field>
         <field name="search_view_id" ref="view_nsp_rfid_card_search"/>
-        <field name="context">{'search_default_available': 1}</field>
     </record>
 </odoo>

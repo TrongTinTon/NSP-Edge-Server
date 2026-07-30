@@ -182,7 +182,6 @@
                                     <field name="name" string="Reader" required="1"/>
                                     <field name="serial_number" string="Serial" required="1"/>
                                     <field name="connection_type" string="Physical Connection" widget="nsp_grouped_connection" optional="show"/>
-                                    <field name="power_dbm" string="Power (dBm)" optional="show"/>
                                     <field name="antenna_numbers" string="Antenna Nos." placeholder="1-4" optional="show"/>
                                     <field name="device_code" string="Technical Code" readonly="1" optional="hide"/>
                                     <field name="status" widget="badge" readonly="1" optional="hide"/>

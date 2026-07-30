@@ -11,9 +11,11 @@
                        autocomplete="off"
                        t-ref="input"
                        t-att-id="props.id"
+                       t-att-data-field-name="props.name"
                        t-att-value="state.value"
                        t-att-placeholder="props.placeholder"
                        t-on-input="onInput"
+                       t-on-paste="onPaste"
                        t-on-keydown="onKeydown"
                        t-on-focus="onFocus"/>
                 <div t-if="state.status === 'error' &amp;&amp; state.message"

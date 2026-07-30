@@ -6,8 +6,6 @@
         <field name="arch" type="xml">
             <search>
                 <field name="measurement_code" string="Measurement Code"/>
-                <field name="target_card_id"/>
-                <field name="controller_id"/>
                 <filter string="Draft" name="draft" domain="[('status','=','draft')]"/>
                 <filter string="Ready" name="ready" domain="[('status','=','ready')]"/>
                 <filter string="Running" name="running" domain="[('status','=','running')]"/>
@@ -15,7 +13,6 @@
                 <filter string="Applied" name="applied" domain="[('status','=','applied')]"/>
                 <filter string="Failed" name="failed" domain="[('status','=','failed')]"/>
                 <group>
-                    <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
                     <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
                 </group>
             </search>
@@ -32,8 +29,8 @@
                   decoration-danger="status == 'failed'">
                 <field name="measurement_code" readonly="1"/>
                 <field name="revision"/>
-                <field name="target_card_id"/>
-                <field name="controller_id"/>
+                <field name="target_count" string="Target Pairs"/>
+                <field name="controller_count" string="Controllers"/>
                 <field name="reader_count" string="Readers"/>
                 <field name="status" widget="badge"/>
                 <field name="event_count" string="Current Reads"/>
@@ -47,7 +44,7 @@
         <field name="arch" type="xml">
             <form string="Measurement Session">
                 <header>
-                    <button name="action_ready" type="object" string="Release to Controller" icon="fa-cloud-upload"
+                    <button name="action_ready" type="object" string="Release to Controllers" icon="fa-cloud-upload"
                             class="oe_highlight" invisible="status != 'draft'"/>
                     <button name="action_open_live" type="object" string="Live Measurement" icon="fa-line-chart"
                             class="oe_highlight" invisible="status == 'draft'"/>
@@ -55,8 +52,7 @@
                             invisible="status != 'running'"/>
                     <button name="action_cancel" type="object" string="Cancel" icon="fa-times-circle"
                             invisible="status in ('completed','applied','failed','cancelled')"/>
-                    <field name="status" widget="statusbar"
-                           statusbar_visible="draft,ready,running,completed,applied"/>
+                    <field name="status" widget="statusbar" statusbar_visible="draft,ready,running,completed,applied"/>
                 </header>
                 <sheet>
                     <div class="oe_button_box" name="button_box">
@@ -70,54 +66,92 @@
                         <div class="text-muted">Revision <field name="revision" readonly="1" class="oe_inline"/></div>
                     </div>
                     <group>
-                        <group string="Measurement Target">
-                            <field name="target_card_id"
-                                   context="{'nsp_simple_card_name': False}"
-                                   readonly="status != 'draft'"/>
-                            <field name="target_tid" readonly="1" widget="CopyClipboardChar"/>
-                        </group>
-                        <group string="Controller">
-                            <field name="controller_id" readonly="status != 'draft'"/>
+                        <group string="Measurement Scope">
+                            <field name="target_count" string="Target Pairs" readonly="1"/>
+                            <field name="target_tag_count" string="RFID Tags" readonly="1"/>
+                            <field name="controller_count" readonly="1"/>
                             <field name="reader_count" readonly="1"/>
                         </group>
-                    </group>
-                    <group>
                         <group string="Schedule">
                             <field name="planned_start_at" readonly="status != 'draft'"/>
                             <field name="planned_end_at" readonly="status != 'draft'"/>
-                        </group>
-                        <group string="Runtime">
                             <field name="started_at" readonly="1"/>
                             <field name="ended_at" readonly="1"/>
                             <field name="applied_at" readonly="1"/>
                         </group>
                     </group>
                     <notebook>
-                        <page string="Readers">
-                            <field name="reader_line_ids" readonly="status != 'draft'">
-                                <list editable="bottom">
-                                    <field name="reader_id"
-                                           domain="[('controller_id','=',parent.controller_id)]"/>
-                                    <field name="serial_number" readonly="1"/>
-                                    <field name="reader_status" readonly="1"/>
-                                    <field name="operation_power_dbm" readonly="1"/>
-                                    <field name="measurement_power_dbm"/>
-                                    <field name="available_antenna_ids" column_invisible="True"/>
-                                    <field name="available_antenna_count" string="Ports" readonly="1"/>
-                                    <field name="antenna_ids"
-                                           string="Measurement Antennas"
-                                           widget="many2many_tags"
-                                           domain="[('id','in',available_antenna_ids)]"
-                                           options="{'no_create': True, 'no_open': True}"
-                                           required="1"/>
+                        <page string="Target Pairs">
+                            <field name="target_line_ids" readonly="1">
+                                <list create="0" edit="0" delete="0">
+                                    <field name="user_tid" string="User RFID Tag"/>
+                                    <field name="vehicle_tid" string="Vehicle RFID Tag"/>
+                                    <field name="license_plate" string="License Plate"/>
                                 </list>
                             </field>
-                            <div class="text-muted mt-2">Select a Reader to load its configured antenna ports automatically. All ports are selected by default; remove any antennas that should not participate in this Measurement.</div>
+                        </page>
+                        <page string="Controllers &amp; Readers">
+                            <div class="alert alert-info" role="alert">
+                                Select Readers from one or many Controllers. Reader ownership determines the Controller automatically. Choose only the Antennas that participate in this Measurement.
+                            </div>
+                            <field name="reader_line_ids" readonly="status != 'draft'">
+                                <list editable="bottom" delete="1">
+                                    <field name="controller_id" readonly="1"/>
+                                    <field name="reader_id"
+                                           />
+                                    <field name="serial_number" readonly="1" optional="hide"/>
+                                    <field name="reader_status" readonly="1" widget="badge"/>
+                                    <field name="reader_power_dbm" string="Reader Power (dBm)"/>
+                                    <field name="read_interval_ms" string="Read Interval ms"/>
+                                    <field name="available_antenna_ids" column_invisible="True"/>
+                                    <field name="antenna_ids" string="Antennas" widget="many2many_tags"
+                                           domain="[('id','in',available_antenna_ids)]"
+                                           options="{'no_create': True, 'no_open': True}" required="1"/>
+                                </list>
+                            </field>
                         </page>
                         <page string="Notes">
-                            <field name="note" placeholder="Measurement purpose or notes" readonly="status not in ('draft','completed')"/>
+                            <field name="note" placeholder="Test plan, operating conditions, or acceptance criteria" readonly="status not in ('draft','completed')"/>
                         </page>
                     </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+
+    <record id="view_nsp_measurement_session_live_form" model="ir.ui.view">
+        <field name="name">nsp.measurement.session.live.form</field>
+        <field name="model">nsp.measurement.session</field>
+        <field name="arch" type="xml">
+            <form string="Live Measurement" create="0" delete="0" duplicate="0">
+                <header>
+                    <button name="action_open_session_form" type="object" string="Configuration" icon="fa-arrow-left"/>
+                    <button name="action_view_events" type="object" string="Observations" icon="fa-list-ol"/>
+                    <button name="action_live_measure_again" type="object" string="Measure Again" icon="fa-repeat"
+                            invisible="status not in ('running','completed','failed')"/>
+                    <button name="action_live_complete" type="object" string="Complete" icon="fa-check-circle"
+                            class="oe_highlight" invisible="status != 'running'"/>
+                    <button name="action_live_apply_to_operation" type="object" string="Apply to Operation" icon="fa-check"
+                            class="oe_highlight" invisible="not is_cloud_deployment or status != 'completed'"/>
+                    <button name="action_live_cancel" type="object" string="Cancel" icon="fa-times-circle"
+                            invisible="status not in ('ready','running')"/>
+                    <field name="status" widget="statusbar" statusbar_visible="draft,ready,running,completed,applied,failed,cancelled"/>
+                </header>
+                <sheet class="nsp-measurement-live-form">
+                    <field name="is_cloud_deployment" invisible="1"/>
+                    <div class="oe_title">
+                        <label for="measurement_code" string="Live Measurement"/>
+                        <h1><field name="measurement_code" readonly="1" widget="CopyClipboardChar"/></h1>
+                    </div>
+                    <group class="nsp-measurement-live-meta">
+                        <field name="revision" readonly="1"/>
+                        <field name="target_count" string="Target Pairs" readonly="1"/>
+                        <field name="controller_count" readonly="1"/>
+                        <field name="reader_count" readonly="1"/>
+                    </group>
+                    <field name="live_dashboard" widget="nsp_business_measurement_live_dashboard" nolabel="1" readonly="1"/>
                 </sheet>
                 <chatter/>
             </form>
@@ -137,6 +171,7 @@
                 <field name="tid"/>
                 <filter string="Session" name="group_session" context="{'group_by':'session_id'}"/>
                 <filter string="Revision" name="group_revision" context="{'group_by':'revision'}"/>
+                <filter string="RFID Tag" name="group_tid" context="{'group_by':'tid'}"/>
                 <filter string="Reader" name="group_reader" context="{'group_by':'serial_number'}"/>
                 <filter string="Antenna" name="group_antenna" context="{'group_by':'antenna_no'}"/>
             </search>
@@ -151,11 +186,12 @@
                 <field name="read_at"/>
                 <field name="session_id"/>
                 <field name="revision"/>
+                <field name="tid"/>
                 <field name="serial_number"/>
                 <field name="antenna_no"/>
-                <field name="power_dbm"/>
-                <field name="tid"/>
-                <field name="rssi_dbm"/>
+                <field name="power_dbm" optional="hide"/>
+                <field name="read_interval_ms" optional="hide"/>
+                <field name="rssi_dbm" optional="hide"/>
                 <field name="event_uid" optional="hide"/>
             </list>
         </field>
@@ -171,11 +207,12 @@
                         <field name="event_uid"/>
                         <field name="session_id"/>
                         <field name="revision"/>
+                        <field name="tid"/>
                         <field name="serial_number"/>
                         <field name="antenna_no"/>
-                        <field name="power_dbm"/>
-                        <field name="tid"/>
                         <field name="read_at"/>
+                        <field name="power_dbm"/>
+                        <field name="read_interval_ms"/>
                         <field name="rssi_dbm"/>
                     </group>
                 </sheet>

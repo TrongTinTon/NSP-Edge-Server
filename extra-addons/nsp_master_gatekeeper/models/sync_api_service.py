@@ -2,7 +2,6 @@
 import base64
 import json
 import logging
-import os
 from datetime import datetime, timezone
 
 from odoo import api, fields, models
@@ -75,17 +74,16 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
 
     @api.model
     def _auth_edge_server_sync(self, data=None):
+        """Authenticate one Edge request against the Cloud master service.
+
+        The deployment boundary is the installed module itself:
+        ``nsp_master_gatekeeper`` owns Cloud source endpoints, while
+        ``nsp_sync`` is installed only on Edge as the outbound transport.
+        Requiring an additional ``nsp.deployment_role`` parameter made every
+        fresh Cloud installation default to ``edge_server`` and incorrectly
+        reject valid requests with ``route_not_allowed``.
+        """
         data = data or self._payload()
-        role = (
-            self.env["ir.config_parameter"].sudo().get_param("nsp.deployment_role")
-            or os.getenv("NSP_DEPLOYMENT_ROLE")
-            or os.getenv("NSP_SERVER_ROLE")
-            or "edge_server"
-        ).strip().lower()
-        if role != "cloud":
-            return self.env["core.api.application"].browse(), "none", False, self._error(
-                "Sync source endpoints are Cloud-only", 403, error_code="route_not_allowed"
-            )
         application, actor_kind, error = self._auth_sync_application(data)
         if error:
             return application, actor_kind, False, error
@@ -212,7 +210,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             raise ValueError("invalid_payload")
         allowed_fields = {
             "serial_number", "antennas", "device_status",
-            "last_seen_at", "firmware_version",
+            "last_seen_at", "firmware_version", "power_dbm", "read_interval_ms",
         }
         unsupported = sorted(set(item) - allowed_fields)
         if unsupported:
@@ -252,6 +250,16 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             vals["last_seen"] = fields.Datetime.now()
         if item.get("firmware_version") not in (None, ""):
             vals["firmware_version"] = str(item.get("firmware_version"))
+        if item.get("power_dbm") not in (None, ""):
+            power = int(item.get("power_dbm"))
+            if power < 0 or power > 40:
+                raise ValueError("invalid_power_dbm")
+            vals["runtime_power_dbm"] = power
+        if item.get("read_interval_ms") not in (None, ""):
+            read_interval = int(item.get("read_interval_ms"))
+            if read_interval <= 0 or read_interval > 60000:
+                raise ValueError("invalid_read_interval_ms")
+            vals["runtime_read_interval_ms"] = read_interval
         device.write(vals)
         return device
 
@@ -478,6 +486,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         payload = {
             "card_uid": card.tid,
             "card_type": card_type,
+            "is_measurement_card": bool(card.is_measurement_card),
             "assignment": assignment,
         }
         if assigned_at:
@@ -558,7 +567,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "server_time": self._iso_datetime(fields.Datetime.now()),
         }, message="Vehicle Configuration snapshot loaded.")
 
-    @endpoint("NSP Gatekeeper Cards Sync", route_path="cards/sync", methods="POST", code="nsp_gatekeeper_cards_sync")
+    @endpoint("NSP Gatekeeper Cards Sync", route_path="cards/sync", methods="POST", code="nsp_cards_sync")
     def api_cards_sync(self):
         data = self._payload()
         _application, _actor_kind, _edge_server, error = self._auth_edge_server_sync(data)
@@ -617,7 +626,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "server_time": self._iso_datetime(fields.Datetime.now()),
         }, message="Cards snapshot loaded.")
 
-    @endpoint("NSP Gatekeeper Users Sync", route_path="users/sync", methods="POST", code="nsp_gatekeeper_users_sync")
+    @endpoint("NSP Gatekeeper Users Sync", route_path="users/sync", methods="POST", code="nsp_users_sync")
     def api_users_sync(self):
         data = self._payload()
         application, actor_kind, edge_server, error = self._auth_edge_server_sync(data)
@@ -639,7 +648,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "server_time": self._iso_datetime(server_time),
         }, message="Users sync loaded.")
 
-    @endpoint("NSP Gatekeeper Vehicles Sync", route_path="vehicles/sync", methods="POST", code="nsp_gatekeeper_vehicles_sync")
+    @endpoint("NSP Gatekeeper Vehicles Sync", route_path="vehicles/sync", methods="POST", code="nsp_vehicles_sync")
     def api_vehicles_sync(self):
         data = self._payload()
         application, actor_kind, edge_server, error = self._auth_edge_server_sync(data)
@@ -670,7 +679,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "server_time": self._iso_datetime(server_time),
         }, message="Vehicles sync loaded.")
 
-    @endpoint("NSP Gatekeeper Vehicle Borrow Sync", route_path="vehicle-borrow/sync", methods="POST", code="nsp_gatekeeper_vehicle_borrow_sync")
+    @endpoint("NSP Gatekeeper Vehicle Borrow Sync", route_path="vehicle-borrow/sync", methods="POST", code="nsp_vehicle_borrow_sync")
     def api_vehicle_borrow_sync(self):
         data = self._payload()
         application, actor_kind, edge_server, error = self._auth_edge_server_sync(data)
@@ -775,26 +784,50 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
 
     @api.model
     def _measurement_session_in_local_scope(self, session, edge_server):
-        return bool(session.controller_id and session.controller_id.edge_server_id == edge_server)
+        return bool(session.reader_line_ids.filtered(
+            lambda line: "edge_server_id" in line.reader_id.controller_id._fields
+            and line.reader_id.controller_id.edge_server_id == edge_server
+        ))
 
     @api.model
-    def _measurement_config_payload(self, session):
+    def _measurement_config_payload(self, session, edge_server=False):
+        lines = session.reader_line_ids
+        if edge_server:
+            lines = lines.filtered(
+                lambda line: "edge_server_id" in line.reader_id.controller_id._fields
+                and line.reader_id.controller_id.edge_server_id == edge_server
+            )
         readers = []
-        for line in session.reader_line_ids.sorted(
-            key=lambda item: ((item.reader_id.serial_number or ""), item.id)
+        for line in lines.sorted(
+            key=lambda item: (
+                (item.reader_id.controller_id.controller_id or ""),
+                (item.reader_id.serial_number or ""),
+                item.id,
+            )
         ):
             readers.append({
+                "controller_code": line.reader_id.controller_id.controller_id or "",
                 "serial_number": line.reader_id.serial_number or "",
-                "power_dbm": int(line.measurement_power_dbm or 0),
+                "power_dbm": int(line.reader_power_dbm or 0),
+                "read_interval_ms": int(line.read_interval_ms or 200),
                 "antennas": sorted(line.antenna_ids.mapped("antenna_no")),
             })
+        targets = [
+            {
+                "user_tid": line.user_tid or "",
+                "vehicle_tid": line.vehicle_tid or "",
+                "license_plate": line.license_plate or "",
+            }
+            for line in session.target_line_ids.sorted(
+                key=lambda item: ((item.license_plate or ""), item.id)
+            )
+        ]
         payload = {
             "measurement_code": session.measurement_code,
-            "controller_code": session.controller_id.controller_id,
             "status": session.status,
             "desired_state": "running" if session.status in ("ready", "running") else "stopped",
             "revision": int(session.revision or 1),
-            "target_tid": session.target_tid or "",
+            "targets": targets,
             "readers": readers,
         }
         if session.planned_start_at:
@@ -887,10 +920,10 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             Session = self.env["nsp.measurement.session"].sudo()
             records = Session.search([
                 ("status", "!=", "draft"),
-                ("controller_id.edge_server_id", "=", edge_server.id),
+                ("reader_line_ids.reader_id.controller_id.edge_server_id", "=", edge_server.id),
             ], order="measurement_code,id")
             return self._ok({
-                "items": [self._measurement_config_payload(session) for session in records],
+                "items": [self._measurement_config_payload(session, edge_server=edge_server) for session in records],
                 "next_sync_cursor": False,
                 "has_more": False,
                 "server_time": self._iso_datetime(fields.Datetime.now()),
@@ -905,7 +938,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
     ):
         allowed = {
             "event_uid", "serial_number", "antenna_no", "tid", "read_at", "rssi_dbm",
-            "revision", "power_dbm",
+            "revision", "power_dbm", "read_interval_ms",
         }
         self._measurement_reject_unknown_fields(item, allowed)
         self._measurement_require_fields(item, ["event_uid", "serial_number", "antenna_no", "tid", "read_at"])
@@ -927,7 +960,6 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             # boundary (Controller -> Reader -> Antenna), not only the current
             # Measurement Reader lines.
             reader = self.env["nsp.device"].sudo().search([
-                ("controller_id", "=", session.controller_id.id),
                 ("serial_number", "=", serial_number),
             ], limit=1)
             if not reader:
@@ -958,21 +990,38 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             try:
                 revision = int(item.get("revision") or session.revision or 1)
                 fallback_power = (
-                    reader_line.measurement_power_dbm
+                    reader_line.reader_power_dbm
                     if reader_line
-                    else session._measurement_power_for_serial(serial_number)
+                    else session._reader_power_for_serial(serial_number)
                 )
                 power_dbm = int(
                     item.get("power_dbm")
                     if item.get("power_dbm") is not None
                     else fallback_power
                 )
+                fallback_interval = (
+                    reader_line.read_interval_ms
+                    if reader_line
+                    else session._reader_interval_for_serial(serial_number)
+                )
+                read_interval_ms = int(
+                    item.get("read_interval_ms")
+                    if item.get("read_interval_ms") is not None
+                    else fallback_interval
+                )
             except Exception as exc:
                 raise ValueError("invalid_measurement_snapshot") from exc
         else:
             revision = int(session.revision or 1)
-            power_dbm = int(reader_line.measurement_power_dbm or 0)
-        if revision <= 0 or power_dbm < 0 or power_dbm > 40:
+            power_dbm = int(reader_line.reader_power_dbm or 0)
+            read_interval_ms = int(reader_line.read_interval_ms or 0)
+        if (
+            revision <= 0
+            or power_dbm < 0
+            or power_dbm > 40
+            or read_interval_ms <= 0
+            or read_interval_ms > 60000
+        ):
             raise ValueError("invalid_measurement_snapshot")
         return {
             "event_uid": event_uid,
@@ -985,6 +1034,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "read_at_ms": read_at_ms,
             "rssi_dbm": rssi,
             "power_dbm": power_dbm,
+            "read_interval_ms": read_interval_ms,
         }
 
     @api.model
@@ -1000,6 +1050,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             and (False if event.rssi_dbm in (False, None) else float(event.rssi_dbm))
             == (False if values["rssi_dbm"] in (False, None) else float(values["rssi_dbm"]))
             and int(event.power_dbm or 0) == int(values["power_dbm"] or 0)
+            and int(event.read_interval_ms or 0) == int(values["read_interval_ms"] or 0)
         )
 
     @api.model
@@ -1010,7 +1061,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         """Store only the selected Target Tag, idempotently, with bounded queries."""
         Event = self.env["nsp.measurement.event"].sudo()
         allowed_antennas = session._allowed_antenna_pairs()
-        target_tid = str(session.target_tid or "").strip().upper()
+        target_tids = session._allowed_target_tids()
         prepared = []
         results = [None] * len(items)
 
@@ -1020,12 +1071,12 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 if not isinstance(item, dict):
                     raise ValueError("invalid_payload")
                 incoming_tid = self.env["nsp.rfid.card"].sudo()._normalize_tid(item.get("tid"))
-                if target_tid and incoming_tid != target_tid:
+                if incoming_tid not in target_tids:
                     results[index] = {
                         "index": index,
                         "record_key": key,
                         "status": "ignored",
-                        "message": "Non-target RFID Tag ignored",
+                        "message": "RFID Tag is not in the Measurement target list",
                     }
                     continue
                 values = self._measurement_event_values(
@@ -1038,13 +1089,15 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 if enforce_current_snapshot and (
                     int(values["revision"] or 1) != int(session.revision or 1)
                     or int(values["power_dbm"] or 0)
-                    != int(session._measurement_power_for_serial(values["serial_number"]) or 0)
+                    != int(session._reader_power_for_serial(values["serial_number"]) or 0)
+                    or int(values["read_interval_ms"] or 0)
+                    != int(session._reader_interval_for_serial(values["serial_number"]) or 0)
                 ):
                     results[index] = {
                         "index": index,
                         "record_key": key,
                         "status": "ignored",
-                        "message": "Stale Measurement revision/power ignored",
+                        "message": "Stale Measurement revision/settings ignored",
                     }
                     continue
                 prepared.append((index, key, values))
@@ -1095,6 +1148,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     and (False if first["rssi_dbm"] in (False, None) else float(first["rssi_dbm"]))
                     == (False if values["rssi_dbm"] in (False, None) else float(values["rssi_dbm"]))
                     and int(first["power_dbm"] or 0) == int(values["power_dbm"] or 0)
+                    and int(first["read_interval_ms"] or 0)
+                    == int(values["read_interval_ms"] or 0)
                 )
                 if same:
                     duplicate_indices.setdefault(uid, []).append((index, key))
@@ -1454,7 +1509,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             vals, existing_by_uid=cache.get("transaction_by_uid")
         )
 
-    @endpoint("NSP Gatekeeper Parking Transactions Sync", route_path="parking-transactions/sync", methods="POST", code="nsp_gatekeeper_parking_transactions_sync")
+    @endpoint("NSP Gatekeeper Parking Transactions Sync", route_path="parking-transactions/sync", methods="POST", code="nsp_parking_transactions_sync")
     def api_parking_transactions_sync(self):
         data = self._payload()
         _application, _actor, edge_server, error = self._auth_edge_server_sync(data)

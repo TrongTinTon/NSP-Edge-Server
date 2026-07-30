@@ -224,7 +224,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             raise ValueError("invalid_payload")
         allowed_fields = {
             "serial_number", "antennas", "device_status",
-            "last_seen_at", "firmware_version",
+            "last_seen_at", "firmware_version", "power_dbm", "read_interval_ms",
         }
         unsupported = sorted(set(item) - allowed_fields)
         if unsupported:
@@ -252,7 +252,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 raise ValueError("invalid_antenna_number") from exc
             if any(number <= 0 for number in reported_numbers):
                 raise ValueError("invalid_antenna_number")
-            declared_numbers = set(device.antennas_ids.mapped("antenna_no"))
+            declared_numbers = set(device.antennas_ids.filtered("active").mapped("antenna_no"))
             if reported_numbers != declared_numbers:
                 raise ValueError("antenna_inventory_mismatch")
 
@@ -264,6 +264,16 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             vals["last_seen"] = fields.Datetime.now()
         if item.get("firmware_version") not in (None, ""):
             vals["firmware_version"] = str(item.get("firmware_version"))
+        if item.get("power_dbm") not in (None, ""):
+            power = int(item.get("power_dbm"))
+            if power < 0 or power > 40:
+                raise ValueError("invalid_power_dbm")
+            vals["runtime_power_dbm"] = power
+        if item.get("read_interval_ms") not in (None, ""):
+            read_interval = int(item.get("read_interval_ms"))
+            if read_interval <= 0 or read_interval > 60000:
+                raise ValueError("invalid_read_interval_ms")
+            vals["runtime_read_interval_ms"] = read_interval
         device.write(vals)
         return device
 
@@ -384,23 +394,26 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         return session
 
     @api.model
-    def _measurement_config_payload(self, session):
+    def _measurement_config_payload(self, session, controller=False):
+        lines = session.reader_line_ids
+        if controller:
+            lines = lines.filtered(lambda line: line.reader_id.controller_id == controller)
         readers = []
-        for line in session.reader_line_ids.sorted(
-            key=lambda item: ((item.reader_id.serial_number or ""), item.id)
-        ):
+        for line in lines.sorted(key=lambda item: ((item.reader_id.serial_number or ""), item.id)):
             readers.append({
                 "serial_number": line.reader_id.serial_number or "",
-                "power_dbm": int(line.measurement_power_dbm or 0),
-                "antennas": sorted(line.antenna_ids.mapped("antenna_no")),
+                "power_dbm": int(line.reader_power_dbm or 0),
+                "read_interval_ms": int(line.read_interval_ms or 200),
+                "antennas": sorted(line.antenna_ids.filtered(
+                    lambda item: item.active and not item.cloud_removed
+                ).mapped("antenna_no")),
             })
         payload = {
             "measurement_code": session.measurement_code,
-            "controller_code": session.controller_id.controller_id,
+            "controller_code": controller.controller_id if controller else "",
             "status": session.status,
             "desired_state": "running" if session.status in ("ready", "running") else "stopped",
             "revision": int(session.revision or 1),
-            "target_tid": session.target_tid or "",
             "readers": readers,
         }
         if session.planned_start_at:
@@ -495,18 +508,18 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             if current_code:
                 current = self.env["nsp.measurement.session"].sudo().search([
                     ("measurement_code", "=", current_code),
-                    ("controller_id", "=", controller.id),
+                    ("reader_line_ids.reader_id.controller_id", "=", controller.id),
                 ], limit=1)
                 if current and current.status in ("completed", "failed", "cancelled"):
                     session = current
             if not session:
                 session = self.env["nsp.measurement.session"].sudo().search([
-                    ("controller_id", "=", controller.id),
+                    ("reader_line_ids.reader_id.controller_id", "=", controller.id),
                     ("status", "in", ["ready", "running"]),
                 ], order="planned_start_at asc, id asc", limit=1)
             if not session:
                 return self._ok({"data": {"measurement_available": False}}, message="No Measurement Session is available.")
-            return self._ok({"data": {"measurement_available": True, **self._measurement_config_payload(session)}}, message="Measurement configuration loaded.")
+            return self._ok({"data": {"measurement_available": True, **self._measurement_config_payload(session, controller=controller)}}, message="Measurement configuration loaded.")
         except Exception as exc:
             return self._measurement_error_response(exc)
 
@@ -517,7 +530,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
     ):
         allowed = {
             "event_uid", "serial_number", "antenna_no", "tid", "read_at", "rssi_dbm",
-            "revision", "power_dbm",
+            "revision", "power_dbm", "read_interval_ms",
         }
         self._measurement_reject_unknown_fields(item, allowed)
         self._measurement_require_fields(item, ["event_uid", "serial_number", "antenna_no", "tid", "read_at"])
@@ -539,7 +552,6 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             # boundary (Controller -> Reader -> Antenna), not only the current
             # Measurement Reader lines.
             reader = self.env["nsp.device"].sudo().search([
-                ("controller_id", "=", session.controller_id.id),
                 ("serial_number", "=", serial_number),
             ], limit=1)
             if not reader:
@@ -570,21 +582,38 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             try:
                 revision = int(item.get("revision") or session.revision or 1)
                 fallback_power = (
-                    reader_line.measurement_power_dbm
+                    reader_line.reader_power_dbm
                     if reader_line
-                    else session._measurement_power_for_serial(serial_number)
+                    else session._reader_power_for_serial(serial_number)
                 )
                 power_dbm = int(
                     item.get("power_dbm")
                     if item.get("power_dbm") is not None
                     else fallback_power
                 )
+                fallback_interval = (
+                    reader_line.read_interval_ms
+                    if reader_line
+                    else session._reader_interval_for_serial(serial_number)
+                )
+                read_interval_ms = int(
+                    item.get("read_interval_ms")
+                    if item.get("read_interval_ms") is not None
+                    else fallback_interval
+                )
             except Exception as exc:
                 raise ValueError("invalid_measurement_snapshot") from exc
         else:
             revision = int(session.revision or 1)
-            power_dbm = int(reader_line.measurement_power_dbm or 0)
-        if revision <= 0 or power_dbm < 0 or power_dbm > 40:
+            power_dbm = int(reader_line.reader_power_dbm or 0)
+            read_interval_ms = int(reader_line.read_interval_ms or 0)
+        if (
+            revision <= 0
+            or power_dbm < 0
+            or power_dbm > 40
+            or read_interval_ms <= 0
+            or read_interval_ms > 60000
+        ):
             raise ValueError("invalid_measurement_snapshot")
         return {
             "event_uid": event_uid,
@@ -597,6 +626,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             "read_at_ms": read_at_ms,
             "rssi_dbm": rssi,
             "power_dbm": power_dbm,
+            "read_interval_ms": read_interval_ms,
         }
 
     @api.model
@@ -612,17 +642,26 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             and (False if event.rssi_dbm in (False, None) else float(event.rssi_dbm))
             == (False if values["rssi_dbm"] in (False, None) else float(values["rssi_dbm"]))
             and int(event.power_dbm or 0) == int(values["power_dbm"] or 0)
+            and int(event.read_interval_ms or 0) == int(values["read_interval_ms"] or 0)
         )
 
     @api.model
     def _measurement_process_event_batch(
         self, session, items, allow_final=False, accept_snapshot=False,
-        enforce_current_snapshot=False, allow_historical_scope=False,
+        enforce_current_snapshot=False, allow_historical_scope=False, controller=False,
     ):
-        """Store only the selected Target Tag, idempotently, with bounded queries."""
+        """Store only selected RFID targets, idempotently, with bounded queries."""
         Event = self.env["nsp.measurement.event"].sudo()
-        allowed_antennas = session._allowed_antenna_pairs()
-        target_tid = str(session.target_tid or "").strip().upper()
+        if controller:
+            lines = session.reader_line_ids.filtered(lambda line: line.reader_id.controller_id == controller)
+            allowed_antennas = {
+                ((line.reader_id.serial_number or "").strip().upper(), int(antenna.antenna_no or 0))
+                for line in lines
+                for antenna in line.antenna_ids
+            }
+        else:
+            allowed_antennas = session._allowed_antenna_pairs()
+        target_tids = session._allowed_target_tids()
         prepared = []
         results = [None] * len(items)
 
@@ -632,12 +671,12 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 if not isinstance(item, dict):
                     raise ValueError("invalid_payload")
                 incoming_tid = self.env["nsp.rfid.card"].sudo()._normalize_tid(item.get("tid"))
-                if target_tid and incoming_tid != target_tid:
+                if incoming_tid not in target_tids:
                     results[index] = {
                         "index": index,
                         "record_key": key,
                         "status": "ignored",
-                        "message": "Non-target RFID Tag ignored",
+                        "message": "RFID Tag is not in the Measurement target list",
                     }
                     continue
                 values = self._measurement_event_values(
@@ -650,13 +689,15 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 if enforce_current_snapshot and (
                     int(values["revision"] or 1) != int(session.revision or 1)
                     or int(values["power_dbm"] or 0)
-                    != int(session._measurement_power_for_serial(values["serial_number"]) or 0)
+                    != int(session._reader_power_for_serial(values["serial_number"]) or 0)
+                    or int(values["read_interval_ms"] or 0)
+                    != int(session._reader_interval_for_serial(values["serial_number"]) or 0)
                 ):
                     results[index] = {
                         "index": index,
                         "record_key": key,
                         "status": "ignored",
-                        "message": "Stale Measurement revision/power ignored",
+                        "message": "Stale Measurement revision/settings ignored",
                     }
                     continue
                 prepared.append((index, key, values))
@@ -707,6 +748,8 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                     and (False if first["rssi_dbm"] in (False, None) else float(first["rssi_dbm"]))
                     == (False if values["rssi_dbm"] in (False, None) else float(values["rssi_dbm"]))
                     and int(first["power_dbm"] or 0) == int(values["power_dbm"] or 0)
+                    and int(first["read_interval_ms"] or 0)
+                    == int(values["read_interval_ms"] or 0)
                 )
                 if same:
                     duplicate_indices.setdefault(uid, []).append((index, key))
@@ -825,13 +868,14 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             self._measurement_reject_unknown_fields(data, {"controller_code", "measurement_code", "events"})
             self._measurement_require_fields(data, ["measurement_code", "events"])
             session = self._measurement_session(data.get("measurement_code"))
-            if session.controller_id != controller:
+            if controller not in session.reader_line_ids.mapped("reader_id.controller_id"):
                 raise ValueError("controller_not_in_scope")
             items = data.get("events")
             if not isinstance(items, list) or not items or len(items) > 100:
                 raise ValueError("invalid_payload")
             result, records = self._measurement_process_event_batch(
-                session, items, accept_snapshot=True, enforce_current_snapshot=True
+                session, items, accept_snapshot=True, enforce_current_snapshot=True,
+                controller=controller,
             )
             if result["processed"] and session.status == "ready":
                 self._measurement_set_status(session, "running", fields.Datetime.now())
@@ -851,7 +895,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             self._measurement_reject_unknown_fields(data, {"controller_code", "measurement_code", "status", "occurred_at", "message"})
             self._measurement_require_fields(data, ["measurement_code", "status", "occurred_at"])
             session = self._measurement_session(data.get("measurement_code"))
-            if session.controller_id != controller:
+            if controller not in session.reader_line_ids.mapped("reader_id.controller_id"):
                 raise ValueError("controller_not_in_scope")
             occurred_at = self._measurement_datetime(data.get("occurred_at"), required=True)
             self._measurement_set_status(session, data.get("status"), occurred_at, data.get("message"))

@@ -3,50 +3,58 @@
 import { Component, onMounted, onWillUnmount, useState } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { useService } from "@web/core/utils/hooks";
-
-const SERIES_COLORS = ["#2563eb", "#f59e0b", "#06b6d4", "#16a34a", "#7c3aed", "#db2777", "#64748b"];
+import { standardFieldProps } from "@web/views/fields/standard_field_props";
 
 export class NspMeasurementLive extends Component {
     static template = "nsp_master_gatekeeper.MeasurementLive";
+    static props = { ...standardFieldProps };
 
     setup() {
         this.orm = useService("orm");
-        this.action = useService("action");
         this.notification = useService("notification");
         this.sessionId = this.resolveSessionId();
         this.timer = null;
         this.loading = false;
         this.state = useState({
             measurementCode: "",
+            deploymentRole: "",
             revision: 1,
             status: "",
-            controllerCode: "",
-            controllerName: "",
-            edgeServerCode: "",
-            edgeStatus: "",
-            targetTag: {},
+            controllers: [],
+            controllerCount: 0,
+            edgeServerCodes: [],
+            targetPairs: [],
+            targetCount: 0,
+            targetTagCount: 0,
+            detectedTargetCount: 0,
+            coveragePercent: 0,
             readers: [],
             readerCount: 0,
             startedAt: null,
             endedAt: null,
+            appliedAt: null,
+            plannedStartAt: null,
+            plannedEndAt: null,
             note: "",
             steps: [],
             rawEventCount: 0,
             detectionCount: 0,
             uniqueAntennas: 0,
             uniqueReaders: 0,
+            uniqueControllers: 0,
             serverTime: null,
             activeTab: "timeline",
             error: "",
             hasLoaded: false,
+            readerConfigCollapsed: false,
         });
         onMounted(() => {
             this.refresh();
-            this.timer = setInterval(() => this.refresh(), 1000);
+            this.timer = window.setInterval(() => this.refresh(), 1000);
         });
         onWillUnmount(() => {
             if (this.timer) {
-                clearInterval(this.timer);
+                window.clearInterval(this.timer);
             }
         });
     }
@@ -57,16 +65,10 @@ export class NspMeasurementLive extends Component {
     }
 
     resolveSessionId() {
-        const action = this.props.action || {};
-        const context = action.context || {};
-        const params = action.params || {};
         const candidates = [
-            params.session_id,
-            context.active_id,
-            context.default_session_id,
-            action.res_id,
-            this.props.session_id,
-            this.props.active_id,
+            this.props.record?.resId,
+            this.props.record?.data?.id,
+            this.props.record?.data?.res_id,
         ];
         for (const value of candidates) {
             const id = this.normalizeSessionId(value);
@@ -77,32 +79,23 @@ export class NspMeasurementLive extends Component {
         return null;
     }
 
-    requireSessionId() {
-        const id = this.normalizeSessionId(this.sessionId);
-        if (!id) {
-            this.notification.add(
-                "Measurement Session context is missing. Return to Measurement Sessions and open Live Measurement again.",
-                {type: "warning"}
-            );
-            return null;
-        }
-        return id;
-    }
-
     _mergeReaders(incoming, resetDraft) {
         const existing = new Map(
             (this.state.readers || []).map((reader) => [Number(reader.reader_line_id), reader])
         );
         return (incoming || []).map((raw) => {
-            const serverPower = Number(raw.measurement_power_dbm ?? 0);
+            const serverPower = Number(raw.reader_power_dbm ?? 0);
+            const serverInterval = Number(raw.read_interval_ms ?? 200);
             const previous = existing.get(Number(raw.reader_line_id));
-            const draft = resetDraft || !previous
-                ? serverPower
-                : Number(previous.powerDraft);
+            const powerDraft = resetDraft || !previous ? serverPower : Number(previous.powerDraft);
+            const intervalDraft = resetDraft || !previous ? serverInterval : Number(previous.intervalDraft);
             return {
                 ...raw,
-                serverMeasurementPower: serverPower,
-                powerDraft: Number.isFinite(draft) ? draft : serverPower,
+                serverReaderPower: serverPower,
+                serverReadInterval: serverInterval,
+                powerDraft: Number.isFinite(powerDraft) ? powerDraft : serverPower,
+                intervalDraft: Number.isFinite(intervalDraft) ? intervalDraft : serverInterval,
+                applying: false,
             };
         });
     }
@@ -116,7 +109,7 @@ export class NspMeasurementLive extends Component {
             const data = await this.orm.call(
                 "nsp.measurement.session",
                 "get_live_snapshot",
-                [this.sessionId, 0, 500]
+                [this.sessionId, 0, 5000]
             );
             if (!data?.found) {
                 this.state.error = "Measurement Session was not found.";
@@ -126,32 +119,39 @@ export class NspMeasurementLive extends Component {
             if (returnedSessionId) {
                 this.sessionId = returnedSessionId;
             }
-            const previousRevision = this.state.revision;
-            const incomingRevision = data.revision || 1;
-            const resetDraft = !this.state.hasLoaded || previousRevision !== incomingRevision;
+            const incomingRevision = Number(data.revision || 1);
+            const resetDraft = !this.state.hasLoaded || Number(this.state.revision) !== incomingRevision;
             this.state.measurementCode = data.measurement_code || "";
+            this.state.deploymentRole = data.deployment_role || "";
             this.state.revision = incomingRevision;
             this.state.status = data.status || "";
-            this.state.controllerCode = data.controller_code || "";
-            this.state.controllerName = data.controller_name || "";
-            this.state.edgeServerCode = data.edge_server_code || "";
-            this.state.edgeStatus = data.edge_status || "";
-            this.state.targetTag = data.target_tag || {};
+            this.state.controllers = data.controllers || [];
+            this.state.controllerCount = Number(data.controller_count || this.state.controllers.length);
+            this.state.edgeServerCodes = data.edge_server_codes || [];
+            this.state.targetPairs = data.target_pairs || [];
+            this.state.targetCount = Number(data.target_count || this.state.targetPairs.length);
+            this.state.targetTagCount = Number(data.target_tag_count || this.state.targetCount * 2);
+            this.state.detectedTargetCount = Number(data.detected_target_count || 0);
+            this.state.coveragePercent = Number(data.coverage_percent || 0);
             this.state.readers = this._mergeReaders(data.readers || [], resetDraft);
-            this.state.readerCount = data.reader_count || this.state.readers.length;
-            this.state.hasLoaded = true;
+            this.state.readerCount = Number(data.reader_count || this.state.readers.length);
             this.state.startedAt = data.started_at || null;
             this.state.endedAt = data.ended_at || null;
+            this.state.appliedAt = data.applied_at || null;
+            this.state.plannedStartAt = data.planned_start_at || null;
+            this.state.plannedEndAt = data.planned_end_at || null;
             this.state.note = data.note || "";
             this.state.steps = data.steps || [];
-            this.state.rawEventCount = data.raw_event_count || 0;
-            this.state.detectionCount = data.detection_count || 0;
-            this.state.uniqueAntennas = data.unique_antennas || 0;
-            this.state.uniqueReaders = data.unique_readers || 0;
+            this.state.rawEventCount = Number(data.raw_event_count || 0);
+            this.state.detectionCount = Number(data.detection_count || 0);
+            this.state.uniqueAntennas = Number(data.unique_antennas || 0);
+            this.state.uniqueReaders = Number(data.unique_readers || 0);
+            this.state.uniqueControllers = Number(data.unique_controllers || 0);
             this.state.serverTime = data.server_time || null;
+            this.state.hasLoaded = true;
             this.state.error = "";
         } catch (error) {
-            this.state.error = error?.message || "Unable to load Live Measurement data.";
+            this.state.error = error?.data?.message || error?.message || "Unable to load Live Measurement data.";
         } finally {
             this.loading = false;
         }
@@ -160,7 +160,7 @@ export class NspMeasurementLive extends Component {
     statusLabel() {
         const labels = {
             draft: "Draft",
-            ready: "Ready",
+            ready: "Released",
             running: "In Progress",
             completed: "Completed",
             applied: "Applied",
@@ -170,18 +170,37 @@ export class NspMeasurementLive extends Component {
         return labels[this.state.status] || this.state.status || "Loading";
     }
 
-    statusClass() {
-        return `nsp-ml__status nsp-ml__status--${this.state.status || "loading"}`;
+    detectionStatusClass(detected) {
+        return detected
+            ? "nsp-ml__coverage-badge nsp-ml__coverage-badge--detected"
+            : "nsp-ml__coverage-badge nsp-ml__coverage-badge--missing";
     }
 
-    targetDescription() {
-        const tag = this.state.targetTag || {};
-        const type = tag.card_type === "vehicle_card" ? "Vehicle Card" : tag.card_type === "user_card" ? "User Card" : "RFID Tag";
-        return tag.assigned_to ? `${type} • ${tag.assigned_to}` : type;
+    detectionStatusLabel(detected) {
+        return detected ? "Detected" : "Not detected";
+    }
+
+    pairStatusLabel(pair) {
+        if (pair?.detected) {
+            return "Complete";
+        }
+        if (pair?.detected_tag_count) {
+            return "Partial";
+        }
+        return "Not detected";
+    }
+
+    coverageWidth() {
+        const value = Number(this.state.coveragePercent || 0);
+        return `${Math.max(0, Math.min(100, value))}%`;
     }
 
     setTimelineTab() {
         this.state.activeTab = "timeline";
+    }
+
+    setCoverageTab() {
+        this.state.activeTab = "coverage";
     }
 
     setReaderTab() {
@@ -205,7 +224,7 @@ export class NspMeasurementLive extends Component {
             return null;
         }
         const text = String(value).trim();
-        const normalized = text.includes("T") ? text : text.replace(" ", "T") + "Z";
+        const normalized = text.includes("T") ? text : `${text.replace(" ", "T")}Z`;
         const parsed = new Date(normalized);
         return Number.isNaN(parsed.getTime()) ? null : parsed;
     }
@@ -228,12 +247,6 @@ export class NspMeasurementLive extends Component {
             return "-";
         }
         return `${String(date.getDate()).padStart(2, "0")}/${String(date.getMonth() + 1).padStart(2, "0")}/${date.getFullYear()} ${this.formatTime(value)}`;
-    }
-
-    formatRssi(value) {
-        return value === false || value === null || value === undefined
-            ? "-"
-            : `${Number(value).toFixed(0)} dBm`;
     }
 
     stepDuration(step) {
@@ -268,60 +281,46 @@ export class NspMeasurementLive extends Component {
         return this.state.steps.length ? this.state.steps[this.state.steps.length - 1] : null;
     }
 
-    firstDetectedAt() {
-        return this.firstStep()?.first_seen_at || null;
-    }
-
-    lastDetectedAt() {
-        return this.lastStep()?.last_seen_at || null;
-    }
-
     antennaList(reader) {
         const values = reader?.antennas || [];
         return values.length ? values.map((value) => `ANT${value}`).join(", ") : "-";
+    }
+
+    controllerCodes() {
+        const codes = (this.state.controllers || []).map((controller) => controller.code).filter(Boolean);
+        return codes.length ? codes.join(", ") : "-";
+    }
+
+    edgeServerCodes() {
+        return this.state.edgeServerCodes.length ? this.state.edgeServerCodes.join(", ") : "-";
     }
 
     readerDetectionCount(reader) {
         const serial = String(reader?.serial_number || "").toUpperCase();
         return (this.state.steps || []).filter(
             (step) => String(step.serial_number || "").toUpperCase() === serial
-        ).length;
+        ).reduce((total, step) => total + Number(step.read_count || 0), 0);
     }
 
-    sequenceClass(sequenceNo) {
-        return `nsp-ml__sequence nsp-ml__sequence--${((Number(sequenceNo) - 1) % 6) + 1}`;
-    }
-
-    edgeDotClass() {
-        return this.state.edgeStatus === "online" ? "nsp-ml__edge-dot nsp-ml__edge-dot--online" : "nsp-ml__edge-dot";
-    }
-
-    canAdjustPower() {
+    canEditReaderSettings() {
         return ["running", "completed", "failed"].includes(this.state.status);
     }
 
-    canMeasureAgain() {
-        return ["running", "completed", "failed"].includes(this.state.status) && this.state.readers.length > 0;
-    }
-
-    readerPowerMatches(reader) {
+    readerSettingsMatch(reader) {
         const draftPower = Number(reader?.powerDraft);
-        const serverPower = Number(reader?.serverMeasurementPower);
+        const serverPower = Number(reader?.serverReaderPower);
+        const draftInterval = Number(reader?.intervalDraft);
+        const serverInterval = Number(reader?.serverReadInterval);
         return Number.isFinite(draftPower)
             && Number.isFinite(serverPower)
-            && draftPower === serverPower;
+            && Number.isFinite(draftInterval)
+            && Number.isFinite(serverInterval)
+            && draftPower === serverPower
+            && draftInterval === serverInterval;
     }
 
-    allReaderPowersMatch() {
-        return this.state.readers.length > 0 && this.state.readers.every((reader) => this.readerPowerMatches(reader));
-    }
-
-    canApply() {
-        return this.state.status === "completed" && this.allReaderPowersMatch();
-    }
-
-    canStop() {
-        return ["ready", "running"].includes(this.state.status);
+    readerApplyDisabled(reader) {
+        return !this.canEditReaderSettings() || this.readerSettingsMatch(reader) || Boolean(reader?.applying);
     }
 
     _readerFromEvent(event) {
@@ -329,143 +328,81 @@ export class NspMeasurementLive extends Component {
         return this.state.readers.find((reader) => Number(reader.reader_line_id) === id) || null;
     }
 
-    decreaseReaderPower(event) {
-        if (!this.canAdjustPower()) {
+    toggleReaderConfiguration() {
+        this.state.readerConfigCollapsed = !this.state.readerConfigCollapsed;
+    }
+
+    updateReaderPower(event) {
+        if (!this.canEditReaderSettings()) {
             return;
         }
         const reader = this._readerFromEvent(event);
         if (reader) {
-            reader.powerDraft = Math.max(0, Number(reader.powerDraft || 0) - 1);
+            reader.powerDraft = Math.max(0, Math.min(40, Number(event.target.value || 0)));
         }
     }
 
-    increaseReaderPower(event) {
-        if (!this.canAdjustPower()) {
+    updateReadInterval(event) {
+        if (!this.canEditReaderSettings()) {
             return;
         }
         const reader = this._readerFromEvent(event);
         if (reader) {
-            reader.powerDraft = Math.min(40, Number(reader.powerDraft || 0) + 1);
+            reader.intervalDraft = Math.max(1, Math.min(60000, Number(event.target.value || 200)));
         }
     }
 
-    focusPower() {
-        document.querySelector(".nsp-ml-reader-power")?.scrollIntoView({behavior: "smooth", block: "center"});
-    }
-
-    async measureAgain() {
-        if (!this.canMeasureAgain()) {
+    async applyReaderSettings(event) {
+        const reader = this._readerFromEvent(event);
+        if (!reader || this.readerApplyDisabled(reader)) {
             return;
         }
-        const powers = this.state.readers.map((reader) => ({
-            reader_line_id: Number(reader.reader_line_id),
-            power_dbm: Number(reader.powerDraft),
-        }));
+        reader.applying = true;
         try {
             await this.orm.call(
                 "nsp.measurement.session",
-                "action_measure_again",
-                [[this.sessionId], powers]
+                "action_apply_reader_settings",
+                [[this.sessionId], Number(reader.reader_line_id), Number(reader.powerDraft), Number(reader.intervalDraft)]
             );
             this.notification.add(
-                `Revision ${Number(this.state.revision) + 1} released for ${powers.length} Reader(s).`,
-                {type: "success"}
+                `${reader.name || reader.serial_number}: settings released as a new revision.`,
+                { type: "success" }
             );
             await this.refresh();
         } catch (error) {
-            this.notification.add(error?.message || "Unable to start a new Measurement revision.", {type: "danger"});
-        }
-    }
-
-    async completeMeasurement() {
-        try {
-            await this.orm.call("nsp.measurement.session", "action_complete", [[this.sessionId]]);
-            this.notification.add("Measurement completed.", {type: "success"});
-            await this.refresh();
-        } catch (error) {
-            this.notification.add(error?.message || "Unable to complete Measurement.", {type: "danger"});
-        }
-    }
-
-    async stopMeasurement() {
-        try {
-            await this.orm.call("nsp.measurement.session", "action_cancel", [[this.sessionId]]);
-            this.notification.add("Measurement cancelled.", {type: "warning"});
-            await this.refresh();
-        } catch (error) {
-            this.notification.add(error?.message || "Unable to stop Measurement.", {type: "danger"});
-        }
-    }
-
-    async applyToOperation() {
-        if (!this.canApply()) {
-            return;
-        }
-        try {
-            await this.orm.call("nsp.measurement.session", "action_apply_to_operation", [[this.sessionId]]);
+            reader.applying = false;
             this.notification.add(
-                `${this.state.readers.length} Reader operation profile(s) updated.`,
-                {type: "success"}
-            );
-            await this.refresh();
-        } catch (error) {
-            this.notification.add(error?.message || "Unable to apply Measurement to operation.", {type: "danger"});
-        }
-    }
-
-    goToSession() {
-        const sessionId = this.requireSessionId();
-        if (!sessionId) {
-            return;
-        }
-        this.action.doAction({
-            type: "ir.actions.act_window",
-            res_model: "nsp.measurement.session",
-            res_id: sessionId,
-            views: [[false, "form"]],
-            target: "current",
-        });
-    }
-
-    async openRevisionHistory() {
-        const sessionId = this.requireSessionId();
-        if (!sessionId) {
-            return;
-        }
-        try {
-            const action = await this.orm.call(
-                "nsp.measurement.session",
-                "action_view_events",
-                [[sessionId]]
-            );
-            await this.action.doAction(action);
-        } catch (error) {
-            this.notification.add(
-                error?.message || "Unable to open Measurement Revision History.",
-                {type: "danger"}
+                error?.data?.message || error?.message || "Unable to apply Reader settings.",
+                { type: "danger" }
             );
         }
     }
 
     exportCsv() {
-        const rows = [["#", "Detected At", "Controller", "Reader", "Antenna", "Power dBm", "Peak RSSI dBm", "Reads", "Duration ms"]];
+        const rows = [[
+            "#", "First Detected", "RFID Tag", "Assigned To", "Controller",
+            "Reader", "Antenna", "Reads", "Last Detected", "Duration ms",
+        ]];
         for (const step of this.state.steps) {
             const first = this.parseDate(step.first_seen_at);
             const last = this.parseDate(step.last_seen_at);
             rows.push([
                 step.sequence_no,
                 step.first_seen_at || "",
+                step.tid || "",
+                step.assigned_to || "",
                 step.controller_code || "",
-                step.reader_name || "",
+                step.reader_name || step.serial_number || "",
                 step.antenna_no,
-                step.power_dbm,
-                step.peak_rssi_dbm ?? "",
                 step.read_count,
+                step.last_seen_at || "",
                 first && last ? Math.max(0, last.getTime() - first.getTime()) : "",
             ]);
         }
-        const csv = rows.map((row) => row.map((value) => `"${String(value ?? "").replaceAll('"', '""')}"`).join(",")).join("\n");
-        const blob = new Blob([csv], {type: "text/csv;charset=utf-8"});
+        const csv = rows
+            .map((row) => row.map((value) => `"${String(value ?? "").replaceAll('"', '""')}"`).join(","))
+            .join("\n");
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement("a");
         anchor.href = url;
@@ -473,43 +410,11 @@ export class NspMeasurementLive extends Component {
         anchor.click();
         URL.revokeObjectURL(url);
     }
-
-    chartGrid() {
-        return [-40, -60, -80, -100].map((value) => ({value, y: this.rssiY(value)}));
-    }
-
-    rssiY(value) {
-        const min = -100;
-        const max = -30;
-        const bounded = Math.max(min, Math.min(max, Number(value)));
-        return 25 + ((max - bounded) / (max - min)) * 160;
-    }
-
-    chartSeries() {
-        const steps = this.state.steps || [];
-        if (!steps.length) {
-            return [];
-        }
-        const groups = new Map();
-        steps.forEach((step, index) => {
-            if (step.peak_rssi_dbm === null || step.peak_rssi_dbm === undefined) {
-                return;
-            }
-            const key = `${step.serial_number}-ANT${step.antenna_no}`;
-            if (!groups.has(key)) {
-                groups.set(key, []);
-            }
-            const x = steps.length === 1 ? 465 : 70 + (index / (steps.length - 1)) * 790;
-            groups.get(key).push({x, y: this.rssiY(step.peak_rssi_dbm), key: `${key}-${index}`});
-        });
-        return [...groups.entries()].map(([key, points], index) => ({
-            key,
-            label: key,
-            color: SERIES_COLORS[index % SERIES_COLORS.length],
-            points: points.map((point) => `${point.x},${point.y}`).join(" "),
-            circles: points,
-        }));
-    }
 }
 
-registry.category("actions").add("nsp_measurement_live", NspMeasurementLive);
+export const nspMeasurementLiveField = {
+    component: NspMeasurementLive,
+    supportedTypes: ["boolean"],
+};
+
+registry.category("fields").add("nsp_master_measurement_live_dashboard", nspMeasurementLiveField);

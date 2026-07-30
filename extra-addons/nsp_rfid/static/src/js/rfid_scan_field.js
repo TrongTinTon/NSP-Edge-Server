@@ -4,7 +4,7 @@ import { _t } from "@web/core/l10n/translation";
 import { registry } from "@web/core/registry";
 import { useService } from "@web/core/utils/hooks";
 import { standardFieldProps } from "@web/views/fields/standard_field_props";
-import { Component, onMounted, useRef, useState } from "@odoo/owl";
+import { Component, onMounted, onWillUnmount, useRef, useState } from "@odoo/owl";
 
 function extractMany2OneId(value) {
     if (!value) {
@@ -41,15 +41,23 @@ export class NspRfidScanField extends Component {
         resolvedValueField: { type: String, optional: true },
         expectedCardType: { type: String, optional: true },
         requireAvailable: { type: Boolean, optional: true },
+        requireMeasurementCard: { type: Boolean, optional: true },
+        requireActiveAssignment: { type: Boolean, optional: true },
         autoFocus: { type: Boolean, optional: true },
         autoNextRow: { type: Boolean, optional: true },
+        skipDuplicates: { type: Boolean, optional: true },
+        nextScanField: { type: String, optional: true },
     };
     static defaultProps = {
         placeholder: "",
         expectedCardType: "",
         requireAvailable: false,
+        requireMeasurementCard: false,
+        requireActiveAssignment: false,
         autoFocus: false,
         autoNextRow: false,
+        skipDuplicates: false,
+        nextScanField: "",
     };
 
     setup() {
@@ -64,9 +72,15 @@ export class NspRfidScanField extends Component {
             message: "",
         });
 
+        this.validationTimer = null;
         onMounted(() => {
             if (this.props.autoFocus && !this.props.readonly) {
                 this.input.el?.focus();
+            }
+        });
+        onWillUnmount(() => {
+            if (this.validationTimer) {
+                window.clearTimeout(this.validationTimer);
             }
         });
     }
@@ -118,6 +132,26 @@ export class NspRfidScanField extends Component {
             this.state.status = "idle";
             this.state.message = "";
         }
+        if (event.inputType === "insertFromPaste") {
+            this.scheduleValidation();
+        }
+    }
+
+    onPaste() {
+        this.scheduleValidation();
+    }
+
+    scheduleValidation() {
+        if (this.validationTimer) {
+            window.clearTimeout(this.validationTimer);
+        }
+        this.validationTimer = window.setTimeout(async () => {
+            this.validationTimer = null;
+            if (this.input.el) {
+                this.state.value = this.input.el.value;
+            }
+            await this.validateScan();
+        }, 0);
     }
 
     onFocus(event) {
@@ -153,7 +187,7 @@ export class NspRfidScanField extends Component {
         // same TID is already present in an earlier row, ignore the repeated
         // scan and keep the current blank row ready for the next card. Do not
         // validate again and, importantly, do not create another line.
-        if (this.props.autoNextRow) {
+        if (this.props.autoNextRow || this.props.skipDuplicates) {
             const duplicateInput = this.findDuplicateInput(tid);
             if (duplicateInput) {
                 await this.skipDuplicateScan();
@@ -175,6 +209,8 @@ export class NspRfidScanField extends Component {
                     expected_card_type: this.props.expectedCardType || false,
                     require_available: Boolean(this.props.requireAvailable),
                     allow_card_id: allowCardId || false,
+                    require_measurement_card: Boolean(this.props.requireMeasurementCard),
+                    require_active_assignment: Boolean(this.props.requireActiveAssignment),
                 }
             );
         } catch (error) {
@@ -191,20 +227,21 @@ export class NspRfidScanField extends Component {
         // Re-check using the canonical TID returned by the server. This also
         // covers scanners that include formatting characters stripped by the
         // backend normalizer.
-        if (this.props.autoNextRow && this.findDuplicateInput(result.tid)) {
+        if ((this.props.autoNextRow || this.props.skipDuplicates) && this.findDuplicateInput(result.tid)) {
             await this.skipDuplicateScan();
             return;
         }
 
         await this.props.record.update({
             [this.props.name]: result.tid,
-            [this.props.targetField]: result.card_id,
         });
         this.state.value = result.tid;
         this.state.status = "success";
         this.state.message = "";
         this.playTone(true);
-        if (this.props.autoNextRow) {
+        if (this.props.nextScanField) {
+            this.focusNextScanField();
+        } else if (this.props.autoNextRow) {
             this.advanceToNextRow();
         } else {
             this.refocus();
@@ -224,7 +261,9 @@ export class NspRfidScanField extends Component {
         }
         const normalizedTid = this.normalizeTid(tid);
         return Array.from(fieldRoot.querySelectorAll(".nsp-rfid-scan__input")).find((input) =>
-            input !== currentInput && this.normalizeTid(input.value) === normalizedTid
+            input !== currentInput &&
+            input.dataset.fieldName === this.props.name &&
+            this.normalizeTid(input.value) === normalizedTid
         ) || false;
     }
 
@@ -263,6 +302,25 @@ export class NspRfidScanField extends Component {
         this.refocus();
     }
 
+
+
+    focusNextScanField() {
+        window.setTimeout(() => {
+            const currentInput = this.input.el;
+            const row = currentInput?.closest("tr.o_data_row");
+            const nextInput = row
+                ? Array.from(row.querySelectorAll(".nsp-rfid-scan__input")).find(
+                    (input) => input.dataset.fieldName === this.props.nextScanField && !input.disabled
+                )
+                : false;
+            if (nextInput) {
+                nextInput.focus();
+                nextInput.select();
+                return;
+            }
+            this.refocus();
+        }, 0);
+    }
 
     advanceToNextRow() {
         window.setTimeout(() => {
@@ -378,8 +436,12 @@ export const nspRfidScanField = {
         { label: _t("Resolved Value Field"), name: "resolved_value_field", type: "string" },
         { label: _t("Expected Card Type"), name: "expected_card_type", type: "string" },
         { label: _t("Require Available Card"), name: "require_available", type: "boolean" },
+        { label: _t("Require Measurement / Test Card"), name: "require_measurement_card", type: "boolean" },
+        { label: _t("Require Active Assignment"), name: "require_active_assignment", type: "boolean" },
         { label: _t("Auto Focus"), name: "autofocus", type: "boolean" },
         { label: _t("Auto Next Row"), name: "auto_next_row", type: "boolean" },
+        { label: _t("Skip Duplicate TID"), name: "skip_duplicates", type: "boolean" },
+        { label: _t("Next Scan Field"), name: "next_scan_field", type: "string" },
     ],
     extractProps: ({ options, placeholder }) => ({
         placeholder,
@@ -387,8 +449,12 @@ export const nspRfidScanField = {
         resolvedValueField: options.resolved_value_field || "",
         expectedCardType: options.expected_card_type || "",
         requireAvailable: Boolean(options.require_available),
+        requireMeasurementCard: Boolean(options.require_measurement_card),
+        requireActiveAssignment: Boolean(options.require_active_assignment),
         autoFocus: Boolean(options.autofocus),
         autoNextRow: Boolean(options.auto_next_row),
+        skipDuplicates: Boolean(options.skip_duplicates),
+        nextScanField: options.next_scan_field || "",
     }),
 };
 

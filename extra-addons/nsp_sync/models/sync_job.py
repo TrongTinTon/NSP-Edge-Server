@@ -442,14 +442,52 @@ class NspSyncJob(models.Model):
     # --------------------------- push payloads ------------------------
     def _serialize_edge_server_status(self):
         self.ensure_one()
-        controllers=[]
-        for controller in self.env["nsp.controller"].sudo().search([("active","=",True)], order="controller_id,id"):
-            devices=[]
-            for device in controller.device_ids.filtered("active").sorted(key=lambda r:(r.serial_number or "",r.id)):
-                status=str(device.status or "offline").lower()
-                devices.append({"serial_number":device.serial_number or "","antennas":sorted(int(n) for n in device.antennas_ids.filtered("active").mapped("antenna_no")),"device_status":status if status in ("online","offline","degraded") else "offline","last_seen_at":self._dt(device.last_seen) if device.last_seen else False,**({"firmware_version":device.firmware_version} if device.firmware_version else {})})
-            controllers.append({"controller_code":controller.controller_id or "","current_status":str(controller.status or "offline").lower(),"last_seen_at":self._dt(controller.timestamp) if controller.timestamp else False,"devices":devices})
-        return {"record_key":self.edge_server_code,"edge_server_code":self.edge_server_code,"current_status":"online","last_seen_at":self._dt(fields.Datetime.now()),"controllers":controllers}
+        controllers = []
+        Controller = self.env["nsp.controller"].sudo()
+        for controller in Controller.search([("active", "=", True)], order="controller_id,id"):
+            devices = []
+            for device in controller.device_ids.filtered("active").sorted(
+                key=lambda record: (record.serial_number or "", record.id)
+            ):
+                status = str(device.status or "offline").lower()
+                item = {
+                    "serial_number": device.serial_number or "",
+                    "antennas": sorted(
+                        int(number)
+                        for number in device.antennas_ids.filtered("active").mapped("antenna_no")
+                    ),
+                    "device_status": (
+                        status if status in ("online", "offline", "degraded") else "offline"
+                    ),
+                    "last_seen_at": self._dt(device.last_seen) if device.last_seen else False,
+                }
+                if device.firmware_version:
+                    item["firmware_version"] = device.firmware_version
+
+                # Runtime settings are unknown until the Controller reports them.
+                # Omit both fields rather than sending a synthetic zero interval
+                # that Cloud must reject as invalid.
+                runtime_interval = int(device.runtime_read_interval_ms or 0)
+                if runtime_interval > 0:
+                    item.update({
+                        "power_dbm": int(device.runtime_power_dbm or 0),
+                        "read_interval_ms": runtime_interval,
+                    })
+                devices.append(item)
+
+            controllers.append({
+                "controller_code": controller.controller_id or "",
+                "current_status": str(controller.status or "offline").lower(),
+                "last_seen_at": self._dt(controller.timestamp) if controller.timestamp else False,
+                "devices": devices,
+            })
+        return {
+            "record_key": self.edge_server_code,
+            "edge_server_code": self.edge_server_code,
+            "current_status": "online",
+            "last_seen_at": self._dt(fields.Datetime.now()),
+            "controllers": controllers,
+        }
 
     @api.model
     def _serialize_parking_transaction(self, record):
@@ -928,7 +966,7 @@ class NspSyncJob(models.Model):
     def _normalize_card_snapshot_item(self, item):
         if not isinstance(item, dict):
             raise UserError(_("Cards snapshot items must be objects."))
-        supported_fields = {"card_uid", "card_type", "assignment", "assigned_at"}
+        supported_fields = {"card_uid", "card_type", "is_measurement_card", "assignment", "assigned_at"}
         unsupported_fields = sorted(set(item) - supported_fields)
         if unsupported_fields:
             raise UserError(_("Unsupported Card field(s): %s") % ", ".join(unsupported_fields))
@@ -940,6 +978,7 @@ class NspSyncJob(models.Model):
         if card_type not in ("vehicle_card", "user_card"):
             raise UserError(_("Invalid Card Type for %s.") % tid)
 
+        is_measurement_card = bool(item.get("is_measurement_card"))
         assignment_type, assignment_code, assigned_at = self._card_assignment_values(item)
         expected_type = {"user": "user_card", "vehicle": "vehicle_card"}.get(assignment_type)
         if expected_type and card_type != expected_type:
@@ -950,6 +989,7 @@ class NspSyncJob(models.Model):
         return {
             "tid": tid,
             "card_type": card_type,
+            "is_measurement_card": is_measurement_card,
             "assignment_type": assignment_type,
             "assignment_code": assignment_code,
             "assigned_at": assigned_at,
@@ -973,7 +1013,7 @@ class NspSyncJob(models.Model):
             normalized.append(info)
 
         tids = [info["tid"] for info in normalized]
-        Card = self.env["nsp.rfid.card"].sudo()
+        Card = self.env["nsp.rfid.card"].sudo().with_context(measurement_sync=True)
         User = self.env["nsp.user"].sudo().with_context(active_test=False)
         Vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False)
         UserLine = self.env["nsp.user.card"].sudo().with_context(active_test=False)
@@ -987,7 +1027,11 @@ class NspSyncJob(models.Model):
             card_by_tid = {card.tid: card for card in existing_cards}
 
             create_vals = [
-                {"tid": info["tid"], "card_type": info["card_type"]}
+                {
+                    "tid": info["tid"],
+                    "card_type": info["card_type"],
+                    "is_measurement_card": info["is_measurement_card"],
+                }
                 for info in normalized if info["tid"] not in card_by_tid
             ]
             if create_vals:
@@ -996,8 +1040,13 @@ class NspSyncJob(models.Model):
 
             for info in normalized:
                 card = card_by_tid[info["tid"]]
+                card_values = {}
                 if card.card_type != info["card_type"]:
-                    card.write({"card_type": info["card_type"]})
+                    card_values["card_type"] = info["card_type"]
+                if bool(card.is_measurement_card) != bool(info["is_measurement_card"]):
+                    card_values["is_measurement_card"] = bool(info["is_measurement_card"])
+                if card_values:
+                    card.write(card_values)
                 info["card"] = card
 
             user_codes = {
@@ -1182,13 +1231,12 @@ class NspSyncJob(models.Model):
     def _apply_measurement_config(self, item):
         self.ensure_one()
         code = str(item.get("measurement_code") or "").strip().upper()
-        controller_code = str(item.get("controller_code") or "").strip().upper()
-        target_tid = self.env["nsp.rfid.card"].sudo()._normalize_tid(item.get("target_tid"))
+        target_payloads = item.get("targets")
         reader_payloads = item.get("readers")
-        if not code or not controller_code or not target_tid:
-            raise UserError(
-                _("Measurement Code, Controller Code and Target TID are required.")
-            )
+        if not code:
+            raise UserError(_("Measurement Code is required."))
+        if not isinstance(target_payloads, list) or not target_payloads:
+            raise UserError(_("Measurement Configuration must contain at least one RFID Target pair."))
         if not isinstance(reader_payloads, list) or not reader_payloads:
             raise UserError(_("Measurement Configuration must contain at least one Reader."))
 
@@ -1200,34 +1248,95 @@ class NspSyncJob(models.Model):
         except (TypeError, ValueError) as exc:
             raise UserError(_("Invalid Measurement revision.")) from exc
 
-        controller = self._find_or_create_controller(controller_code)
         Card = self.env["nsp.rfid.card"].sudo()
-        target_card = Card.search([("tid", "=", target_tid)], limit=1)
-        if not target_card:
-            raise UserError(_("Target RFID Tag %s has not been synchronized to this Edge Server.") % target_tid)
+        normalized_targets = []
+        all_tids = set()
+        seen_users = set()
+        seen_vehicles = set()
+        for payload in target_payloads:
+            if not isinstance(payload, dict):
+                raise UserError(_("Measurement RFID Target pair must be an object."))
+            unsupported = set(payload) - {"user_tid", "vehicle_tid", "license_plate"}
+            if unsupported:
+                raise UserError(
+                    _("Unsupported Measurement RFID Target field(s): %s")
+                    % ", ".join(sorted(unsupported))
+                )
+            user_tid = Card._normalize_tid(payload.get("user_tid"))
+            vehicle_tid = Card._normalize_tid(payload.get("vehicle_tid"))
+            plate = str(payload.get("license_plate") or "").strip().upper()
+            if not user_tid or not vehicle_tid:
+                raise UserError(_(
+                    "Each Measurement RFID Target pair requires one User RFID Tag and one Vehicle RFID Tag."
+                ))
+            if user_tid in seen_users:
+                raise UserError(_("Duplicate User RFID Tag in Measurement Configuration: %s") % user_tid)
+            if vehicle_tid in seen_vehicles:
+                raise UserError(_("Duplicate Vehicle RFID Tag in Measurement Configuration: %s") % vehicle_tid)
+            seen_users.add(user_tid)
+            seen_vehicles.add(vehicle_tid)
+            all_tids.update([user_tid, vehicle_tid])
+            normalized_targets.append({
+                "user_tid": user_tid,
+                "vehicle_tid": vehicle_tid,
+                "license_plate": plate,
+            })
 
-        Device = self.env["nsp.device"].sudo()
-        Antenna = self.env["nsp.device.antenna"].sudo()
+        cards = Card.search([("tid", "in", list(all_tids))])
+        card_by_tid = {card.tid: card for card in cards}
+        missing_tids = sorted(all_tids - set(card_by_tid))
+        if missing_tids:
+            raise UserError(
+                _("RFID Target(s) have not been synchronized to this Edge Server: %s")
+                % ", ".join(missing_tids[:20])
+            )
+
+        target_commands = []
+        Target = self.env["nsp.measurement.target.line"].sudo()
+        for payload in normalized_targets:
+            user_card = card_by_tid[payload["user_tid"]]
+            vehicle_card = card_by_tid[payload["vehicle_tid"]]
+            values = Target._prepare_scanned_values({
+                "user_card_id": user_card.id,
+                "vehicle_card_id": vehicle_card.id,
+            })
+            expected_plate = payload.get("license_plate")
+            actual_plate = str(values.get("license_plate") or "").strip().upper()
+            if expected_plate and actual_plate != expected_plate:
+                raise UserError(_(
+                    "Vehicle RFID Tag %(tid)s resolves to License Plate %(actual)s, not %(expected)s."
+                ) % {
+                    "tid": payload["vehicle_tid"],
+                    "actual": actual_plate or "-",
+                    "expected": expected_plate,
+                })
+            target_commands.append((0, 0, values))
+
+        Device = self.env["nsp.device"].sudo().with_context(active_test=False)
+        Antenna = self.env["nsp.device.antenna"].sudo().with_context(active_test=False)
         line_commands = []
         seen_serials = set()
         for reader_payload in reader_payloads:
             if not isinstance(reader_payload, dict):
                 raise UserError(_("Measurement Reader must be an object."))
+            controller_code = str(reader_payload.get("controller_code") or "").strip().upper()
             reader_serial = str(reader_payload.get("serial_number") or "").strip().upper()
+            if not controller_code:
+                raise UserError(_("Measurement Reader Controller Code is required."))
             if not reader_serial or reader_serial in seen_serials:
                 raise UserError(_("Measurement Reader Serial is missing or duplicated."))
             seen_serials.add(reader_serial)
             try:
-                measurement_power = int(
-                    reader_payload.get("power_dbm")
-                    if reader_payload.get("power_dbm") is not None
-                    else 30
-                )
+                reader_power = int(reader_payload.get("power_dbm") if reader_payload.get("power_dbm") is not None else 30)
+                read_interval = int(reader_payload.get("read_interval_ms") if reader_payload.get("read_interval_ms") is not None else 200)
             except (TypeError, ValueError) as exc:
-                raise UserError(_("Invalid Measurement Reader power.")) from exc
-            if measurement_power < 0 or measurement_power > 40:
+                raise UserError(_("Invalid Measurement Reader settings.")) from exc
+            if reader_power < 0 or reader_power > 40:
                 raise UserError(_("Measurement Reader power must be between 0 and 40 dBm."))
+            if read_interval <= 0 or read_interval > 60000:
+                raise UserError(_("Measurement Reader Read Interval must be between 1 and 60000 ms."))
 
+            controller = self._find_or_create_controller(controller_code)
             reader = Device.search([
                 ("serial_number", "=", reader_serial),
                 ("controller_id", "=", controller.id),
@@ -1238,6 +1347,8 @@ class NspSyncJob(models.Model):
                     "name": reader_serial,
                     "controller_id": controller.id,
                 })
+            elif not reader.active or reader.cloud_removed:
+                reader.write({"active": True, "cloud_removed": False})
 
             numbers = reader_payload.get("antennas")
             if not isinstance(numbers, list) or not numbers:
@@ -1257,6 +1368,9 @@ class NspSyncJob(models.Model):
                 ("antenna_no", "in", list(keys)),
             ])
             antenna_by_no = {int(antenna.antenna_no): antenna for antenna in existing}
+            stale_referenced = existing.filtered(lambda antenna: not antenna.active or antenna.cloud_removed)
+            if stale_referenced:
+                stale_referenced.write({"active": True, "cloud_removed": False})
             missing = sorted(keys - set(antenna_by_no))
             if missing:
                 created = Antenna.create([
@@ -1264,24 +1378,26 @@ class NspSyncJob(models.Model):
                     for antenna_no in missing
                 ])
                 antenna_by_no.update({int(antenna.antenna_no): antenna for antenna in created})
-            antenna_refs = Antenna.browse([antenna_by_no[number].id for number in sorted(keys)])
+            selected_antennas = Antenna.browse([
+                antenna_by_no[number].id for number in sorted(keys)
+            ])
             line_commands.append((0, 0, {
                 "reader_id": reader.id,
-                "measurement_power_dbm": measurement_power,
-                "antenna_ids": [(6, 0, antenna_refs.ids)],
+                "reader_power_dbm": reader_power,
+                "read_interval_ms": read_interval,
+                "antenna_ids": [(6, 0, selected_antennas.ids)],
             }))
 
         Session = self.env["nsp.measurement.session"].sudo().with_context(measurement_sync=True)
         session = Session.search([("measurement_code", "=", code)], limit=1)
         vals = {
             "measurement_code": code,
-            "controller_id": controller.id,
-            "target_card_id": target_card.id,
             "revision": revision,
             "status": status,
             "planned_start_at": self._remote_datetime(item.get("planned_start_at")),
             "planned_end_at": self._remote_datetime(item.get("planned_end_at")),
             "note": str(item.get("note") or "").strip() or False,
+            "target_line_ids": [(5, 0, 0)] + target_commands,
             "reader_line_ids": [(5, 0, 0)] + line_commands,
         }
         if session:
@@ -1804,7 +1920,12 @@ class NspSyncJob(models.Model):
             "power_dbm": int(
                 event.power_dbm
                 if event.power_dbm is not None
-                else event.session_id._measurement_power_for_serial(event.serial_number)
+                else event.session_id._reader_power_for_serial(event.serial_number)
+            ),
+            "read_interval_ms": int(
+                event.read_interval_ms
+                if event.read_interval_ms is not None
+                else event.session_id._reader_interval_for_serial(event.serial_number)
             ),
         }
         if event.rssi_dbm not in (False, None):

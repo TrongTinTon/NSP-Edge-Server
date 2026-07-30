@@ -5,7 +5,7 @@
 - Cloud: `nsp_master_gatekeeper` owns Edge Servers, master Controllers/Readers/Antennas, Branches, Parking Configuration, Device Whitelist, Measurement management and Cloud history mirrors.
 - Edge: `nsp_business_gatekeeper` owns the local Controller/Reader/Antenna runtime cache, parking detection/business processing, Parking Transactions, Measurement runtime, Live Monitor and Live Measurement. **Edge has no `nsp.edge.server` model.**
 - `nsp_business_gatekeeper` depends on `nsp_sync`; installing Business Gatekeeper installs Sync automatically.
-- `nsp_sync` is the shared transport layer. Edge uses Cloud Connection, jobs, durable retry/ACK and snapshot application. Cloud uses its source/receive endpoints.
+- `nsp_sync` is the Edge transport layer. Edge uses Cloud Connection, jobs, durable retry/ACK and authoritative snapshot application. Cloud source/receive endpoints are owned directly by `nsp_master_gatekeeper`.
 - Legacy `nsp_gatekeeper` is removed. This package targets fresh install only.
 
 ## Cloud -> Edge master/config synchronization
@@ -41,7 +41,7 @@ Cloud does not re-run current Parking topology rules when receiving a final Park
 ## Installation dependency boundary
 
 - `nsp_business_gatekeeper` depends on `nsp_sync`; installing the Edge business module installs Sync automatically.
-- `nsp_master_gatekeeper` also uses `nsp_sync` for Cloud-side authoritative snapshot/business-event endpoints.
+- `nsp_master_gatekeeper` does not depend on `nsp_sync`; it owns the Cloud-side authoritative snapshot and business-event endpoints directly.
 - `nsp_mobile` depends on `nsp_master_gatekeeper`, never the reverse. Installing Master must not auto-install Mobile (`auto_install=False`).
 - Cloud and Edge Gatekeeper modules are deployment-role alternatives and are not intended to be installed together in the same database.
 
@@ -65,8 +65,24 @@ Each transition stores only the source antenna, destination antenna, business ev
 The transition Event Type is authoritative for Check-in/Check-out. Lane direction is not stored. Raw Detection Events remain Edge-only.
 
 
-## Module dependency boundary
+## Measurement sessions
 
-- `nsp_master_gatekeeper` is standalone Cloud master/API and does not depend on `nsp_sync`.
-- `nsp_business_gatekeeper` depends on `nsp_sync`; installing Business Gatekeeper installs Edge synchronization automatically.
-- `nsp_sync` is Edge-only transport. Cloud sync endpoints are owned by `nsp_master_gatekeeper`.
+A Measurement Session is a test plan, not a single-tag Reader command. It supports:
+
+- one or many RFID target lines;
+- one or many Controllers;
+- one or many Readers per Controller;
+- an explicit antenna subset per Reader;
+- temporary Reader Power and Read Interval per Reader;
+- a shared revision for every released configuration.
+
+RFID Cards use `is_measurement_card` only as an eligibility switch. Current Usage State is derived instead of stored: a card is `Measurement / Test` only while it belongs to a released/running Measurement Session, then returns to `Used` or `Available` when the session ends or the line is removed.
+
+Cloud sends each Edge the full target list and only the Reader lines owned by that Edge. Edge sends each Controller only its own Reader subset. Controller drops non-target TIDs before durable Measurement persistence. Detection Timeline presents the chronological RFID path using First Detected, RFID Tag, Controller, Reader, Antenna, Reads, Last Detected and Duration. Reader Power, Read Interval and RSSI are not timeline dimensions; Reader settings are shown on compact Reader cards, and RSSI-over-time visualization is intentionally removed.
+## Sync API deployment boundary
+
+- Cloud source APIs are owned by `nsp_master_gatekeeper`; their availability is determined by installing the Master module.
+- Edge outbound transport is owned by `nsp_sync`; installing `nsp_business_gatekeeper` installs it automatically.
+- Cloud source APIs do not depend on the optional `nsp.deployment_role` parameter. Authentication still requires a valid Core API Application, an allowed route, and a declared active Edge Server code.
+- `nsp_sync` must not be installed on the Cloud database for normal fresh-install deployment.
+

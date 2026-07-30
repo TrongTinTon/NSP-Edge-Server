@@ -40,6 +40,18 @@ class Device(models.Model):
     ], string="Status", required=True, default="offline", index=True)
     last_seen = fields.Datetime(string="Last Seen", readonly=True, copy=False, index=True)
     firmware_version = fields.Char(string="Firmware Version", readonly=True, copy=False)
+    runtime_power_dbm = fields.Integer(
+        string="Reader Power (dBm)",
+        readonly=True,
+        copy=False,
+        help="Actual power reported by the Controller for the running Reader instance.",
+    )
+    runtime_read_interval_ms = fields.Integer(
+        string="Read Interval ms",
+        readonly=True,
+        copy=False,
+        help="Actual read interval reported by the Controller for the running Reader instance.",
+    )
 
     # Physical connection inventory. The Odoo field widget groups options as Wired / Wireless.
     connection_type = fields.Selection([
@@ -53,7 +65,8 @@ class Device(models.Model):
         ("cellular", "4G/5G"),
     ], string="Physical Connection", index=True)
 
-    # Reader parameters controlled by the server
+    # Operation profile sent to Controller. These values are promoted from an
+    # approved Measurement Session and are intentionally not edited on Reader UI.
     power_dbm = fields.Integer(
         string="Power (dBm)",
         required=True,

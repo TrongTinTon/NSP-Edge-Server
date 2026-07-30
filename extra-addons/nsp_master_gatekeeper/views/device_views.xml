@@ -74,18 +74,14 @@
                                    decoration-warning="status == 'degraded'"/>
                             <field name="last_seen" readonly="1"/>
                             <field name="firmware_version" readonly="1"/>
+                            <field name="runtime_power_dbm" string="Reader Power (dBm)" readonly="1"/>
+                            <field name="runtime_read_interval_ms" string="Read Interval ms" readonly="1"/>
 
                         </group>
                     </group>
-                    <group string="Reader Parameters">
-                        <group>
-                            <field name="power_dbm" string="Power (dBm)"/>
-                            <field name="read_interval_ms" string="Read Interval ms"/>
-                        </group>
-                        <group>
-                            <field name="tid_addr" string="TID Start Address"/>
-                            <field name="tid_len" string="TID Length"/>
-                        </group>
+                    <group string="TID Parameters">
+                        <field name="tid_addr" string="TID Start Address"/>
+                        <field name="tid_len" string="TID Length"/>
                     </group>
                     <notebook>
                         <page name="antennas" string="Antennas">
@@ -136,6 +132,8 @@
                 <field name="device_code" string="Technical Code" optional="hide"/>
                 <field name="last_seen"/>
                 <field name="firmware_version"/>
+                <field name="runtime_power_dbm" string="Reader Power (dBm)"/>
+                <field name="runtime_read_interval_ms" string="Read Interval ms"/>
 
             </list>
         </field>

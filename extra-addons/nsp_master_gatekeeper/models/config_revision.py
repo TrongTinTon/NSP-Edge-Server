@@ -62,7 +62,10 @@ class NspDeviceRevision(models.Model):
     def create(self, vals_list):
         records = super().create(vals_list); _bump_edge_revisions(self.env, _edge_ids(records)); return records
     def write(self, vals):
-        runtime_only = set(vals) <= {"status", "last_seen", "firmware_version"}
+        runtime_only = set(vals) <= {
+            "status", "last_seen", "firmware_version",
+            "runtime_power_dbm", "runtime_read_interval_ms",
+        }
         before = _edge_ids(self); result = super().write(vals)
         if not runtime_only: _bump_edge_revisions(self.env, before | _edge_ids(self))
         return result

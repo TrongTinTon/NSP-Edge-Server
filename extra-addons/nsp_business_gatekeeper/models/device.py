@@ -40,6 +40,18 @@ class Device(models.Model):
     ], string="Status", required=True, default="offline", index=True)
     last_seen = fields.Datetime(string="Last Seen", readonly=True, copy=False, index=True)
     firmware_version = fields.Char(string="Firmware Version", readonly=True, copy=False)
+    runtime_power_dbm = fields.Integer(
+        string="Reader Power (dBm)",
+        readonly=True,
+        copy=False,
+        help="Actual power reported by the Controller for the running Reader instance.",
+    )
+    runtime_read_interval_ms = fields.Integer(
+        string="Read Interval ms",
+        readonly=True,
+        copy=False,
+        help="Actual read interval reported by the Controller for the running Reader instance.",
+    )
     active = fields.Boolean(default=True, index=True)
     cloud_removed = fields.Boolean(default=False, readonly=True, index=True, copy=False)
 
@@ -55,7 +67,8 @@ class Device(models.Model):
         ("cellular", "4G/5G"),
     ], string="Physical Connection", index=True)
 
-    # Reader parameters controlled by the server
+    # Operation profile sent to Controller. These values are promoted from an
+    # approved Measurement Session and are intentionally not edited on Reader UI.
     power_dbm = fields.Integer(
         string="Power (dBm)",
         required=True,
@@ -171,13 +184,13 @@ class Device(models.Model):
     @api.depends("antennas_ids")
     def _compute_antenna_count(self):
         for record in self:
-            record.antennas = len(record.antennas_ids)
+            record.antennas = len(record.antennas_ids.filtered("active"))
 
     def _antenna_config_payload(self):
         self.ensure_one()
         return [
             {"antenna_no": int(antenna.antenna_no)}
-            for antenna in self.antennas_ids.sorted(key=lambda item: (item.antenna_no, item.id))
+            for antenna in self.antennas_ids.filtered("active").sorted(key=lambda item: (item.antenna_no, item.id))
         ]
 
     def _build_config_payload(self):
