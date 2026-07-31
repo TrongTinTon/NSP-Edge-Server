@@ -1,9 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <!-- Vehicles are managed only from the User form. No standalone Vehicles menu. -->
-    <menuitem id="menu_nsp_vehicle_types" name="Vehicle Types" parent="nsp_core.menu_nsp_reference_data"
-              action="action_nsp_vehicle_type" sequence="40"
-              groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking"/>
-    <menuitem id="menu_nsp_vehicle_colors" name="Vehicle Colors" parent="nsp_core.menu_nsp_reference_data"
-              action="action_nsp_vehicle_color" sequence="50"
-              groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking"/>
+    <!-- Vehicle Types and Colors have no standalone menu. They remain available through Quick Create and Create/Edit from Vehicle fields. -->
 </odoo>

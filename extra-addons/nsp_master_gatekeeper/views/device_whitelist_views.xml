@@ -22,9 +22,15 @@
         <field name="arch" type="xml">
             <list string="Device Whitelist" editable="bottom">
                 <field name="serial_number" string="Serial"/>
-                <field name="device_type_id" options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False}"/>
-                <field name="model_id" options="{'no_create': False, 'no_quick_create': True, 'no_create_edit': False}"/>
-                <field name="vendor_id" options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False}"/>
+                <field name="device_type_id"
+                       options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                       context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_device_type_form'}"/>
+                <field name="model_id"
+                       options="{'no_create': False, 'no_quick_create': True, 'no_create_edit': False, 'no_open': False}"
+                       context="{'form_view_ref': 'nsp_core.view_nsp_reference_model_form'}"/>
+                <field name="vendor_id"
+                       options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                       context="{'form_view_ref': 'nsp_core.view_nsp_reference_vendor_form'}"/>
             </list>
         </field>
     </record>
@@ -43,11 +49,17 @@
                     </div>
                     <group string="Whitelist Entry">
                         <group>
-                            <field name="device_type_id" options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False}"/>
-                            <field name="model_id" options="{'no_create': False, 'no_quick_create': True, 'no_create_edit': False}"/>
+                            <field name="device_type_id"
+                       options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                       context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_device_type_form'}"/>
+                            <field name="model_id"
+                       options="{'no_create': False, 'no_quick_create': True, 'no_create_edit': False, 'no_open': False}"
+                       context="{'form_view_ref': 'nsp_core.view_nsp_reference_model_form'}"/>
                         </group>
                         <group>
-                            <field name="vendor_id" options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False}"/>
+                            <field name="vendor_id"
+                       options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                       context="{'form_view_ref': 'nsp_core.view_nsp_reference_vendor_form'}"/>
                         </group>
                     </group>
                 </sheet>

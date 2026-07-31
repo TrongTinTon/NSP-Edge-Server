@@ -5,7 +5,7 @@
         <field name="model">nsp.measurement.session</field>
         <field name="arch" type="xml">
             <search>
-                <field name="measurement_code" string="Measurement Code"/>
+                <field name="measurement_code" string="Calibration Code"/>
                 <filter string="Draft" name="draft" domain="[('status','=','draft')]"/>
                 <filter string="Ready" name="ready" domain="[('status','=','ready')]"/>
                 <filter string="Running" name="running" domain="[('status','=','running')]"/>
@@ -23,7 +23,7 @@
         <field name="name">nsp.measurement.session.list</field>
         <field name="model">nsp.measurement.session</field>
         <field name="arch" type="xml">
-            <list string="Measurement Sessions"
+            <list string="Reader Calibration"
                   decoration-info="status == 'running'"
                   decoration-success="status in ('completed','applied')"
                   decoration-danger="status == 'failed'">
@@ -42,11 +42,11 @@
         <field name="name">nsp.measurement.session.form</field>
         <field name="model">nsp.measurement.session</field>
         <field name="arch" type="xml">
-            <form string="Measurement Session">
+            <form string="Reader Calibration">
                 <header>
                     <button name="action_ready" type="object" string="Release to Controllers" icon="fa-cloud-upload"
                             class="oe_highlight" invisible="status != 'draft'"/>
-                    <button name="action_open_live" type="object" string="Live Measurement" icon="fa-line-chart"
+                    <button name="action_open_live" type="object" string="Live Reader Calibration" icon="fa-line-chart"
                             class="oe_highlight" invisible="status == 'draft'"/>
                     <button name="action_complete" type="object" string="Complete" icon="fa-check-circle"
                             invisible="status != 'running'"/>
@@ -61,12 +61,12 @@
                         </button>
                     </div>
                     <div class="oe_title">
-                        <label for="measurement_code" string="Measurement Code"/>
+                        <label for="measurement_code" string="Calibration Code"/>
                         <h1><field name="measurement_code" readonly="1" widget="CopyClipboardChar"/></h1>
                         <div class="text-muted">Revision <field name="revision" readonly="1" class="oe_inline"/></div>
                     </div>
                     <group>
-                        <group string="Measurement Scope">
+                        <group string="Calibration Scope">
                             <field name="target_count" string="Target Pairs" readonly="1"/>
                             <field name="target_tag_count" string="RFID Tags" readonly="1"/>
                             <field name="controller_count" readonly="1"/>
@@ -109,7 +109,7 @@
                         </page>
                         <page string="Controllers &amp; Readers">
                             <div class="alert alert-info" role="alert">
-                                Select Readers from one or many Controllers. Reader ownership determines the Controller automatically. Choose only the Antennas that participate in this Measurement.
+                                Select Readers from one or many Controllers. Reader ownership determines the Controller automatically. Choose only the Antennas that participate in this calibration.
                             </div>
                             <field name="reader_line_ids" readonly="status != 'draft'">
                                 <list editable="bottom" delete="1">
@@ -143,7 +143,7 @@
         <field name="name">nsp.measurement.session.live.form</field>
         <field name="model">nsp.measurement.session</field>
         <field name="arch" type="xml">
-            <form string="Live Measurement" create="0" delete="0" duplicate="0">
+            <form string="Live Reader Calibration" create="0" delete="0" duplicate="0">
                 <header>
                     <button name="action_open_session_form" type="object" string="Configuration" icon="fa-arrow-left"/>
                     <button name="action_view_events" type="object" string="Observations" icon="fa-list-ol"/>
@@ -160,7 +160,7 @@
                 <sheet class="nsp-measurement-live-form">
                     <field name="is_cloud_deployment" invisible="1"/>
                     <div class="oe_title">
-                        <label for="measurement_code" string="Live Measurement"/>
+                        <label for="measurement_code" string="Live Reader Calibration"/>
                         <h1><field name="measurement_code" readonly="1" widget="CopyClipboardChar"/></h1>
                     </div>
                     <group class="nsp-measurement-live-meta">
@@ -200,7 +200,7 @@
         <field name="name">nsp.measurement.event.list</field>
         <field name="model">nsp.measurement.event</field>
         <field name="arch" type="xml">
-            <list string="Measurement Observations" create="0" edit="0" delete="0">
+            <list string="Calibration Observations" create="0" edit="0" delete="0">
                 <field name="read_at"/>
                 <field name="session_id"/>
                 <field name="revision"/>
@@ -219,7 +219,7 @@
         <field name="name">nsp.measurement.event.form</field>
         <field name="model">nsp.measurement.event</field>
         <field name="arch" type="xml">
-            <form string="Measurement Observation" create="0" edit="0" delete="0">
+            <form string="Calibration Observation" create="0" edit="0" delete="0">
                 <sheet>
                     <group>
                         <field name="event_uid"/>
@@ -239,14 +239,14 @@
     </record>
 
     <record id="action_nsp_measurement_session" model="ir.actions.act_window">
-        <field name="name">Measurement Sessions</field>
+        <field name="name">Reader Calibration</field>
         <field name="res_model">nsp.measurement.session</field>
         <field name="view_mode">list,form</field>
         <field name="search_view_id" ref="view_nsp_measurement_session_search"/>
     </record>
 
     <record id="action_nsp_measurement_event" model="ir.actions.act_window">
-        <field name="name">Measurement Observations</field>
+        <field name="name">Calibration Observations</field>
         <field name="res_model">nsp.measurement.event</field>
         <field name="view_mode">list,form</field>
         <field name="search_view_id" ref="view_nsp_measurement_event_search"/>

@@ -111,14 +111,14 @@
                         </div>
                     </article>
                     <div t-if="!state.readers.length" class="nsp-ml__empty nsp-ml__empty--card">
-                        No Measurement Readers are configured.
+                        No Readers are configured for this calibration.
                     </div>
                 </div>
             </section>
 
             <div class="nsp-ml__layout">
                 <main class="nsp-ml__main">
-                    <nav class="nsp-ml__tabs" aria-label="Measurement data views">
+                    <nav class="nsp-ml__tabs" aria-label="Reader calibration data views">
                         <button t-att-class="tabClass('timeline')" t-on-click="setTimelineTab">Detection Timeline</button>
                         <button t-att-class="tabClass('coverage')" t-on-click="setCoverageTab">
                             RFID Coverage <span class="nsp-ml__tab-count" t-esc="state.targetCount"/>
@@ -226,7 +226,7 @@
                         <header class="nsp-ml-panel__header">
                             <div>
                                 <h3>Reader Status</h3>
-                                <span class="nsp-ml__hint">Configured Measurement settings compared with Controller runtime status.</span>
+                                <span class="nsp-ml__hint">Configured calibration settings compared with Controller runtime status.</span>
                             </div>
                         </header>
                         <div class="nsp-ml__table-wrap">
@@ -278,7 +278,7 @@
                     </section>
 
                     <section t-if="state.activeTab === 'notes'" class="nsp-ml-panel">
-                        <header class="nsp-ml-panel__header"><h3>Measurement Notes</h3></header>
+                        <header class="nsp-ml-panel__header"><h3>Calibration Notes</h3></header>
                         <div class="nsp-ml__notes" t-esc="state.note || 'No notes.'"/>
                     </section>
                 </main>

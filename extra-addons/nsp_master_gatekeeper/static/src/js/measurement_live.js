@@ -112,7 +112,7 @@ export class NspMeasurementLive extends Component {
                 [this.sessionId, 0, 5000]
             );
             if (!data?.found) {
-                this.state.error = "Measurement Session was not found.";
+                this.state.error = "Reader Calibration was not found.";
                 return;
             }
             const returnedSessionId = this.normalizeSessionId(data.session_id);
@@ -151,7 +151,7 @@ export class NspMeasurementLive extends Component {
             this.state.hasLoaded = true;
             this.state.error = "";
         } catch (error) {
-            this.state.error = error?.data?.message || error?.message || "Unable to load Live Measurement data.";
+            this.state.error = error?.data?.message || error?.message || "Unable to load live Reader Calibration data.";
         } finally {
             this.loading = false;
         }

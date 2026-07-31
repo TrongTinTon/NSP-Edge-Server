@@ -133,8 +133,4 @@
         <field name="search_view_id" ref="view_nsp_reference_vendor_search"/>
     </record>
 
-    <menuitem id="menu_nsp_reference_data" name="Reference Data" parent="nsp_core.menu_nsp_configuration" sequence="30" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking"/>
-    <menuitem id="menu_nsp_reference_brands" name="Brands" parent="menu_nsp_reference_data" action="action_nsp_reference_brand" sequence="10" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking"/>
-    <menuitem id="menu_nsp_reference_models" name="Models" parent="menu_nsp_reference_data" action="action_nsp_reference_model" sequence="20" groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking"/>
-    <menuitem id="menu_nsp_reference_vendors" name="Vendors" parent="menu_nsp_reference_data" action="action_nsp_reference_vendor" sequence="30" groups="nsp_core.group_nsp_it_parking"/>
 </odoo>

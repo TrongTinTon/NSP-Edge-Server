@@ -23,10 +23,18 @@
                     <field name="vehicle_ids" context="{'default_owner_id': id}">
                         <list editable="bottom" open_form_view="1" delete="0">
                             <field name="license_plate"/>
-                            <field name="vehicle_type_id" optional="show"/>
-                            <field name="brand_id" optional="show"/>
-                            <field name="model_id" domain="[('brand_id', '=', brand_id)]" optional="show"/>
-                            <field name="color_id" optional="hide"/>
+                            <field name="vehicle_type_id" optional="show"
+                                   options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                   context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_type_form'}"/>
+                            <field name="brand_id" optional="show"
+                                   options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                   context="{'form_view_ref': 'nsp_core.view_nsp_reference_brand_form'}"/>
+                            <field name="model_id" domain="[('brand_id', '=', brand_id)]" optional="show"
+                                   options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                   context="{'form_view_ref': 'nsp_core.view_nsp_reference_model_form', 'default_brand_id': brand_id}"/>
+                            <field name="color_id" optional="hide"
+                                   options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                   context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_color_form'}"/>
                             <field name="rfid_tid_input" string="RFID TID" placeholder="Scan or enter Vehicle TID"/>
                             <field name="tid" readonly="1" optional="hide"/>
                             <field name="active" widget="boolean_toggle" optional="hide"/>

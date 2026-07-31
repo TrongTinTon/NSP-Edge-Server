@@ -5,76 +5,26 @@
         <field name="web_icon">nsp_business_gatekeeper,static/description/icon.png</field>
     </record>
 
-    <!-- Configuration / Gatekeeper -->
-    <menuitem id="nsp_device_root"
-              name="Gatekeeper"
+    <!-- Keep Configuration focused on the two operational setup workflows. -->
+    <menuitem id="menu_nsp_parking_area"
+              name="Parking Layout"
               parent="nsp_core.menu_nsp_configuration"
+              action="action_nsp_parking_area"
               sequence="10"
               groups="nsp_core.group_nsp_it_parking"/>
 
-    <!-- Branch master belongs directly under Gatekeeper. -->
-
-    <!-- Setup -->
-    <menuitem id="menu_nsp_setup_root"
-              name="Setup"
-              parent="nsp_device_root"
-              sequence="20"/>
-
-    <menuitem id="menu_nsp_parking_area"
-              name="Parking Configuration"
-              parent="menu_nsp_setup_root"
-              action="action_nsp_parking_area"
-              sequence="10"/>
-
-    <menuitem id="menu_nsp_infrastructure_root"
-              name="Infrastructure"
-              parent="menu_nsp_setup_root"
-              sequence="20"/>
-
-    <menuitem id="nsp_controller_menu"
-              name="Controllers"
-              parent="menu_nsp_infrastructure_root"
-              action="action_nsp_controllers"
-              sequence="20"/>
-
-    <menuitem id="nsp_device_menu"
-              name="Readers"
-              parent="menu_nsp_infrastructure_root"
-              action="nsp_device_action"
-              sequence="30"/>
-
-    <menuitem id="menu_nsp_device_antenna"
-              name="Antennas"
-              parent="menu_nsp_infrastructure_root"
-              action="action_nsp_device_antenna"
-              sequence="40"/>
-
-    <!-- Measurement Sessions is the Measurement entry itself; avoid a redundant submenu. -->
     <menuitem id="menu_nsp_measurement"
-              name="Measurement"
-              parent="nsp_device_root"
+              name="Reader Calibration"
+              parent="nsp_core.menu_nsp_configuration"
               action="action_nsp_measurement_session"
-              sequence="30"/>
-
-    <!-- Runtime/business events -->
-    <menuitem id="menu_nsp_events_root"
-              name="Events"
-              parent="nsp_device_root"
-              sequence="40"/>
-
-    <menuitem id="menu_nsp_parking_transaction"
-              name="Parking Transactions"
-              parent="menu_nsp_events_root"
-              action="action_nsp_parking_transaction"
-              sequence="10"/>
-
-    <menuitem id="menu_nsp_parking_detection_event"
-              name="Detection Events"
-              parent="menu_nsp_events_root"
-              action="action_nsp_parking_detection_event"
               sequence="20"
               groups="nsp_core.group_nsp_it_parking"/>
 
-    <!-- Device master/reference configuration remains under the global Configuration menu. -->
-
+    <!-- Parking business history is a first-class operational menu. -->
+    <menuitem id="menu_nsp_transactions"
+              name="Transactions"
+              parent="nsp_core.menu_nsp_root"
+              action="action_nsp_parking_transaction"
+              sequence="30"
+              groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking"/>
 </odoo>

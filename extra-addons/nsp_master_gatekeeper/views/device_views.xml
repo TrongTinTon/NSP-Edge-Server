@@ -86,7 +86,7 @@
                     <notebook>
                         <page name="antennas" string="Antennas">
                             <div class="alert alert-info" role="alert">
-                                Antennas are physical ports owned by this Reader. Reader power applies to all ports; movement timing is configured separately in Parking Configuration.
+                                Antennas are physical ports owned by this Reader. Reader power applies to all ports; movement timing is configured separately in Parking Layout.
                             </div>
                             <div class="text-muted mb-2">
                                 Use Add a line to add physical Antennas while creating or editing this Reader.

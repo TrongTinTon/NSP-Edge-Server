@@ -1,7 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <menuitem id="menu_nsp_sync_root" name="Sync" parent="nsp_core.menu_nsp_configuration" sequence="20" groups="nsp_core.group_nsp_it_parking"/>
-    <menuitem id="menu_nsp_sync_auth" name="Cloud Connections" parent="menu_nsp_sync_root" action="action_nsp_sync_auth" sequence="10"/>
-    <menuitem id="menu_nsp_sync_job" name="Sync Jobs" parent="menu_nsp_sync_root" action="action_nsp_sync_job" sequence="20"/>
-    <menuitem id="menu_nsp_sync_record" name="Sync Records" parent="menu_nsp_sync_root" action="action_nsp_sync_record_all" sequence="30"/>
+    <!-- Sync is infrastructure, not a user-facing Configuration menu. Views and actions remain available for technical diagnostics. -->
 </odoo>
