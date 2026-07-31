@@ -44,28 +44,12 @@ class NspParkingArea(models.Model):
         required=True,
         index=True,
     )
-    motorbike_capacity = fields.Integer(
-        string="Motorbike Capacity",
-        default=0,
-        help="Number of internal motorbike spaces. Set 0 when capacity monitoring is not configured.",
-    )
-    live_monitor_columns = fields.Integer(
-        string="Live Monitor Columns",
-        default=2,
-        required=True,
-        help=(
-            "Number of vehicle columns shown on the customer-facing Parking Live Monitor. "
-            "Allowed range: 1-4. The monitor keeps four rows, so one page displays "
-            "4, 8, 12 or 16 vehicles respectively."
-        ),
-    )
-
     lane_ids = fields.One2many(
         "nsp.parking.lane", "parking_area_id", string="Parking Lanes"
     )
     antenna_transition_ids = fields.Many2many(
         "nsp.parking.antenna.transition",
-        string="Antenna Transitions",
+        string="Antenna Movement Rules",
         compute="_compute_topology",
     )
     controller_ids = fields.Many2many(
@@ -161,18 +145,6 @@ class NspParkingArea(models.Model):
             values["code"] = self._normalize_code(values.get("code"))
         return super().write(values)
 
-    @api.constrains("motorbike_capacity")
-    def _check_motorbike_capacity(self):
-        for rec in self:
-            if rec.motorbike_capacity < 0:
-                raise ValidationError(_("Motorbike Capacity cannot be negative."))
-
-    @api.constrains("live_monitor_columns")
-    def _check_live_monitor_columns(self):
-        for rec in self:
-            if rec.live_monitor_columns < 1 or rec.live_monitor_columns > 4:
-                raise ValidationError(_("Live Monitor Columns must be between 1 and 4."))
-
     def action_open_live_monitor(self):
         self.ensure_one()
         return {
@@ -180,57 +152,7 @@ class NspParkingArea(models.Model):
             "name": _("Parking Live Monitor"),
             "tag": "nsp_parking_live_monitor",
             "target": "fullscreen",
-            "params": {
-                "parking_area_id": self.id,
-                "live_monitor_columns": int(self.live_monitor_columns or 2),
-            },
-        }
-
-    def _motorbike_slot_snapshot(self):
-        """Return current motorbike occupancy using final allowed Parking Transactions.
-
-        The current location of each motorbike is determined from its latest
-        allowed transaction globally. This keeps the footer correct after a
-        page reload and avoids storing a second mutable occupancy table.
-        """
-        self.ensure_one()
-        capacity = max(int(self.motorbike_capacity or 0), 0)
-        if not capacity:
-            return {
-                "capacity_configured": False,
-                "motorbike_capacity": 0,
-                "motorbike_occupied": 0,
-                "available_slots": None,
-            }
-
-        self.env.cr.execute(
-            """
-            SELECT COUNT(*)
-              FROM (
-                    SELECT DISTINCT ON (tx.vehicle_id)
-                           tx.vehicle_id,
-                           tx.event_type,
-                           lane.parking_area_id
-                      FROM nsp_parking_transaction tx
-                      JOIN nsp_vehicle vehicle ON vehicle.id = tx.vehicle_id
-                      JOIN nsp_vehicle_type vehicle_type ON vehicle_type.id = vehicle.vehicle_type_id
-                      JOIN nsp_parking_lane lane ON lane.id = tx.lane_id
-                     WHERE tx.status = 'allowed'
-                       AND tx.vehicle_id IS NOT NULL
-                       AND LOWER(vehicle_type.code) = 'motorbike'
-                     ORDER BY tx.vehicle_id, tx.event_time DESC, tx.id DESC
-                   ) current_vehicle
-             WHERE current_vehicle.event_type = 'check_in'
-               AND current_vehicle.parking_area_id = %s
-            """,
-            [self.id],
-        )
-        occupied = int((self.env.cr.fetchone() or [0])[0] or 0)
-        return {
-            "capacity_configured": True,
-            "motorbike_capacity": capacity,
-            "motorbike_occupied": occupied,
-            "available_slots": max(capacity - occupied, 0),
+            "params": {"parking_area_id": self.id},
         }
 
     @api.model
@@ -253,7 +175,6 @@ class NspParkingArea(models.Model):
         if not area:
             return {"found": False}
 
-        slots = area._motorbike_slot_snapshot()
         transactions = self.env["nsp.parking.transaction"].sudo().search(
             [
                 ("lane_id.parking_area_id", "=", area.id),
@@ -262,20 +183,13 @@ class NspParkingArea(models.Model):
             order="event_time desc, id desc",
             limit=limit,
         )
-        # Feed oldest -> newest so OWL can use the same rolling-stream logic
-        # for the initial snapshot and for realtime Bus events.
-        items = [
-            tx._live_monitor_payload(slot_snapshot=slots)
-            for tx in transactions[::-1]
-        ]
+        items = [tx._live_monitor_payload() for tx in transactions[::-1]]
         return {
             "found": True,
             "parking_area_id": area.id,
             "parking_area_name": area.name,
             "branch_name": area.branch_id.name or "",
             "state": area.state,
-            "live_monitor_columns": int(area.live_monitor_columns or 2),
-            **slots,
             "items": items,
         }
 
@@ -322,41 +236,46 @@ class NspParkingArea(models.Model):
         if not lanes:
             return [_('Configure at least one active Parking Lane.')]
 
-        transitions = lanes.mapped("antenna_transition_ids")
-        serials = {
-            str(serial or "").strip().upper()
-            for serial in (
-                transitions.mapped("from_serial_number")
-                + transitions.mapped("to_serial_number")
-            )
-            if str(serial or "").strip()
-        }
-        whitelisted_serials = set(
-            self.env["nsp.device.whitelist"].sudo().search([
-                ("serial_number", "in", list(serials)),
-            ]).mapped("serial_number")
-        ) if serials else set()
-
         for lane in lanes:
             lane_name = lane.display_name or lane.name or _("Lane")
-            if not lane.controller_id:
-                issues.append(
-                    _("Lane %(lane)s must have a Controller.") % {"lane": lane_name}
-                )
+            controller = lane.controller_id
+            if not controller:
+                issues.append(_("Lane %(lane)s must have a Controller.") % {"lane": lane_name})
                 continue
+
+            controller_whitelist = controller.whitelist_id
+            if (
+                not controller_whitelist
+                or not controller_whitelist.active
+                or controller_whitelist.device_type_code != "CONTROLLER"
+            ):
+                issues.append(
+                    _("Lane %(lane)s Controller must be an active Controller in Device Whitelist.")
+                    % {"lane": lane_name}
+                )
+            server_whitelist = controller_whitelist.parent_id if controller_whitelist else False
+            if (
+                not server_whitelist
+                or not server_whitelist.active
+                or server_whitelist.device_type_code != "SERVER"
+            ):
+                issues.append(
+                    _("Lane %(lane)s Controller must belong to an active Server in Device Whitelist.")
+                    % {"lane": lane_name}
+                )
 
             rules = lane.antenna_transition_ids
             if not rules:
                 issues.append(
-                    _("Lane %(lane)s must have at least one Antenna Transition.")
+                    _("Lane %(lane)s must have at least one Antenna Movement Rule.")
                     % {"lane": lane_name}
                 )
                 continue
 
             wrong_scope = rules.filtered(
                 lambda item: (
-                    item.from_controller_id != lane.controller_id
-                    or item.to_controller_id != lane.controller_id
+                    item.from_controller_id != controller
+                    or item.to_controller_id != controller
                 )
             )
             if wrong_scope:
@@ -364,19 +283,26 @@ class NspParkingArea(models.Model):
                     _("All antennas of lane %(lane)s must belong to Controller %(controller)s.")
                     % {
                         "lane": lane_name,
-                        "controller": lane.controller_id.controller_id,
+                        "controller": controller.controller_id,
                     }
                 )
 
-            invalid = rules.filtered(
-                lambda item: (
-                    str(item.from_serial_number or "").strip().upper() not in whitelisted_serials
-                    or str(item.to_serial_number or "").strip().upper() not in whitelisted_serials
+            invalid_antennas = rules.mapped("from_antenna_id") | rules.mapped("to_antenna_id")
+            invalid_antennas = invalid_antennas.filtered(
+                lambda antenna: (
+                    not antenna.active
+                    or not antenna.whitelist_id
+                    or not antenna.whitelist_id.active
+                    or antenna.whitelist_id.device_type_code != "ANTENNA"
+                    or not antenna.device_id.active
+                    or not antenna.device_id.whitelist_id
+                    or not antenna.device_id.whitelist_id.active
+                    or antenna.device_id.whitelist_id.device_type_code != "RFID_READER"
                 )
             )
-            if invalid:
+            if invalid_antennas:
                 issues.append(
-                    _("Lane %(lane)s contains a Reader that is not in Device Whitelist.")
+                    _("Lane %(lane)s contains an Antenna or RFID Reader that is not active in Device Whitelist.")
                     % {"lane": lane_name}
                 )
         return issues
@@ -436,18 +362,6 @@ class NspParkingArea(models.Model):
         )
         return action
 
-    def action_open_antenna_transitions(self):
-        self.ensure_one()
-        action = self.env.ref("nsp_business_gatekeeper.action_nsp_parking_antenna_transition").sudo().read()[0]
-        action.update(
-            {
-                "name": _("Antenna Transitions"),
-                "domain": [("lane_id.parking_area_id", "=", self.id)],
-                "context": {},
-            }
-        )
-        return action
-
     def action_set_operational(self):
         for rec in self:
             issues = rec._operational_issues()
@@ -475,8 +389,6 @@ class NspParkingArea(models.Model):
             "parking_area_name": self.name,
             "branch_code": self.branch_id.code or "",
             "state": self.state,
-            "motorbike_capacity": int(self.motorbike_capacity or 0),
-            "live_monitor_columns": int(self.live_monitor_columns or 2),
             "lanes": self._lane_payload(),
         }
 
@@ -517,7 +429,7 @@ class NspParkingLane(models.Model):
     antenna_transition_ids = fields.One2many(
         "nsp.parking.antenna.transition",
         "lane_id",
-        string="Antenna Transitions",
+        string="Antenna Movement Rules",
     )
     transition_count = fields.Integer(compute="_compute_transition_count")
 
@@ -578,7 +490,7 @@ class NspParkingLane(models.Model):
             )
             if invalid:
                 raise ValidationError(
-                    _("Existing Antenna Transitions do not belong to the selected Lane Controller.")
+                    _("Existing Antenna Movement Rules do not belong to the selected Lane Controller.")
                 )
         return result
 
@@ -727,12 +639,23 @@ class NspParkingAntennaTransition(models.Model):
             }
             serials.discard("")
             allowed = set(
-                Whitelist.search([("serial_number", "in", list(serials))]).mapped("serial_number")
+                Whitelist.search([
+                    ("serial_number", "in", list(serials)),
+                    ("active", "=", True),
+                    ("device_type_code", "=", "RFID_READER"),
+                ]).mapped("serial_number")
             ) if serials else set()
             if serials - allowed:
                 raise ValidationError(
                     _("Both antennas must belong to Readers in Device Whitelist.")
                 )
+
+            if "whitelist_id" in rec.from_antenna_id._fields:
+                invalid_antennas = (rec.from_antenna_id | rec.to_antenna_id).filtered(
+                    lambda antenna: not antenna.whitelist_id or not antenna.whitelist_id.active
+                )
+                if invalid_antennas:
+                    raise ValidationError(_("Both antennas must be active devices in Device Whitelist."))
 
             antenna_ids = [rec.from_antenna_id.id, rec.to_antenna_id.id]
             conflict = self.search([

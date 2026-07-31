@@ -172,7 +172,11 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
               FROM nsp_device AS device
               JOIN nsp_device_whitelist AS whitelist
                 ON whitelist.serial_number = device.serial_number
+              JOIN nsp_device_type AS device_type
+                ON device_type.id = whitelist.device_type_id
              WHERE device.controller_id = %s
+               AND whitelist.active = TRUE
+               AND device_type.code = 'RFID_READER'
             """,
             (controller.id,),
         )
@@ -187,6 +191,8 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             return devices.browse()
         allowed = set(self.env["nsp.device.whitelist"].sudo().search([
             ("serial_number", "in", serials),
+            ("active", "=", True),
+            ("device_type_code", "=", "RFID_READER"),
         ]).mapped("serial_number"))
         return devices.filtered(lambda reader: reader.serial_number in allowed)
 
@@ -205,6 +211,8 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         ]) if controller_ids and serials else Device.browse()
         whitelist = self.env["nsp.device.whitelist"].sudo().search([
             ("serial_number", "in", list(serials)),
+            ("active", "=", True),
+            ("device_type_code", "=", "RFID_READER"),
         ]) if serials else self.env["nsp.device.whitelist"].browse()
         return {
             "device_by_key": {(device.controller_id.id, device.serial_number): device for device in devices},

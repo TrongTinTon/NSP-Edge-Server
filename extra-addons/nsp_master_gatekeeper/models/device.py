@@ -11,10 +11,15 @@ class Device(models.Model):
     _order = "controller_id, serial_number, id"
 
     # Device declaration
+    whitelist_id = fields.Many2one(
+        "nsp.device.whitelist", string="Device Whitelist", readonly=True, copy=False,
+        ondelete="set null", index=True,
+    )
+
     name = fields.Char(string="Reader Name", required=True, default="RFID Reader", index=True)
     serial_number = fields.Char(
         string="Serial",
-        required=True,
+        required=False,
         copy=False,
         index=True,
         help="Physical Reader serial number. It must be globally unique across all Edge Servers and Controllers.",
@@ -26,11 +31,12 @@ class Device(models.Model):
     controller_id = fields.Many2one(
         "nsp.controller",
         string="Controller",
-        required=True,
+        required=False,
         ondelete="restrict",
         index=True,
         help="Controller that directly manages this Reader.",
     )
+    active = fields.Boolean(default=True, index=True)
 
     # Runtime status reported by the Controller
     status = fields.Selection([
@@ -207,12 +213,11 @@ class Device(models.Model):
             vals = dict(source)
             antenna_inputs.append(vals.pop("antenna_numbers", None))
             serial = self._normalize_serial(vals.get("serial_number"))
-            if not serial:
-                raise ValidationError(_("Reader Serial is required."))
-            if serial in serials:
-                self._raise_serial_conflict(serial)
-            serials.add(serial)
-            vals["serial_number"] = serial
+            if serial:
+                if serial in serials:
+                    self._raise_serial_conflict(serial)
+                serials.add(serial)
+            vals["serial_number"] = serial or False
             vals["name"] = str(vals.get("name") or serial or "RFID Reader").strip()
             vals["device_code"] = self._normalize_code(
                 vals.get("device_code") or new_management_code("DEV")
@@ -221,7 +226,7 @@ class Device(models.Model):
 
         existing = self.with_context(active_test=False).search([
             ("serial_number", "in", sorted(serials)),
-        ], limit=1)
+        ], limit=1) if serials else self.browse()
         if existing:
             self._raise_serial_conflict(existing.serial_number, existing)
 
@@ -236,14 +241,13 @@ class Device(models.Model):
         antenna_input = values.pop("antenna_numbers", None)
         if "serial_number" in values:
             serial = self._normalize_serial(values.get("serial_number"))
-            if not serial:
-                raise ValidationError(_("Reader Serial is required."))
-            if len(self) > 1:
-                self._raise_serial_conflict(serial)
-            conflict = self._serial_conflict(serial, exclude_ids=self.ids)
-            if conflict:
-                self._raise_serial_conflict(serial, conflict)
-            values["serial_number"] = serial
+            if serial:
+                if len(self) > 1:
+                    self._raise_serial_conflict(serial)
+                conflict = self._serial_conflict(serial, exclude_ids=self.ids)
+                if conflict:
+                    self._raise_serial_conflict(serial, conflict)
+            values["serial_number"] = serial or False
         if "name" in values:
             values["name"] = str(values.get("name") or "").strip() or "RFID Reader"
         if "device_code" in values:
@@ -257,8 +261,6 @@ class Device(models.Model):
     @api.constrains("serial_number", "device_code")
     def _check_declaration(self):
         for reader in self:
-            if not self._normalize_serial(reader.serial_number):
-                raise ValidationError(_("Reader Serial is required."))
             if not self._normalize_code(reader.device_code):
                 raise ValidationError(_("Device Code is required."))
 
@@ -341,20 +343,31 @@ class Device(models.Model):
                 ])
         return True
 
-    def _antenna_config_payload(self):
+    def _antenna_config_payload(self, include_identity=False):
         self.ensure_one()
-        return [
-            {"antenna_no": int(antenna.antenna_no)}
-            for antenna in self.antennas_ids.sorted(key=lambda item: (item.antenna_no, item.id))
-        ]
+        antennas = self.antennas_ids
+        if "active" in antennas._fields:
+            antennas = antennas.filtered("active")
+        if "cloud_removed" in antennas._fields:
+            antennas = antennas.filtered(lambda antenna: not antenna.cloud_removed)
+        if "whitelist_id" in antennas._fields:
+            antennas = antennas.filtered(
+                lambda antenna: antenna.whitelist_id and antenna.whitelist_id.active
+            )
+        result = []
+        for antenna in antennas.sorted(key=lambda item: (item.antenna_no, item.id)):
+            item = {"antenna_no": int(antenna.antenna_no)}
+            if include_identity:
+                item.update({
+                    "technical_code": antenna.technical_code or "",
+                    "serial_number": antenna.serial_number or False,
+                    "name": antenna.whitelist_id.name if antenna.whitelist_id else antenna.display_name,
+                })
+            result.append(item)
+        return result
 
     def _build_config_payload(self):
-        """Return technical Reader configuration for the Controller.
-
-        Device Code, physical connection and parking topology remain server-owned.
-        Transmit power is common to the Reader. Antenna declarations contain only
-        the physical antenna number; parking timing belongs to Parking Configuration.
-        """
+        """Return technical Reader configuration for the Controller."""
         self.ensure_one()
         return {
             "serial_number": self.serial_number or "",
@@ -364,7 +377,7 @@ class Device(models.Model):
                 "tid_start_address": int(self.tid_addr or 0),
                 "tid_length": int(self.tid_len or 0),
             },
-            "antennas": self._antenna_config_payload(),
+            "antennas": self._antenna_config_payload(include_identity=False),
         }
 
     def _build_edge_config_payload(self):
@@ -372,8 +385,10 @@ class Device(models.Model):
         self.ensure_one()
         payload = self._build_config_payload()
         payload.update({
+            "technical_code": self.device_code or "",
             "reader_name": self.name or self.serial_number or "RFID Reader",
             "physical_connection": self.connection_type or False,
+            "antennas": self._antenna_config_payload(include_identity=True),
         })
         return payload
 

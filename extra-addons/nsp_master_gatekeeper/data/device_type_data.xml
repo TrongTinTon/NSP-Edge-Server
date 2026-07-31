@@ -1,15 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo noupdate="1">
+    <record id="device_type_server" model="nsp.device.type">
+        <field name="name">Server</field>
+        <field name="code">SERVER</field>
+    </record>
+    <record id="device_type_controller" model="nsp.device.type">
+        <field name="name">Controller</field>
+        <field name="code">CONTROLLER</field>
+    </record>
     <record id="device_type_rfid_reader" model="nsp.device.type">
         <field name="name">RFID Reader</field>
         <field name="code">RFID_READER</field>
     </record>
-    <record id="device_type_camera" model="nsp.device.type">
-        <field name="name">Camera</field>
-        <field name="code">CAMERA</field>
-    </record>
-    <record id="device_type_other" model="nsp.device.type">
-        <field name="name">Other</field>
-        <field name="code">OTHER</field>
+    <record id="device_type_antenna" model="nsp.device.type">
+        <field name="name">Antenna</field>
+        <field name="code">ANTENNA</field>
     </record>
 </odoo>

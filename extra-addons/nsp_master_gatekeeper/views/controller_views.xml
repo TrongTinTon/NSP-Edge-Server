@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='UTF-8'?>
 <odoo>
     <record id="view_nsp_edge_servers_search" model="ir.ui.view">
         <field name="name">nsp.edge.server.search</field>
@@ -22,11 +22,8 @@
         <field name="name">nsp.edge.server.list</field>
         <field name="model">nsp.edge.server</field>
         <field name="arch" type="xml">
-            <list string="Edge Servers">
-                <field name="status" widget="badge"
-                       decoration-success="status == 'online'"
-                       decoration-danger="status in ('offline','revoked')"
-                       decoration-warning="status in ('error','block')"/>
+            <list string="Edge Servers" create="0" edit="1" delete="0">
+                <field name="status" widget="badge" decoration-success="status == 'online'" decoration-danger="status in ('offline','revoked')" decoration-warning="status in ('error','block')"/>
                 <field name="name"/>
                 <field name="edge_server_code" string="Technical Code" optional="hide"/>
                 <field name="controller_count"/>
@@ -42,7 +39,7 @@
         <field name="name">nsp.edge.server.form</field>
         <field name="model">nsp.edge.server</field>
         <field name="arch" type="xml">
-            <form string="Edge Server">
+            <form string="Edge Server" create="0" edit="1" delete="0">
                 <header>
                     <field name="status" widget="statusbar" statusbar_visible="offline,online,error,block,revoked" readonly="1"/>
                 </header>
@@ -57,10 +54,7 @@
                             <field name="edge_server_code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
                         <group string="Runtime Status">
-                            <field name="status" widget="badge" readonly="1"
-                                   decoration-success="status == 'online'"
-                                   decoration-danger="status in ('offline','revoked')"
-                                   decoration-warning="status in ('error','block')"/>
+                            <field name="status" widget="badge" readonly="1" decoration-success="status == 'online'" decoration-danger="status in ('offline','revoked')" decoration-warning="status in ('error','block')"/>
                             <field name="timestamp" string="Last Heartbeat" readonly="1"/>
                         </group>
                     </group>
@@ -72,14 +66,13 @@
                             <div class="text-muted mb-2">
                                 Use Add a line to open the Controller popup. Inside it, add Readers directly in the list and declare their Antenna numbers on the same line.
                             </div>
-                            <field name="controller_ids" mode="list,form"
-                                   context="{'default_edge_server_id': id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_controllers_form'}">
-                                <list string="Controllers" create="1" edit="1" delete="1">
+                            <field name="controller_ids" mode="list,form" context="{'default_edge_server_id': id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_controllers_form'}">
+                                <list string="Controllers" create="0" edit="1" delete="0">
                                     <control>
                                         <create string="Add a line"/>
                                     </control>
                                     <field name="controller_name" string="Controller"/>
-                                    <field name="controller_id" string="Technical Code" optional="hide"/>
+                                    <field name="controller_id" string="Technical Code" optional="hide" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                                     <field name="status" widget="badge" readonly="1"/>
                                     <field name="reader_count" readonly="1"/>
                                     <field name="antenna_count" readonly="1"/>
@@ -100,9 +93,9 @@
         <field name="model">nsp.controller</field>
         <field name="arch" type="xml">
             <search string="Controllers">
-                <field name="controller_id"/>
+                <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                 <field name="controller_name"/>
-                <field name="edge_server_id"/>
+                <field name="edge_server_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                 <filter string="Online" name="online" domain="[('status','=','online')]"/>
                 <filter string="Offline" name="offline" domain="[('status','=','offline')]"/>
                 <filter string="Error" name="error" domain="[('status','=','error')]"/>
@@ -119,14 +112,11 @@
         <field name="name">nsp.controller.list</field>
         <field name="model">nsp.controller</field>
         <field name="arch" type="xml">
-            <list string="Controllers">
-                <field name="status" widget="badge"
-                       decoration-success="status == 'online'"
-                       decoration-danger="status in ('offline','revoked')"
-                       decoration-warning="status in ('error','block')"/>
+            <list string="Controllers" create="0" edit="1" delete="0">
+                <field name="status" widget="badge" decoration-success="status == 'online'" decoration-danger="status in ('offline','revoked')" decoration-warning="status in ('error','block')"/>
                 <field name="controller_name" string="Controller" decoration-bf="1"/>
-                <field name="controller_id" string="Technical Code" optional="hide"/>
-                <field name="edge_server_id"/>
+                <field name="controller_id" string="Technical Code" optional="hide" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                <field name="edge_server_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                 <field name="reader_count"/>
                 <field name="antenna_count"/>
                 <field name="timestamp" string="Last Heartbeat"/>
@@ -139,29 +129,23 @@
         <field name="name">nsp.controller.form</field>
         <field name="model">nsp.controller</field>
         <field name="arch" type="xml">
-            <form string="Controller">
+            <form string="Controller" create="0" edit="1" delete="0">
                 <header>
                     <field name="status" widget="statusbar" statusbar_visible="offline,online,error,block,revoked" readonly="1"/>
                 </header>
                 <sheet>
                     <div class="oe_title">
                         <label for="controller_name"/>
-                        <h1><field name="controller_name" placeholder="Main Gate Controller"/></h1>
+                        <h1><field name="controller_name" readonly="1"/></h1>
                     </div>
                     <group>
                         <group string="Controller Declaration">
-                            <field name="edge_server_id"
-                                   readonly="context.get('default_edge_server_id')"
-                                   options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
-                                   context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_edge_servers_form'}"/>
+                            <field name="edge_server_id" readonly="context.get('default_edge_server_id')" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_edge_servers_form'}"/>
                             <field name="active"/>
-                            <field name="controller_id" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
+                            <field name="controller_id" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                         </group>
                         <group string="Runtime Status">
-                            <field name="status" widget="badge" readonly="1"
-                                   decoration-success="status == 'online'"
-                                   decoration-danger="status in ('offline','revoked')"
-                                   decoration-warning="status in ('error','block')"/>
+                            <field name="status" widget="badge" readonly="1" decoration-success="status == 'online'" decoration-danger="status in ('offline','revoked')" decoration-warning="status in ('error','block')"/>
                             <field name="timestamp" string="Last Heartbeat" readonly="1"/>
                         </group>
                     </group>
@@ -173,9 +157,8 @@
                             <div class="text-muted mb-2">
                                 Use Add a line to enter Reader information directly. Enter Antenna Nos. as 1,2,3,4 or 1-4; the Antenna records are created automatically when the Controller is saved.
                             </div>
-                            <field name="device_ids"
-                                   context="{'default_controller_id': id, 'default_edge_server_id': edge_server_id}">
-                                <list string="Readers" editable="bottom" create="1" edit="1" delete="1" open_form_view="0">
+                            <field name="device_ids" context="{'default_controller_id': id, 'default_edge_server_id': edge_server_id}">
+                                <list string="Readers" create="0" edit="1" delete="0" open_form_view="0">
                                     <control>
                                         <create string="Add a line"/>
                                     </control>

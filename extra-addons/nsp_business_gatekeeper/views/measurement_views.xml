@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='UTF-8'?>
 <odoo>
     <record id="view_nsp_measurement_session_search" model="ir.ui.view">
         <field name="name">nsp.measurement.session.search</field>
@@ -23,10 +23,7 @@
         <field name="name">nsp.measurement.session.list</field>
         <field name="model">nsp.measurement.session</field>
         <field name="arch" type="xml">
-            <list string="Reader Calibration"
-                  decoration-info="status == 'running'"
-                  decoration-success="status in ('completed','applied')"
-                  decoration-danger="status == 'failed'">
+            <list string="Reader Calibration" decoration-info="status == 'running'" decoration-success="status in ('completed','applied')" decoration-danger="status == 'failed'">
                 <field name="measurement_code" readonly="1"/>
                 <field name="revision"/>
                 <field name="target_count" string="Target Pairs"/>
@@ -44,14 +41,10 @@
         <field name="arch" type="xml">
             <form string="Reader Calibration">
                 <header>
-                    <button name="action_ready" type="object" string="Release to Controllers" icon="fa-cloud-upload"
-                            class="oe_highlight" invisible="status != 'draft'"/>
-                    <button name="action_open_live" type="object" string="Live Reader Calibration" icon="fa-line-chart"
-                            class="oe_highlight" invisible="status == 'draft'"/>
-                    <button name="action_complete" type="object" string="Complete" icon="fa-check-circle"
-                            invisible="status != 'running'"/>
-                    <button name="action_cancel" type="object" string="Cancel" icon="fa-times-circle"
-                            invisible="status in ('completed','applied','failed','cancelled')"/>
+                    <button name="action_ready" type="object" string="Release to Controllers" icon="fa-cloud-upload" class="oe_highlight" invisible="status != 'draft'"/>
+                    <button name="action_open_live" type="object" string="Live Reader Calibration" icon="fa-line-chart" class="oe_highlight" invisible="status == 'draft'"/>
+                    <button name="action_complete" type="object" string="Complete" icon="fa-check-circle" invisible="status != 'running'"/>
+                    <button name="action_cancel" type="object" string="Cancel" icon="fa-times-circle" invisible="status in ('completed','applied','failed','cancelled')"/>
                     <field name="status" widget="statusbar" statusbar_visible="draft,ready,running,completed,applied"/>
                 </header>
                 <sheet>
@@ -97,16 +90,13 @@
                             <field name="reader_line_ids" readonly="status != 'draft'">
                                 <list editable="bottom" delete="1">
                                     <field name="controller_id" readonly="1"/>
-                                    <field name="reader_id"
-                                           />
+                                    <field name="reader_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" domain="[('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','RFID_READER')]"/>
                                     <field name="serial_number" readonly="1" optional="hide"/>
                                     <field name="reader_status" readonly="1" widget="badge"/>
                                     <field name="reader_power_dbm" string="Reader Power (dBm)"/>
                                     <field name="read_interval_ms" string="Read Interval ms"/>
                                     <field name="available_antenna_ids" column_invisible="True"/>
-                                    <field name="antenna_ids" string="Antennas" widget="many2many_tags"
-                                           domain="[('id','in',available_antenna_ids)]"
-                                           options="{'no_create': True, 'no_open': True}" required="1"/>
+                                    <field name="antenna_ids" string="Antennas" widget="many2many_tags" domain="[('id','in',available_antenna_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" required="1"/>
                                 </list>
                             </field>
                         </page>
@@ -129,14 +119,10 @@
                 <header>
                     <button name="action_open_session_form" type="object" string="Configuration" icon="fa-arrow-left"/>
                     <button name="action_view_events" type="object" string="Observations" icon="fa-list-ol"/>
-                    <button name="action_live_measure_again" type="object" string="Measure Again" icon="fa-repeat"
-                            invisible="status not in ('running','completed','failed')"/>
-                    <button name="action_live_complete" type="object" string="Complete" icon="fa-check-circle"
-                            class="oe_highlight" invisible="status != 'running'"/>
-                    <button name="action_live_apply_to_operation" type="object" string="Apply to Operation" icon="fa-check"
-                            class="oe_highlight" invisible="not is_cloud_deployment or status != 'completed'"/>
-                    <button name="action_live_cancel" type="object" string="Cancel" icon="fa-times-circle"
-                            invisible="status not in ('ready','running')"/>
+                    <button name="action_live_measure_again" type="object" string="Measure Again" icon="fa-repeat" invisible="status not in ('running','completed','failed')"/>
+                    <button name="action_live_complete" type="object" string="Complete" icon="fa-check-circle" class="oe_highlight" invisible="status != 'running'"/>
+                    <button name="action_live_apply_to_operation" type="object" string="Apply to Operation" icon="fa-check" class="oe_highlight" invisible="not is_cloud_deployment or status != 'completed'"/>
+                    <button name="action_live_cancel" type="object" string="Cancel" icon="fa-times-circle" invisible="status not in ('ready','running')"/>
                     <field name="status" widget="statusbar" statusbar_visible="draft,ready,running,completed,applied,failed,cancelled"/>
                 </header>
                 <sheet class="nsp-measurement-live-form">

@@ -352,13 +352,8 @@ class ParkingTransaction(models.Model):
             ),
         }
 
-    def _live_monitor_payload(self, slot_snapshot=None):
-        """Serialize one final transaction for the customer-facing monitor.
-
-        Realtime bus payloads use ``slot_delta`` so a burst of transactions does
-        not execute an occupancy SQL query for every vehicle. The initial and
-        periodic snapshot remains authoritative and heals any missed bus event.
-        """
+    def _live_monitor_payload(self):
+        """Serialize one final transaction for the customer-facing monitor."""
         self.ensure_one()
         area = self.parking_area_id
         vehicle = self.vehicle_id
@@ -366,20 +361,6 @@ class ParkingTransaction(models.Model):
         gate_user = self.user_id if self.event_type == "check_out" and self.user_id else owner
         vehicle_type = vehicle.vehicle_type_id if vehicle else self.env["nsp.vehicle.type"].browse()
         vehicle_type_code = str(vehicle_type.code or "").strip().lower() if vehicle_type else ""
-        capacity = max(int(area.motorbike_capacity or 0), 0) if area else 0
-        slots = slot_snapshot if slot_snapshot is not None else {
-            "capacity_configured": bool(capacity),
-            "motorbike_capacity": capacity,
-            "motorbike_occupied": None,
-            "available_slots": None,
-        }
-        slot_delta = 0
-        if vehicle_type_code == "motorbike" and self.status == "allowed":
-            if self.event_type == "check_in":
-                slot_delta = -1
-            elif self.event_type == "check_out":
-                slot_delta = 1
-
         license_plate = (self.license_plate or self.vehicle_tid or "-").strip().upper()
         employee_name = (
             (gate_user.name or _("Unknown employee")).strip().upper()
@@ -404,17 +385,11 @@ class ParkingTransaction(models.Model):
             "vehicle_type": vehicle_type_code or "other",
             "license_plate": license_plate,
             "employee_name": employee_name,
-            "slot_delta": slot_delta,
             **self._live_monitor_display_meta(),
-            **slots,
         }
 
     def _broadcast_live_monitor(self):
-        """Broadcast final transactions without per-vehicle occupancy SQL.
-
-        Check-out events are also sent because they change the local slot count.
-        The Live Monitor reconciles against an authoritative snapshot every 15s.
-        """
+        """Broadcast final transactions to the Parking Live Monitor."""
         bus = self.env["bus.bus"]
         for transaction in self:
             if not transaction.parking_area_id:

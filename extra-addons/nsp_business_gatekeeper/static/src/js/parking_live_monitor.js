@@ -28,7 +28,8 @@ export class NspParkingLiveMonitor extends Component {
 
         const params = this.props.action?.params || {};
         this.parkingAreaId = Number(params.parking_area_id || 0);
-        this.initialDisplayColumns = this._normalizeDisplayColumns(params.live_monitor_columns);
+        this.displayColumnsStorageKey = `nsp.parking.live.columns.${this.parkingAreaId}`;
+        this.initialDisplayColumns = this._loadDisplayColumns();
 
         this.seenKeys = new Set();
         this.seenOrder = [];
@@ -52,10 +53,6 @@ export class NspParkingLiveMonitor extends Component {
             flashKeys: [],
             pendingCount: 0,
             recentArrivalTimes: [],
-            capacityConfigured: false,
-            motorbikeCapacity: 0,
-            motorbikeOccupied: 0,
-            availableSlots: null,
             clock: "",
             error: "",
         });
@@ -161,23 +158,6 @@ export class NspParkingLiveMonitor extends Component {
         return `Đang hiển thị theo đợt • còn ${this.state.pendingCount}`;
     }
 
-    get slotLabel() {
-        if (!this.state.capacityConfigured) {
-            return "Chưa cấu hình sức chứa";
-        }
-        if (Number(this.state.availableSlots || 0) <= 0) {
-            return "Xe máy nội bộ: Hết chỗ";
-        }
-        return `Xe máy nội bộ: Còn ${this.state.availableSlots} chỗ`;
-    }
-
-    get slotBadgeClass() {
-        if (!this.state.capacityConfigured) {
-            return "is-unconfigured";
-        }
-        return Number(this.state.availableSlots || 0) > 0 ? "is-available" : "is-full";
-    }
-
     entryCardClass(item) {
         if (!item) {
             return "is-empty";
@@ -201,6 +181,25 @@ export class NspParkingLiveMonitor extends Component {
             return DEFAULT_COLUMNS;
         }
         return Math.min(MAX_COLUMNS, Math.max(MIN_COLUMNS, columns));
+    }
+
+    _loadDisplayColumns() {
+        try {
+            return this._normalizeDisplayColumns(window.localStorage.getItem(this.displayColumnsStorageKey));
+        } catch {
+            return DEFAULT_COLUMNS;
+        }
+    }
+
+    setDisplayColumns(value) {
+        const columns = this._normalizeDisplayColumns(value);
+        this.state.displayColumns = columns;
+        this.state.entries = this.state.entries.slice(0, this.visibleCapacity);
+        try {
+            window.localStorage.setItem(this.displayColumnsStorageKey, String(columns));
+        } catch {
+            // Browser storage may be unavailable in private/restricted sessions.
+        }
     }
 
     _eventTimeMs(value) {
@@ -248,46 +247,6 @@ export class NspParkingLiveMonitor extends Component {
         return true;
     }
 
-    _applyAuthoritativeSlotState(payload) {
-        if (!payload) {
-            return;
-        }
-        if (payload.capacity_configured !== undefined) {
-            this.state.capacityConfigured = Boolean(payload.capacity_configured);
-        }
-        if (payload.motorbike_capacity !== undefined && payload.motorbike_capacity !== null) {
-            this.state.motorbikeCapacity = Number(payload.motorbike_capacity || 0);
-        }
-        if (payload.motorbike_occupied !== undefined && payload.motorbike_occupied !== null) {
-            this.state.motorbikeOccupied = Number(payload.motorbike_occupied || 0);
-        }
-        if (payload.available_slots !== undefined && payload.available_slots !== null) {
-            this.state.availableSlots = Number(payload.available_slots);
-        } else if (!this.state.capacityConfigured) {
-            this.state.availableSlots = null;
-        }
-    }
-
-    _applySlotDelta(payload) {
-        this._applyAuthoritativeSlotState(payload);
-        if (
-            payload?.available_slots !== undefined &&
-            payload.available_slots !== null
-        ) {
-            return;
-        }
-        const delta = Number(payload?.slot_delta || 0);
-        if (!delta || !this.state.capacityConfigured || this.state.availableSlots === null) {
-            return;
-        }
-        const capacity = Math.max(Number(this.state.motorbikeCapacity || 0), 0);
-        this.state.availableSlots = Math.max(
-            0,
-            Math.min(capacity, Number(this.state.availableSlots || 0) + delta)
-        );
-        this.state.motorbikeOccupied = Math.max(capacity - this.state.availableSlots, 0);
-    }
-
     queueBusPayload(payload) {
         if (!payload || Number(payload.parking_area_id || 0) !== this.parkingAreaId) {
             return;
@@ -311,7 +270,6 @@ export class NspParkingLiveMonitor extends Component {
             if (!this._markSeen(payload)) {
                 continue;
             }
-            this._applySlotDelta(payload);
             if (payload.event_type === "check_in") {
                 arrivals.push(now);
             }
@@ -491,8 +449,6 @@ export class NspParkingLiveMonitor extends Component {
             this.state.parkingAreaName = data.parking_area_name || "";
             this.state.branchName = data.branch_name || "";
             this.state.areaState = data.state || "";
-            this.state.displayColumns = this._normalizeDisplayColumns(data.live_monitor_columns);
-            this._applyAuthoritativeSlotState(data);
 
             if (reset) {
                 this.state.entries = [];

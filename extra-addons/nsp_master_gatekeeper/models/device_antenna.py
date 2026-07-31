@@ -12,12 +12,18 @@ class DeviceAntenna(models.Model):
     _order = "device_id, antenna_no, id"
 
     display_name = fields.Char(string="Antenna", compute="_compute_display_name", store=True)
-    antenna_no = fields.Integer(string="Antenna No", required=True, index=True)
+    whitelist_id = fields.Many2one(
+        "nsp.device.whitelist", string="Device Whitelist", readonly=True, copy=False,
+        ondelete="set null", index=True,
+    )
+    technical_code = fields.Char(string="Technical Code", readonly=True, copy=False, index=True)
+    serial_number = fields.Char(string="Serial Number", copy=False, index=True)
+    antenna_no = fields.Integer(string="Antenna No", required=False, index=True)
     device_id = fields.Many2one(
         "nsp.device",
         string="Reader",
         ondelete="cascade",
-        required=True,
+        required=False,
         index=True,
     )
     device_serial = fields.Char(
@@ -31,26 +37,27 @@ class DeviceAntenna(models.Model):
         related="device_id.controller_id",
         readonly=True,
     )
+    active = fields.Boolean(default=True, index=True)
 
     _sql_constraints = [
+        ("antenna_technical_code_unique", "unique(technical_code)", "Antenna Technical Code must be unique."),
         (
             "device_antenna_unique",
             "unique(device_id, antenna_no)",
             "Antenna number must be unique per Reader.",
-        ),
-        (
-            "antenna_no_positive",
-            "CHECK(antenna_no > 0)",
-            "Antenna number must be greater than zero.",
         ),
     ]
 
     @api.depends("device_id.name", "device_id.serial_number", "antenna_no")
     def _compute_display_name(self):
         for antenna in self:
+            owner = (
+                antenna.device_id.name or antenna.device_id.serial_number
+                if antenna.device_id else _("Unassigned Reader")
+            )
             antenna.display_name = "%s / Antenna %s" % (
-                antenna.device_id.name or antenna.device_id.serial_number or _("Reader"),
-                antenna.antenna_no or "",
+                owner,
+                antenna.antenna_no or antenna.technical_code or "",
             )
 
     @api.model
@@ -80,6 +87,5 @@ class DeviceAntenna(models.Model):
 
     @api.model
     def _validate_values(self, values, partial=False):
-        if "antenna_no" in values or not partial:
-            if int(values.get("antenna_no") or 0) <= 0:
-                raise ValidationError(_("Antenna number must be greater than zero."))
+        if "antenna_no" in values and int(values.get("antenna_no") or 0) < 0:
+            raise ValidationError(_("Antenna number cannot be negative."))

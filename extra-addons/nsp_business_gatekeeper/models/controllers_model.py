@@ -11,6 +11,7 @@ class NspController(models.Model):
     _inherit=["mail.thread","mail.activity.mixin"]
     _rec_name="controller_name"
     _order="controller_name, controller_id, id"
+    whitelist_id=fields.Many2one("nsp.device.whitelist",string="Device Whitelist",readonly=True,copy=False,ondelete="set null",index=True)
     controller_id=fields.Char(string="Controller Code",required=True,readonly=True,copy=False,index=True,default=lambda self:new_management_code("CTRL"))
     controller_name=fields.Char(string="Controller Name",required=True,default="NSP Gatekeeper Controller",tracking=True)
     timestamp=fields.Datetime(string="Last Heartbeat",readonly=True,copy=False,index=True)

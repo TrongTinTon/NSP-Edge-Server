@@ -6,7 +6,7 @@ Bản source này dành cho **fresh install**. Các model, view, menu và route 
 
 Kiến trúc trách nhiệm:
 
-- **Cloud**: master User, Vehicle, Friends, Vehicle Borrow, RFID Tag Whitelist, assignment, Measurement và Parking Configuration.
+- **Cloud**: master User, Vehicle, Friends, Vehicle Borrow, RFID Tag Whitelist, assignment, Reader Calibration và Parking Layout.
 - **Edge**: bản sao runtime, nhận raw TID, ghép Directed Antenna Transition, quyết định Check-in/Check-out và tạo Parking Transaction.
 - **Controller**: áp dụng cấu hình Reader, đọc TID và chuyển detection bền vững lên Edge; không xử lý nghiệp vụ người/xe.
 
@@ -45,9 +45,9 @@ Check-out được phép khi User là:
 1. Chủ sở hữu Vehicle; hoặc
 2. Borrower có `nsp.vehicle.borrow` active, chưa return, và Event Time nằm trong `valid_from`–`valid_to`.
 
-## 5. Measurement
+## 5. Reader Calibration
 
-Measurement sử dụng cặp target:
+Reader Calibration sử dụng cặp target:
 
 - Employee RFID Tag đang gắn active với User.
 - Vehicle RFID Tag đang gắn active với Vehicle.
@@ -65,7 +65,7 @@ Measurement chỉ điều chỉnh tạm thời:
 
 Cloud chỉ đồng bộ các Measurement Session đang `ready` hoặc `running` xuống Edge. Terminal history được giữ tại Cloud, không ép Edge tái tạo target từ assignment đã revoke.
 
-## 6. Parking Configuration
+## 6. Parking Layout
 
 Cloud quản lý:
 
@@ -132,3 +132,18 @@ Payload là full snapshot:
 ```
 
 Tag không có assignment chỉ gửi `tid`. Edge không xóa whitelist history; khi record biến mất khỏi snapshot, Edge chỉ revoke assignment active còn sót.
+
+## 10. Device Whitelist và UI vận hành
+
+`Device Whitelist` là nơi duy nhất được phép tạo hạ tầng thiết bị:
+
+- Server.
+- Controller.
+- RFID Reader.
+- Antenna.
+
+Quan hệ bắt buộc: Server → Controller → RFID Reader → Antenna. Serial Number bắt buộc với RFID Reader và tùy chọn với ba loại còn lại. Technical Code hiển thị với Server và Controller. Device Type được trình bày bằng badge để phân biệt trực quan.
+
+Các màn hình runtime Controller/Reader/Antenna chỉ đọc. `Parking Layout` và `Reader Calibration` chỉ chọn thiết bị active đã có trong Device Whitelist; không cho Quick Create hoặc Create and Edit thiết bị.
+
+`Parking Layout` chỉ trình bày danh sách Lanes. Mỗi Lane chứa trực tiếp các Antenna Movement Rules có hướng From Antenna → To Antenna, Event Type và Duration. `Motorbike Capacity` đã bỏ. Số cột hiển thị được người vận hành điều chỉnh trực tiếp trên Live Monitor và lưu theo trình duyệt.

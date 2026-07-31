@@ -18,6 +18,16 @@
                 </div>
 
                 <div class="nsp-parking-live-monitor__header-status">
+                    <div class="nsp-parking-live-monitor__column-control" title="Điều chỉnh số cột hiển thị trên màn hình này">
+                        <span class="nsp-parking-live-monitor__column-label">CỘT</span>
+                        <t t-foreach="[1, 2, 3, 4]" t-as="column" t-key="column">
+                            <button type="button"
+                                    t-att-class="'nsp-parking-live-monitor__column-button' + (displayColumns === column ? ' is-active' : '')"
+                                    t-on-click="() => this.setDisplayColumns(column)">
+                                <t t-esc="column"/>
+                            </button>
+                        </t>
+                    </div>
                     <div class="nsp-parking-live-monitor__pill is-live">
                         <span class="nsp-parking-live-monitor__live-dot"/>
                         <span>TRỰC TUYẾN</span>
@@ -97,10 +107,7 @@
                     <span t-if="state.alerts.length"> · <t t-esc="state.alerts.length"/> cảnh báo đang giữ</span>
                 </div>
 
-                <div class="nsp-parking-live-monitor__slots" t-att-class="slotBadgeClass">
-                    <i class="fa fa-motorcycle"/>
-                    <span><t t-esc="slotLabel"/></span>
-                </div>
+
             </footer>
 
             <div class="nsp-parking-live-monitor__error" t-if="state.error">

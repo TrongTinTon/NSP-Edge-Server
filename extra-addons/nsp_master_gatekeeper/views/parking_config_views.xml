@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='UTF-8'?>
 <odoo>
     <record id="view_nsp_parking_area_search" model="ir.ui.view">
         <field name="name">nsp.parking.operation.search</field>
@@ -8,7 +8,6 @@
                 <field name="name"/>
                 <field name="code"/>
                 <field name="branch_id"/>
-                <field name="controller_ids"/>
                 <filter string="Operational" name="operational" domain="[('state','=','operational')]"/>
                 <filter string="Configuring" name="draft" domain="[('state','=','draft')]"/>
                 <filter string="Maintenance" name="maintenance" domain="[('state','=','maintenance')]"/>
@@ -27,19 +26,12 @@
         <field name="model">nsp.parking.area</field>
         <field name="arch" type="xml">
             <list string="Parking Layout">
-                <field name="state" widget="badge"
-                       decoration-success="state == 'operational'"
-                       decoration-warning="state == 'draft' or state == 'maintenance'"
-                       decoration-danger="state == 'blocked'"/>
+                <field name="state" widget="badge" decoration-success="state == 'operational'" decoration-warning="state == 'draft' or state == 'maintenance'" decoration-danger="state == 'blocked'"/>
                 <field name="name"/>
                 <field name="code" string="Technical Code" optional="hide"/>
                 <field name="branch_id"/>
-                <field name="edge_server_count" string="Edge Servers"/>
-                <field name="controller_count" string="Controllers"/>
-                <field name="reader_count" string="Readers"/>
                 <field name="lane_count" string="Lanes"/>
-                <field name="antenna_count" string="Antennas"/>
-            </list>
+                </list>
         </field>
     </record>
 
@@ -49,105 +41,49 @@
         <field name="arch" type="xml">
             <form string="Parking Layout">
                 <header>
-                    <button name="action_set_operational" type="object" string="Set Operational"
-                            class="oe_highlight" invisible="state == 'operational'"/>
-                    <button name="action_set_maintenance" type="object" string="Set Maintenance"
-                            invisible="state == 'maintenance'"/>
-                    <button name="action_set_blocked" type="object" string="Block"
-                            invisible="state == 'blocked'"/>
-                    <button name="action_reset_to_draft" type="object" string="Back to Draft"
-                            invisible="state == 'draft'"/>
-                    <field name="state" widget="statusbar"
-                           statusbar_visible="draft,operational,maintenance,blocked"/>
+                    <button name="action_set_operational" type="object" string="Set Operational" class="oe_highlight" invisible="state == 'operational'"/>
+                    <button name="action_set_maintenance" type="object" string="Set Maintenance" invisible="state == 'maintenance'"/>
+                    <button name="action_set_blocked" type="object" string="Block" invisible="state == 'blocked'"/>
+                    <button name="action_reset_to_draft" type="object" string="Back to Draft" invisible="state == 'draft'"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,operational,maintenance,blocked"/>
                 </header>
                 <sheet>
                     <div class="oe_button_box" name="button_box">
-                        <button name="action_open_live_monitor" type="object" class="oe_stat_button" icon="fa-desktop"
-                                groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking,base.group_system">
+                        <button name="action_open_live_monitor" type="object" class="oe_stat_button" icon="fa-desktop" groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking,base.group_system">
                             <span class="o_stat_text">Live Monitor</span>
                         </button>
-                        <button name="action_open_edge_servers" type="object" class="oe_stat_button" icon="fa-server">
-                            <field name="edge_server_count" widget="statinfo" string="Edge Servers"/>
-                        </button>
-                        <button name="action_open_controllers" type="object" class="oe_stat_button" icon="fa-sitemap">
-                            <field name="controller_count" widget="statinfo" string="Controllers"/>
-                        </button>
-                        <button name="action_open_readers" type="object" class="oe_stat_button" icon="fa-rss">
-                            <field name="reader_count" widget="statinfo" string="Readers"/>
-                        </button>
-                        <button name="action_open_antennas" type="object" class="oe_stat_button" icon="fa-signal">
-                            <field name="antenna_count" widget="statinfo" string="Antennas"/>
-                        </button>
-                        <button name="action_open_device_whitelist" type="object" class="oe_stat_button" icon="fa-shield">
-                            <field name="whitelist_count" widget="statinfo" string="Whitelist"/>
-                        </button>
-                        <button name="action_open_lanes" type="object" class="oe_stat_button" icon="fa-road">
-                            <field name="lane_count" widget="statinfo" string="Lanes"/>
-                        </button>
-                    </div>
+                        </div>
 
                     <div class="oe_title">
                         <label for="name"/>
                         <h1><field name="name" placeholder="Parking Area A"/></h1>
                     </div>
 
-                    <div class="alert alert-info" role="alert">
-                        Configure the server-owned parking topology here. Each lane selects one Controller, then defines directed Antenna Transitions. Every transition specifies From Antenna, To Antenna, Event Type and measured Duration. Edge creates a Parking Transaction only when the same Vehicle RFID follows a configured transition within its Duration.
-                    </div>
+                    <div class="alert alert-info" role="alert">Define each parking Lane and its physical movement rules. Devices are selected from Device Whitelist; this screen never creates Server, Controller, RFID Reader or Antenna records.</div>
 
                     <group>
                         <group string="Parking Operation">
                             <field name="branch_id" options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}" context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_branch_form'}"/>
                             <field name="state" readonly="1"/>
-                            <field name="motorbike_capacity" string="Motorbike Capacity"/>
-                            <field name="live_monitor_columns" string="Live Monitor Columns"/>
                             <field name="code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
-                        <group string="Derived Infrastructure">
-                            <field name="edge_server_ids" widget="many2many_tags" readonly="1"/>
-                            <field name="controller_ids" widget="many2many_tags" readonly="1"/>
-                            <field name="reader_ids" widget="many2many_tags" readonly="1"/>
-                            <field name="antenna_ids" widget="many2many_tags" readonly="1"/>
                         </group>
-                    </group>
 
-                    <notebook>
-                        <page string="1. Parking Lanes">
-                            <div class="alert alert-secondary" role="alert">
-                                Assign one Controller to each Lane. Check-in or Check-out is not stored on the Lane; it is defined by each directed Antenna Transition.
-                            </div>
-                            <field name="lane_ids" context="{'default_parking_area_id': id}">
-                                <list editable="bottom">
-                                    <field name="lane_no" string="Lane No"/>
-                                    <field name="name" string="Lane Name"/>
-                                    <field name="code" string="Technical Code" optional="hide" readonly="1"/>
-                                    <field name="controller_id"
-                                           options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
-                                           context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_controllers_form'}"/>
-                                    <field name="active" widget="boolean_toggle"/>
-                                    <field name="transition_count" string="Transitions" readonly="1"/>
-                                </list>
-                            </field>
-                        </page>
-
-                        <page string="2. Antenna Transitions">
-                            <div class="alert alert-secondary" role="alert">
-                                Define the physical path used to validate a vehicle movement. Example: Antenna 1 → Antenna 2, Check-in, Duration 2 seconds. The Edge uses this configured Duration as the valid movement window.
-                            </div>
-                            <button name="action_open_antenna_transitions" type="object"
-                                    string="Configure Antenna Transitions" class="oe_highlight" icon="fa-exchange"/>
-                            <field name="antenna_transition_ids" readonly="1">
-                                <list create="0" delete="0">
-                                    <field name="lane_id"/>
-                                    <field name="event_type" widget="badge"/>
-                                    <field name="from_antenna_id" string="From Antenna"/>
-                                    <field name="to_antenna_id" string="To Antenna"/>
-                                    <field name="duration_seconds" string="Duration (s)"/>
-                                </list>
-                            </field>
-                        </page>
-                    </notebook>
-                </sheet>
+                    <separator string="Lanes"/><div class="alert alert-info" role="alert">
+                Configure one Controller and the directed antenna paths inside each Lane. Check-in and Check-out are defined by the ordered From Antenna → To Antenna rule and its measured Duration.
+            </div>
+            <field name="lane_ids" mode="list,form" context="{'default_parking_area_id': id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_parking_lane_form'}">
+                <list create="1" edit="1" delete="1">
+                    <control><create string="Add Lane"/></control>
+                    <field name="lane_no" string="Lane No."/>
+                    <field name="name" string="Lane Name"/>
+                    <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" domain="[('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','CONTROLLER')]"/>
+                    <field name="transition_count" string="Movement Rules" readonly="1"/>
+                    <field name="active" widget="boolean_toggle"/>
+                    <field name="code" string="Technical Code" optional="hide" readonly="1"/>
+                </list>
+            </field>
+        </sheet>
             </form>
         </field>
     </record>
@@ -168,8 +104,8 @@
                 <field name="lane_no" string="Lane No"/>
                 <field name="name" string="Lane Name" decoration-bf="1"/>
                 <field name="code" string="Technical Code" optional="hide" readonly="1"/>
-                <field name="controller_id"/>
-                <field name="transition_count" string="Transitions" readonly="1"/>
+                <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" domain="[('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','CONTROLLER')]"/>
+                <field name="transition_count" string="Movement Rules" readonly="1"/>
                 <field name="active" widget="boolean_toggle"/>
             </list>
         </field>
@@ -187,35 +123,30 @@
                     </div>
                     <group>
                         <group string="Lane Declaration">
-                            <field name="parking_area_id" options="{'no_create': False, 'no_open': False}"/>
-                            <field name="controller_id"
-                                           options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
-                                           context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_controllers_form'}"/>
+                            <field name="parking_area_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': False}"/>
+                            <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_controllers_form'}" domain="[('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','CONTROLLER')]"/>
                             <field name="lane_no" string="Lane No"/>
                             <field name="active"/>
                         </group>
                         <group string="Identity">
-                            <field name="transition_count" string="Antenna Transitions" readonly="1"/>
+                            <field name="transition_count" string="Movement Rules" readonly="1"/>
                             <field name="code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
                     </group>
-                    <notebook>
-                        <page string="Antenna Transitions">
-                            <div class="alert alert-info" role="alert">
-                                Configure the ordered antenna path directly. Event Type defines Check-in or Check-out. Duration is the maximum time allowed from the first antenna detection to the next antenna detection for the same Vehicle RFID.
-                            </div>
-                            <field name="antenna_transition_ids" context="{'default_lane_id': id}">
-                                <list editable="bottom">
-                                    <field name="lane_controller_id" column_invisible="1"/>
-                                    <field name="event_type"/>
-                                    <field name="from_antenna_id" string="From Antenna" domain="[('device_id.controller_id','=',parent.controller_id)]"/>
-                                    <field name="to_antenna_id" string="To Antenna" domain="[('device_id.controller_id','=',parent.controller_id)]"/>
-                                    <field name="duration_seconds" string="Duration (s)"/>
-                                </list>
-                            </field>
-                        </page>
-                    </notebook>
-                </sheet>
+                    <group string="Movement Rules">
+                <div class="alert alert-info" role="alert" colspan="2">
+                    Add the real movement path for this Lane. Example: Antenna 1 → Antenna 2 = Check-in. Antenna 2 → Antenna 1 = Check-out. Duration is measured in Reader Calibration and is evaluated by Edge for the same Vehicle RFID.
+                </div>
+                <field name="antenna_transition_ids" context="{'default_lane_id': id}" colspan="2">
+                    <list editable="bottom" create="1" edit="1" delete="1">
+                        <field name="lane_controller_id" column_invisible="1"/>
+                        <field name="from_antenna_id" string="From Antenna" domain="[('device_id.controller_id','=',parent.controller_id),('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','ANTENNA')]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                        <field name="to_antenna_id" string="To Antenna" domain="[('device_id.controller_id','=',parent.controller_id),('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','ANTENNA')]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                        <field name="event_type" widget="badge" decoration-success="event_type == 'check_in'" decoration-info="event_type == 'check_out'"/>
+                        <field name="duration_seconds" string="Duration (s)"/>
+                    </list>
+                </field>
+            </group></sheet>
             </form>
         </field>
     </record>
@@ -226,54 +157,4 @@
         <field name="view_mode">list,form</field>
     </record>
 
-    <record id="view_nsp_parking_antenna_transition_list" model="ir.ui.view">
-        <field name="name">nsp.parking.antenna.transition.list</field>
-        <field name="model">nsp.parking.antenna.transition</field>
-        <field name="arch" type="xml">
-            <list string="Antenna Transitions" editable="bottom">
-                <field name="lane_controller_id" column_invisible="1"/>
-                <field name="parking_area_id" readonly="1"/>
-                <field name="lane_id"/>
-                <field name="event_type" widget="badge"/>
-                <field name="from_antenna_id" string="From Antenna" domain="[('device_id.controller_id','=',lane_controller_id)]"/>
-                <field name="to_antenna_id" string="To Antenna" domain="[('device_id.controller_id','=',lane_controller_id)]"/>
-                <field name="duration_seconds" string="Duration (s)"/>
-            </list>
-        </field>
-    </record>
-
-    <record id="view_nsp_parking_antenna_transition_form" model="ir.ui.view">
-        <field name="name">nsp.parking.antenna.transition.form</field>
-        <field name="model">nsp.parking.antenna.transition</field>
-        <field name="arch" type="xml">
-            <form string="Antenna Transition">
-                <sheet>
-                    <div class="oe_title">
-                        <h1><field name="rule_name" readonly="1"/></h1>
-                    </div>
-                    <group>
-                        <group string="Movement">
-                            <field name="lane_id"/>
-                            <field name="parking_area_id" readonly="1"/>
-                            <field name="lane_controller_id" readonly="1"/>
-                            <field name="event_type"/>
-                            <field name="duration_seconds" string="Duration (Seconds)"/>
-                        </group>
-                        <group string="Antenna Path">
-                            <field name="from_antenna_id" domain="[('device_id.controller_id','=',lane_controller_id)]"/>
-                            <field name="to_antenna_id" domain="[('device_id.controller_id','=',lane_controller_id)]"/>
-                            <field name="from_serial_number" string="From Reader Serial" readonly="1"/>
-                            <field name="to_serial_number" string="To Reader Serial" readonly="1"/>
-                        </group>
-                    </group>
-                </sheet>
-            </form>
-        </field>
-    </record>
-
-    <record id="action_nsp_parking_antenna_transition" model="ir.actions.act_window">
-        <field name="name">Antenna Transitions</field>
-        <field name="res_model">nsp.parking.antenna.transition</field>
-        <field name="view_mode">list,form</field>
-    </record>
-</odoo>
+    </odoo>

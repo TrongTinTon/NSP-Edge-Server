@@ -1166,6 +1166,12 @@ class NspMeasurementReaderLine(models.Model):
             antennas = antennas.filtered("active")
         if "cloud_removed" in antennas._fields:
             antennas = antennas.filtered(lambda antenna: not antenna.cloud_removed)
+        if "whitelist_id" in antennas._fields:
+            antennas = antennas.filtered(
+                lambda antenna: antenna.whitelist_id
+                and antenna.whitelist_id.active
+                and antenna.whitelist_id.device_type_code == "ANTENNA"
+            )
         return antennas
 
     @api.depends("reader_id", "reader_id.antennas_ids")
@@ -1243,6 +1249,13 @@ class NspMeasurementReaderLine(models.Model):
 
     def _validate_line_scope(self):
         for line in self:
+            if (
+                not line.reader_id.active
+                or not line.reader_id.whitelist_id
+                or not line.reader_id.whitelist_id.active
+                or line.reader_id.whitelist_id.device_type_code != "RFID_READER"
+            ):
+                raise ValidationError(_("Reader Calibration can use only active RFID Readers from Device Whitelist."))
             if line.reader_power_dbm < 0 or line.reader_power_dbm > 40:
                 raise ValidationError(_("Reader Power must be between 0 and 40 dBm."))
             if line.read_interval_ms <= 0 or line.read_interval_ms > 60000:
@@ -1253,6 +1266,9 @@ class NspMeasurementReaderLine(models.Model):
                 lambda antenna: antenna.device_id != line.reader_id
                 or ("active" in antenna._fields and not antenna.active)
                 or ("cloud_removed" in antenna._fields and antenna.cloud_removed)
+                or not antenna.whitelist_id
+                or not antenna.whitelist_id.active
+                or antenna.whitelist_id.device_type_code != "ANTENNA"
             )
             if invalid:
                 raise ValidationError(_("Every Measurement Antenna must be active and belong to its Reader."))

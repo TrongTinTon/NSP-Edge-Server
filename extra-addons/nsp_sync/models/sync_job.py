@@ -605,18 +605,18 @@ class NspSyncJob(models.Model):
         """Preload master records used by high-volume pull snapshots."""
         rows = [item for item in (items or []) if isinstance(item, dict)]
         if kind == "device_whitelist":
-            serials = {str(item.get("serial_number") or "").strip().upper() for item in rows}
+            technical_codes = {str(item.get("technical_code") or "").strip().upper() for item in rows}
             type_codes = {str(item.get("device_type_code") or "").strip().upper() for item in rows}
-            serials.discard("")
+            technical_codes.discard("")
             type_codes.discard("")
-            records = self.env["nsp.device.whitelist"].sudo().search([
-                ("serial_number", "in", list(serials)),
-            ]) if serials else self.env["nsp.device.whitelist"].browse()
+            records = self.env["nsp.device.whitelist"].sudo().with_context(active_test=False).search([
+                ("technical_code", "in", list(technical_codes)),
+            ]) if technical_codes else self.env["nsp.device.whitelist"].browse()
             device_types = self.env["nsp.device.type"].sudo().with_context(active_test=False).search([
                 ("code", "in", list(type_codes)),
             ]) if type_codes else self.env["nsp.device.type"].browse()
             return {
-                "records": {record.serial_number: record for record in records},
+                "records": {record.technical_code: record for record in records},
                 "device_types": {record.code: record for record in device_types},
             }
 
@@ -681,58 +681,71 @@ class NspSyncJob(models.Model):
 
     @api.model
     def _apply_device_whitelist(self, item, cache=None):
-        serial = str(item.get("serial_number") or "").strip().upper()
-        if not serial:
-            raise UserError(_("Device Whitelist Serial is required."))
+        technical_code = str(item.get("technical_code") or "").strip().upper()
+        if not technical_code:
+            raise UserError(_("Device Whitelist Technical Code is required."))
 
         type_code = str(item.get("device_type_code") or "").strip().upper()
         type_name = str(item.get("device_type_name") or type_code).strip()
         if not type_code:
-            raise UserError(_("Device Type Code is required for Device Whitelist %(serial)s.") % {"serial": serial})
+            raise UserError(_("Device Type Code is required for %(code)s.") % {"code": technical_code})
+        if type_code not in {"SERVER", "CONTROLLER", "RFID_READER", "ANTENNA"}:
+            raise UserError(_("Unsupported Device Type Code: %s") % type_code)
 
         cache = cache or self._prepare_apply_cache("device_whitelist", [item])
-        DeviceType = self.env["nsp.device.type"].sudo().with_context(active_test=False)
         device_type = cache.get("device_types", {}).get(type_code)
         if not device_type:
-            device_type = DeviceType.create({
-                "code": type_code,
-                "name": type_name or type_code,
-                "active": True,
-            })
-            cache.setdefault("device_types", {})[type_code] = device_type
-        elif type_name and device_type.name != type_name:
+            raise UserError(_("Device Type %(type)s is not installed on Edge.") % {"type": type_code})
+        if type_name and device_type.name != type_name:
             device_type.write({"name": type_name})
 
-        Whitelist = self.env["nsp.device.whitelist"].sudo()
-        record = cache.get("records", {}).get(serial)
+        parent_code = str(item.get("parent_technical_code") or "").strip().upper()
+        parent = cache.get("records", {}).get(parent_code) if parent_code else False
+        if parent_code and not parent:
+            parent = self.env["nsp.device.whitelist"].sudo().search([
+                ("technical_code", "=", parent_code),
+            ], limit=1)
+        if parent_code and not parent:
+            raise UserError(_("Parent Device %(parent)s was not found for %(device)s.") % {
+                "parent": parent_code,
+                "device": technical_code,
+            })
+
+        serial = str(item.get("serial_number") or "").strip().upper() or False
         vals = {
-            "serial_number": serial,
+            "technical_code": technical_code,
+            "name": str(item.get("name") or technical_code).strip(),
             "device_type_id": device_type.id,
+            "serial_number": serial,
+            "parent_id": parent.id if parent else False,
+            "antenna_no": int(item.get("antenna_no") or 0),
+            "connection_type": item.get("physical_connection") or False,
+            "tid_addr": int(item.get("tid_start_address") or 0),
+            "tid_len": int(item.get("tid_length") or 6),
+            "active": bool(item.get("active", True)),
         }
+        Whitelist = self.env["nsp.device.whitelist"].sudo().with_context(active_test=False)
+        record = cache.get("records", {}).get(technical_code)
         if record:
-            changed = {}
-            for name, value in vals.items():
-                current = record[name].id if record._fields[name].type == "many2one" else record[name]
-                if current != value:
-                    changed[name] = value
-            if changed:
-                record.write(changed)
+            self._write_changed(record, vals)
             return record
         record = Whitelist.create(vals)
-        cache.setdefault("records", {})[serial] = record
+        cache.setdefault("records", {})[technical_code] = record
         return record
 
     @api.model
     def _reconcile_device_whitelist_snapshot(self, items):
-        serials = {
-            str(item.get("serial_number") or "").strip().upper()
+        technical_codes = {
+            str(item.get("technical_code") or "").strip().upper()
             for item in (items or [])
-            if isinstance(item, dict) and str(item.get("serial_number") or "").strip()
+            if isinstance(item, dict) and str(item.get("technical_code") or "").strip()
         }
-        Whitelist = self.env["nsp.device.whitelist"].sudo()
-        stale = Whitelist.search([("serial_number", "not in", list(serials))]) if serials else Whitelist.search([])
+        Whitelist = self.env["nsp.device.whitelist"].sudo().with_context(active_test=False)
+        stale = Whitelist.search([
+            ("technical_code", "not in", list(technical_codes))
+        ]) if technical_codes else Whitelist.search([])
         if stale:
-            stale.unlink()
+            stale.write({"active": False})
         return len(stale)
 
     @api.model
@@ -1361,8 +1374,7 @@ class NspSyncJob(models.Model):
             raise UserError(_("Parking Configuration item must be an object."))
 
         unsupported = set(item) - {
-            "parking_area_code", "parking_area_name", "branch_code", "state",
-            "motorbike_capacity", "live_monitor_columns", "lanes",
+            "parking_area_code", "parking_area_name", "branch_code", "state", "lanes",
         }
         if unsupported:
             raise UserError(
@@ -1387,16 +1399,6 @@ class NspSyncJob(models.Model):
                 % {"code": branch_code}
             )
 
-        try:
-            motorbike_capacity = int(item.get("motorbike_capacity") or 0)
-            live_monitor_columns = int(item.get("live_monitor_columns") or 2)
-        except (TypeError, ValueError) as exc:
-            raise UserError(_("Parking capacity and monitor columns must be integers.")) from exc
-        if motorbike_capacity < 0:
-            raise UserError(_("Motorbike Capacity cannot be negative."))
-        if live_monitor_columns < 1 or live_monitor_columns > 4:
-            raise UserError(_("Live Monitor Columns must be between 1 and 4."))
-
         Parking = self.env["nsp.parking.area"].sudo()
         parking = Parking.search([("code", "=", area_code)], limit=1)
         parking_vals = {
@@ -1404,8 +1406,6 @@ class NspSyncJob(models.Model):
             "name": str(item.get("parking_area_name") or area_code).strip(),
             "branch_id": branch.id,
             "state": state,
-            "motorbike_capacity": motorbike_capacity,
-            "live_monitor_columns": live_monitor_columns,
         }
         if parking:
             self._write_changed(parking, parking_vals)
@@ -1660,8 +1660,14 @@ class NspSyncJob(models.Model):
             if stale_branch: stale_branch.write({"status":"inactive"})
             # Device whitelist is a small pure cache: hard-delete stale.
             cache=self._prepare_apply_cache("device_whitelist",whitelist)
-            for item in whitelist: self._apply_device_whitelist(item,cache=cache)
+            for item in whitelist:
+                self._apply_device_whitelist(item, cache=cache)
             self._reconcile_device_whitelist_snapshot(whitelist)
+            whitelist_by_code = {
+                record.technical_code: record
+                for record in self.env["nsp.device.whitelist"].sudo().with_context(active_test=False).search([])
+                if record.technical_code
+            }
             # Controllers/readers/antennas independent of Parking Area assignment.
             Controller=self.env["nsp.controller"].sudo().with_context(active_test=False); Device=self.env["nsp.device"].sudo().with_context(active_test=False); Antenna=self.env["nsp.device.antenna"].sudo().with_context(active_test=False)
             incoming_ctrl=set(); incoming_serial=set(); incoming_ant=set()
@@ -1670,14 +1676,19 @@ class NspSyncJob(models.Model):
                 code=str(c.get("controller_code") or "").strip().upper();
                 if not code: raise UserError(_("Controller Code is required."))
                 incoming_ctrl.add(code); ctrl=ctrl_by.get(code)
-                vals={"controller_name":c.get("controller_name") or code,"active":bool(c.get("active",True)),"cloud_removed":False}
+                controller_whitelist = whitelist_by_code.get(code)
+                vals={"controller_name":c.get("controller_name") or code,"active":bool(c.get("active",True)),"cloud_removed":False,"whitelist_id":controller_whitelist.id if controller_whitelist else False}
                 if ctrl: self._write_changed(ctrl,vals)
                 else: vals["controller_id"]=code; ctrl=Controller.create(vals); ctrl_by[code]=ctrl
                 for d in c.get("devices") or []:
                     serial=str(d.get("serial_number") or "").strip().upper();
                     if not serial: raise UserError(_("Reader Serial Number is required."))
                     incoming_serial.add(serial); rp=d.get("reader_parameters") or {}; conn=d.get("physical_connection") or False
-                    vals={"name":d.get("reader_name") or serial,"controller_id":ctrl.id,"connection_type":conn,"power_dbm":int(rp.get("power_dbm") if rp.get("power_dbm") is not None else 30),"read_interval_ms":int(rp.get("read_interval_ms") or 200),"tid_addr":int(rp.get("tid_start_address") or 0),"tid_len":int(rp.get("tid_length") or 4),"active":True,"cloud_removed":False}
+                    reader_code = str(d.get("technical_code") or "").strip().upper()
+                    reader_whitelist = whitelist_by_code.get(reader_code)
+                    vals={"name":d.get("reader_name") or serial,"controller_id":ctrl.id,"connection_type":conn,"power_dbm":int(rp.get("power_dbm") if rp.get("power_dbm") is not None else 30),"read_interval_ms":int(rp.get("read_interval_ms") or 200),"tid_addr":int(rp.get("tid_start_address") or 0),"tid_len":int(rp.get("tid_length") or 6),"device_code":reader_code or (reader_whitelist.technical_code if reader_whitelist else False),"whitelist_id":reader_whitelist.id if reader_whitelist else False,"active":True,"cloud_removed":False}
+                    if not vals["device_code"]:
+                        vals.pop("device_code")
                     dev=dev_by.get(serial)
                     if dev: self._write_changed(dev,vals)
                     else: vals["serial_number"]=serial; dev=Device.create(vals); dev_by[serial]=dev
@@ -1686,12 +1697,20 @@ class NspSyncJob(models.Model):
                         for a in Antenna.search([("device_id", "=", dev.id)])
                     }
                     for a in d.get("antennas") or []:
-                        if not isinstance(a, dict) or set(a) - {"antenna_no"}:
-                            raise UserError(_("Reader antenna supports only antenna_no."))
+                        if not isinstance(a, dict) or set(a) - {"antenna_no", "technical_code", "serial_number", "name"}:
+                            raise UserError(_("Reader antenna payload contains unsupported fields."))
                         no=int(a.get("antenna_no") or 0)
                         if no <= 0:
                             raise UserError(_("Antenna No must be greater than zero."))
-                        incoming_ant.add((serial,no)); av={"active":True,"cloud_removed":False}
+                        antenna_code = str(a.get("technical_code") or "").strip().upper()
+                        antenna_whitelist = whitelist_by_code.get(antenna_code)
+                        incoming_ant.add((serial,no)); av={
+                            "technical_code": antenna_code or False,
+                            "serial_number": str(a.get("serial_number") or "").strip().upper() or False,
+                            "whitelist_id": antenna_whitelist.id if antenna_whitelist else False,
+                            "active":True,
+                            "cloud_removed":False,
+                        }
                         ant=existing_ant.get(no)
                         if ant: self._write_changed(ant,av)
                         else: av.update({"device_id":dev.id,"antenna_no":no}); Antenna.create(av)

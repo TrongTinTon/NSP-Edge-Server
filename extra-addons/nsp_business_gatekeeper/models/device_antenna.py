@@ -12,6 +12,12 @@ class DeviceAntenna(models.Model):
     _order = "device_id, antenna_no, id"
 
     display_name = fields.Char(string="Antenna", compute="_compute_display_name", store=True)
+    whitelist_id = fields.Many2one(
+        "nsp.device.whitelist", string="Device Whitelist", readonly=True, copy=False,
+        ondelete="set null", index=True,
+    )
+    technical_code = fields.Char(string="Technical Code", readonly=True, copy=False, index=True)
+    serial_number = fields.Char(string="Serial Number", copy=False, index=True)
     antenna_no = fields.Integer(string="Antenna No", required=True, index=True)
     device_id = fields.Many2one(
         "nsp.device",
@@ -35,6 +41,7 @@ class DeviceAntenna(models.Model):
     cloud_removed = fields.Boolean(default=False, readonly=True, index=True, copy=False)
 
     _sql_constraints = [
+        ("antenna_technical_code_unique", "unique(technical_code)", "Antenna Technical Code must be unique."),
         (
             "device_antenna_unique",
             "unique(device_id, antenna_no)",

@@ -191,6 +191,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         ]) if controller_ids and serials else Device.browse()
         whitelist = self.env["nsp.device.whitelist"].sudo().search([
             ("serial_number", "in", list(serials)),
+            ("active", "=", True),
+            ("device_type_code", "=", "RFID_READER"),
         ]) if serials else self.env["nsp.device.whitelist"].browse()
         return {
             "device_by_key": {(device.controller_id.id, device.serial_number): device for device in devices},
@@ -291,6 +293,9 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         controllers = Controller.search([
             ("controller_id", "in", list(controller_codes)),
             ("edge_server_id", "=", edge_server.id),
+            ("active", "=", True),
+            ("whitelist_id.active", "=", True),
+            ("whitelist_id.device_type_code", "=", "CONTROLLER"),
         ]) if controller_codes else Controller.browse()
         controller_by_code = {record.controller_id: record for record in controllers}
         reported_device_items = [
@@ -474,28 +479,74 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
 
     @endpoint("NSP Gatekeeper Configuration Sync", route_path="gatekeeper-config/sync", methods="POST", code="nsp_gatekeeper_config_sync")
     def api_gatekeeper_config_sync(self):
-        data=self._payload(); _app,_actor,edge,error=self._auth_edge_server_sync(data)
-        if error: return error
-        unsupported=sorted(set(data)-{"edge_server_code"})
-        if unsupported: return self._error("Unsupported field(s): %s" % ", ".join(unsupported),400,error_code="invalid_payload")
-        controllers=[]
-        for controller in edge.controller_ids.with_context(active_test=False).sorted(key=lambda r:(r.controller_id or "",r.id)):
-            devices=[]
-            for device in controller.device_ids.sorted(key=lambda r:(r.serial_number or "",r.id)):
-                payload=device._build_edge_config_payload(); payload["reader_name"]=device.name; devices.append(payload)
-            controllers.append({"controller_code":controller.controller_id,"controller_name":controller.controller_name,"active":bool(controller.active),"devices":devices})
-        areas=self.env["nsp.parking.area"].sudo().search([],order="code,id").filtered(lambda area: edge in area.edge_server_ids)
-        branches=areas.mapped("branch_id")
-        whitelist=self.env["nsp.device.whitelist"].sudo().search([],order="serial_number,id")
+        data = self._payload()
+        _app, _actor, edge, error = self._auth_edge_server_sync(data)
+        if error:
+            return error
+        unsupported = sorted(set(data) - {"edge_server_code"})
+        if unsupported:
+            return self._error(
+                "Unsupported field(s): %s" % ", ".join(unsupported),
+                400,
+                error_code="invalid_payload",
+            )
+
+        Whitelist = self.env["nsp.device.whitelist"].sudo().with_context(active_test=False)
+        all_active = Whitelist.search([("active", "=", True)], order="technical_code,id")
+        scope = all_active.filtered(lambda item: item._runtime_edge_server() == edge)
+
+        controllers = []
+        controller_entries = scope.filtered(
+            lambda item: item.device_type_code == "CONTROLLER" and item.controller_id and item.controller_id.active
+        ).sorted(key=lambda item: (item.technical_code or "", item.id))
+        for controller_entry in controller_entries:
+            controller = controller_entry.controller_id
+            devices = []
+            reader_entries = scope.filtered(
+                lambda item: item.device_type_code == "RFID_READER"
+                and item.reader_id
+                and item.reader_id.controller_id == controller
+                and item.reader_id.active
+            ).sorted(key=lambda item: (item.serial_number or "", item.id))
+            for reader_entry in reader_entries:
+                payload = reader_entry.reader_id._build_edge_config_payload()
+                payload["reader_name"] = reader_entry.name or reader_entry.reader_id.name
+                payload["technical_code"] = reader_entry.technical_code
+                devices.append(payload)
+            controllers.append({
+                "controller_code": controller_entry.technical_code,
+                "controller_name": controller_entry.name or controller.controller_name,
+                "active": True,
+                "devices": devices,
+            })
+
+        areas = self.env["nsp.parking.area"].sudo().search([], order="code,id").filtered(
+            lambda area: edge in area.edge_server_ids
+        )
+        branches = areas.mapped("branch_id")
         return self._ok({
-            "edge_server_code":edge.edge_server_code,
-            "revision":int(edge.config_revision or 1),
-            "branches":[{"branch_code":b.code,"branch_name":b.name,"timezone":b.timezone or "Asia/Ho_Chi_Minh","active":b.status=="active"} for b in branches],
-            "controllers":controllers,
-            "parking_areas":[a.prepare_sync_payload() for a in areas],
-            "device_whitelist":[{"serial_number":w.serial_number,"device_type_code":w.device_type_id.code,"device_type_name":w.device_type_id.name} for w in whitelist],
-            "server_time":self._iso_datetime(fields.Datetime.now()),
-        },message="Gatekeeper authoritative snapshot loaded.")
+            "edge_server_code": edge.edge_server_code,
+            "revision": int(edge.config_revision or 1),
+            "branches": [{
+                "branch_code": branch.code,
+                "branch_name": branch.name,
+                "timezone": branch.timezone or "Asia/Ho_Chi_Minh",
+                "active": branch.status == "active",
+            } for branch in branches],
+            "controllers": controllers,
+            "parking_areas": [area.prepare_sync_payload() for area in areas],
+            "device_whitelist": [
+                item._prepare_sync_payload()
+                for item in scope.sorted(
+                    key=lambda row: (
+                        {"SERVER": 1, "CONTROLLER": 2, "RFID_READER": 3, "ANTENNA": 4}.get(row.device_type_code, 9),
+                        row.technical_code or "",
+                        row.id,
+                    )
+                )
+            ],
+            "server_time": self._iso_datetime(fields.Datetime.now()),
+        }, message="Gatekeeper authoritative snapshot loaded.")
 
     @endpoint("NSP Vehicle Configuration Sync", route_path="vehicle-config/sync", methods="POST", code="nsp_vehicle_config_sync")
     def api_vehicle_config_sync(self):
