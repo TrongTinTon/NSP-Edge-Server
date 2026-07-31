@@ -74,10 +74,6 @@ class NspUserVehicleExtension(models.Model):
                 "tag_id": tag.id,
                 "user_id": user.id,
             })
-            user.message_post(
-                body=_("Employee RFID Tag assigned: %s") % tid,
-                subtype_xmlid="mail.mt_note",
-            )
 
     def _inverse_employee_tid_input(self):
         for user in self:
@@ -125,14 +121,9 @@ class NspUserVehicleExtension(models.Model):
             assignment = Assignment.active_for_user(user)
             if not assignment:
                 continue
-            tid = assignment.tid
             assignment.with_context(
                 rfid_audit_user_id=actor_user_id or self.env.user.id,
             ).action_revoke()
-            user.message_post(
-                body=_("Employee RFID Tag revoked: %s") % tid,
-                subtype_xmlid="mail.mt_note",
-            )
 
     def action_revoke_employee_tag(self):
         self._revoke_employee_tag(actor_user_id=self.env.user.id)

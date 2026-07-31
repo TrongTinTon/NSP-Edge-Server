@@ -56,40 +56,43 @@
                         <div class="text-muted" title="Revision"><i class="fa fa-code-fork me-1"/>R<field name="revision" readonly="1" class="oe_inline"/></div>
                     </div>
 
-                    <separator string="Devices"/>
-                    <field name="reader_line_ids" mode="list,form" readonly="status != 'draft'"
-                           context="{'default_session_id': id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_measurement_reader_line_form'}">
-                        <list create="1" edit="1" delete="1">
-                            <control><create string="Add Reader"/></control>
-                            <field name="edge_server_id" string="Server"/>
-                            <field name="controller_id" string="Controller"/>
-                            <field name="reader_id" string="Reader"/>
-                            <field name="antenna_count" string="Antennas" readonly="1"/>
-                            <field name="reader_power_dbm" string="Power"/>
-                            <field name="read_interval_ms" string="Interval"/>
-                            <field name="reader_status" string="State" readonly="1" widget="badge" optional="hide"/>
-                        </list>
-                    </field>
-
-                    <separator string="Vehicles"/>
-                    <field name="target_line_ids" readonly="status != 'draft'">
-                        <list editable="bottom" create="1" delete="1">
-                            <control><create string="Add Vehicle"/></control>
-                            <field name="vehicle_scan_tid" string="RFID Tag" widget="nsp_rfid_scan"
-                                   options="{'target_field': 'tag_id', 'resolved_value_field': 'vehicle_tid', 'expected_target': 'vehicle_or_available', 'require_available': False, 'require_active_assignment': False, 'skip_duplicates': True}"
-                                   placeholder="Scan RFID TID"/>
-                            <field name="tag_id" column_invisible="True"/>
-                            <field name="vehicle_tid" column_invisible="True"/>
-                            <field name="vehicle_id" string="Plate" domain="[('active', '=', True)]"
-                                   options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
-                                   context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_form'}"/>
-                            <field name="owner_locked" column_invisible="True"/>
-                            <field name="owner_id" string="Owner" readonly="owner_locked" domain="[('active', '=', True)]"
-                                   options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
-                                   context="{'form_view_ref': 'nsp_user.view_nsp_user_form'}"/>
-                            <field name="vehicle_detection_state" string="State" widget="badge" readonly="1" optional="hide"/>
-                        </list>
-                    </field>
+                    <notebook>
+                        <page string="Devices" name="devices">
+                            <field name="reader_line_ids" mode="list,form" readonly="status != 'draft'"
+                                   context="{'default_session_id': id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_measurement_reader_line_form'}">
+                                <list create="1" edit="1" delete="1">
+                                    <control><create string="Add Reader"/></control>
+                                    <field name="edge_server_id" string="Server"/>
+                                    <field name="controller_id" string="Controller"/>
+                                    <field name="reader_id" string="Reader"/>
+                                    <field name="antenna_count" string="Antennas" readonly="1"/>
+                                    <field name="reader_power_dbm" string="Power"/>
+                                    <field name="read_interval_ms" string="Interval"/>
+                                    <field name="reader_status" string="State" readonly="1" widget="badge" optional="hide"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Vehicles" name="vehicles">
+                            <field name="target_line_ids" readonly="status != 'draft'">
+                                <list editable="bottom" create="1" delete="1">
+                                    <control><create string="Add Vehicle"/></control>
+                                    <field name="vehicle_scan_tid" string="RFID Tag" widget="nsp_rfid_scan"
+                                           options="{'target_field': 'tag_id', 'resolved_value_field': 'vehicle_tid', 'expected_target': 'vehicle_or_available', 'require_available': False, 'require_active_assignment': False, 'skip_duplicates': True}"
+                                           placeholder="Scan RFID TID"/>
+                                    <field name="tag_id" column_invisible="True"/>
+                                    <field name="vehicle_tid" column_invisible="True"/>
+                                    <field name="vehicle_id" string="Plate" domain="[('active', '=', True)]"
+                                           options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                           context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_form'}"/>
+                                    <field name="owner_locked" column_invisible="True"/>
+                                    <field name="owner_id" string="Owner" readonly="owner_locked" domain="[('active', '=', True)]"
+                                           options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                           context="{'form_view_ref': 'nsp_user.view_nsp_user_form'}"/>
+                                    <field name="vehicle_detection_state" string="State" widget="badge" readonly="1" optional="hide"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
 
                     <field name="calibration_workspace" widget="nsp_calibration_workspace" nolabel="1" readonly="1" invisible="status == 'draft'"/>
                 </sheet>

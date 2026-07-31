@@ -5,45 +5,46 @@
         <field name="model">nsp.user</field>
         <field name="inherit_id" ref="nsp_user.view_nsp_user_form"/>
         <field name="arch" type="xml">
-            <xpath expr="//notebook" position="before">
-                <group name="employee_rfid_tag" string="Employee RFID Tag">
-                    <field name="employee_tid_input" placeholder="Scan or enter Employee TID"/>
-                    <field name="employee_tid" readonly="1"/>
-                    <button name="action_revoke_employee_tag" type="object" string="Revoke Employee Tag"
-                            invisible="not employee_tag_assignment_id" class="btn-secondary"/>
-                    <field name="employee_tag_assignment_id" invisible="1"/>
-                </group>
-            </xpath>
-            <xpath expr="//notebook" position="inside">
+            <xpath expr="//page[@name='nsp_user_friends']" position="before">
                 <page string="Vehicles" name="nsp_user_vehicles">
-                    <div class="alert alert-info" role="alert">
-                        Create vehicles directly for this User. Each Vehicle accepts one active RFID TID.
-                        Revoke the current assignment before assigning another tag.
-                    </div>
-                    <field name="vehicle_ids" context="{'default_owner_id': id}">
+                    <field name="vehicle_ids" nolabel="1" context="{'default_owner_id': id}">
                         <list editable="bottom" open_form_view="1" delete="0">
-                            <field name="license_plate"/>
-                            <field name="vehicle_type_id" optional="show"
+                            <field name="license_plate" string="Plate" decoration-bf="1"/>
+                            <field name="vehicle_type_id" string="Type" optional="show"
                                    options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
                                    context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_type_form'}"/>
-                            <field name="brand_id" optional="show"
+                            <field name="brand_id" string="Brand" optional="show"
                                    options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
                                    context="{'form_view_ref': 'nsp_core.view_nsp_reference_brand_form'}"/>
-                            <field name="model_id" domain="[('brand_id', '=', brand_id)]" optional="show"
+                            <field name="model_id" string="Model" domain="[('brand_id', '=', brand_id)]" optional="show"
                                    options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
                                    context="{'form_view_ref': 'nsp_core.view_nsp_reference_model_form', 'default_brand_id': brand_id}"/>
-                            <field name="color_id" optional="hide"
+                            <field name="color_id" string="Color" optional="hide"
                                    options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
                                    context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_color_form'}"/>
-                            <field name="rfid_tid_input" string="RFID TID" placeholder="Scan or enter Vehicle TID"/>
-                            <field name="tid" readonly="1" optional="hide"/>
+                            <field name="rfid_tid_input" string="Tag" placeholder="Scan or enter TID"/>
                             <field name="active" widget="boolean_toggle" optional="hide"/>
-                            <button name="action_revoke_rfid_tag" type="object" string="Revoke Tag"
-                                    invisible="not active_tag_assignment_id"/>
+                            <button name="action_revoke_rfid_tag" type="object" string="Revoke" icon="fa-unlink"
+                                    help="Revoke RFID tag" invisible="not active_tag_assignment_id"/>
                             <field name="active_tag_assignment_id" column_invisible="1"/>
                         </list>
                     </field>
                 </page>
+            </xpath>
+
+            <xpath expr="//page[@name='nsp_user_settings']" position="attributes">
+                <attribute name="groups">nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking,base.group_system</attribute>
+            </xpath>
+
+            <xpath expr="//page[@name='nsp_user_settings']/group/group[@name='nsp_user_system_settings']" position="before">
+                <group string="Tag" name="nsp_user_tag_settings"
+                       groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking,base.group_system">
+                    <field name="employee_tid_input" string="TID" placeholder="Scan or enter TID"/>
+                    <button name="action_revoke_employee_tag" type="object" string="Revoke" icon="fa-unlink"
+                            help="Revoke employee tag" invisible="not employee_tag_assignment_id"
+                            class="btn-secondary"/>
+                    <field name="employee_tag_assignment_id" invisible="1"/>
+                </group>
             </xpath>
         </field>
     </record>
@@ -54,8 +55,8 @@
         <field name="inherit_id" ref="nsp_user.view_nsp_user_list"/>
         <field name="arch" type="xml">
             <xpath expr="//field[@name='email']" position="after">
-                <field name="employee_tid" string="Employee TID" optional="show"/>
-                <field name="vehicle_count" optional="show"/>
+                <field name="vehicle_count" string="Vehicles" optional="show"/>
+                <field name="employee_tid" string="Tag" optional="show"/>
             </xpath>
         </field>
     </record>

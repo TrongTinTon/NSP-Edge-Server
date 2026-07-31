@@ -61,7 +61,7 @@ class NspParkingLaneSequence(models.Model):
     _inherit = "nsp.parking.lane"
 
     direction = fields.Selection([
-        ("entry", "Entry"), ("exit", "Exit"), ("bidirectional", "Bidirectional"),
+        ("entry", "Entry"), ("exit", "Exit"), ("bidirectional", "Both"),
     ], default="entry", required=True, index=True)
     tolerance_type = fields.Selection([
         ("percent", "Percentage (%)"), ("seconds", "Seconds"),

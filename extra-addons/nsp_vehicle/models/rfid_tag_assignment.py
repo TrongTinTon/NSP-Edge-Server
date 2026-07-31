@@ -203,7 +203,50 @@ class NspRfidTagAssignment(models.Model):
                 reserved_vehicles,
             )
             prepared.append(vals)
-        return super().create(prepared)
+        records = super().create(prepared)
+        if not sync_mode:
+            records._post_chatter_event("assigned", actor_user_id)
+        return records
+
+    def _post_chatter_event(self, action, actor_user_id=False):
+        actor = self.env["res.users"].sudo().browse(
+            int(actor_user_id or self.env.user.id)
+        ).exists()
+        author_id = actor.partner_id.id if actor and actor.partner_id else False
+        for assignment in self:
+            verb = _("assigned") if action == "assigned" else _("revoked")
+            if assignment.user_id:
+                assignment.user_id.sudo().message_post(
+                    body=_("RFID tag %(verb)s: %(tid)s") % {
+                        "verb": verb,
+                        "tid": assignment.tid or "-",
+                    },
+                    subtype_xmlid="mail.mt_note",
+                    author_id=author_id,
+                )
+                continue
+
+            vehicle = assignment.vehicle_id
+            if not vehicle:
+                continue
+            vehicle.sudo().message_post(
+                body=_("RFID tag %(verb)s: %(tid)s") % {
+                    "verb": verb,
+                    "tid": assignment.tid or "-",
+                },
+                subtype_xmlid="mail.mt_note",
+                author_id=author_id,
+            )
+            if vehicle.owner_id:
+                vehicle.owner_id.sudo().message_post(
+                    body=_("Vehicle %(vehicle)s — RFID tag %(verb)s: %(tid)s") % {
+                        "vehicle": vehicle.display_name,
+                        "verb": verb,
+                        "tid": assignment.tid or "-",
+                    },
+                    subtype_xmlid="mail.mt_note",
+                    author_id=author_id,
+                )
 
     def write(self, vals):
         values = dict(vals)
@@ -223,7 +266,7 @@ class NspRfidTagAssignment(models.Model):
         }
         if immutable_fields.intersection(values) and not controlled:
             raise UserError(_(
-                "RFID Tag assignment history is immutable. Revoke the active assignment and create a new one."
+                "RFID assignment cannot be edited. Revoke it and assign a new tag."
             ))
         if values.get("state") == "active" and self.filtered(lambda rec: rec.state == "revoked"):
             raise UserError(_("A revoked RFID Tag assignment cannot be reactivated."))
@@ -236,7 +279,7 @@ class NspRfidTagAssignment(models.Model):
             self.env.context.get("module_uninstall")
             or self.env.context.get("rfid_assignment_sync_cleanup")
         ):
-            raise UserError(_("RFID Tag assignment history cannot be deleted. Revoke it instead."))
+            raise UserError(_("RFID assignment cannot be deleted. Revoke it instead."))
         return super().unlink()
 
     @api.constrains("tag_id", "user_id", "vehicle_id", "state")
@@ -263,6 +306,8 @@ class NspRfidTagAssignment(models.Model):
             "revoked_at": fields.Datetime.now(),
             "revoked_by_id": actor_user_id,
         })
+        if not self.env.context.get("rfid_assignment_sync"):
+            active._post_chatter_event("revoked", actor_user_id)
         return True
 
     @api.model

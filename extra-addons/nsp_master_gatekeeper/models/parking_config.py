@@ -386,11 +386,11 @@ class NspParkingLane(models.Model):
         ondelete="set null",
     )
     calibration_result_id = fields.Many2one(
-        "nsp.measurement.result", string="Accepted Result",
+        "nsp.measurement.result", string="Calibration",
         ondelete="set null", domain=[("state", "=", "accepted")],
     )
     direction = fields.Selection(
-        [("entry", "Entry"), ("exit", "Exit"), ("bidirectional", "Bidirectional")],
+        [("entry", "Entry"), ("exit", "Exit"), ("bidirectional", "Both")],
         string="Direction", default="entry", required=True,
     )
     timeline_line_ids = fields.One2many(
@@ -520,7 +520,7 @@ class NspParkingLane(models.Model):
         for lane in self:
             result = lane.calibration_result_id
             if not result or result.state != "accepted":
-                raise ValidationError(_("Select an Accepted Result first."))
+                raise ValidationError(_("Select an accepted Calibration first."))
             lane.calibration_source_id = result.session_id
             lane.timeline_line_ids.unlink()
             lane.checkin_sequence_ids.unlink()

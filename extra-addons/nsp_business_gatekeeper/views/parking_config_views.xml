@@ -6,10 +6,9 @@
         <field name="arch" type="xml">
             <search string="Parking Layout">
                 <field name="name"/>
-                <field name="code"/>
                 <field name="branch_id"/>
+                <filter string="Draft" name="draft" domain="[('state','=','draft')]"/>
                 <filter string="Operational" name="operational" domain="[('state','=','operational')]"/>
-                <filter string="Configuring" name="draft" domain="[('state','=','draft')]"/>
                 <filter string="Maintenance" name="maintenance" domain="[('state','=','maintenance')]"/>
                 <filter string="Blocked" name="blocked" domain="[('state','=','blocked')]"/>
                 <separator/>
@@ -26,12 +25,14 @@
         <field name="model">nsp.parking.area</field>
         <field name="arch" type="xml">
             <list string="Parking Layout" create="0" edit="0" delete="0">
-                <field name="state" widget="badge" decoration-success="state == 'operational'" decoration-warning="state == 'draft' or state == 'maintenance'" decoration-danger="state == 'blocked'"/>
-                <field name="name"/>
-                <field name="code" string="Technical Code" optional="hide"/>
-                <field name="branch_id"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'operational'"
+                       decoration-warning="state in ('draft','maintenance')"
+                       decoration-danger="state == 'blocked'"/>
+                <field name="name" string="Layout" decoration-bf="1"/>
+                <field name="branch_id" string="Branch"/>
                 <field name="lane_count" string="Lanes"/>
-                </list>
+            </list>
         </field>
     </record>
 
@@ -41,46 +42,42 @@
         <field name="arch" type="xml">
             <form string="Parking Layout" create="0" edit="0" delete="0">
                 <header>
-                    <button name="action_set_operational" type="object" string="Set Operational" class="oe_highlight" invisible="state == 'operational'"/>
-                    <button name="action_set_maintenance" type="object" string="Set Maintenance" invisible="state == 'maintenance'"/>
-                    <button name="action_set_blocked" type="object" string="Block" invisible="state == 'blocked'"/>
-                    <button name="action_reset_to_draft" type="object" string="Back to Draft" invisible="state == 'draft'"/>
-                    <field name="state" widget="statusbar" statusbar_visible="draft,operational,maintenance,blocked"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,operational,maintenance,blocked" readonly="1"/>
                 </header>
                 <sheet>
                     <div class="oe_button_box" name="button_box">
-                        <button name="action_open_live_monitor" type="object" class="oe_stat_button" icon="fa-desktop" groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking,base.group_system">
-                            <span class="o_stat_text">Live Monitor</span>
+                        <button name="action_open_live_monitor" type="object" class="oe_stat_button"
+                                icon="fa-desktop" help="Open the live parking monitor."
+                                groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking,base.group_system">
+                            <span class="o_stat_text">Monitor</span>
                         </button>
-                        </div>
-
-                    <div class="oe_title">
-                        <label for="name"/>
-                        <h1><field name="name" placeholder="Parking Area A"/></h1>
                     </div>
-
-                    <div class="alert alert-info" role="alert">Parking Lanes, Antenna Timelines and Parking Event Sequences are synchronized from Cloud. Edge uses them as read-only runtime configuration.</div>
-
+                    <div class="oe_title">
+                        <h1><field name="name"/></h1>
+                    </div>
                     <group>
-                        <group string="Parking Operation">
-                            <field name="branch_id" options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}" context="{'form_view_ref': 'nsp_business_gatekeeper.view_nsp_branch_form'}"/>
+                        <group>
+                            <field name="branch_id" string="Branch" readonly="1"/>
+                        </group>
+                        <group string="Runtime">
                             <field name="state" readonly="1"/>
-                            <field name="code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
+                            <field name="lane_count" string="Lanes" readonly="1"/>
                         </group>
-                        </group>
-
-                    <separator string="Lanes"/><div class="alert alert-info" role="alert">
-                Each Lane contains an Antenna Timeline plus Check-in and Check-out sequences. Edge matches real-time RFID detections against those ordered sequences.
-            </div>
-            <field name="lane_ids" readonly="1">
-                <list create="0" edit="0" delete="0">
-                    <field name="name" string="Lane Name"/>
-                    <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" domain="[('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','CONTROLLER')]"/>
-                    <field name="transition_count" string="Timeline Points" readonly="1"/>
-                    <field name="active" widget="boolean_toggle" readonly="1"/>
-                </list>
-            </field>
-        </sheet>
+                    </group>
+                    <separator string="Lanes"/>
+                    <field name="lane_ids" readonly="1" nolabel="1">
+                        <list create="0" edit="0" delete="0">
+                            <field name="name" string="Lane" decoration-bf="1"/>
+                            <field name="direction" widget="badge"
+                                   decoration-success="direction == 'entry'"
+                                   decoration-warning="direction == 'exit'"
+                                   decoration-info="direction == 'bidirectional'"/>
+                            <field name="controller_id" string="Controller"/>
+                            <field name="transition_count" string="Points" readonly="1"/>
+                            <field name="active" widget="boolean_toggle" readonly="1"/>
+                        </list>
+                    </field>
+                </sheet>
             </form>
         </field>
     </record>
@@ -96,13 +93,16 @@
         <field name="name">nsp.parking.lane.list</field>
         <field name="model">nsp.parking.lane</field>
         <field name="arch" type="xml">
-            <list string="Parking Lanes" create="0" edit="0" delete="0">
-                <field name="parking_area_id"/>
-                <field name="name" string="Lane Name" decoration-bf="1"/>
-                <field name="code" string="Technical Code" optional="hide" readonly="1"/>
-                <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" domain="[('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','CONTROLLER')]"/>
-                <field name="transition_count" string="Timeline Points" readonly="1"/>
-                <field name="active" widget="boolean_toggle"/>
+            <list string="Lanes" create="0" edit="0" delete="0">
+                <field name="parking_area_id" string="Layout"/>
+                <field name="name" string="Lane" decoration-bf="1"/>
+                <field name="direction" widget="badge"
+                                   decoration-success="direction == 'entry'"
+                                   decoration-warning="direction == 'exit'"
+                                   decoration-info="direction == 'bidirectional'"/>
+                <field name="controller_id" string="Controller"/>
+                <field name="transition_count" string="Points" readonly="1"/>
+                <field name="active" widget="boolean_toggle" readonly="1"/>
             </list>
         </field>
     </record>
@@ -111,64 +111,76 @@
         <field name="name">nsp.parking.lane.form</field>
         <field name="model">nsp.parking.lane</field>
         <field name="arch" type="xml">
-            <form string="Parking Lane" create="0" edit="0" delete="0">
+            <form string="Lane" create="0" edit="0" delete="0">
                 <sheet>
                     <div class="oe_title">
-                        <label for="name"/>
-                        <h1><field name="name" placeholder="Parking Lane"/></h1>
+                        <h1><field name="name"/></h1>
                     </div>
                     <group>
-                        <group string="Lane Declaration">
-                            <field name="parking_area_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': False}"/>
-                            <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" domain="[('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','CONTROLLER')]"/>
-                                        <field name="active"/>
-                        </group>
-                        <group string="Identity">
-                            <field name="transition_count" string="Timeline Points" readonly="1"/>
-                            <field name="code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
-                        </group>
-                    </group>
-                    <group string="Runtime Sequence Configuration">
                         <group>
-                            <field name="direction" readonly="1"/>
-                            <field name="tolerance_type" readonly="1"/>
-                            <field name="tolerance_value" readonly="1"/>
-                            <field name="total_path_duration" readonly="1"/>
+                            <field name="direction" widget="badge" readonly="1"
+                                   decoration-success="direction == 'entry'"
+                                   decoration-warning="direction == 'exit'"
+                                   decoration-info="direction == 'bidirectional'"/>
+                        </group>
+                        <group string="Devices">
+                            <field name="controller_id" string="Controller" readonly="1"/>
+                            <field name="transition_count" string="Points" readonly="1"/>
                         </group>
                     </group>
-                    <separator string="Antenna Timeline"/>
-                    <field name="timeline_line_ids" readonly="1">
-                        <list create="0" edit="0" delete="0">
-                            <field name="sequence" string="Order"/>
-                            <field name="antenna_id"/>
-                            <field name="reader_id"/>
-                            <field name="port_no"/>
-                            <field name="duration_from_previous"/>
-                            <field name="cumulative_time"/>
-                        </list>
-                    </field>
-                    <separator string="Parking Event Sequences"/>
-                    <group col="2">
-                        <group string="Check-in Sequence">
-                            <field name="checkin_sequence_ids" readonly="1">
-                                <list create="0" edit="0" delete="0"><field name="sequence"/><field name="antenna_id"/></list>
+                    <notebook>
+                        <page string="Timeline" name="timeline">
+                            <field name="timeline_line_ids" readonly="1" nolabel="1">
+                                <list create="0" edit="0" delete="0">
+                                    <field name="sequence" string="#"/>
+                                    <field name="antenna_id" string="Antenna"/>
+                                    <field name="reader_id" string="Reader"/>
+                                    <field name="port_no" string="Port"/>
+                                    <field name="duration_from_previous" string="Interval (s)"/>
+                                    <field name="cumulative_time" string="Elapsed (s)"/>
+                                </list>
                             </field>
-                        </group>
-                        <group string="Check-out Sequence">
-                            <field name="checkout_sequence_ids" readonly="1">
-                                <list create="0" edit="0" delete="0"><field name="sequence"/><field name="antenna_id"/></list>
-                            </field>
-                        </group>
-                    </group>
+                        </page>
+                        <page string="Sequences" name="sequences">
+                            <group col="2">
+                                <group string="Check-in">
+                                    <field name="checkin_sequence_ids" readonly="1" nolabel="1">
+                                        <list create="0" edit="0" delete="0">
+                                            <field name="sequence" string="#"/>
+                                            <field name="antenna_id" string="Antenna"/>
+                                        </list>
+                                    </field>
+                                </group>
+                                <group string="Check-out">
+                                    <field name="checkout_sequence_ids" readonly="1" nolabel="1">
+                                        <list create="0" edit="0" delete="0">
+                                            <field name="sequence" string="#"/>
+                                            <field name="antenna_id" string="Antenna"/>
+                                        </list>
+                                    </field>
+                                </group>
+                            </group>
+                        </page>
+                        <page string="Settings" name="settings">
+                            <group>
+                                <group string="Tolerance">
+                                    <field name="tolerance_type" string="Unit" readonly="1"/>
+                                    <field name="tolerance_value" string="Value" readonly="1"/>
+                                </group>
+                                <group string="Status">
+                                    <field name="active" readonly="1"/>
+                                </group>
+                            </group>
+                        </page>
+                    </notebook>
                 </sheet>
             </form>
         </field>
     </record>
 
     <record id="action_nsp_parking_lane" model="ir.actions.act_window">
-        <field name="name">Parking Lanes</field>
+        <field name="name">Lanes</field>
         <field name="res_model">nsp.parking.lane</field>
         <field name="view_mode">list,form</field>
     </record>
-
-    </odoo>
+</odoo>
