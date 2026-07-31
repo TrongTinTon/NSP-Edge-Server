@@ -2,7 +2,7 @@
     'name': 'NSP Vehicle',
     'summary': 'User-owned vehicles, RFID assignments and borrowing for NSP',
     'description': 'Manage vehicles from the User form, one active employee tag per User, one active tag per Vehicle, Odoo chatter audit, Friends and Vehicle Borrow.',
-    'version': '19.0.17.2.0',
+    'version': '19.0.17.4.0',
     'sequence': 30,
     'author': 'BKU Team',
     'category': 'Services',

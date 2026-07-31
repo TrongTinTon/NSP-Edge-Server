@@ -2,7 +2,7 @@
     'name': 'NSP RFID',
     'summary': 'RFID Tag Whitelist for NSP',
     'description': 'Maintain the authoritative whitelist of normalized RFID TIDs. Assignment ownership is managed separately and the tag has no stored type or purpose.',
-    'version': '19.0.3.0.0',
+    'version': '19.0.3.2.0',
     'sequence': 20,
     'author': 'BKU Team',
     'category': 'Services',

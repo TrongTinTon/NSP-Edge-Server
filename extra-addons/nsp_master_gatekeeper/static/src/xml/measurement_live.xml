@@ -19,17 +19,17 @@
 
             <section class="nsp-ml__summary-grid">
                 <article class="nsp-ml-summary-card">
-                    <span class="nsp-ml-summary-card__label">Target Pairs</span>
-                    <strong class="nsp-ml-summary-card__value" t-esc="state.targetCount"/>
+                    <span class="nsp-ml-summary-card__label">Vehicles</span>
+                    <strong class="nsp-ml-summary-card__value" t-esc="state.vehicleCount"/>
                     <span class="nsp-ml-summary-card__meta">
-                        <t t-esc="state.targetTagCount"/> RFID tags across user–vehicle pairs
+                        <t t-esc="state.vehicleTagCount"/> Vehicle RFID tags
                     </span>
                 </article>
                 <article class="nsp-ml-summary-card nsp-ml-summary-card--coverage">
                     <span class="nsp-ml-summary-card__label">RFID Coverage</span>
                     <div class="nsp-ml-summary-card__coverage-row">
                         <strong class="nsp-ml-summary-card__value">
-                            <t t-esc="state.detectedTargetCount"/> / <t t-esc="state.targetCount"/>
+                            <t t-esc="state.detectedVehicleCount"/> / <t t-esc="state.vehicleCount"/>
                         </strong>
                         <span class="nsp-ml-summary-card__percent"><t t-esc="state.coveragePercent"/>%</span>
                     </div>
@@ -121,7 +121,7 @@
                     <nav class="nsp-ml__tabs" aria-label="Reader calibration data views">
                         <button t-att-class="tabClass('timeline')" t-on-click="setTimelineTab">Detection Timeline</button>
                         <button t-att-class="tabClass('coverage')" t-on-click="setCoverageTab">
-                            RFID Coverage <span class="nsp-ml__tab-count" t-esc="state.targetCount"/>
+                            RFID Coverage <span class="nsp-ml__tab-count" t-esc="state.vehicleCount"/>
                         </button>
                         <button t-att-class="tabClass('reader')" t-on-click="setReaderTab">Reader Status</button>
                         <button t-att-class="tabClass('session')" t-on-click="setSessionTab">Session</button>
@@ -184,38 +184,36 @@
                     <section t-if="state.activeTab === 'coverage'" class="nsp-ml-panel">
                         <header class="nsp-ml-panel__header">
                             <div>
-                                <h3>RFID Pair Coverage</h3>
-                                <span class="nsp-ml__hint">A target pair is complete only when both the User RFID Tag and Vehicle RFID Tag are detected.</span>
+                                <h3>Vehicle RFID Coverage</h3>
+                                <span class="nsp-ml__hint">Each Vehicle is detected when its selected RFID Tag is read by the calibration assembly.</span>
                             </div>
-                            <span class="nsp-ml__coverage-total"><t t-esc="state.detectedTargetCount"/> / <t t-esc="state.targetCount"/> complete</span>
+                            <span class="nsp-ml__coverage-total"><t t-esc="state.detectedVehicleCount"/> / <t t-esc="state.vehicleCount"/> detected</span>
                         </header>
                         <div class="nsp-ml__table-wrap">
                             <table class="table nsp-ml__table">
                                 <thead>
                                     <tr>
                                         <th>License Plate</th>
-                                        <th>User RFID Tag</th>
-                                        <th>User Status</th>
-                                        <th class="text-end">User Reads</th>
-                                        <th>Vehicle RFID Tag</th>
-                                        <th>Vehicle Status</th>
-                                        <th class="text-end">Vehicle Reads</th>
-                                        <th>Pair Status</th>
+                                        <th>Owner</th>
+                                        <th>RFID Tag</th>
+                                        <th>Status</th>
+                                        <th class="text-end">Reads</th>
+                                        <th>First Detected</th>
+                                        <th>Last Detected</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <tr t-foreach="state.targetPairs" t-as="target" t-key="target.id">
-                                        <td><strong t-esc="target.license_plate || '-'"/></td>
-                                        <td class="nsp-ml__mono" t-esc="target.user_tid"/>
-                                        <td><span t-att-class="detectionStatusClass(target.user_detected)" t-esc="detectionStatusLabel(target.user_detected)"/></td>
-                                        <td class="text-end" t-esc="target.user_read_count"/>
-                                        <td class="nsp-ml__mono" t-esc="target.vehicle_tid"/>
-                                        <td><span t-att-class="detectionStatusClass(target.vehicle_detected)" t-esc="detectionStatusLabel(target.vehicle_detected)"/></td>
-                                        <td class="text-end" t-esc="target.vehicle_read_count"/>
-                                        <td><span t-att-class="detectionStatusClass(target.detected)" t-esc="pairStatusLabel(target)"/></td>
+                                    <tr t-foreach="state.vehicles" t-as="vehicle" t-key="vehicle.id">
+                                        <td><strong t-esc="vehicle.license_plate || '-'"/></td>
+                                        <td t-esc="vehicle.owner_name || 'No owner'"/>
+                                        <td class="nsp-ml__mono" t-esc="vehicle.vehicle_tid"/>
+                                        <td><span t-att-class="detectionStatusClass(vehicle.detected)" t-esc="vehicleStatusLabel(vehicle)"/></td>
+                                        <td class="text-end" t-esc="vehicle.read_count"/>
+                                        <td class="nsp-ml__mono" t-esc="formatTime(vehicle.first_read_at)"/>
+                                        <td class="nsp-ml__mono" t-esc="formatTime(vehicle.last_read_at)"/>
                                     </tr>
-                                    <tr t-if="!state.targetPairs.length">
-                                        <td colspan="8"><div class="nsp-ml__empty">No RFID Target pairs are configured.</div></td>
+                                    <tr t-if="!state.vehicles.length">
+                                        <td colspan="7"><div class="nsp-ml__empty">No Vehicles are configured.</div></td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -269,8 +267,8 @@
                             <div><span>Status</span><strong t-esc="statusLabel()"/></div>
                             <div><span>Controllers</span><strong class="nsp-ml__mono" t-esc="controllerCodes()"/></div>
                             <div><span>Edge Servers</span><strong class="nsp-ml__mono" t-esc="edgeServerCodes()"/></div>
-                            <div><span>Target Pairs</span><strong t-esc="state.targetCount"/></div>
-                            <div><span>RFID Tags</span><strong t-esc="state.targetTagCount"/></div>
+                            <div><span>Vehicles</span><strong t-esc="state.vehicleCount"/></div>
+                            <div><span>Vehicle RFID Tags</span><strong t-esc="state.vehicleTagCount"/></div>
                             <div><span>Planned Start</span><strong t-esc="formatDateTime(state.plannedStartAt)"/></div>
                             <div><span>Started At</span><strong t-esc="formatDateTime(state.startedAt)"/></div>
                             <div><span>Ended At</span><strong t-esc="formatDateTime(state.endedAt)"/></div>
@@ -286,7 +284,7 @@
                 <aside class="nsp-ml__sidebar">
                     <section class="nsp-ml-side-card">
                         <h3>Current Revision</h3>
-                        <div class="nsp-ml__metric"><span>Complete pairs</span><strong><t t-esc="state.detectedTargetCount"/> / <t t-esc="state.targetCount"/></strong></div>
+                        <div class="nsp-ml__metric"><span>Detected vehicles</span><strong><t t-esc="state.detectedVehicleCount"/> / <t t-esc="state.vehicleCount"/></strong></div>
                         <div class="nsp-ml__metric"><span>Controllers detected</span><strong><t t-esc="state.uniqueControllers"/> / <t t-esc="state.controllerCount"/></strong></div>
                         <div class="nsp-ml__metric"><span>Readers detected</span><strong><t t-esc="state.uniqueReaders"/> / <t t-esc="state.readerCount"/></strong></div>
                         <div class="nsp-ml__metric"><span>Antennas detected</span><strong t-esc="state.uniqueAntennas"/></div>

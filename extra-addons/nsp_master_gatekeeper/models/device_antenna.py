@@ -18,7 +18,22 @@ class DeviceAntenna(models.Model):
     )
     technical_code = fields.Char(string="Technical Code", readonly=True, copy=False, index=True)
     serial_number = fields.Char(string="Serial Number", copy=False, index=True)
-    antenna_no = fields.Integer(string="Antenna No", required=False, index=True)
+    whitelist_management_code = fields.Char(
+        string="Whitelist Antenna",
+        related="whitelist_id.technical_code",
+        readonly=True,
+    )
+    whitelist_photo = fields.Image(
+        string="Photo",
+        related="whitelist_id.image_128",
+        readonly=True,
+    )
+    antenna_no = fields.Integer(
+        string="Reader Antenna No",
+        required=False,
+        index=True,
+        help="Physical antenna port number used by the RFID Reader SDK, for example 1, 2, 3 or 4.",
+    )
     device_id = fields.Many2one(
         "nsp.device",
         string="Reader",
@@ -48,16 +63,19 @@ class DeviceAntenna(models.Model):
         ),
     ]
 
-    @api.depends("device_id.name", "device_id.serial_number", "antenna_no")
+    @api.depends("device_id.name", "device_id.serial_number", "antenna_no", "whitelist_id.display_name", "technical_code")
     def _compute_display_name(self):
         for antenna in self:
-            owner = (
-                antenna.device_id.name or antenna.device_id.serial_number
-                if antenna.device_id else _("Unassigned Reader")
-            )
-            antenna.display_name = "%s / Antenna %s" % (
-                owner,
-                antenna.antenna_no or antenna.technical_code or "",
+            if not antenna.device_id:
+                antenna.display_name = (
+                    antenna.whitelist_id.display_name
+                    or antenna.technical_code
+                    or _("Unassigned Antenna")
+                )
+                continue
+            owner = antenna.device_id.name or antenna.device_id.serial_number
+            antenna.display_name = "%s / Port %s" % (
+                owner, antenna.antenna_no or "-",
             )
 
     @api.model

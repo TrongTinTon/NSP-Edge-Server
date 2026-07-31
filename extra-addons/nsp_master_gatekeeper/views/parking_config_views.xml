@@ -1,4 +1,4 @@
-<?xml version='1.0' encoding='UTF-8'?>
+<?xml version="1.0" encoding="utf-8"?>
 <odoo>
     <record id="view_nsp_parking_area_search" model="ir.ui.view">
         <field name="name">nsp.parking.operation.search</field>
@@ -12,10 +12,11 @@
                 <filter string="Configuring" name="draft" domain="[('state','=','draft')]"/>
                 <filter string="Maintenance" name="maintenance" domain="[('state','=','maintenance')]"/>
                 <filter string="Blocked" name="blocked" domain="[('state','=','blocked')]"/>
+                <filter string="Published" name="published" domain="[('published_payload_json','!=',False)]"/>
                 <separator/>
                 <group>
                     <filter string="Branch" name="group_branch" context="{'group_by':'branch_id'}"/>
-                    <filter string="State" name="group_state" context="{'group_by':'state'}"/>
+                    <filter string="Working State" name="group_state" context="{'group_by':'state'}"/>
                 </group>
             </search>
         </field>
@@ -26,12 +27,17 @@
         <field name="model">nsp.parking.area</field>
         <field name="arch" type="xml">
             <list string="Parking Layout">
-                <field name="state" widget="badge" decoration-success="state == 'operational'" decoration-warning="state == 'draft' or state == 'maintenance'" decoration-danger="state == 'blocked'"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'operational'"
+                       decoration-warning="state in ('draft','maintenance')"
+                       decoration-danger="state == 'blocked'"/>
                 <field name="name"/>
-                <field name="code" string="Technical Code" optional="hide"/>
                 <field name="branch_id"/>
                 <field name="lane_count" string="Lanes"/>
-                </list>
+                <field name="published_revision" string="Published Rev."/>
+                <field name="published_at" optional="hide"/>
+                <field name="code" string="Technical Code" optional="hide"/>
+            </list>
         </field>
     </record>
 
@@ -41,49 +47,61 @@
         <field name="arch" type="xml">
             <form string="Parking Layout">
                 <header>
-                    <button name="action_set_operational" type="object" string="Set Operational" class="oe_highlight" invisible="state == 'operational'"/>
-                    <button name="action_set_maintenance" type="object" string="Set Maintenance" invisible="state == 'maintenance'"/>
-                    <button name="action_set_blocked" type="object" string="Block" invisible="state == 'blocked'"/>
-                    <button name="action_reset_to_draft" type="object" string="Back to Draft" invisible="state == 'draft'"/>
+                    <button name="action_set_operational" type="object" string="Publish" class="oe_highlight" icon="fa-cloud-upload"/>
+                    <button name="action_set_maintenance" type="object" string="Publish Maintenance" invisible="not is_published"/>
+                    <button name="action_set_blocked" type="object" string="Publish Blocked" invisible="not is_published"/>
+                    <button name="action_reset_to_draft" type="object" string="Edit Draft" invisible="state == 'draft'"/>
                     <field name="state" widget="statusbar" statusbar_visible="draft,operational,maintenance,blocked"/>
                 </header>
                 <sheet>
+                    <field name="is_published" invisible="1"/>
                     <div class="oe_button_box" name="button_box">
-                        <button name="action_open_live_monitor" type="object" class="oe_stat_button" icon="fa-desktop" groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking,base.group_system">
+                        <button name="action_open_live_monitor" type="object" class="oe_stat_button" icon="fa-desktop"
+                                groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking,base.group_system">
                             <span class="o_stat_text">Live Monitor</span>
                         </button>
-                        </div>
-
+                    </div>
                     <div class="oe_title">
                         <label for="name"/>
                         <h1><field name="name" placeholder="Parking Area A"/></h1>
                     </div>
-
-                    <div class="alert alert-info" role="alert">Define each parking Lane and its physical movement rules. Devices are selected from Device Whitelist; this screen never creates Server, Controller, RFID Reader or Antenna records.</div>
-
+                    <div class="alert alert-info" role="alert">
+                        Build the operating assembly from independent Device Whitelist identities. Publishing creates an immutable snapshot for Edge. Editing Draft does not change the last published runtime configuration.
+                    </div>
                     <group>
-                        <group string="Parking Operation">
-                            <field name="branch_id" options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}" context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_branch_form'}"/>
-                            <field name="state" readonly="1"/>
+                        <group string="Parking Layout">
+                            <field name="branch_id" context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_branch_form'}"/>
                             <field name="code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
+                        <group string="Publication">
+                            <field name="published_revision" readonly="1"/>
+                            <field name="published_at" readonly="1"/>
+                            <field name="published_edge_server_codes" string="Published Servers" readonly="1"/>
                         </group>
-
-                    <separator string="Lanes"/><div class="alert alert-info" role="alert">
-                Configure one Controller and the directed antenna paths inside each Lane. Check-in and Check-out are defined by the ordered From Antenna → To Antenna rule and its measured Duration.
-            </div>
-            <field name="lane_ids" mode="list,form" context="{'default_parking_area_id': id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_parking_lane_form'}">
-                <list create="1" edit="1" delete="1">
-                    <control><create string="Add Lane"/></control>
-                    <field name="lane_no" string="Lane No."/>
-                    <field name="name" string="Lane Name"/>
-                    <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" domain="[('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','CONTROLLER')]"/>
-                    <field name="transition_count" string="Movement Rules" readonly="1"/>
-                    <field name="active" widget="boolean_toggle"/>
-                    <field name="code" string="Technical Code" optional="hide" readonly="1"/>
-                </list>
-            </field>
-        </sheet>
+                    </group>
+                    <separator string="Lanes"/>
+                    <div class="alert alert-info" role="alert">
+                        Each Lane selects one Server and one Controller for this published layout only. Movement Rules map RFID Reader ports to independent Antenna devices and define Check-in or Check-out direction.
+                    </div>
+                    <field name="lane_ids" mode="list,form"
+                           context="{'default_parking_area_id': id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_parking_lane_form'}">
+                        <list create="1" edit="1" delete="1">
+                            <control><create string="Add Lane"/></control>
+                            <field name="lane_no" string="Lane No."/>
+                            <field name="name" string="Lane Name"/>
+                            <field name="available_edge_server_ids" column_invisible="1"/>
+                            <field name="edge_server_id" string="Server"
+                                   domain="[('id','in',available_edge_server_ids)]"
+                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                            <field name="available_controller_ids" column_invisible="1"/>
+                            <field name="controller_id" string="Controller"
+                                   domain="[('id','in',available_controller_ids)]"
+                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                            <field name="transition_count" string="Movement Rules" readonly="1"/>
+                            <field name="active" widget="boolean_toggle"/>
+                        </list>
+                    </field>
+                </sheet>
             </form>
         </field>
     </record>
@@ -101,12 +119,13 @@
         <field name="arch" type="xml">
             <list string="Parking Lanes">
                 <field name="parking_area_id"/>
-                <field name="lane_no" string="Lane No"/>
+                <field name="lane_no" string="Lane No."/>
                 <field name="name" string="Lane Name" decoration-bf="1"/>
-                <field name="code" string="Technical Code" optional="hide" readonly="1"/>
-                <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" domain="[('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','CONTROLLER')]"/>
+                <field name="edge_server_id" string="Server"/>
+                <field name="controller_id"/>
                 <field name="transition_count" string="Movement Rules" readonly="1"/>
                 <field name="active" widget="boolean_toggle"/>
+                <field name="code" string="Technical Code" optional="hide" readonly="1"/>
             </list>
         </field>
     </record>
@@ -121,32 +140,57 @@
                         <label for="name"/>
                         <h1><field name="name" placeholder="Parking Lane 01"/></h1>
                     </div>
+                    <div class="alert alert-info" role="alert">
+                        Server, Controller, RFID Reader and Antenna remain independent in Device Whitelist. Their relationships below exist only in this Parking Layout.
+                    </div>
                     <group>
-                        <group string="Lane Declaration">
-                            <field name="parking_area_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': False}"/>
-                            <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_controllers_form'}" domain="[('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','CONTROLLER')]"/>
-                            <field name="lane_no" string="Lane No"/>
-                            <field name="active"/>
-                        </group>
-                        <group string="Identity">
-                            <field name="transition_count" string="Movement Rules" readonly="1"/>
+                        <group string="Lane">
+                            <field name="parking_area_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True}"/>
+                            <field name="lane_no" string="Lane No."/>
+                            <field name="active" widget="boolean_toggle"/>
                             <field name="code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
+                        <group string="Runtime Assembly">
+                            <field name="available_edge_server_ids" invisible="1"/>
+                            <field name="edge_server_id" string="Server"
+                                   domain="[('id','in',available_edge_server_ids)]"
+                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                            <field name="available_controller_ids" invisible="1"/>
+                            <field name="controller_id" string="Controller"
+                                   domain="[('id','in',available_controller_ids)]"
+                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                            <field name="transition_count" string="Movement Rules" readonly="1"/>
+                        </group>
                     </group>
-                    <group string="Movement Rules">
-                <div class="alert alert-info" role="alert" colspan="2">
-                    Add the real movement path for this Lane. Example: Antenna 1 → Antenna 2 = Check-in. Antenna 2 → Antenna 1 = Check-out. Duration is measured in Reader Calibration and is evaluated by Edge for the same Vehicle RFID.
-                </div>
-                <field name="antenna_transition_ids" context="{'default_lane_id': id}" colspan="2">
-                    <list editable="bottom" create="1" edit="1" delete="1">
-                        <field name="lane_controller_id" column_invisible="1"/>
-                        <field name="from_antenna_id" string="From Antenna" domain="[('device_id.controller_id','=',parent.controller_id),('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','ANTENNA')]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                        <field name="to_antenna_id" string="To Antenna" domain="[('device_id.controller_id','=',parent.controller_id),('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','ANTENNA')]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                        <field name="event_type" widget="badge" decoration-success="event_type == 'check_in'" decoration-info="event_type == 'check_out'"/>
-                        <field name="duration_seconds" string="Duration (s)"/>
-                    </list>
-                </field>
-            </group></sheet>
+                    <separator string="Movement Rules"/>
+                    <div class="alert alert-info" role="alert">
+                        Example: Reader A / No.1 / Antenna A → Reader A / No.2 / Antenna B = Check-in. The reverse ordered path may be configured as Check-out.
+                    </div>
+                    <field name="antenna_transition_ids" context="{'default_lane_id': id}">
+                        <list editable="bottom" create="1" edit="1" delete="1">
+                            <field name="available_reader_ids" column_invisible="1"/>
+                            <field name="available_antenna_ids" column_invisible="1"/>
+                            <field name="from_device_id" string="From Reader"
+                                   domain="[('id','in',available_reader_ids)]"
+                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                            <field name="from_antenna_no" string="From No."/>
+                            <field name="from_antenna_id" string="From Antenna"
+                                   domain="[('id','in',available_antenna_ids)]"
+                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                            <field name="to_device_id" string="To Reader"
+                                   domain="[('id','in',available_reader_ids)]"
+                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                            <field name="to_antenna_no" string="To No."/>
+                            <field name="to_antenna_id" string="To Antenna"
+                                   domain="[('id','in',available_antenna_ids)]"
+                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                            <field name="event_type" widget="badge"
+                                   decoration-success="event_type == 'check_in'"
+                                   decoration-info="event_type == 'check_out'"/>
+                            <field name="duration_seconds" string="Duration (s)"/>
+                        </list>
+                    </field>
+                </sheet>
             </form>
         </field>
     </record>
@@ -156,5 +200,4 @@
         <field name="res_model">nsp.parking.lane</field>
         <field name="view_mode">list,form</field>
     </record>
-
-    </odoo>
+</odoo>

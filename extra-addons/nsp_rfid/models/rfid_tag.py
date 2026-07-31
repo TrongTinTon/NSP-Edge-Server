@@ -92,8 +92,9 @@ class NspRfidTag(models.Model):
     ):
         """Validate a keyboard-scanned TID without persisting scan state.
 
-        ``expected_target`` may be ``user`` or ``vehicle``. This is a validation
-        of the current assignment, not a property of the tag itself.
+        ``expected_target`` may be ``user``, ``vehicle`` or
+        ``vehicle_or_available``. The latter accepts an unassigned whitelist TID
+        or a TID already assigned to a Vehicle, but rejects User assignments.
         """
         normalized = self._normalize_tid(tid)
         if not normalized:
@@ -147,6 +148,13 @@ class NspRfidTag(models.Model):
                 "tag_id": tag.id,
                 "message": _("RFID Tag %s is not assigned to an active Vehicle.") % normalized,
             }
+        if expected == "vehicle_or_available" and assignment and not assignment.vehicle_id:
+            return {
+                "valid": False,
+                "tid": normalized,
+                "tag_id": tag.id,
+                "message": _("RFID Tag %s is assigned to a User and cannot be used for a Vehicle.") % normalized,
+            }
 
         result = {
             "valid": True,
@@ -156,6 +164,16 @@ class NspRfidTag(models.Model):
             "user_id": assignment.user_id.id if assignment and assignment.user_id else False,
             "vehicle_id": assignment.vehicle_id.id if assignment and assignment.vehicle_id else False,
             "license_plate": assignment.vehicle_id.license_plate if assignment and assignment.vehicle_id else False,
+            "owner_id": (
+                assignment.vehicle_id.owner_id.id
+                if assignment and assignment.vehicle_id and assignment.vehicle_id.owner_id
+                else False
+            ),
+            "owner_name": (
+                assignment.vehicle_id.owner_id.display_name
+                if assignment and assignment.vehicle_id and assignment.vehicle_id.owner_id
+                else False
+            ),
             "message": _("RFID Tag is valid."),
         }
         return result

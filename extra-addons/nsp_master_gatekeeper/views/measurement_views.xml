@@ -26,7 +26,7 @@
             <list string="Reader Calibration" decoration-info="status == 'running'" decoration-success="status in ('completed','applied')" decoration-danger="status == 'failed'">
                 <field name="measurement_code" readonly="1"/>
                 <field name="revision"/>
-                <field name="target_count" string="Target Pairs"/>
+                <field name="target_count" string="Vehicles"/>
                 <field name="controller_count" string="Controllers"/>
                 <field name="reader_count" string="Readers"/>
                 <field name="status" widget="badge"/>
@@ -60,8 +60,8 @@
                     </div>
                     <group>
                         <group string="Calibration Scope">
-                            <field name="target_count" string="Target Pairs" readonly="1"/>
-                            <field name="target_tag_count" string="RFID Tags" readonly="1"/>
+                            <field name="target_count" string="Vehicles" readonly="1"/>
+                            <field name="target_tag_count" string="Vehicle RFID Tags" readonly="1"/>
                             <field name="controller_count" readonly="1"/>
                             <field name="reader_count" readonly="1"/>
                         </group>
@@ -74,38 +74,47 @@
                         </group>
                     </group>
                     <notebook>
-                        <page string="Target Pairs">
+                        <page string="Vehicles">
                             <div class="alert alert-info" role="alert">
-                                One line represents one person and one vehicle. Scan, paste, or type the Employee RFID Tag, then the Vehicle RFID Tag. A valid value shows a green border; an invalid value shows a red border and the reason. The License Plate is resolved automatically from the active Vehicle RFID Tag assignment.
+                                Scan a Vehicle RFID Tag. If the tag is already assigned, the License Plate and existing Owner are shown automatically. For a new test tag, type a License Plate and use Quick Create; saving assigns the scanned RFID Tag to that Vehicle. If the Vehicle has no Owner, create or select a User directly in the Owner field.
                             </div>
                             <field name="target_line_ids" readonly="status != 'draft'">
                                 <list editable="bottom" delete="1">
-                                    <field name="user_scan_tid" string="Employee RFID Tag" widget="nsp_rfid_scan" options="{'target_field': 'user_assignment_id', 'resolved_value_field': 'user_tid', 'expected_target': 'user', 'require_available': False, 'require_active_assignment': True, 'skip_duplicates': True, 'next_scan_field': 'vehicle_scan_tid'}" placeholder="Scan or paste User RFID TID"/>
-                                    <field name="user_assignment_id" column_invisible="True"/>
-                                    <field name="user_tid" column_invisible="True"/>
-                                    <field name="user_id" column_invisible="True"/>
-                                    <field name="vehicle_scan_tid" string="Vehicle RFID Tag" widget="nsp_rfid_scan" options="{'target_field': 'vehicle_assignment_id', 'resolved_value_field': 'vehicle_tid', 'expected_target': 'vehicle', 'require_available': False, 'require_active_assignment': True, 'skip_duplicates': True, 'auto_next_row': True}" placeholder="Scan or paste Vehicle RFID TID"/>
-                                    <field name="vehicle_assignment_id" column_invisible="True"/>
+                                    <field name="vehicle_scan_tid" string="RFID Tag"
+                                           widget="nsp_rfid_scan"
+                                           options="{'target_field': 'tag_id', 'resolved_value_field': 'vehicle_tid', 'expected_target': 'vehicle_or_available', 'require_available': False, 'require_active_assignment': False, 'skip_duplicates': True}"
+                                           placeholder="Scan or paste Vehicle RFID TID"/>
+                                    <field name="tag_id" column_invisible="True"/>
                                     <field name="vehicle_tid" column_invisible="True"/>
-                                    <field name="vehicle_id" column_invisible="True"/>
-                                    <field name="license_plate" string="License Plate" readonly="1"/>
+                                    <field name="vehicle_id" string="License Plate"
+                                           domain="[('active', '=', True)]"
+                                           options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                           context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_form'}"/>
+                                    <field name="owner_locked" column_invisible="True"/>
+                                    <field name="owner_id" string="Owner" readonly="owner_locked"
+                                           domain="[('active', '=', True)]"
+                                           options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                           context="{'form_view_ref': 'nsp_user.view_nsp_user_form'}"/>
+                                    <field name="vehicle_detection_state" string="Status" widget="badge" readonly="1" optional="hide"/>
                                 </list>
                             </field>
                         </page>
-                        <page string="Controllers &amp; Readers">
+                        <page string="Device Assembly">
                             <div class="alert alert-info" role="alert">
-                                Select Readers from one or many Controllers. Reader ownership determines the Controller automatically. Choose only the Antennas that participate in this calibration.
+                                Assemble independent Device Whitelist identities for this calibration only: Server → Controller → RFID Reader, then map Reader ports to Antennas. No permanent device hierarchy is created.
                             </div>
-                            <field name="reader_line_ids" readonly="status != 'draft'">
-                                <list editable="bottom" delete="1">
-                                    <field name="controller_id" readonly="1"/>
-                                    <field name="reader_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" context="{'form_view_ref': 'nsp_master_gatekeeper.nsp_device_view_form'}" domain="[('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','RFID_READER')]"/>
+                            <field name="reader_line_ids" mode="list,form" readonly="status != 'draft'"
+                                   context="{'default_session_id': id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_measurement_reader_line_form'}">
+                                <list create="1" edit="1" delete="1">
+                                    <control><create string="Add Reader Assembly"/></control>
+                                    <field name="edge_server_id" string="Server"/>
+                                    <field name="controller_id" string="Controller"/>
+                                    <field name="reader_id" string="RFID Reader"/>
                                     <field name="serial_number" readonly="1" optional="hide"/>
-                                    <field name="reader_status" readonly="1" widget="badge"/>
-                                    <field name="reader_power_dbm" string="Reader Power (dBm)"/>
-                                    <field name="read_interval_ms" string="Read Interval ms"/>
-                                    <field name="available_antenna_ids" column_invisible="True"/>
-                                    <field name="antenna_ids" string="Antennas" widget="many2many_tags" domain="[('id','in',available_antenna_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" required="1"/>
+                                    <field name="antenna_count" string="Antennas" readonly="1"/>
+                                    <field name="reader_power_dbm" string="Power (dBm)"/>
+                                    <field name="read_interval_ms" string="Interval (ms)"/>
+                                    <field name="reader_status" readonly="1" widget="badge" optional="hide"/>
                                 </list>
                             </field>
                         </page>
@@ -119,6 +128,68 @@
         </field>
     </record>
 
+
+
+
+    <record id="view_nsp_measurement_reader_line_form" model="ir.ui.view">
+        <field name="name">nsp.measurement.reader.line.assembly.form</field>
+        <field name="model">nsp.measurement.reader.line</field>
+        <field name="arch" type="xml">
+            <form string="Reader Assembly">
+                <sheet>
+                    <field name="session_id" invisible="1"/>
+                    <div class="oe_title">
+                        <h1>Reader Assembly</h1>
+                    </div>
+                    <div class="alert alert-info" role="alert">
+                        This assembly exists only inside the current Reader Calibration. Device Whitelist identities remain independent and can be assembled differently in another calibration or Parking Layout.
+                    </div>
+                    <group>
+                        <group string="Calibration Assembly">
+                            <field name="available_edge_server_ids" invisible="1"/>
+                            <field name="edge_server_id" string="Server"
+                                   domain="[('id','in',available_edge_server_ids)]"
+                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                            <field name="available_controller_ids" invisible="1"/>
+                            <field name="controller_id" string="Controller"
+                                   domain="[('id','in',available_controller_ids)]"
+                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                            <field name="available_reader_ids" invisible="1"/>
+                            <field name="reader_id" string="RFID Reader"
+                                   domain="[('id','in',available_reader_ids)]"
+                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                            <field name="serial_number" readonly="1"/>
+                            <field name="reader_status" widget="badge" readonly="1"/>
+                        </group>
+                        <group string="Reader Calibration Parameters">
+                            <field name="reader_power_dbm" string="Power (dBm)"/>
+                            <field name="read_interval_ms" string="Read Interval (ms)"/>
+                            <field name="reader_tid_addr" string="TID Start Address (Words)"/>
+                            <field name="reader_tid_len" string="TID Length (Words)"/>
+                        </group>
+                    </group>
+                    <separator string="Antenna Port Mapping"/>
+                    <div class="alert alert-info" role="alert">
+                        Each row is one physical port on the selected RFID Reader. Select an independent Antenna identity from Device Whitelist. Blank ports are disabled for this calibration.
+                    </div>
+                    <field name="antenna_port_ids" nolabel="1"
+                           context="{'default_reader_line_id': id}">
+                        <list editable="bottom" create="1" delete="1" open_form_view="0">
+                            <control>
+                                <create string="Add a line"/>
+                            </control>
+                            <field name="reader_line_id" column_invisible="1"/>
+                            <field name="port_no" string="No." decoration-bf="1"/>
+                            <field name="available_antenna_ids" column_invisible="1"/>
+                            <field name="antenna_id" string="Antenna"
+                                   domain="[('id','in',available_antenna_ids)]"
+                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                        </list>
+                    </field>
+                </sheet>
+            </form>
+        </field>
+    </record>
 
     <record id="view_nsp_measurement_session_live_form" model="ir.ui.view">
         <field name="name">nsp.measurement.session.live.form</field>
@@ -142,7 +213,7 @@
                     </div>
                     <group class="nsp-measurement-live-meta">
                         <field name="revision" readonly="1"/>
-                        <field name="target_count" string="Target Pairs" readonly="1"/>
+                        <field name="target_count" string="Vehicles" readonly="1"/>
                         <field name="controller_count" readonly="1"/>
                         <field name="reader_count" readonly="1"/>
                     </group>

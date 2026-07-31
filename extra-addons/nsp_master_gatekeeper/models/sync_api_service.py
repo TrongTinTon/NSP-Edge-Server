@@ -477,6 +477,143 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 }
         return payload
 
+    @api.model
+    def _published_parking_payload_for_edge(self, area, edge_code):
+        """Return the immutable published Parking Layout slice for one Edge."""
+        payload = area.prepare_sync_payload()
+        if not payload:
+            return False
+        normalized_edge = str(edge_code or "").strip().upper()
+        lanes = []
+        for lane in payload.get("lanes") or []:
+            if not isinstance(lane, dict):
+                continue
+            if str(lane.get("server_code") or "").strip().upper() != normalized_edge:
+                continue
+            lanes.append(dict(lane))
+        if not lanes:
+            return False
+        result = dict(payload)
+        result["lanes"] = lanes
+        return result
+
+    @api.model
+    def _published_gatekeeper_projection(self, edge):
+        """Project only devices referenced by published Parking assemblies.
+
+        Device Whitelist remains the Cloud inventory of independent identities.
+        This projection is assembled from immutable published Parking Layout
+        snapshots and therefore never exposes an unrelated fixed device tree.
+        """
+        edge_code = str(edge.edge_server_code or "").strip().upper()
+        Area = self.env["nsp.parking.area"].sudo()
+        areas = Area.search([
+            ("published_payload_json", "!=", False),
+        ], order="code,id").filtered(lambda area: area.is_published_for_edge(edge_code))
+
+        area_payloads = []
+        branch_ids = set()
+        referenced_codes = set()
+        controller_map = {}
+        for area in areas:
+            payload = self._published_parking_payload_for_edge(area, edge_code)
+            if not payload:
+                continue
+            area_payloads.append(payload)
+            branch_ids.add(area.branch_id.id)
+            for lane in payload.get("lanes") or []:
+                server_code = str(lane.get("server_code") or "").strip().upper()
+                controller_code = str(lane.get("controller_code") or "").strip().upper()
+                if not server_code or not controller_code:
+                    continue
+                referenced_codes.update({server_code, controller_code})
+                controller = controller_map.setdefault(controller_code, {
+                    "controller_code": controller_code,
+                    "controller_name": controller_code,
+                    "server_code": server_code,
+                    "active": True,
+                    "devices": {},
+                })
+                if controller["server_code"] != server_code:
+                    raise ValueError("controller_published_on_multiple_servers")
+                for reader in lane.get("readers") or []:
+                    if not isinstance(reader, dict):
+                        continue
+                    reader_code = str(reader.get("technical_code") or "").strip().upper()
+                    serial = str(reader.get("serial_number") or "").strip().upper()
+                    if not reader_code or not serial:
+                        raise ValueError("published_reader_identity_missing")
+                    referenced_codes.add(reader_code)
+                    reader_payload = dict(reader)
+                    reader_payload["technical_code"] = reader_code
+                    reader_payload["serial_number"] = serial
+                    antenna_rows = []
+                    for antenna in reader.get("antennas") or []:
+                        if not isinstance(antenna, dict):
+                            continue
+                        antenna_code = str(antenna.get("technical_code") or "").strip().upper()
+                        if not antenna_code:
+                            raise ValueError("published_antenna_identity_missing")
+                        referenced_codes.add(antenna_code)
+                        antenna_row = dict(antenna)
+                        antenna_row["technical_code"] = antenna_code
+                        antenna_rows.append(antenna_row)
+                    reader_payload["antennas"] = antenna_rows
+                    previous = controller["devices"].get(reader_code)
+                    if previous and previous != reader_payload:
+                        raise ValueError("reader_published_with_conflicting_configuration")
+                    controller["devices"][reader_code] = reader_payload
+
+        Whitelist = self.env["nsp.device.whitelist"].sudo().with_context(active_test=False)
+        identities = Whitelist.search([
+            ("technical_code", "in", sorted(referenced_codes)),
+        ], order="technical_code,id") if referenced_codes else Whitelist.browse()
+        identity_by_code = {record.technical_code: record for record in identities}
+        missing = sorted(referenced_codes - set(identity_by_code))
+        if missing:
+            raise ValueError("published_device_identity_missing:%s" % ",".join(missing))
+        inactive = sorted(
+            code for code, record in identity_by_code.items() if not record.active
+        )
+        if inactive:
+            raise ValueError("published_device_identity_inactive:%s" % ",".join(inactive))
+
+        for controller_code, controller in controller_map.items():
+            identity = identity_by_code.get(controller_code)
+            if identity:
+                controller["controller_name"] = identity.name or identity.technical_code
+            controller["devices"] = sorted(
+                controller["devices"].values(),
+                key=lambda row: (row.get("serial_number") or "", row.get("technical_code") or ""),
+            )
+
+        Branch = self.env["nsp.branch"].sudo()
+        branches = Branch.browse(sorted(branch_ids)) if branch_ids else Branch.browse()
+        type_order = {"SERVER": 1, "CONTROLLER": 2, "RFID_READER": 3, "ANTENNA": 4}
+        whitelist_payload = [
+            record._prepare_sync_payload()
+            for record in identities.sorted(
+                key=lambda row: (
+                    type_order.get(row.device_type_code, 9),
+                    row.technical_code or "",
+                    row.id,
+                )
+            )
+        ]
+        return {
+            "branches": [{
+                "branch_code": branch.code,
+                "branch_name": branch.name,
+                "timezone": branch.timezone or "Asia/Ho_Chi_Minh",
+                "active": branch.status == "active",
+            } for branch in branches],
+            "controllers": sorted(
+                controller_map.values(), key=lambda row: row["controller_code"]
+            ),
+            "parking_areas": area_payloads,
+            "device_whitelist": whitelist_payload,
+        }
+
     @endpoint("NSP Gatekeeper Configuration Sync", route_path="gatekeeper-config/sync", methods="POST", code="nsp_gatekeeper_config_sync")
     def api_gatekeeper_config_sync(self):
         data = self._payload()
@@ -490,63 +627,20 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 400,
                 error_code="invalid_payload",
             )
-
-        Whitelist = self.env["nsp.device.whitelist"].sudo().with_context(active_test=False)
-        all_active = Whitelist.search([("active", "=", True)], order="technical_code,id")
-        scope = all_active.filtered(lambda item: item._runtime_edge_server() == edge)
-
-        controllers = []
-        controller_entries = scope.filtered(
-            lambda item: item.device_type_code == "CONTROLLER" and item.controller_id and item.controller_id.active
-        ).sorted(key=lambda item: (item.technical_code or "", item.id))
-        for controller_entry in controller_entries:
-            controller = controller_entry.controller_id
-            devices = []
-            reader_entries = scope.filtered(
-                lambda item: item.device_type_code == "RFID_READER"
-                and item.reader_id
-                and item.reader_id.controller_id == controller
-                and item.reader_id.active
-            ).sorted(key=lambda item: (item.serial_number or "", item.id))
-            for reader_entry in reader_entries:
-                payload = reader_entry.reader_id._build_edge_config_payload()
-                payload["reader_name"] = reader_entry.name or reader_entry.reader_id.name
-                payload["technical_code"] = reader_entry.technical_code
-                devices.append(payload)
-            controllers.append({
-                "controller_code": controller_entry.technical_code,
-                "controller_name": controller_entry.name or controller.controller_name,
-                "active": True,
-                "devices": devices,
-            })
-
-        areas = self.env["nsp.parking.area"].sudo().search([], order="code,id").filtered(
-            lambda area: edge in area.edge_server_ids
-        )
-        branches = areas.mapped("branch_id")
+        try:
+            projection = self._published_gatekeeper_projection(edge)
+        except Exception as exc:
+            return self._error(
+                str(exc).replace("_", " "),
+                409,
+                error_code=str(exc).split(":", 1)[0] or "invalid_published_configuration",
+            )
         return self._ok({
             "edge_server_code": edge.edge_server_code,
             "revision": int(edge.config_revision or 1),
-            "branches": [{
-                "branch_code": branch.code,
-                "branch_name": branch.name,
-                "timezone": branch.timezone or "Asia/Ho_Chi_Minh",
-                "active": branch.status == "active",
-            } for branch in branches],
-            "controllers": controllers,
-            "parking_areas": [area.prepare_sync_payload() for area in areas],
-            "device_whitelist": [
-                item._prepare_sync_payload()
-                for item in scope.sorted(
-                    key=lambda row: (
-                        {"SERVER": 1, "CONTROLLER": 2, "RFID_READER": 3, "ANTENNA": 4}.get(row.device_type_code, 9),
-                        row.technical_code or "",
-                        row.id,
-                    )
-                )
-            ],
+            **projection,
             "server_time": self._iso_datetime(fields.Datetime.now()),
-        }, message="Gatekeeper authoritative snapshot loaded.")
+        }, message="Published Gatekeeper assembly snapshot loaded.")
 
     @endpoint("NSP Vehicle Configuration Sync", route_path="vehicle-config/sync", methods="POST", code="nsp_vehicle_config_sync")
     def api_vehicle_config_sync(self):
@@ -800,49 +894,71 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
     @api.model
     def _measurement_session_in_local_scope(self, session, edge_server):
         return bool(session.reader_line_ids.filtered(
-            lambda line: "edge_server_id" in line.reader_id.controller_id._fields
-            and line.reader_id.controller_id.edge_server_id == edge_server
+            lambda line: line.edge_server_id == edge_server
         ))
 
     @api.model
     def _measurement_config_payload(self, session, edge_server=False):
+        """Return one released calibration assembly for an Edge Server."""
         lines = session.reader_line_ids
         if edge_server:
-            lines = lines.filtered(
-                lambda line: "edge_server_id" in line.reader_id.controller_id._fields
-                and line.reader_id.controller_id.edge_server_id == edge_server
-            )
+            lines = lines.filtered(lambda line: line.edge_server_id == edge_server)
         readers = []
         for line in lines.sorted(
             key=lambda item: (
-                (item.reader_id.controller_id.controller_id or ""),
-                (item.reader_id.serial_number or ""),
+                item.edge_server_id.edge_server_code or "",
+                item.controller_id.controller_id or "",
+                item.reader_id.serial_number or "",
                 item.id,
             )
         ):
+            antenna_rows = []
+            for mapping in line.antenna_port_ids.filtered("antenna_id").sorted(
+                key=lambda item: (item.port_no, item.id)
+            ):
+                antenna = mapping.antenna_id
+                antenna_rows.append({
+                    "antenna_no": int(mapping.port_no or 0),
+                    "technical_code": antenna.technical_code or antenna.whitelist_id.technical_code or "",
+                    "serial_number": antenna.serial_number or antenna.whitelist_id.serial_number or False,
+                    "name": antenna.whitelist_id.name or antenna.display_name or "",
+                })
             readers.append({
-                "controller_code": line.reader_id.controller_id.controller_id or "",
+                "server_code": line.edge_server_id.edge_server_code or "",
+                "controller_code": line.controller_id.controller_id or "",
+                "controller_name": line.controller_id.controller_name or "",
+                "technical_code": line.reader_id.device_code or "",
                 "serial_number": line.reader_id.serial_number or "",
-                "power_dbm": int(line.reader_power_dbm or 0),
-                "read_interval_ms": int(line.read_interval_ms or 200),
-                "antennas": sorted(line.antenna_ids.mapped("antenna_no")),
+                "reader_name": line.reader_id.name or line.reader_id.serial_number or "",
+                "physical_connection": line.reader_id.connection_type or False,
+                "reader_parameters": {
+                    "power_dbm": int(line.reader_power_dbm or 0),
+                    "read_interval_ms": int(line.read_interval_ms or 200),
+                    "tid_start_address": int(line.reader_tid_addr or 0),
+                    "tid_length": int(line.reader_tid_len or 0),
+                },
+                "antennas": antenna_rows,
             })
-        targets = [
-            {
-                "user_tid": line.user_tid or "",
+        vehicles = []
+        for line in session.target_line_ids.sorted(
+            key=lambda item: ((item.license_plate or ""), item.id)
+        ):
+            vehicle = line.vehicle_id
+            item = {
                 "vehicle_tid": line.vehicle_tid or "",
+                "vehicle_code": vehicle.vehicle_code or "",
                 "license_plate": line.license_plate or "",
             }
-            for line in session.target_line_ids.sorted(
-                key=lambda item: ((item.license_plate or ""), item.id)
-            )
-        ]
+            owner_code = self._user_code(vehicle.owner_id) if vehicle.owner_id else ""
+            if owner_code:
+                item["owner_user_code"] = owner_code
+            vehicles.append(item)
         payload = {
             "measurement_code": session.measurement_code,
             "status": session.status,
             "desired_state": "running" if session.status in ("ready", "running") else "stopped",
             "revision": int(session.revision or 1),
-            "targets": targets,
+            "vehicles": vehicles,
             "readers": readers,
         }
         if session.planned_start_at:
@@ -935,7 +1051,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             Session = self.env["nsp.measurement.session"].sudo()
             records = Session.search([
                 ("status", "in", ("ready", "running")),
-                ("reader_line_ids.reader_id.controller_id.edge_server_id", "=", edge_server.id),
+                ("reader_line_ids.edge_server_id", "=", edge_server.id),
             ], order="measurement_code,id")
             return self._ok({
                 "items": [self._measurement_config_payload(session, edge_server=edge_server) for session in records],
@@ -949,7 +1065,6 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
     @api.model
     def _measurement_event_values(
         self, session, item, allowed_antennas=None, accept_snapshot=False,
-        allow_historical_scope=False,
     ):
         allowed = {
             "event_uid", "serial_number", "antenna_no", "tid", "read_at", "rssi_dbm",
@@ -967,31 +1082,16 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         if antenna_no <= 0:
             raise ValueError("antenna_not_found")
         reader_line = session._measurement_line_for_serial(serial_number)
-        if allow_historical_scope:
-            # Cloud receives durable Measurement observations from an authenticated
-            # Edge. Old observations may belong to a previous Measurement revision
-            # whose Reader/Antenna selection is no longer the current Session
-            # configuration. Validate against the immutable physical ownership
-            # boundary (Controller -> Reader -> Antenna), not only the current
-            # Measurement Reader lines.
-            reader = self.env["nsp.device"].sudo().search([
-                ("serial_number", "=", serial_number),
-            ], limit=1)
-            if not reader:
-                raise ValueError("reader_not_in_scope")
-            antenna = self.env["nsp.device.antenna"].sudo().search([
-                ("device_id", "=", reader.id),
-                ("antenna_no", "=", antenna_no),
-            ], limit=1)
-            if not antenna:
-                raise ValueError("antenna_not_found")
-        else:
-            if allowed_antennas is None:
-                allowed_antennas = session._allowed_antenna_pairs()
-            if (serial_number, antenna_no) not in allowed_antennas:
-                raise ValueError("antenna_not_found")
-            if not reader_line:
-                raise ValueError("reader_not_in_scope")
+        # Device Whitelist identities have no permanent parent-child topology.
+        # Observation scope is therefore validated only against the Reader
+        # Calibration assembly released for this Session, never against a fixed
+        # Controller -> Reader -> Antenna tree on the master records.
+        if allowed_antennas is None:
+            allowed_antennas = session._allowed_antenna_pairs()
+        if (serial_number, antenna_no) not in allowed_antennas:
+            raise ValueError("antenna_not_found")
+        if not reader_line:
+            raise ValueError("reader_not_in_scope")
         read_at = self._measurement_datetime(item.get("read_at"), required=True)
         read_at_ms = self._measurement_millisecond(item.get("read_at"))
         if item.get("rssi_dbm") in (None, ""):
@@ -1071,7 +1171,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
     @api.model
     def _measurement_process_event_batch(
         self, session, items, allow_final=False, accept_snapshot=False,
-        enforce_current_snapshot=False, allow_historical_scope=False,
+        enforce_current_snapshot=False,
     ):
         """Store only the selected Target Tag, idempotently, with bounded queries."""
         Event = self.env["nsp.measurement.event"].sudo()
@@ -1099,7 +1199,6 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     item,
                     allowed_antennas=allowed_antennas,
                     accept_snapshot=accept_snapshot,
-                    allow_historical_scope=allow_historical_scope,
                 )
                 if enforce_current_snapshot and (
                     int(values["revision"] or 1) != int(session.revision or 1)
@@ -1270,7 +1369,6 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 raise ValueError("invalid_payload")
             result, _records = self._measurement_process_event_batch(
                 session, items, allow_final=True, accept_snapshot=True,
-                allow_historical_scope=True,
             )
             return self._ok(result, message="Measurement Events synchronized.")
         except Exception as exc:

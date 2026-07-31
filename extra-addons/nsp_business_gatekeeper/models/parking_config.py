@@ -253,14 +253,18 @@ class NspParkingArea(models.Model):
                     _("Lane %(lane)s Controller must be an active Controller in Device Whitelist.")
                     % {"lane": lane_name}
                 )
-            server_whitelist = controller_whitelist.parent_id if controller_whitelist else False
+            server = controller.edge_server_id
+            server_whitelist = server.whitelist_id if server else False
             if (
-                not server_whitelist
+                not server
+                or not server.active
+                or server.cloud_removed
+                or not server_whitelist
                 or not server_whitelist.active
                 or server_whitelist.device_type_code != "SERVER"
             ):
                 issues.append(
-                    _("Lane %(lane)s Controller must belong to an active Server in Device Whitelist.")
+                    _("Lane %(lane)s Controller must belong to the published active Server assembly.")
                     % {"lane": lane_name}
                 )
 

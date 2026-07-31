@@ -5,6 +5,51 @@ from odoo.addons.nsp_core.utils import new_management_code
 
 NODE_STATUS=[("online","Online"),("offline","Offline"),("block","Blocked"),("revoked","Revoked"),("error","Error")]
 
+class NspEdgeServer(models.Model):
+    """Edge-local runtime projection of a published Server identity."""
+
+    _name = "nsp.edge.server"
+    _description = "NSP Edge Server Runtime"
+    _rec_name = "name"
+    _order = "name, edge_server_code, id"
+
+    whitelist_id = fields.Many2one(
+        "nsp.device.whitelist", string="Device Whitelist", readonly=True,
+        copy=False, ondelete="set null", index=True,
+    )
+    edge_server_code = fields.Char(
+        string="Edge Server Code", required=True, readonly=True,
+        copy=False, index=True, default=lambda self: new_management_code("EDGE"),
+    )
+    name = fields.Char(string="Edge Server Name", required=True, default="NSP Edge Server")
+    status = fields.Selection(NODE_STATUS, default="offline", required=True, index=True)
+    active = fields.Boolean(default=True, index=True)
+    cloud_removed = fields.Boolean(default=False, readonly=True, index=True, copy=False)
+    controller_ids = fields.One2many("nsp.controller", "edge_server_id", string="Controllers")
+
+    _sql_constraints = [
+        ("edge_server_code_unique", "unique(edge_server_code)", "Edge Server Code must be unique."),
+    ]
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        prepared = []
+        for source in vals_list:
+            values = dict(source)
+            values["edge_server_code"] = str(
+                values.get("edge_server_code") or new_management_code("EDGE")
+            ).strip().upper()
+            values["name"] = str(values.get("name") or values["edge_server_code"]).strip()
+            prepared.append(values)
+        return super().create(prepared)
+
+    def write(self, vals):
+        values = dict(vals)
+        if values.get("edge_server_code"):
+            values["edge_server_code"] = str(values["edge_server_code"]).strip().upper()
+        return super().write(values)
+
+
 class NspController(models.Model):
     _name="nsp.controller"
     _description="NSP Controller"
@@ -14,6 +59,7 @@ class NspController(models.Model):
     whitelist_id=fields.Many2one("nsp.device.whitelist",string="Device Whitelist",readonly=True,copy=False,ondelete="set null",index=True)
     controller_id=fields.Char(string="Controller Code",required=True,readonly=True,copy=False,index=True,default=lambda self:new_management_code("CTRL"))
     controller_name=fields.Char(string="Controller Name",required=True,default="NSP Gatekeeper Controller",tracking=True)
+    edge_server_id=fields.Many2one("nsp.edge.server",string="Edge Server",required=False,ondelete="restrict",index=True)
     timestamp=fields.Datetime(string="Last Heartbeat",readonly=True,copy=False,index=True)
     active=fields.Boolean(default=True,index=True)
     cloud_removed=fields.Boolean(default=False,readonly=True,index=True,copy=False)

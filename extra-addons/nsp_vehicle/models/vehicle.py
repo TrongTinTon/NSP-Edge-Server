@@ -5,7 +5,12 @@ from odoo.addons.nsp_core.utils import new_management_code
 
 
 class Vehicle(models.Model):
-    """Vehicle master owned by one NSP User with one active RFID Tag."""
+    """Vehicle identity with one optional owner and one active RFID Tag.
+
+    Reader Calibration may quick-create a Vehicle from a License Plate before an
+    owner is known. Ownership can be assigned later without changing the Vehicle
+    identity or RFID assignment.
+    """
 
     _name = "nsp.vehicle"
     _description = "Vehicle Management"
@@ -31,10 +36,10 @@ class Vehicle(models.Model):
     owner_id = fields.Many2one(
         "nsp.user",
         string="Owner",
-        required=True,
         tracking=True,
         ondelete="restrict",
         index=True,
+        help="Optional while creating a test Vehicle in Reader Calibration.",
     )
     vehicle_type_id = fields.Many2one(
         "nsp.vehicle.type",

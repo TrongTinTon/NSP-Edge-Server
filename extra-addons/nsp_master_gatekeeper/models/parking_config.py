@@ -1,15 +1,13 @@
 # -*- coding: utf-8 -*-
+import json
+
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError, UserError
 from odoo.addons.nsp_core.utils import new_management_code
 
 
 class NspParkingArea(models.Model):
-    """Server-owned parking topology and operational configuration.
-
-    Parking topology remains on Cloud/Edge. Controllers receive only the
-    technical configuration of the Readers and antenna ports they manage.
-    """
+    """Cloud working layout plus immutable published runtime snapshot."""
 
     _name = "nsp.parking.area"
     _description = "NSP Parking Operation Configuration"
@@ -18,19 +16,12 @@ class NspParkingArea(models.Model):
 
     name = fields.Char(string="Parking Area Name", required=True)
     code = fields.Char(
-        string="Parking Area Code",
-        required=True,
-        readonly=True,
-        copy=False,
-        index=True,
-        default=lambda self: new_management_code("PARK"),
+        string="Parking Area Code", required=True, readonly=True, copy=False,
+        index=True, default=lambda self: new_management_code("PARK"),
     )
     branch_id = fields.Many2one(
-        "nsp.branch",
-        string="Branch",
-        required=True,
-        ondelete="restrict",
-        index=True,
+        "nsp.branch", string="Branch", required=True,
+        ondelete="restrict", index=True,
     )
     state = fields.Selection(
         [
@@ -39,45 +30,39 @@ class NspParkingArea(models.Model):
             ("maintenance", "Maintenance"),
             ("blocked", "Blocked"),
         ],
-        string="State",
-        default="draft",
-        required=True,
-        index=True,
+        string="Working State", default="draft", required=True, index=True,
     )
     lane_ids = fields.One2many(
-        "nsp.parking.lane", "parking_area_id", string="Parking Lanes"
+        "nsp.parking.lane", "parking_area_id", string="Parking Lanes",
     )
+
+    # Publication is separate from the editable working state. Returning to Draft
+    # does not remove the last published snapshot from Edge.
+    published_revision = fields.Integer(
+        string="Published Revision", default=0, readonly=True, copy=False, index=True,
+    )
+    published_at = fields.Datetime(readonly=True, copy=False)
+    published_payload_json = fields.Text(readonly=True, copy=False)
+    published_edge_server_codes = fields.Char(readonly=True, copy=False)
+    is_published = fields.Boolean(compute="_compute_is_published")
+
     antenna_transition_ids = fields.Many2many(
-        "nsp.parking.antenna.transition",
-        string="Antenna Movement Rules",
+        "nsp.parking.antenna.transition", string="Movement Rules",
         compute="_compute_topology",
     )
     edge_server_ids = fields.Many2many(
-        "nsp.edge.server",
-        string="Edge Servers",
-        compute="_compute_topology",
-        help="Edge Servers derived from Controllers assigned to active lanes.",
+        "nsp.edge.server", string="Servers", compute="_compute_topology",
     )
     controller_ids = fields.Many2many(
-        "nsp.controller",
-        string="Controllers",
-        compute="_compute_topology",
+        "nsp.controller", string="Controllers", compute="_compute_topology",
         search="_search_controllers",
-        help="Controllers assigned to active parking lanes.",
     )
     reader_ids = fields.Many2many(
-        "nsp.device",
-        string="Readers",
-        compute="_compute_topology",
-        help="Readers whose antenna ports are mapped to this parking operation.",
+        "nsp.device", string="Readers", compute="_compute_topology",
     )
     antenna_ids = fields.Many2many(
-        "nsp.device.antenna",
-        string="Antennas",
-        compute="_compute_topology",
-        help="Reader antenna ports mapped to this parking operation.",
+        "nsp.device.antenna", string="Antennas", compute="_compute_topology",
     )
-
     edge_server_count = fields.Integer(compute="_compute_counts")
     controller_count = fields.Integer(compute="_compute_counts")
     reader_count = fields.Integer(compute="_compute_counts")
@@ -89,51 +74,50 @@ class NspParkingArea(models.Model):
         ("code_unique", "unique(code)", "Parking Area Code must be unique."),
     ]
 
+    @api.depends("published_payload_json")
+    def _compute_is_published(self):
+        for record in self:
+            record.is_published = bool(record.published_payload_json)
+
     @api.depends(
-        "lane_ids.active",
-        "lane_ids.controller_id",
-        "lane_ids.controller_id.edge_server_id",
+        "lane_ids.active", "lane_ids.edge_server_id", "lane_ids.controller_id",
+        "lane_ids.antenna_transition_ids.from_device_id",
         "lane_ids.antenna_transition_ids.from_antenna_id",
-        "lane_ids.antenna_transition_ids.from_antenna_id.device_id",
+        "lane_ids.antenna_transition_ids.to_device_id",
         "lane_ids.antenna_transition_ids.to_antenna_id",
-        "lane_ids.antenna_transition_ids.to_antenna_id.device_id",
     )
     def _compute_topology(self):
-        for rec in self:
-            active_lanes = rec.lane_ids.filtered("active")
-            transitions = active_lanes.mapped("antenna_transition_ids")
+        for record in self:
+            lanes = record.lane_ids.filtered("active")
+            transitions = lanes.mapped("antenna_transition_ids")
+            readers = transitions.mapped("from_device_id") | transitions.mapped("to_device_id")
             antennas = transitions.mapped("from_antenna_id") | transitions.mapped("to_antenna_id")
-            readers = antennas.mapped("device_id")
-            controllers = active_lanes.mapped("controller_id")
-            rec.antenna_transition_ids = transitions
-            rec.reader_ids = readers
-            rec.antenna_ids = antennas
-            rec.controller_ids = controllers
-            rec.edge_server_ids = controllers.mapped("edge_server_id")
+            record.antenna_transition_ids = transitions
+            record.edge_server_ids = lanes.mapped("edge_server_id")
+            record.controller_ids = lanes.mapped("controller_id")
+            record.reader_ids = readers
+            record.antenna_ids = antennas
 
     @api.model
     def _search_controllers(self, operator, value):
         return [("lane_ids.controller_id", operator, value)]
 
     @api.depends(
-        "edge_server_ids",
-        "controller_ids",
-        "reader_ids",
-        "antenna_ids",
+        "edge_server_ids", "controller_ids", "reader_ids", "antenna_ids",
         "lane_ids.active",
     )
     def _compute_counts(self):
-        for rec in self:
-            rec.edge_server_count = len(rec.edge_server_ids)
-            rec.controller_count = len(rec.controller_ids)
-            rec.reader_count = len(rec.reader_ids)
-            rec.antenna_count = len(rec.antenna_ids)
-            rec.lane_count = len(rec.lane_ids.filtered("active"))
+        for record in self:
+            record.edge_server_count = len(record.edge_server_ids)
+            record.controller_count = len(record.controller_ids)
+            record.reader_count = len(record.reader_ids)
+            record.antenna_count = len(record.antenna_ids)
+            record.lane_count = len(record.lane_ids.filtered("active"))
 
     def _compute_whitelist_count(self):
         count = self.env["nsp.device.whitelist"].sudo().search_count([])
-        for rec in self:
-            rec.whitelist_count = count
+        for record in self:
+            record.whitelist_count = count
 
     @api.model
     def _normalize_code(self, value):
@@ -143,11 +127,11 @@ class NspParkingArea(models.Model):
     def create(self, vals_list):
         prepared = []
         for source in vals_list:
-            vals = dict(source)
-            vals["code"] = self._normalize_code(
-                vals.get("code") or new_management_code("PARK")
+            values = dict(source)
+            values["code"] = self._normalize_code(
+                values.get("code") or new_management_code("PARK")
             )
-            prepared.append(vals)
+            prepared.append(values)
         return super().create(prepared)
 
     def write(self, vals):
@@ -168,7 +152,6 @@ class NspParkingArea(models.Model):
 
     @api.model
     def get_live_monitor_snapshot(self, parking_area_id, limit=16):
-        """Initial/reconciliation payload for the customer-facing Live Monitor."""
         if not (
             self.env.user.has_group("nsp_core.group_nsp_operator")
             or self.env.user.has_group("nsp_core.group_nsp_it_parking")
@@ -176,7 +159,6 @@ class NspParkingArea(models.Model):
         ):
             from odoo.exceptions import AccessError
             raise AccessError(_("You do not have access to the Parking Live Monitor."))
-
         try:
             parking_area_id = int(parking_area_id or 0)
             limit = min(max(int(limit or 12), 3), 50)
@@ -185,60 +167,91 @@ class NspParkingArea(models.Model):
         area = self.sudo().browse(parking_area_id).exists()
         if not area:
             return {"found": False}
-
         transactions = self.env["nsp.parking.transaction"].sudo().search(
             [
                 ("lane_id.parking_area_id", "=", area.id),
                 ("event_type", "=", "check_in"),
             ],
-            order="event_time desc, id desc",
-            limit=limit,
+            order="event_time desc, id desc", limit=limit,
         )
-        items = [tx._live_monitor_payload() for tx in transactions[::-1]]
         return {
             "found": True,
             "parking_area_id": area.id,
             "parking_area_name": area.name,
             "branch_name": area.branch_id.name or "",
             "state": area.state,
-            "items": items,
+            "items": [tx._live_monitor_payload() for tx in transactions[::-1]],
         }
 
-
     def _lane_payload(self):
-        """Return directed antenna transitions for Cloud/Edge synchronization."""
         self.ensure_one()
         result = []
-        lanes = self.lane_ids.filtered("active").sorted(
+        for lane in self.lane_ids.filtered("active").sorted(
             key=lambda item: (item.lane_no, item.id)
-        )
-        for lane in lanes:
+        ):
             transitions = []
+            reader_map = {}
             for transition in lane.antenna_transition_ids.sorted(
                 key=lambda item: (
-                    item.from_serial_number or "",
-                    item.from_antenna_no,
-                    item.to_serial_number or "",
-                    item.to_antenna_no,
-                    item.id,
+                    item.from_serial_number or "", item.from_antenna_no,
+                    item.to_serial_number or "", item.to_antenna_no, item.id,
                 )
             ):
-                transitions.append({
-                    "from_serial_number": transition.from_serial_number or "",
-                    "from_antenna_no": int(transition.from_antenna_no or 0),
-                    "to_serial_number": transition.to_serial_number or "",
-                    "to_antenna_no": int(transition.to_antenna_no or 0),
-                    "event_type": transition.event_type,
-                    "duration_seconds": float(transition.duration_seconds or 0.0),
-                })
+                transitions.append(transition._prepare_sync_payload())
+                for reader, antenna, port_no in (
+                    (transition.from_device_id, transition.from_antenna_id, transition.from_antenna_no),
+                    (transition.to_device_id, transition.to_antenna_id, transition.to_antenna_no),
+                ):
+                    key = reader.id
+                    if key not in reader_map:
+                        reader_map[key] = {
+                            "technical_code": reader.device_code or "",
+                            "serial_number": reader.serial_number or "",
+                            "reader_name": reader.name or reader.serial_number or "",
+                            "physical_connection": reader.connection_type or False,
+                            "reader_parameters": {
+                                "power_dbm": int(reader.power_dbm or 0),
+                                "read_interval_ms": int(reader.read_interval_ms or 200),
+                                "tid_start_address": int(reader.tid_addr or 0),
+                                "tid_length": int(reader.tid_len or 0),
+                            },
+                            "antennas": {},
+                        }
+                    reader_map[key]["antennas"][int(port_no)] = {
+                        "antenna_no": int(port_no),
+                        "technical_code": antenna.technical_code or "",
+                        "serial_number": antenna.serial_number or False,
+                        "name": antenna.whitelist_id.display_name or antenna.display_name or "",
+                    }
+            readers = []
+            for values in reader_map.values():
+                values["antennas"] = [
+                    values["antennas"][number]
+                    for number in sorted(values["antennas"])
+                ]
+                readers.append(values)
+            readers.sort(key=lambda row: (row["serial_number"], row["technical_code"]))
             result.append({
                 "lane_code": lane.code,
                 "lane_name": lane.name,
                 "lane_no": int(lane.lane_no or 0),
-                "controller_code": lane.controller_id.controller_id,
+                "server_code": lane.edge_server_id.edge_server_code or "",
+                "controller_code": lane.controller_id.controller_id or "",
+                "readers": readers,
                 "antenna_transitions": transitions,
             })
         return result
+
+    def _build_sync_payload(self, published_state="operational", revision=False):
+        self.ensure_one()
+        return {
+            "parking_area_code": self.code,
+            "parking_area_name": self.name,
+            "branch_code": self.branch_id.code or "",
+            "state": published_state,
+            "published_revision": int(revision or self.published_revision or 1),
+            "lanes": self._lane_payload(),
+        }
 
     def _operational_issues(self):
         self.ensure_one()
@@ -246,181 +259,94 @@ class NspParkingArea(models.Model):
         lanes = self.lane_ids.filtered("active")
         if not lanes:
             return [_('Configure at least one active Parking Lane.')]
-
         for lane in lanes:
-            lane_name = lane.display_name or lane.name or _("Lane")
-            controller = lane.controller_id
-            if not controller:
-                issues.append(_("Lane %(lane)s must have a Controller.") % {"lane": lane_name})
+            try:
+                lane._validate_lane_assembly()
+            except ValidationError as exc:
+                issues.append(str(exc))
                 continue
-
-            controller_whitelist = controller.whitelist_id
-            if (
-                not controller_whitelist
-                or not controller_whitelist.active
-                or controller_whitelist.device_type_code != "CONTROLLER"
-            ):
+            if not lane.antenna_transition_ids:
                 issues.append(
-                    _("Lane %(lane)s Controller must be an active Controller in Device Whitelist.")
-                    % {"lane": lane_name}
-                )
-            server_whitelist = controller.edge_server_id.whitelist_id if controller.edge_server_id else False
-            if (
-                not server_whitelist
-                or not server_whitelist.active
-                or server_whitelist.device_type_code != "SERVER"
-            ):
-                issues.append(
-                    _("Lane %(lane)s Controller must belong to an active Server in Device Whitelist.")
-                    % {"lane": lane_name}
-                )
-
-            rules = lane.antenna_transition_ids
-            if not rules:
-                issues.append(
-                    _("Lane %(lane)s must have at least one Antenna Movement Rule.")
-                    % {"lane": lane_name}
+                    _("Lane %(lane)s must have at least one Movement Rule.")
+                    % {"lane": lane.display_name}
                 )
                 continue
-
-            wrong_scope = rules.filtered(
-                lambda item: (
-                    item.from_controller_id != controller
-                    or item.to_controller_id != controller
-                )
-            )
-            if wrong_scope:
-                issues.append(
-                    _("All antennas of lane %(lane)s must belong to Controller %(controller)s.")
-                    % {
-                        "lane": lane_name,
-                        "controller": controller.controller_id,
-                    }
-                )
-
-            invalid_antennas = rules.mapped("from_antenna_id") | rules.mapped("to_antenna_id")
-            invalid_antennas = invalid_antennas.filtered(
-                lambda antenna: (
-                    not antenna.active
-                    or not antenna.whitelist_id
-                    or not antenna.whitelist_id.active
-                    or antenna.whitelist_id.device_type_code != "ANTENNA"
-                    or not antenna.device_id.active
-                    or not antenna.device_id.whitelist_id
-                    or not antenna.device_id.whitelist_id.active
-                    or antenna.device_id.whitelist_id.device_type_code != "RFID_READER"
-                )
-            )
-            if invalid_antennas:
-                issues.append(
-                    _("Lane %(lane)s contains an Antenna or RFID Reader that is not active in Device Whitelist.")
-                    % {"lane": lane_name}
-                )
+            try:
+                lane.antenna_transition_ids._validate_lane_mapping_consistency()
+            except ValidationError as exc:
+                issues.append(str(exc))
         return issues
 
-    def _open_related_action(self, action_xmlid, records, name, context=None):
-        self.ensure_one()
-        action = self.env.ref(action_xmlid).sudo().read()[0]
-        action.update(
-            {
-                "name": name,
-                "domain": [("id", "in", records.ids)] if records else [],
-                "context": dict(context or {}),
-            }
-        )
-        return action
-
-    def action_open_edge_servers(self):
-        self.ensure_one()
-        return self._open_related_action(
-            "nsp_master_gatekeeper.action_nsp_edge_servers",
-            self.edge_server_ids,
-            _("Edge Servers"),
-        )
-
-    def action_open_controllers(self):
-        self.ensure_one()
-        context = {}
-        if len(self.edge_server_ids) == 1:
-            context["default_edge_server_id"] = self.edge_server_ids.id
-        return self._open_related_action(
-            "nsp_master_gatekeeper.action_nsp_controllers",
-            self.controller_ids,
-            _("Controllers"),
-            context,
-        )
-
-    def action_open_readers(self):
-        self.ensure_one()
-        context = {}
-        if len(self.controller_ids) == 1:
-            context["default_controller_id"] = self.controller_ids.id
-        return self._open_related_action(
-            "nsp_master_gatekeeper.nsp_device_action", self.reader_ids, _("Readers"), context
-        )
-
-    def action_open_antennas(self):
-        self.ensure_one()
-        context = {}
-        if len(self.reader_ids) == 1:
-            context["default_device_id"] = self.reader_ids.id
-        return self._open_related_action(
-            "nsp_master_gatekeeper.action_nsp_device_antenna",
-            self.antenna_ids,
-            _("Antennas"),
-            context,
-        )
-
-    def action_open_device_whitelist(self):
-        self.ensure_one()
-        action = self.env.ref("nsp_master_gatekeeper.nsp_device_whitelist_action").sudo().read()[0]
-        action.update({"name": _("Device Whitelist"), "domain": [], "context": {}})
-        return action
-
-    def action_open_lanes(self):
-        self.ensure_one()
-        action = self.env.ref("nsp_master_gatekeeper.action_nsp_parking_lane").sudo().read()[0]
-        action.update(
-            {
-                "name": _("Parking Lanes"),
-                "domain": [("parking_area_id", "=", self.id)],
-                "context": {"default_parking_area_id": self.id},
-            }
-        )
-        return action
-
-    def action_set_operational(self):
-        for rec in self:
-            issues = rec._operational_issues()
+    def _publish(self, target_state):
+        for record in self:
+            issues = record._operational_issues()
             if issues:
                 raise UserError("\n".join(issues))
-        self.write({"state": "operational"})
+            revision = int(record.published_revision or 0) + 1
+            payload = record._build_sync_payload(target_state, revision)
+            previous_edge_codes = {
+                item.strip().upper()
+                for item in str(record.published_edge_server_codes or "").split(",")
+                if item.strip()
+            }
+            edge_codes = sorted({
+                str(lane.edge_server_id.edge_server_code or "").strip().upper()
+                for lane in record.lane_ids.filtered("active")
+                if lane.edge_server_id and lane.edge_server_id.edge_server_code
+            })
+            record.with_context(nsp_publishing=True).write({
+                "state": target_state,
+                "published_revision": revision,
+                "published_at": fields.Datetime.now(),
+                "published_payload_json": json.dumps(
+                    payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                ),
+                "published_edge_server_codes": ",".join(edge_codes),
+            })
+            affected_codes = previous_edge_codes | set(edge_codes)
+            affected_edges = self.env["nsp.edge.server"].sudo().with_context(active_test=False).search([
+                ("edge_server_code", "in", sorted(affected_codes)),
+            ]) if affected_codes else self.env["nsp.edge.server"]
+            affected_edges.bump_config_revision()
         return True
 
-    def action_reset_to_draft(self):
-        self.write({"state": "draft"})
-        return True
+    def action_set_operational(self):
+        return self._publish("operational")
 
     def action_set_maintenance(self):
-        self.write({"state": "maintenance"})
-        return True
+        return self._publish("maintenance")
 
     def action_set_blocked(self):
-        self.write({"state": "blocked"})
+        return self._publish("blocked")
+
+    def action_reset_to_draft(self):
+        # Keep the last immutable published payload active on Edge while Cloud is edited.
+        self.write({"state": "draft"})
         return True
 
     def prepare_sync_payload(self):
         self.ensure_one()
-        return {
-            "parking_area_code": self.code,
-            "parking_area_name": self.name,
-            "branch_code": self.branch_id.code or "",
-            "state": self.state,
-            "lanes": self._lane_payload(),
+        if not self.published_payload_json:
+            return False
+        try:
+            payload = json.loads(self.published_payload_json)
+        except Exception as exc:
+            raise ValidationError(_("Published Parking Layout snapshot is invalid.")) from exc
+        return payload
+
+    def is_published_for_edge(self, edge_code):
+        self.ensure_one()
+        codes = {
+            item.strip().upper()
+            for item in str(self.published_edge_server_codes or "").split(",")
+            if item.strip()
         }
+        return str(edge_code or "").strip().upper() in codes
 
 
 class NspParkingLane(models.Model):
+    """One contextual Server + Controller assembly for a physical lane."""
+
     _name = "nsp.parking.lane"
     _description = "NSP Parking Lane"
     _order = "parking_area_id, lane_no, id"
@@ -428,271 +354,277 @@ class NspParkingLane(models.Model):
 
     name = fields.Char(string="Lane Name", required=True, default="Lane")
     code = fields.Char(
-        string="Lane Code",
-        required=True,
-        readonly=True,
-        copy=False,
-        index=True,
+        string="Lane Code", required=True, readonly=True, copy=False, index=True,
         default=lambda self: new_management_code("LANE"),
     )
     display_name = fields.Char(compute="_compute_display_name", store=True)
     parking_area_id = fields.Many2one(
-        "nsp.parking.area",
-        string="Parking Area",
-        required=True,
-        ondelete="cascade",
-        index=True,
+        "nsp.parking.area", string="Parking Area", required=True,
+        ondelete="cascade", index=True,
+    )
+    edge_server_id = fields.Many2one(
+        "nsp.edge.server", string="Server", required=True,
+        ondelete="restrict", index=True,
     )
     controller_id = fields.Many2one(
-        "nsp.controller",
-        string="Controller",
-        required=True,
-        ondelete="restrict",
-        index=True,
-        help="Controller that owns every Reader and antenna used by this Lane.",
+        "nsp.controller", string="Controller", required=True,
+        ondelete="restrict", index=True,
+    )
+    available_edge_server_ids = fields.Many2many(
+        "nsp.edge.server", compute="_compute_available_devices", readonly=True,
+    )
+    available_controller_ids = fields.Many2many(
+        "nsp.controller", compute="_compute_available_devices", readonly=True,
     )
     lane_no = fields.Integer(string="Lane No.", default=1, required=True)
     active = fields.Boolean(default=True, index=True)
     antenna_transition_ids = fields.One2many(
-        "nsp.parking.antenna.transition",
-        "lane_id",
-        string="Antenna Movement Rules",
+        "nsp.parking.antenna.transition", "lane_id", string="Movement Rules",
     )
     transition_count = fields.Integer(compute="_compute_transition_count")
 
     _sql_constraints = [
         (
-            "lane_code_per_area_unique",
-            "unique(parking_area_id, code)",
-            "Lane Code must be unique within a Parking Area.",
+            "parking_lane_code_unique", "unique(code)",
+            "Parking Lane Code must be unique.",
         ),
         (
-            "lane_no_per_area_unique",
-            "unique(parking_area_id, lane_no)",
-            "Lane number must be unique within a Parking Area.",
+            "parking_lane_number_unique", "unique(parking_area_id, lane_no)",
+            "Lane No. must be unique per Parking Area.",
         ),
-        ("lane_no_positive", "CHECK(lane_no > 0)", "Lane number must be greater than zero."),
+        (
+            "parking_lane_number_positive", "CHECK(lane_no > 0)",
+            "Lane No. must be greater than zero.",
+        ),
     ]
 
-    @api.depends("parking_area_id.name", "name", "lane_no")
+    @api.depends("name", "lane_no", "parking_area_id.name")
     def _compute_display_name(self):
-        for rec in self:
-            lane_name = rec.name or (_("Lane %s") % (rec.lane_no or ""))
-            rec.display_name = "%s / %s" % (
-                rec.parking_area_id.name or _("Parking"),
-                lane_name,
+        for record in self:
+            record.display_name = "%s / %02d · %s" % (
+                record.parking_area_id.name or _("Parking"),
+                int(record.lane_no or 0), record.name or _("Lane"),
             )
 
     @api.depends("antenna_transition_ids")
     def _compute_transition_count(self):
-        for rec in self:
-            rec.transition_count = len(rec.antenna_transition_ids)
+        for record in self:
+            record.transition_count = len(record.antenna_transition_ids)
 
     @api.model
-    def _normalize_code(self, value):
-        return str(value or "").strip().upper()
+    def _active_whitelisted(self, model_name, type_code):
+        return self.env[model_name].search([
+            ("active", "=", True),
+            ("whitelist_id", "!=", False),
+            ("whitelist_id.active", "=", True),
+            ("whitelist_id.device_type_code", "=", type_code),
+        ])
 
-    @api.model_create_multi
-    def create(self, vals_list):
-        prepared = []
-        for source in vals_list:
-            vals = dict(source)
-            vals["code"] = self._normalize_code(
-                vals.get("code") or new_management_code("LANE")
-            )
-            prepared.append(vals)
-        return super().create(prepared)
+    @api.depends("edge_server_id", "controller_id")
+    def _compute_available_devices(self):
+        Edge = self.env["nsp.edge.server"]
+        Controller = self.env["nsp.controller"]
+        edges = self._active_whitelisted("nsp.edge.server", "SERVER")
+        controllers = self._active_whitelisted("nsp.controller", "CONTROLLER")
+        for record in self:
+            record.available_edge_server_ids = edges if edges else Edge.browse()
+            record.available_controller_ids = controllers if controllers else Controller.browse()
 
-    def write(self, vals):
-        values = dict(vals)
-        if "code" in values:
-            values["code"] = self._normalize_code(values.get("code"))
-        result = super().write(values)
-        if "controller_id" in values:
-            invalid = self.mapped("antenna_transition_ids").filtered(
-                lambda item: (
-                    item.from_controller_id != item.lane_id.controller_id
-                    or item.to_controller_id != item.lane_id.controller_id
-                )
+    @api.model
+    def _validate_whitelist_identity(self, record, type_code, label):
+        if (
+            not record or not record.active or not record.whitelist_id
+            or not record.whitelist_id.active
+            or record.whitelist_id.device_type_code != type_code
+        ):
+            raise ValidationError(
+                _("%(label)s must be an active device from Device Whitelist.")
+                % {"label": label}
             )
-            if invalid:
-                raise ValidationError(
-                    _("Existing Antenna Movement Rules do not belong to the selected Lane Controller.")
-                )
-        return result
+
+    def _validate_lane_assembly(self):
+        for record in self:
+            if not record.active:
+                continue
+            self._validate_whitelist_identity(record.edge_server_id, "SERVER", _("Server"))
+            self._validate_whitelist_identity(record.controller_id, "CONTROLLER", _("Controller"))
+        return True
+
+    @api.constrains("edge_server_id", "controller_id", "active")
+    def _check_lane_assembly(self):
+        self._validate_lane_assembly()
 
 
 class NspParkingAntennaTransition(models.Model):
-    """Directed physical RFID path used by the Edge parking business engine.
-
-    A transition is the authoritative timing rule for one movement. Lane-level
-    fixed timing windows are intentionally not stored. The transition
-    itself says which antenna must be observed first, which antenna comes next,
-    what business event it represents, and how long that movement may take.
-    """
+    """Directed contextual Reader-port path used by Edge business logic."""
 
     _name = "nsp.parking.antenna.transition"
-    _description = "NSP Parking Antenna Transition"
-    _order = "lane_id, event_type, from_antenna_id, to_antenna_id, id"
+    _description = "NSP Parking Movement Rule"
+    _order = "lane_id, event_type, from_device_id, from_antenna_no, id"
     _rec_name = "rule_name"
 
     rule_name = fields.Char(compute="_compute_rule_name")
     lane_id = fields.Many2one(
-        "nsp.parking.lane",
-        string="Parking Lane",
-        required=True,
-        ondelete="cascade",
-        index=True,
+        "nsp.parking.lane", string="Parking Lane", required=True,
+        ondelete="cascade", index=True,
     )
     parking_area_id = fields.Many2one(
-        "nsp.parking.area", related="lane_id.parking_area_id", readonly=True
-    )
-    lane_controller_id = fields.Many2one(
-        "nsp.controller", related="lane_id.controller_id", readonly=True
+        "nsp.parking.area", related="lane_id.parking_area_id", readonly=True,
     )
     event_type = fields.Selection(
         [("check_in", "Check-in"), ("check_out", "Check-out")],
-        string="Event Type",
-        required=True,
-        index=True,
-        help="Business event created when the same Vehicle RFID moves from From Antenna to To Antenna within Duration.",
-    )
-    from_antenna_id = fields.Many2one(
-        "nsp.device.antenna",
-        string="From Antenna",
-        required=True,
-        ondelete="restrict",
-        index=True,
-    )
-    to_antenna_id = fields.Many2one(
-        "nsp.device.antenna",
-        string="To Antenna",
-        required=True,
-        ondelete="restrict",
-        index=True,
-    )
-    duration_seconds = fields.Float(
-        string="Duration (Seconds)",
-        required=True,
-        default=2.0,
-        digits=(8, 3),
-        help="Maximum measured time allowed between From Antenna and To Antenna for the same Vehicle RFID.",
-    )
-
-    from_controller_id = fields.Many2one(
-        "nsp.controller", related="from_antenna_id.device_id.controller_id", readonly=True
-    )
-    to_controller_id = fields.Many2one(
-        "nsp.controller", related="to_antenna_id.device_id.controller_id", readonly=True
+        string="Event Type", required=True, index=True,
     )
     from_device_id = fields.Many2one(
-        "nsp.device", related="from_antenna_id.device_id", readonly=True
+        "nsp.device", string="From Reader", required=True,
+        ondelete="restrict", index=True,
+    )
+    from_antenna_no = fields.Integer(string="From Port", required=True, default=1)
+    from_antenna_id = fields.Many2one(
+        "nsp.device.antenna", string="From Antenna", required=True,
+        ondelete="restrict", index=True,
     )
     to_device_id = fields.Many2one(
-        "nsp.device", related="to_antenna_id.device_id", readonly=True
+        "nsp.device", string="To Reader", required=True,
+        ondelete="restrict", index=True,
     )
-    from_serial_number = fields.Char(
-        related="from_device_id.serial_number", readonly=True
+    to_antenna_no = fields.Integer(string="To Port", required=True, default=2)
+    to_antenna_id = fields.Many2one(
+        "nsp.device.antenna", string="To Antenna", required=True,
+        ondelete="restrict", index=True,
     )
-    to_serial_number = fields.Char(
-        related="to_device_id.serial_number", readonly=True
+    duration_seconds = fields.Float(
+        string="Duration (Seconds)", required=True, default=2.0, digits=(8, 3),
     )
-    from_antenna_no = fields.Integer(
-        related="from_antenna_id.antenna_no", readonly=True
+    from_serial_number = fields.Char(related="from_device_id.serial_number", readonly=True)
+    to_serial_number = fields.Char(related="to_device_id.serial_number", readonly=True)
+    available_reader_ids = fields.Many2many(
+        "nsp.device", compute="_compute_available_devices", readonly=True,
     )
-    to_antenna_no = fields.Integer(
-        related="to_antenna_id.antenna_no", readonly=True
+    available_antenna_ids = fields.Many2many(
+        "nsp.device.antenna", compute="_compute_available_devices", readonly=True,
     )
 
     _sql_constraints = [
         (
             "unique_directed_transition",
-            "unique(lane_id, from_antenna_id, to_antenna_id)",
-            "The same directed Antenna Transition can be configured only once per Lane.",
+            "unique(lane_id, from_device_id, from_antenna_no, to_device_id, to_antenna_no)",
+            "The same directed Movement Rule can be configured only once per Lane.",
         ),
         (
-            "transition_duration_positive",
-            "CHECK(duration_seconds > 0)",
-            "Antenna Transition Duration must be greater than zero.",
+            "transition_duration_positive", "CHECK(duration_seconds > 0)",
+            "Movement Rule Duration must be greater than zero.",
         ),
         (
-            "transition_antennas_different",
-            "CHECK(from_antenna_id <> to_antenna_id)",
-            "From Antenna and To Antenna must be different.",
+            "transition_ports_positive", "CHECK(from_antenna_no > 0 AND to_antenna_no > 0)",
+            "Reader port numbers must be greater than zero.",
         ),
     ]
 
     @api.depends(
-        "lane_id.display_name",
-        "event_type",
-        "from_antenna_id.display_name",
-        "to_antenna_id.display_name",
+        "lane_id.display_name", "event_type",
+        "from_device_id.display_name", "from_antenna_no", "from_antenna_id.display_name",
+        "to_device_id.display_name", "to_antenna_no", "to_antenna_id.display_name",
         "duration_seconds",
     )
     def _compute_rule_name(self):
         labels = dict(self._fields["event_type"].selection)
-        for rec in self:
-            rec.rule_name = "%s / %s: %s → %s / %.3gs" % (
-                rec.lane_id.display_name or _("Lane"),
-                labels.get(rec.event_type, rec.event_type or ""),
-                rec.from_antenna_id.display_name or _("Antenna"),
-                rec.to_antenna_id.display_name or _("Antenna"),
-                rec.duration_seconds or 0.0,
+        for record in self:
+            record.rule_name = "%s / %s: %s [No.%s · %s] → %s [No.%s · %s] / %.3gs" % (
+                record.lane_id.display_name or _("Lane"),
+                labels.get(record.event_type, record.event_type or ""),
+                record.from_device_id.display_name or _("Reader"),
+                record.from_antenna_no or "-",
+                record.from_antenna_id.whitelist_id.technical_code or _("Antenna"),
+                record.to_device_id.display_name or _("Reader"),
+                record.to_antenna_no or "-",
+                record.to_antenna_id.whitelist_id.technical_code or _("Antenna"),
+                record.duration_seconds or 0.0,
             )
 
+    @api.depends("lane_id", "from_device_id", "to_device_id")
+    def _compute_available_devices(self):
+        Reader = self.env["nsp.device"]
+        Antenna = self.env["nsp.device.antenna"]
+        readers = Reader.search([
+            ("active", "=", True),
+            ("whitelist_id", "!=", False),
+            ("whitelist_id.active", "=", True),
+            ("whitelist_id.device_type_code", "=", "RFID_READER"),
+        ])
+        antennas = Antenna.search([
+            ("active", "=", True),
+            ("whitelist_id", "!=", False),
+            ("whitelist_id.active", "=", True),
+            ("whitelist_id.device_type_code", "=", "ANTENNA"),
+        ])
+        for record in self:
+            record.available_reader_ids = readers
+            record.available_antenna_ids = antennas
+
+    @api.model
+    def _validate_identity(self, record, type_code, label):
+        if (
+            not record or not record.active or not record.whitelist_id
+            or not record.whitelist_id.active
+            or record.whitelist_id.device_type_code != type_code
+        ):
+            raise ValidationError(
+                _("%(label)s must be an active device from Device Whitelist.")
+                % {"label": label}
+            )
+
+    def _validate_lane_mapping_consistency(self):
+        for lane in self.mapped("lane_id"):
+            endpoint_to_antenna = {}
+            antenna_to_endpoint = {}
+            for rule in lane.antenna_transition_ids:
+                for reader, port_no, antenna, side in (
+                    (rule.from_device_id, int(rule.from_antenna_no or 0), rule.from_antenna_id, _("From")),
+                    (rule.to_device_id, int(rule.to_antenna_no or 0), rule.to_antenna_id, _("To")),
+                ):
+                    self._validate_identity(reader, "RFID_READER", _("%s Reader") % side)
+                    self._validate_identity(antenna, "ANTENNA", _("%s Antenna") % side)
+                    if port_no <= 0:
+                        raise ValidationError(_("Reader port number must be greater than zero."))
+                    endpoint = (reader.id, port_no)
+                    previous_antenna = endpoint_to_antenna.get(endpoint)
+                    if previous_antenna and previous_antenna != antenna.id:
+                        raise ValidationError(
+                            _("The same Reader port cannot be mapped to different Antennas in one Lane.")
+                        )
+                    previous_endpoint = antenna_to_endpoint.get(antenna.id)
+                    if previous_endpoint and previous_endpoint != endpoint:
+                        raise ValidationError(
+                            _("The same Antenna cannot be mapped to different Reader ports in one Lane.")
+                        )
+                    endpoint_to_antenna[endpoint] = antenna.id
+                    antenna_to_endpoint[antenna.id] = endpoint
+                if (
+                    rule.from_device_id == rule.to_device_id
+                    and int(rule.from_antenna_no or 0) == int(rule.to_antenna_no or 0)
+                ):
+                    raise ValidationError(_("From and To endpoints must be different."))
+        return True
+
     @api.constrains(
-        "lane_id", "from_antenna_id", "to_antenna_id", "duration_seconds"
+        "lane_id", "from_device_id", "from_antenna_no", "from_antenna_id",
+        "to_device_id", "to_antenna_no", "to_antenna_id", "duration_seconds",
     )
     def _check_transition(self):
-        Whitelist = self.env["nsp.device.whitelist"].sudo()
-        for rec in self:
-            if not rec.lane_id or not rec.from_antenna_id or not rec.to_antenna_id:
-                continue
-            if rec.from_antenna_id == rec.to_antenna_id:
-                raise ValidationError(_("From Antenna and To Antenna must be different."))
-            if rec.duration_seconds <= 0:
-                raise ValidationError(_("Antenna Transition Duration must be greater than zero."))
-            if (
-                rec.from_controller_id != rec.lane_id.controller_id
-                or rec.to_controller_id != rec.lane_id.controller_id
-            ):
-                raise ValidationError(
-                    _("Both antennas must belong to the Controller assigned to this Lane.")
-                )
+        self._validate_lane_mapping_consistency()
 
-            serials = {
-                str(rec.from_serial_number or "").strip().upper(),
-                str(rec.to_serial_number or "").strip().upper(),
-            }
-            serials.discard("")
-            allowed = set(
-                Whitelist.search([
-                    ("serial_number", "in", list(serials)),
-                    ("active", "=", True),
-                    ("device_type_code", "=", "RFID_READER"),
-                ]).mapped("serial_number")
-            ) if serials else set()
-            if serials - allowed:
-                raise ValidationError(
-                    _("Both antennas must belong to Readers in Device Whitelist.")
-                )
-
-            if "whitelist_id" in rec.from_antenna_id._fields:
-                invalid_antennas = (rec.from_antenna_id | rec.to_antenna_id).filtered(
-                    lambda antenna: not antenna.whitelist_id or not antenna.whitelist_id.active
-                )
-                if invalid_antennas:
-                    raise ValidationError(_("Both antennas must be active devices in Device Whitelist."))
-
-            antenna_ids = [rec.from_antenna_id.id, rec.to_antenna_id.id]
-            conflict = self.search([
-                ("id", "!=", rec.id),
-                ("lane_id", "!=", rec.lane_id.id),
-                "|",
-                ("from_antenna_id", "in", antenna_ids),
-                ("to_antenna_id", "in", antenna_ids),
-            ], limit=1)
-            if conflict:
-                raise ValidationError(
-                    _("An antenna can participate in transitions of only one Parking Lane.")
-                )
+    def _prepare_sync_payload(self):
+        self.ensure_one()
+        return {
+            "from_reader_code": self.from_device_id.device_code or "",
+            "from_serial_number": self.from_serial_number or "",
+            "from_antenna_no": int(self.from_antenna_no or 0),
+            "from_antenna_code": self.from_antenna_id.technical_code or "",
+            "to_reader_code": self.to_device_id.device_code or "",
+            "to_serial_number": self.to_serial_number or "",
+            "to_antenna_no": int(self.to_antenna_no or 0),
+            "to_antenna_code": self.to_antenna_id.technical_code or "",
+            "event_type": self.event_type,
+            "duration_seconds": float(self.duration_seconds or 0.0),
+        }

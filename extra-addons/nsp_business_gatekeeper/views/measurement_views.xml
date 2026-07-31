@@ -26,7 +26,7 @@
             <list string="Reader Calibration" decoration-info="status == 'running'" decoration-success="status in ('completed','applied')" decoration-danger="status == 'failed'">
                 <field name="measurement_code" readonly="1"/>
                 <field name="revision"/>
-                <field name="target_count" string="Target Pairs"/>
+                <field name="target_count" string="Vehicles"/>
                 <field name="controller_count" string="Controllers"/>
                 <field name="reader_count" string="Readers"/>
                 <field name="status" widget="badge"/>
@@ -39,7 +39,7 @@
         <field name="name">nsp.measurement.session.form</field>
         <field name="model">nsp.measurement.session</field>
         <field name="arch" type="xml">
-            <form string="Reader Calibration">
+            <form string="Reader Calibration" create="0" edit="0" delete="0">
                 <header>
                     <button name="action_ready" type="object" string="Release to Controllers" icon="fa-cloud-upload" class="oe_highlight" invisible="status != 'draft'"/>
                     <button name="action_open_live" type="object" string="Live Reader Calibration" icon="fa-line-chart" class="oe_highlight" invisible="status == 'draft'"/>
@@ -60,8 +60,8 @@
                     </div>
                     <group>
                         <group string="Calibration Scope">
-                            <field name="target_count" string="Target Pairs" readonly="1"/>
-                            <field name="target_tag_count" string="RFID Tags" readonly="1"/>
+                            <field name="target_count" string="Vehicles" readonly="1"/>
+                            <field name="target_tag_count" string="Vehicle RFID Tags" readonly="1"/>
                             <field name="controller_count" readonly="1"/>
                             <field name="reader_count" readonly="1"/>
                         </group>
@@ -74,29 +74,31 @@
                         </group>
                     </group>
                     <notebook>
-                        <page string="Target Pairs">
+                        <page string="Vehicles">
                             <field name="target_line_ids" readonly="1">
                                 <list create="0" edit="0" delete="0">
-                                    <field name="user_tid" string="Employee RFID Tag"/>
-                                    <field name="vehicle_tid" string="Vehicle RFID Tag"/>
+                                    <field name="vehicle_tid" string="RFID Tag"/>
                                     <field name="license_plate" string="License Plate"/>
+                                    <field name="owner_id" string="Owner"/>
+                                    <field name="vehicle_detection_state" string="Status" widget="badge"/>
                                 </list>
                             </field>
                         </page>
-                        <page string="Controllers &amp; Readers">
+                        <page string="Device Assembly">
                             <div class="alert alert-info" role="alert">
-                                Select Readers from one or many Controllers. Reader ownership determines the Controller automatically. Choose only the Antennas that participate in this calibration.
+                                This is the released calibration assembly received from Cloud. Server, Controller, RFID Reader and Antenna identities remain independent in Device Whitelist.
                             </div>
-                            <field name="reader_line_ids" readonly="status != 'draft'">
-                                <list editable="bottom" delete="1">
-                                    <field name="controller_id" readonly="1"/>
-                                    <field name="reader_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" domain="[('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','RFID_READER')]"/>
+                            <field name="reader_line_ids" mode="list,form" readonly="1"
+                                   context="{'form_view_ref': 'nsp_business_gatekeeper.view_nsp_measurement_reader_line_form'}">
+                                <list create="0" edit="0" delete="0">
+                                    <field name="edge_server_id" string="Server"/>
+                                    <field name="controller_id" string="Controller"/>
+                                    <field name="reader_id" string="RFID Reader"/>
                                     <field name="serial_number" readonly="1" optional="hide"/>
-                                    <field name="reader_status" readonly="1" widget="badge"/>
-                                    <field name="reader_power_dbm" string="Reader Power (dBm)"/>
-                                    <field name="read_interval_ms" string="Read Interval ms"/>
-                                    <field name="available_antenna_ids" column_invisible="True"/>
-                                    <field name="antenna_ids" string="Antennas" widget="many2many_tags" domain="[('id','in',available_antenna_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" required="1"/>
+                                    <field name="antenna_count" string="Antennas" readonly="1"/>
+                                    <field name="reader_power_dbm" string="Power (dBm)"/>
+                                    <field name="read_interval_ms" string="Interval (ms)"/>
+                                    <field name="reader_status" readonly="1" widget="badge" optional="hide"/>
                                 </list>
                             </field>
                         </page>
@@ -106,6 +108,43 @@
                     </notebook>
                 </sheet>
                 <chatter/>
+            </form>
+        </field>
+    </record>
+
+
+    <record id="view_nsp_measurement_reader_line_form" model="ir.ui.view">
+        <field name="name">nsp.measurement.reader.line.edge.assembly.form</field>
+        <field name="model">nsp.measurement.reader.line</field>
+        <field name="arch" type="xml">
+            <form string="Released Reader Assembly" create="0" edit="0" delete="0">
+                <sheet>
+                    <div class="oe_title"><h1>Released Reader Assembly</h1></div>
+                    <group>
+                        <group string="Assembly">
+                            <field name="edge_server_id" string="Server"/>
+                            <field name="controller_id" string="Controller"/>
+                            <field name="reader_id" string="RFID Reader"/>
+                            <field name="serial_number"/>
+                            <field name="reader_status" widget="badge"/>
+                        </group>
+                        <group string="Reader Parameters">
+                            <field name="reader_power_dbm" string="Power (dBm)"/>
+                            <field name="read_interval_ms" string="Read Interval (ms)"/>
+                            <field name="reader_tid_addr" string="TID Start Address (Words)"/>
+                            <field name="reader_tid_len" string="TID Length (Words)"/>
+                        </group>
+                    </group>
+                    <separator string="Antenna Port Mapping"/>
+                    <field name="antenna_port_ids" nolabel="1" readonly="1">
+                        <list create="0" edit="0" delete="0">
+                            <field name="port_no" string="No."/>
+                            <field name="antenna_id" string="Antenna"/>
+                            <field name="antenna_management_code" string="Management Code" optional="hide"/>
+                            <field name="antenna_serial_number" string="Serial Number" optional="hide"/>
+                        </list>
+                    </field>
+                </sheet>
             </form>
         </field>
     </record>
@@ -133,7 +172,7 @@
                     </div>
                     <group class="nsp-measurement-live-meta">
                         <field name="revision" readonly="1"/>
-                        <field name="target_count" string="Target Pairs" readonly="1"/>
+                        <field name="target_count" string="Vehicles" readonly="1"/>
                         <field name="controller_count" readonly="1"/>
                         <field name="reader_count" readonly="1"/>
                     </group>

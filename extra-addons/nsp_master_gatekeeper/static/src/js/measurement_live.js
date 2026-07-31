@@ -23,10 +23,10 @@ export class NspMeasurementLive extends Component {
             controllers: [],
             controllerCount: 0,
             edgeServerCodes: [],
-            targetPairs: [],
-            targetCount: 0,
-            targetTagCount: 0,
-            detectedTargetCount: 0,
+            vehicles: [],
+            vehicleCount: 0,
+            vehicleTagCount: 0,
+            detectedVehicleCount: 0,
             coveragePercent: 0,
             readers: [],
             readerCount: 0,
@@ -128,10 +128,10 @@ export class NspMeasurementLive extends Component {
             this.state.controllers = data.controllers || [];
             this.state.controllerCount = Number(data.controller_count || this.state.controllers.length);
             this.state.edgeServerCodes = data.edge_server_codes || [];
-            this.state.targetPairs = data.target_pairs || [];
-            this.state.targetCount = Number(data.target_count || this.state.targetPairs.length);
-            this.state.targetTagCount = Number(data.target_tag_count || this.state.targetCount * 2);
-            this.state.detectedTargetCount = Number(data.detected_target_count || 0);
+            this.state.vehicles = data.vehicles || [];
+            this.state.vehicleCount = Number(data.vehicle_count || this.state.vehicles.length);
+            this.state.vehicleTagCount = Number(data.vehicle_tag_count || this.state.vehicleCount);
+            this.state.detectedVehicleCount = Number(data.detected_vehicle_count || 0);
             this.state.coveragePercent = Number(data.coverage_percent || 0);
             this.state.readers = this._mergeReaders(data.readers || [], resetDraft);
             this.state.readerCount = Number(data.reader_count || this.state.readers.length);
@@ -180,14 +180,8 @@ export class NspMeasurementLive extends Component {
         return detected ? "Detected" : "Not detected";
     }
 
-    pairStatusLabel(pair) {
-        if (pair?.detected) {
-            return "Complete";
-        }
-        if (pair?.detected_tag_count) {
-            return "Partial";
-        }
-        return "Not detected";
+    vehicleStatusLabel(vehicle) {
+        return vehicle?.detected ? "Detected" : "Not detected";
     }
 
     coverageWidth() {
