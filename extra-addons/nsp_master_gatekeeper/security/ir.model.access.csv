@@ -31,3 +31,7 @@ access_nsp_measurement_target_line_it,nsp.measurement.target.line IT,nsp_master_
 access_nsp_measurement_target_line_operator,nsp.measurement.target.line Operator,nsp_master_gatekeeper.model_nsp_measurement_target_line,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_device_type_it,nsp.device.type IT,nsp_master_gatekeeper.model_nsp_device_type,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_device_type_operator,nsp.device.type Operator,nsp_master_gatekeeper.model_nsp_device_type,nsp_core.group_nsp_operator,1,0,0,0
+access_nsp_parking_lane_timeline_it,nsp.parking.lane.timeline IT,nsp_master_gatekeeper.model_nsp_parking_lane_timeline,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_parking_lane_timeline_operator,nsp.parking.lane.timeline Operator,nsp_master_gatekeeper.model_nsp_parking_lane_timeline,nsp_core.group_nsp_operator,1,0,0,0
+access_nsp_parking_lane_event_sequence_it,nsp.parking.lane.event.sequence IT,nsp_master_gatekeeper.model_nsp_parking_lane_event_sequence,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_parking_lane_event_sequence_operator,nsp.parking.lane.event.sequence Operator,nsp_master_gatekeeper.model_nsp_parking_lane_event_sequence,nsp_core.group_nsp_operator,1,0,0,0

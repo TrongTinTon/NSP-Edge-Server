@@ -81,13 +81,12 @@
                     </group>
                     <separator string="Lanes"/>
                     <div class="alert alert-info" role="alert">
-                        Each Lane selects one Server and one Controller for this published layout only. Movement Rules map RFID Reader ports to independent Antenna devices and define Check-in or Check-out direction.
+                        Each Lane imports or records an Antenna Timeline from Reader Calibration, then defines Check-in and Check-out sequences from those antennas. Publishing creates the runtime snapshot used by Edge.
                     </div>
                     <field name="lane_ids" mode="list,form"
                            context="{'default_parking_area_id': id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_parking_lane_form'}">
                         <list create="1" edit="1" delete="1">
                             <control><create string="Add Lane"/></control>
-                            <field name="lane_no" string="Lane No."/>
                             <field name="name" string="Lane Name"/>
                             <field name="available_edge_server_ids" column_invisible="1"/>
                             <field name="edge_server_id" string="Server"
@@ -97,7 +96,8 @@
                             <field name="controller_id" string="Controller"
                                    domain="[('id','in',available_controller_ids)]"
                                    options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                            <field name="transition_count" string="Movement Rules" readonly="1"/>
+                            <field name="calibration_source_id" string="Calibration Source"/>
+                            <field name="transition_count" string="Timeline Points" readonly="1"/>
                             <field name="active" widget="boolean_toggle"/>
                         </list>
                     </field>
@@ -119,7 +119,6 @@
         <field name="arch" type="xml">
             <list string="Parking Lanes">
                 <field name="parking_area_id"/>
-                <field name="lane_no" string="Lane No."/>
                 <field name="name" string="Lane Name" decoration-bf="1"/>
                 <field name="edge_server_id" string="Server"/>
                 <field name="controller_id"/>
@@ -134,62 +133,87 @@
         <field name="name">nsp.parking.lane.form</field>
         <field name="model">nsp.parking.lane</field>
         <field name="arch" type="xml">
-            <form string="Parking Lane">
+            <form string="Parking Lane Configuration">
                 <sheet>
                     <div class="oe_title">
-                        <label for="name"/>
-                        <h1><field name="name" placeholder="Parking Lane 01"/></h1>
+                        <h1><field name="name" placeholder="Lane Entry 01"/></h1>
                     </div>
-                    <div class="alert alert-info" role="alert">
-                        Server, Controller, RFID Reader and Antenna remain independent in Device Whitelist. Their relationships below exist only in this Parking Layout.
-                    </div>
-                    <group>
-                        <group string="Lane">
-                            <field name="parking_area_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True}"/>
-                            <field name="lane_no" string="Lane No."/>
+                    <group col="5">
+                        <field name="parking_area_id" string="Parking Area" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True}"/>
+                        <field name="name" string="Lane Name"/>
+                        <field name="code" string="Lane Code" readonly="1"/>
+                        <field name="controller_id" string="Controller" domain="[('id','in',available_controller_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                        <field name="direction" widget="selection_badge" string="Direction"/>
+                    </group>
+                    <field name="available_controller_ids" invisible="1"/>
+                    <field name="available_edge_server_ids" invisible="1"/>
+                    <group col="2">
+                        <group>
+                            <field name="edge_server_id" string="Server" domain="[('id','in',available_edge_server_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                             <field name="active" widget="boolean_toggle"/>
-                            <field name="code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
-                        <group string="Runtime Assembly">
-                            <field name="available_edge_server_ids" invisible="1"/>
-                            <field name="edge_server_id" string="Server"
-                                   domain="[('id','in',available_edge_server_ids)]"
-                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                            <field name="available_controller_ids" invisible="1"/>
-                            <field name="controller_id" string="Controller"
-                                   domain="[('id','in',available_controller_ids)]"
-                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                            <field name="transition_count" string="Movement Rules" readonly="1"/>
+                        <group>
+                            <field name="calibration_source_id" string="Calibration Source" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': False}"/>
+                            <field name="total_path_duration" readonly="1"/>
                         </group>
                     </group>
-                    <separator string="Movement Rules"/>
+                    <separator string="1. Antenna Timeline (from Reader Calibration)"/>
                     <div class="alert alert-info" role="alert">
-                        Example: Reader A / No.1 / Antenna A → Reader A / No.2 / Antenna B = Check-in. The reverse ordered path may be configured as Check-out.
+                        Timeline records the antenna detection order and duration between consecutive antennas. It does not define Check-in or Check-out by itself.
                     </div>
-                    <field name="antenna_transition_ids" context="{'default_lane_id': id}">
-                        <list editable="bottom" create="1" edit="1" delete="1">
-                            <field name="available_reader_ids" column_invisible="1"/>
+                    <field name="timeline_line_ids" context="{'default_lane_id': id}">
+                        <list editable="bottom" create="1" delete="1">
+                            <control><create string="Add a line"/></control>
+                            <field name="sequence" string="Order"/>
                             <field name="available_antenna_ids" column_invisible="1"/>
-                            <field name="from_device_id" string="From Reader"
-                                   domain="[('id','in',available_reader_ids)]"
-                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                            <field name="from_antenna_no" string="From No."/>
-                            <field name="from_antenna_id" string="From Antenna"
-                                   domain="[('id','in',available_antenna_ids)]"
-                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                            <field name="to_device_id" string="To Reader"
-                                   domain="[('id','in',available_reader_ids)]"
-                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                            <field name="to_antenna_no" string="To No."/>
-                            <field name="to_antenna_id" string="To Antenna"
-                                   domain="[('id','in',available_antenna_ids)]"
-                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                            <field name="event_type" widget="badge"
-                                   decoration-success="event_type == 'check_in'"
-                                   decoration-info="event_type == 'check_out'"/>
-                            <field name="duration_seconds" string="Duration (s)"/>
+                            <field name="antenna_id" string="Antenna / Detection Point" domain="[('id','in',available_antenna_ids)]" context="{'list_view_ref': 'nsp_master_gatekeeper.view_nsp_device_antenna_identity_list', 'search_view_ref': 'nsp_master_gatekeeper.view_nsp_device_antenna_identity_search'}" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                            <field name="available_reader_ids" column_invisible="1"/>
+                            <field name="reader_id" string="Reader" domain="[('id','in',available_reader_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                            <field name="port_no" string="Port / Channel"/>
+                            <field name="duration_from_previous" string="Duration from previous (s)"/>
+                            <field name="cumulative_time" string="Cumulative Time (s)" readonly="1"/>
                         </list>
                     </field>
+                    <div class="alert alert-success" role="alert">
+                        Total path duration: <field name="total_path_duration" readonly="1" class="oe_inline"/> seconds
+                    </div>
+                    <separator string="2. Parking Event Sequences"/>
+                    <group col="2">
+                        <group string="Check-in Sequence">
+                            <field name="checkin_sequence_ids" context="{'default_lane_id': id, 'default_sequence_type': 'check_in'}">
+                                <list editable="bottom" create="1" delete="1">
+                                    <control><create string="Add a line"/></control>
+                                    <field name="sequence" string="Order"/>
+                                    <field name="sequence_type" column_invisible="1"/>
+                                    <field name="available_antenna_ids" column_invisible="1"/>
+                                    <field name="antenna_id" string="Antenna" domain="[('id','in',available_antenna_ids)]" context="{'list_view_ref': 'nsp_master_gatekeeper.view_nsp_device_antenna_identity_list', 'search_view_ref': 'nsp_master_gatekeeper.view_nsp_device_antenna_identity_search'}" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                                </list>
+                            </field>
+                        </group>
+                        <group string="Check-out Sequence">
+                            <field name="checkout_sequence_ids" context="{'default_lane_id': id, 'default_sequence_type': 'check_out'}">
+                                <list editable="bottom" create="1" delete="1">
+                                    <control><create string="Add a line"/></control>
+                                    <field name="sequence" string="Order"/>
+                                    <field name="sequence_type" column_invisible="1"/>
+                                    <field name="available_antenna_ids" column_invisible="1"/>
+                                    <field name="antenna_id" string="Antenna" domain="[('id','in',available_antenna_ids)]" context="{'list_view_ref': 'nsp_master_gatekeeper.view_nsp_device_antenna_identity_list', 'search_view_ref': 'nsp_master_gatekeeper.view_nsp_device_antenna_identity_search'}" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                                </list>
+                            </field>
+                        </group>
+                    </group>
+                    <separator string="3. Transition Time Tolerance (Optional)"/>
+                    <group col="2">
+                        <group>
+                            <field name="tolerance_type"/>
+                            <field name="tolerance_value"/>
+                        </group>
+                        <group string="Notes">
+                            <div class="text-muted">• Timeline and durations come from calibration.</div>
+                            <div class="text-muted">• Event sequences define the meaning (Check-in / Check-out).</div>
+                            <div class="text-muted">• Edge will match real-time detections against these sequences.</div>
+                        </group>
+                    </group>
                 </sheet>
             </form>
         </field>

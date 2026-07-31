@@ -183,6 +183,7 @@
                             <field name="available_antenna_ids" column_invisible="1"/>
                             <field name="antenna_id" string="Antenna"
                                    domain="[('id','in',available_antenna_ids)]"
+                                   context="{'list_view_ref': 'nsp_master_gatekeeper.view_nsp_device_antenna_identity_list', 'search_view_ref': 'nsp_master_gatekeeper.view_nsp_device_antenna_identity_search'}"
                                    options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                         </list>
                     </field>

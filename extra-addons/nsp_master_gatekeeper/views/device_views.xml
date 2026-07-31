@@ -131,6 +131,32 @@
         <field name="view_ids" eval="[(5,0,0),             (0,0, {'view_mode': 'list', 'view_id': ref('nsp_device_heartbeat_view_list')}),             (0,0, {'view_mode': 'form', 'view_id': ref('nsp_device_view_form')})]"/>
     </record>
 
+    <record id="view_nsp_device_antenna_identity_search" model="ir.ui.view">
+        <field name="name">nsp.device.antenna.identity.search</field>
+        <field name="model">nsp.device.antenna</field>
+        <field name="arch" type="xml">
+            <search string="Select Antenna">
+                <field name="display_name" string="Antenna"/>
+                <field name="whitelist_management_code" string="Management Code"/>
+                <field name="serial_number" string="Serial Number"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_device_antenna_identity_list" model="ir.ui.view">
+        <field name="name">nsp.device.antenna.identity.list</field>
+        <field name="model">nsp.device.antenna</field>
+        <field name="priority">5</field>
+        <field name="arch" type="xml">
+            <list string="Select Antenna" create="0" edit="0" delete="0">
+                <field name="whitelist_photo" string="Photo" widget="image" class="oe_avatar"/>
+                <field name="whitelist_management_code" string="Management Code"/>
+                <field name="serial_number" string="Serial Number" optional="show"/>
+                <field name="active" invisible="1"/>
+            </list>
+        </field>
+    </record>
+
     <record id="view_nsp_device_antenna_search" model="ir.ui.view">
         <field name="name">nsp.reader.antenna.search</field>
         <field name="model">nsp.device.antenna</field>

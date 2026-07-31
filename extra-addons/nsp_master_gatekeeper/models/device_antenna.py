@@ -63,20 +63,82 @@ class DeviceAntenna(models.Model):
         ),
     ]
 
-    @api.depends("device_id.name", "device_id.serial_number", "antenna_no", "whitelist_id.display_name", "technical_code")
+    @api.depends(
+        "whitelist_id.technical_code",
+        "whitelist_id.serial_number",
+        "technical_code",
+        "serial_number",
+    )
     def _compute_display_name(self):
+        """Show the independent Antenna identity, never a runtime parent path.
+
+        Reader/port relationships belong to a Calibration or Parking assembly.
+        They must not leak into the Device Whitelist selection label.
+        """
         for antenna in self:
-            if not antenna.device_id:
-                antenna.display_name = (
-                    antenna.whitelist_id.display_name
-                    or antenna.technical_code
-                    or _("Unassigned Antenna")
+            management_code = (
+                antenna.whitelist_id.technical_code
+                or antenna.technical_code
+                or ""
+            ).strip()
+            serial_number = (
+                antenna.whitelist_id.serial_number
+                or antenna.serial_number
+                or ""
+            ).strip()
+            if management_code and serial_number:
+                antenna.display_name = "%s · SN %s" % (
+                    management_code,
+                    serial_number,
                 )
-                continue
-            owner = antenna.device_id.name or antenna.device_id.serial_number
-            antenna.display_name = "%s / Port %s" % (
-                owner, antenna.antenna_no or "-",
-            )
+            else:
+                antenna.display_name = (
+                    management_code
+                    or ("SN %s" % serial_number if serial_number else "")
+                    or _("Antenna")
+                )
+
+    @api.model
+    def name_search(self, name="", domain=None, operator="ilike", limit=100):
+        """Search Antennas by Device Whitelist identity fields."""
+        search_domain = list(domain or [])
+        if name:
+            search_domain = [
+                "|", "|", "|",
+                ("display_name", operator, name),
+                ("whitelist_id.technical_code", operator, name),
+                ("whitelist_id.serial_number", operator, name),
+                ("technical_code", operator, name),
+            ] + search_domain
+        records = self.search(search_domain, limit=limit)
+        return [(record.id, record.display_name) for record in records]
+
+    def init(self):
+        """Refresh stored labels created by older Reader-centric versions."""
+        self.env.cr.execute(
+            """
+            UPDATE nsp_device_antenna AS antenna
+               SET display_name = CASE
+                   WHEN COALESCE(NULLIF(TRIM(whitelist.technical_code), ''), '') <> ''
+                        AND COALESCE(NULLIF(TRIM(whitelist.serial_number), ''), '') <> ''
+                       THEN TRIM(whitelist.technical_code) || ' · SN ' || TRIM(whitelist.serial_number)
+                   WHEN COALESCE(NULLIF(TRIM(whitelist.technical_code), ''), '') <> ''
+                       THEN TRIM(whitelist.technical_code)
+                   WHEN COALESCE(NULLIF(TRIM(whitelist.serial_number), ''), '') <> ''
+                       THEN 'SN ' || TRIM(whitelist.serial_number)
+                   ELSE COALESCE(NULLIF(TRIM(antenna.technical_code), ''), 'Antenna')
+               END
+              FROM nsp_device_whitelist AS whitelist
+             WHERE antenna.whitelist_id = whitelist.id
+            """
+        )
+        self.env.cr.execute(
+            """
+            UPDATE nsp_device_antenna
+               SET display_name = COALESCE(NULLIF(TRIM(technical_code), ''), 'Antenna')
+             WHERE whitelist_id IS NULL
+            """
+        )
 
     @api.model
     def default_get(self, fields_list):

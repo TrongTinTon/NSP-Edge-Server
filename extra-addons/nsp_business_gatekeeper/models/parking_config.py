@@ -199,7 +199,7 @@ class NspParkingArea(models.Model):
         self.ensure_one()
         result = []
         lanes = self.lane_ids.filtered("active").sorted(
-            key=lambda item: (item.lane_no, item.id)
+            key=lambda item: ((item.name or "").casefold(), item.code or "", item.id)
         )
         for lane in lanes:
             transitions = []
@@ -223,7 +223,6 @@ class NspParkingArea(models.Model):
             result.append({
                 "lane_code": lane.code,
                 "lane_name": lane.name,
-                "lane_no": int(lane.lane_no or 0),
                 "controller_code": lane.controller_id.controller_id,
                 "antenna_transitions": transitions,
             })
@@ -400,7 +399,7 @@ class NspParkingArea(models.Model):
 class NspParkingLane(models.Model):
     _name = "nsp.parking.lane"
     _description = "NSP Parking Lane"
-    _order = "parking_area_id, lane_no, id"
+    _order = "parking_area_id, name, id"
     _rec_name = "display_name"
 
     name = fields.Char(string="Lane Name", required=True, default="Lane")
@@ -428,7 +427,6 @@ class NspParkingLane(models.Model):
         index=True,
         help="Controller that owns every Reader and antenna used by this Lane.",
     )
-    lane_no = fields.Integer(string="Lane No.", default=1, required=True)
     active = fields.Boolean(default=True, index=True)
     antenna_transition_ids = fields.One2many(
         "nsp.parking.antenna.transition",
@@ -443,21 +441,14 @@ class NspParkingLane(models.Model):
             "unique(parking_area_id, code)",
             "Lane Code must be unique within a Parking Area.",
         ),
-        (
-            "lane_no_per_area_unique",
-            "unique(parking_area_id, lane_no)",
-            "Lane number must be unique within a Parking Area.",
-        ),
-        ("lane_no_positive", "CHECK(lane_no > 0)", "Lane number must be greater than zero."),
     ]
 
-    @api.depends("parking_area_id.name", "name", "lane_no")
+    @api.depends("parking_area_id.name", "name")
     def _compute_display_name(self):
         for rec in self:
-            lane_name = rec.name or (_("Lane %s") % (rec.lane_no or ""))
             rec.display_name = "%s / %s" % (
                 rec.parking_area_id.name or _("Parking"),
-                lane_name,
+                rec.name or _("Lane"),
             )
 
     @api.depends("antenna_transition_ids")

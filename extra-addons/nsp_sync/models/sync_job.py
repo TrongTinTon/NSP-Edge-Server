@@ -1606,11 +1606,11 @@ class NspSyncJob(models.Model):
 
         lane_specs = {}
         transition_specs = []
-        for lane_index, lane_item in enumerate(lanes_data, start=1):
+        for lane_item in lanes_data:
             if not isinstance(lane_item, dict):
                 raise UserError(_("Parking lanes must contain objects."))
             unsupported_lane = set(lane_item) - {
-                "lane_code", "lane_name", "lane_no", "server_code",
+                "lane_code", "lane_name", "server_code",
                 "controller_code", "readers", "antenna_transitions",
             }
             if unsupported_lane:
@@ -1634,19 +1634,12 @@ class NspSyncJob(models.Model):
                 raise UserError(_(
                     "Controller %(controller)s is not assembled under Server %(server)s."
                 ) % {"controller": controller_code, "server": server_code})
-            try:
-                lane_no = int(lane_item.get("lane_no") or lane_index)
-            except (TypeError, ValueError) as exc:
-                raise UserError(_("Parking Lane No. must be an integer.")) from exc
-            if lane_no < 1:
-                raise UserError(_("Parking Lane No. must be at least one."))
 
             lane_specs[lane_code] = {
                 "parking_area_id": parking.id,
                 "code": lane_code,
                 "name": str(lane_item.get("lane_name") or lane_code).strip(),
                 "controller_id": controller.id,
-                "lane_no": lane_no,
                 "active": True,
             }
 
