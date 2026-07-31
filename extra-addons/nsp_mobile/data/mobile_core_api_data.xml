@@ -8,7 +8,7 @@
         <field name="token_ttl_hours">1</field>
         <field name="refresh_token_ttl_days">30</field>
         <field name="rate_limit_per_minute">180</field>
-        <field name="notes">System Mobile Application. Users authenticate with linked Odoo User credentials and receive res.users-bound Mobile Tokens. Authorization uses standard Odoo Groups, ACLs and Record Rules.</field>
+        <field name="notes">System Mobile Application. Mobile login authenticates an internal Odoo User and resolves exactly one linked NSP User business profile. Tokens remain bound to res.users, the Mobile session and the current device.</field>
     </record>
     <record id="action_endpoint_manager_nsp_mobile" model="action.endpoint.manager">
         <field name="name">NSP Mobile Core API Endpoints</field>
@@ -16,42 +16,42 @@
         <field name="application_id" ref="core_api_application_nsp_mobile"/>
         <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
     </record>
-    <record id="action_core_api_nsp_mobile_me" model="ir.actions.core_api">
+    <record id="action_core_api_nsp_mobile_profile" model="ir.actions.core_api">
         <field name="name">NSP Mobile Profile</field>
         <field name="model_id" ref="model_nsp_mobile_api_service"/>
-        <field name="code">model.api_me()</field>
+        <field name="code">model.api_profile()</field>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="endpoint_code">nsp_mobile_me</field>
-        <field name="route_suffix">mobile/me</field>
-        <field name="http_methods">GET</field>
+        <field name="endpoint_code">nsp_mobile_profile</field>
+        <field name="route_suffix">mobile/profile</field>
+        <field name="http_methods">GET,PATCH</field>
     </record>
-    <record id="endpoint_nsp_mobile_me" model="core.api.endpoint">
+    <record id="endpoint_nsp_mobile_profile" model="core.api.endpoint">
         <field name="name">NSP Mobile Profile</field>
-        <field name="code">nsp_mobile_me</field>
+        <field name="code">nsp_mobile_profile</field>
         <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/me</field>
-        <field name="http_methods">GET</field>
-        <field name="action_id" ref="action_core_api_nsp_mobile_me"/>
+        <field name="route_suffix">mobile/profile</field>
+        <field name="http_methods">GET,PATCH</field>
+        <field name="action_id" ref="action_core_api_nsp_mobile_profile"/>
         <field name="application_id" ref="core_api_application_nsp_mobile"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="route_active" eval="True"/>
     </record>
-    <record id="action_core_api_nsp_mobile_device_register" model="ir.actions.core_api">
-        <field name="name">NSP Mobile Devices Register</field>
+    <record id="action_core_api_nsp_mobile_device" model="ir.actions.core_api">
+        <field name="name">NSP Mobile Current Device</field>
         <field name="model_id" ref="model_nsp_mobile_api_service"/>
-        <field name="code">model.api_device_register()</field>
+        <field name="code">model.api_device()</field>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="endpoint_code">nsp_mobile_device_register</field>
-        <field name="route_suffix">mobile/devices/register</field>
-        <field name="http_methods">POST</field>
+        <field name="endpoint_code">nsp_mobile_device</field>
+        <field name="route_suffix">mobile/device</field>
+        <field name="http_methods">GET,PATCH,DELETE</field>
     </record>
-    <record id="endpoint_nsp_mobile_device_register" model="core.api.endpoint">
-        <field name="name">NSP Mobile Devices Register</field>
-        <field name="code">nsp_mobile_device_register</field>
+    <record id="endpoint_nsp_mobile_device" model="core.api.endpoint">
+        <field name="name">NSP Mobile Current Device</field>
+        <field name="code">nsp_mobile_device</field>
         <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/devices/register</field>
-        <field name="http_methods">POST</field>
-        <field name="action_id" ref="action_core_api_nsp_mobile_device_register"/>
+        <field name="route_suffix">mobile/device</field>
+        <field name="http_methods">GET,PATCH,DELETE</field>
+        <field name="action_id" ref="action_core_api_nsp_mobile_device"/>
         <field name="application_id" ref="core_api_application_nsp_mobile"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="route_active" eval="True"/>
@@ -62,36 +62,16 @@
         <field name="code">model.api_device_heartbeat()</field>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="endpoint_code">nsp_mobile_device_heartbeat</field>
-        <field name="route_suffix">mobile/devices/heartbeat</field>
+        <field name="route_suffix">mobile/device/heartbeat</field>
         <field name="http_methods">POST</field>
     </record>
     <record id="endpoint_nsp_mobile_device_heartbeat" model="core.api.endpoint">
         <field name="name">NSP Mobile Device Heartbeat</field>
         <field name="code">nsp_mobile_device_heartbeat</field>
         <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/devices/heartbeat</field>
+        <field name="route_suffix">mobile/device/heartbeat</field>
         <field name="http_methods">POST</field>
         <field name="action_id" ref="action_core_api_nsp_mobile_device_heartbeat"/>
-        <field name="application_id" ref="core_api_application_nsp_mobile"/>
-        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="route_active" eval="True"/>
-    </record>
-    <record id="action_core_api_nsp_mobile_device_unregister" model="ir.actions.core_api">
-        <field name="name">NSP Mobile Device Unregister</field>
-        <field name="model_id" ref="model_nsp_mobile_api_service"/>
-        <field name="code">model.api_device_unregister()</field>
-        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="endpoint_code">nsp_mobile_device_unregister</field>
-        <field name="route_suffix">mobile/devices/unregister</field>
-        <field name="http_methods">POST</field>
-    </record>
-    <record id="endpoint_nsp_mobile_device_unregister" model="core.api.endpoint">
-        <field name="name">NSP Mobile Device Unregister</field>
-        <field name="code">nsp_mobile_device_unregister</field>
-        <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/devices/unregister</field>
-        <field name="http_methods">POST</field>
-        <field name="action_id" ref="action_core_api_nsp_mobile_device_unregister"/>
         <field name="application_id" ref="core_api_application_nsp_mobile"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="route_active" eval="True"/>
@@ -116,42 +96,42 @@
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="route_active" eval="True"/>
     </record>
-    <record id="action_core_api_nsp_mobile_vehicle" model="ir.actions.core_api">
+    <record id="action_core_api_nsp_mobile_vehicle_detail" model="ir.actions.core_api">
         <field name="name">NSP Mobile Vehicle Detail</field>
         <field name="model_id" ref="model_nsp_mobile_api_service"/>
-        <field name="code">model.api_vehicle()</field>
+        <field name="code">model.api_vehicle_detail()</field>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="endpoint_code">nsp_mobile_vehicle</field>
-        <field name="route_suffix">mobile/vehicle</field>
+        <field name="endpoint_code">nsp_mobile_vehicle_detail</field>
+        <field name="route_suffix">mobile/vehicles/detail</field>
         <field name="http_methods">GET</field>
     </record>
-    <record id="endpoint_nsp_mobile_vehicle" model="core.api.endpoint">
+    <record id="endpoint_nsp_mobile_vehicle_detail" model="core.api.endpoint">
         <field name="name">NSP Mobile Vehicle Detail</field>
-        <field name="code">nsp_mobile_vehicle</field>
+        <field name="code">nsp_mobile_vehicle_detail</field>
         <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/vehicle</field>
+        <field name="route_suffix">mobile/vehicles/detail</field>
         <field name="http_methods">GET</field>
-        <field name="action_id" ref="action_core_api_nsp_mobile_vehicle"/>
+        <field name="action_id" ref="action_core_api_nsp_mobile_vehicle_detail"/>
         <field name="application_id" ref="core_api_application_nsp_mobile"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="route_active" eval="True"/>
     </record>
-    <record id="action_core_api_nsp_mobile_parking_history" model="ir.actions.core_api">
-        <field name="name">NSP Mobile Parking History</field>
+    <record id="action_core_api_nsp_mobile_parking_transactions" model="ir.actions.core_api">
+        <field name="name">NSP Mobile Parking Transactions</field>
         <field name="model_id" ref="model_nsp_mobile_api_service"/>
-        <field name="code">model.api_parking_history()</field>
+        <field name="code">model.api_parking_transactions()</field>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="endpoint_code">nsp_mobile_parking_history</field>
-        <field name="route_suffix">mobile/parking-history</field>
+        <field name="endpoint_code">nsp_mobile_parking_transactions</field>
+        <field name="route_suffix">mobile/parking/transactions</field>
         <field name="http_methods">GET</field>
     </record>
-    <record id="endpoint_nsp_mobile_parking_history" model="core.api.endpoint">
-        <field name="name">NSP Mobile Parking History</field>
-        <field name="code">nsp_mobile_parking_history</field>
+    <record id="endpoint_nsp_mobile_parking_transactions" model="core.api.endpoint">
+        <field name="name">NSP Mobile Parking Transactions</field>
+        <field name="code">nsp_mobile_parking_transactions</field>
         <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/parking-history</field>
+        <field name="route_suffix">mobile/parking/transactions</field>
         <field name="http_methods">GET</field>
-        <field name="action_id" ref="action_core_api_nsp_mobile_parking_history"/>
+        <field name="action_id" ref="action_core_api_nsp_mobile_parking_transactions"/>
         <field name="application_id" ref="core_api_application_nsp_mobile"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="route_active" eval="True"/>
@@ -202,156 +182,116 @@
         <field name="code">model.api_friend_requests()</field>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="endpoint_code">nsp_mobile_friend_requests</field>
-        <field name="route_suffix">mobile/friends/requests</field>
-        <field name="http_methods">GET</field>
+        <field name="route_suffix">mobile/friend-requests</field>
+        <field name="http_methods">GET,POST</field>
     </record>
     <record id="endpoint_nsp_mobile_friend_requests" model="core.api.endpoint">
         <field name="name">NSP Mobile Friend Requests</field>
         <field name="code">nsp_mobile_friend_requests</field>
         <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/friends/requests</field>
-        <field name="http_methods">GET</field>
+        <field name="route_suffix">mobile/friend-requests</field>
+        <field name="http_methods">GET,POST</field>
         <field name="action_id" ref="action_core_api_nsp_mobile_friend_requests"/>
         <field name="application_id" ref="core_api_application_nsp_mobile"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="route_active" eval="True"/>
     </record>
-    <record id="action_core_api_nsp_mobile_friend_request" model="ir.actions.core_api">
-        <field name="name">NSP Mobile Friend Request Create</field>
-        <field name="model_id" ref="model_nsp_mobile_api_service"/>
-        <field name="code">model.api_friend_request()</field>
-        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="endpoint_code">nsp_mobile_friend_request</field>
-        <field name="route_suffix">mobile/friends/request</field>
-        <field name="http_methods">POST</field>
-    </record>
-    <record id="endpoint_nsp_mobile_friend_request" model="core.api.endpoint">
-        <field name="name">NSP Mobile Friend Request Create</field>
-        <field name="code">nsp_mobile_friend_request</field>
-        <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/friends/request</field>
-        <field name="http_methods">POST</field>
-        <field name="action_id" ref="action_core_api_nsp_mobile_friend_request"/>
-        <field name="application_id" ref="core_api_application_nsp_mobile"/>
-        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="route_active" eval="True"/>
-    </record>
-    <record id="action_core_api_nsp_mobile_friend_accept" model="ir.actions.core_api">
+    <record id="action_core_api_nsp_mobile_friend_request_accept" model="ir.actions.core_api">
         <field name="name">NSP Mobile Friend Request Accept</field>
         <field name="model_id" ref="model_nsp_mobile_api_service"/>
-        <field name="code">model.api_friend_accept()</field>
+        <field name="code">model.api_friend_request_accept()</field>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="endpoint_code">nsp_mobile_friend_accept</field>
-        <field name="route_suffix">mobile/friends/accept</field>
+        <field name="endpoint_code">nsp_mobile_friend_request_accept</field>
+        <field name="route_suffix">mobile/friend-requests/accept</field>
         <field name="http_methods">POST</field>
     </record>
-    <record id="endpoint_nsp_mobile_friend_accept" model="core.api.endpoint">
+    <record id="endpoint_nsp_mobile_friend_request_accept" model="core.api.endpoint">
         <field name="name">NSP Mobile Friend Request Accept</field>
-        <field name="code">nsp_mobile_friend_accept</field>
+        <field name="code">nsp_mobile_friend_request_accept</field>
         <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/friends/accept</field>
+        <field name="route_suffix">mobile/friend-requests/accept</field>
         <field name="http_methods">POST</field>
-        <field name="action_id" ref="action_core_api_nsp_mobile_friend_accept"/>
+        <field name="action_id" ref="action_core_api_nsp_mobile_friend_request_accept"/>
         <field name="application_id" ref="core_api_application_nsp_mobile"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="route_active" eval="True"/>
     </record>
-    <record id="action_core_api_nsp_mobile_friend_cancel" model="ir.actions.core_api">
-        <field name="name">NSP Mobile Friend Cancel</field>
+    <record id="action_core_api_nsp_mobile_friend_request_cancel" model="ir.actions.core_api">
+        <field name="name">NSP Mobile Friend Request Cancel</field>
         <field name="model_id" ref="model_nsp_mobile_api_service"/>
-        <field name="code">model.api_friend_cancel()</field>
+        <field name="code">model.api_friend_request_cancel()</field>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="endpoint_code">nsp_mobile_friend_cancel</field>
-        <field name="route_suffix">mobile/friends/cancel</field>
+        <field name="endpoint_code">nsp_mobile_friend_request_cancel</field>
+        <field name="route_suffix">mobile/friend-requests/cancel</field>
         <field name="http_methods">POST</field>
     </record>
-    <record id="endpoint_nsp_mobile_friend_cancel" model="core.api.endpoint">
-        <field name="name">NSP Mobile Friend Cancel</field>
-        <field name="code">nsp_mobile_friend_cancel</field>
+    <record id="endpoint_nsp_mobile_friend_request_cancel" model="core.api.endpoint">
+        <field name="name">NSP Mobile Friend Request Cancel</field>
+        <field name="code">nsp_mobile_friend_request_cancel</field>
         <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/friends/cancel</field>
+        <field name="route_suffix">mobile/friend-requests/cancel</field>
         <field name="http_methods">POST</field>
-        <field name="action_id" ref="action_core_api_nsp_mobile_friend_cancel"/>
+        <field name="action_id" ref="action_core_api_nsp_mobile_friend_request_cancel"/>
         <field name="application_id" ref="core_api_application_nsp_mobile"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="route_active" eval="True"/>
     </record>
-    <record id="action_core_api_nsp_mobile_borrows" model="ir.actions.core_api">
-        <field name="name">NSP Mobile Borrows</field>
+    <record id="action_core_api_nsp_mobile_vehicle_borrows" model="ir.actions.core_api">
+        <field name="name">NSP Mobile Vehicle Borrows</field>
         <field name="model_id" ref="model_nsp_mobile_api_service"/>
-        <field name="code">model.api_borrows()</field>
+        <field name="code">model.api_vehicle_borrows()</field>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="endpoint_code">nsp_mobile_borrows</field>
-        <field name="route_suffix">mobile/borrows</field>
-        <field name="http_methods">GET</field>
+        <field name="endpoint_code">nsp_mobile_vehicle_borrows</field>
+        <field name="route_suffix">mobile/vehicle-borrows</field>
+        <field name="http_methods">GET,POST</field>
     </record>
-    <record id="endpoint_nsp_mobile_borrows" model="core.api.endpoint">
-        <field name="name">NSP Mobile Borrows</field>
-        <field name="code">nsp_mobile_borrows</field>
+    <record id="endpoint_nsp_mobile_vehicle_borrows" model="core.api.endpoint">
+        <field name="name">NSP Mobile Vehicle Borrows</field>
+        <field name="code">nsp_mobile_vehicle_borrows</field>
         <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/borrows</field>
-        <field name="http_methods">GET</field>
-        <field name="action_id" ref="action_core_api_nsp_mobile_borrows"/>
+        <field name="route_suffix">mobile/vehicle-borrows</field>
+        <field name="http_methods">GET,POST</field>
+        <field name="action_id" ref="action_core_api_nsp_mobile_vehicle_borrows"/>
         <field name="application_id" ref="core_api_application_nsp_mobile"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="route_active" eval="True"/>
     </record>
-    <record id="action_core_api_nsp_mobile_borrow_create" model="ir.actions.core_api">
-        <field name="name">NSP Mobile Borrow Create</field>
+    <record id="action_core_api_nsp_mobile_vehicle_borrow_end" model="ir.actions.core_api">
+        <field name="name">NSP Mobile Vehicle Borrow End</field>
         <field name="model_id" ref="model_nsp_mobile_api_service"/>
-        <field name="code">model.api_borrow_create()</field>
+        <field name="code">model.api_vehicle_borrow_end()</field>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="endpoint_code">nsp_mobile_borrow_create</field>
-        <field name="route_suffix">mobile/borrows/create</field>
+        <field name="endpoint_code">nsp_mobile_vehicle_borrow_end</field>
+        <field name="route_suffix">mobile/vehicle-borrows/end</field>
         <field name="http_methods">POST</field>
     </record>
-    <record id="endpoint_nsp_mobile_borrow_create" model="core.api.endpoint">
-        <field name="name">NSP Mobile Borrow Create</field>
-        <field name="code">nsp_mobile_borrow_create</field>
+    <record id="endpoint_nsp_mobile_vehicle_borrow_end" model="core.api.endpoint">
+        <field name="name">NSP Mobile Vehicle Borrow End</field>
+        <field name="code">nsp_mobile_vehicle_borrow_end</field>
         <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/borrows/create</field>
+        <field name="route_suffix">mobile/vehicle-borrows/end</field>
         <field name="http_methods">POST</field>
-        <field name="action_id" ref="action_core_api_nsp_mobile_borrow_create"/>
+        <field name="action_id" ref="action_core_api_nsp_mobile_vehicle_borrow_end"/>
         <field name="application_id" ref="core_api_application_nsp_mobile"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="route_active" eval="True"/>
     </record>
-    <record id="action_core_api_nsp_mobile_borrow_end" model="ir.actions.core_api">
-        <field name="name">NSP Mobile Borrow End</field>
+    <record id="action_core_api_nsp_mobile_vehicle_borrow_cancel" model="ir.actions.core_api">
+        <field name="name">NSP Mobile Vehicle Borrow Cancel</field>
         <field name="model_id" ref="model_nsp_mobile_api_service"/>
-        <field name="code">model.api_borrow_end()</field>
+        <field name="code">model.api_vehicle_borrow_cancel()</field>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="endpoint_code">nsp_mobile_borrow_end</field>
-        <field name="route_suffix">mobile/borrows/end</field>
+        <field name="endpoint_code">nsp_mobile_vehicle_borrow_cancel</field>
+        <field name="route_suffix">mobile/vehicle-borrows/cancel</field>
         <field name="http_methods">POST</field>
     </record>
-    <record id="endpoint_nsp_mobile_borrow_end" model="core.api.endpoint">
-        <field name="name">NSP Mobile Borrow End</field>
-        <field name="code">nsp_mobile_borrow_end</field>
+    <record id="endpoint_nsp_mobile_vehicle_borrow_cancel" model="core.api.endpoint">
+        <field name="name">NSP Mobile Vehicle Borrow Cancel</field>
+        <field name="code">nsp_mobile_vehicle_borrow_cancel</field>
         <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/borrows/end</field>
+        <field name="route_suffix">mobile/vehicle-borrows/cancel</field>
         <field name="http_methods">POST</field>
-        <field name="action_id" ref="action_core_api_nsp_mobile_borrow_end"/>
-        <field name="application_id" ref="core_api_application_nsp_mobile"/>
-        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="route_active" eval="True"/>
-    </record>
-    <record id="action_core_api_nsp_mobile_borrow_cancel" model="ir.actions.core_api">
-        <field name="name">NSP Mobile Borrow Cancel</field>
-        <field name="model_id" ref="model_nsp_mobile_api_service"/>
-        <field name="code">model.api_borrow_cancel()</field>
-        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="endpoint_code">nsp_mobile_borrow_cancel</field>
-        <field name="route_suffix">mobile/borrows/cancel</field>
-        <field name="http_methods">POST</field>
-    </record>
-    <record id="endpoint_nsp_mobile_borrow_cancel" model="core.api.endpoint">
-        <field name="name">NSP Mobile Borrow Cancel</field>
-        <field name="code">nsp_mobile_borrow_cancel</field>
-        <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/borrows/cancel</field>
-        <field name="http_methods">POST</field>
-        <field name="action_id" ref="action_core_api_nsp_mobile_borrow_cancel"/>
+        <field name="action_id" ref="action_core_api_nsp_mobile_vehicle_borrow_cancel"/>
         <field name="application_id" ref="core_api_application_nsp_mobile"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="route_active" eval="True"/>
@@ -436,64 +376,45 @@
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="route_active" eval="True"/>
     </record>
-    <record id="action_core_api_nsp_mobile_realtime_events" model="ir.actions.core_api">
-        <field name="name">NSP Mobile Realtime Events</field>
+    <record id="action_core_api_nsp_mobile_auth_password" model="ir.actions.core_api">
+        <field name="name">NSP Mobile Password</field>
         <field name="model_id" ref="model_nsp_mobile_api_service"/>
-        <field name="code">model.api_realtime_events()</field>
+        <field name="code">model.api_auth_password()</field>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="endpoint_code">nsp_mobile_realtime_events</field>
-        <field name="route_suffix">mobile/realtime/events</field>
-        <field name="http_methods">GET</field>
-    </record>
-    <record id="endpoint_nsp_mobile_realtime_events" model="core.api.endpoint">
-        <field name="name">NSP Mobile Realtime Events</field>
-        <field name="code">nsp_mobile_realtime_events</field>
-        <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/realtime/events</field>
-        <field name="http_methods">GET</field>
-        <field name="action_id" ref="action_core_api_nsp_mobile_realtime_events"/>
-        <field name="application_id" ref="core_api_application_nsp_mobile"/>
-        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="route_active" eval="True"/>
-    </record>
-    <record id="action_core_api_nsp_mobile_change_password" model="ir.actions.core_api">
-        <field name="name">NSP Mobile Change Password</field>
-        <field name="model_id" ref="model_nsp_mobile_api_service"/>
-        <field name="code">model.api_change_password()</field>
-        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="endpoint_code">nsp_mobile_change_password</field>
-        <field name="route_suffix">mobile/auth/change-password</field>
-        <field name="http_methods">POST</field>
-    </record>
-    <record id="endpoint_nsp_mobile_change_password" model="core.api.endpoint">
-        <field name="name">NSP Mobile Change Password</field>
-        <field name="code">nsp_mobile_change_password</field>
-        <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/auth/change-password</field>
-        <field name="http_methods">POST</field>
-        <field name="action_id" ref="action_core_api_nsp_mobile_change_password"/>
-        <field name="application_id" ref="core_api_application_nsp_mobile"/>
-        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="route_active" eval="True"/>
-    </record>
-    <record id="action_core_api_nsp_mobile_me_update" model="ir.actions.core_api">
-        <field name="name">NSP Mobile Profile Update</field>
-        <field name="model_id" ref="model_nsp_mobile_api_service"/>
-        <field name="code">model.api_me_update()</field>
-        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="endpoint_code">nsp_mobile_me_update</field>
-        <field name="route_suffix">mobile/me/update</field>
+        <field name="endpoint_code">nsp_mobile_auth_password</field>
+        <field name="route_suffix">mobile/auth/password</field>
         <field name="http_methods">PATCH</field>
     </record>
-    <record id="endpoint_nsp_mobile_me_update" model="core.api.endpoint">
-        <field name="name">NSP Mobile Profile Update</field>
-        <field name="code">nsp_mobile_me_update</field>
+    <record id="endpoint_nsp_mobile_auth_password" model="core.api.endpoint">
+        <field name="name">NSP Mobile Password</field>
+        <field name="code">nsp_mobile_auth_password</field>
         <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/me/update</field>
+        <field name="route_suffix">mobile/auth/password</field>
         <field name="http_methods">PATCH</field>
-        <field name="action_id" ref="action_core_api_nsp_mobile_me_update"/>
+        <field name="action_id" ref="action_core_api_nsp_mobile_auth_password"/>
         <field name="application_id" ref="core_api_application_nsp_mobile"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="route_active" eval="True"/>
     </record>
+    <record id="action_core_api_nsp_mobile_notification_events" model="ir.actions.core_api">
+        <field name="name">NSP Mobile Notification Events</field>
+        <field name="model_id" ref="model_nsp_mobile_api_service"/>
+        <field name="code">model.api_notification_events()</field>
+        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
+        <field name="endpoint_code">nsp_mobile_notification_events</field>
+        <field name="route_suffix">mobile/notifications/events</field>
+        <field name="http_methods">GET</field>
+    </record>
+    <record id="endpoint_nsp_mobile_notification_events" model="core.api.endpoint">
+        <field name="name">NSP Mobile Notification Events</field>
+        <field name="code">nsp_mobile_notification_events</field>
+        <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
+        <field name="route_suffix">mobile/notifications/events</field>
+        <field name="http_methods">GET</field>
+        <field name="action_id" ref="action_core_api_nsp_mobile_notification_events"/>
+        <field name="application_id" ref="core_api_application_nsp_mobile"/>
+        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
+        <field name="route_active" eval="True"/>
+    </record>
+    <function model="nsp.mobile.api.service" name="_cleanup_obsolete_routes"/>
 </odoo>

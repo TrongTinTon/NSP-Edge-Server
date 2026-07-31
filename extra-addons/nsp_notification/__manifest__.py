@@ -1,1 +1,22 @@
-{'name': 'NSP Notification', 'summary': 'Cloud notification center for NSP parking events', 'description': 'Cloud-only NSP notification center. Extends parking transactions on Cloud without being required by NSP Gatekeeper/Edge.', 'version': '19.0.4.0.1', 'sequence': 40, 'author': 'BKU Team', 'category': 'Services', 'depends': ['base', 'nsp_core', 'nsp_user', 'nsp_master_gatekeeper'], 'installable': True, 'application': True, 'auto_install': False, 'data': ['security/ir.model.access.csv', 'views/notification_views.xml', 'views/notification_delivery_views.xml', 'views/menu_views.xml'], 'license': 'LGPL-3'}
+{
+    'name': 'NSP Notification',
+    'summary': 'Cloud notification center for NSP parking events',
+    'description': ('Cloud-only NSP notification center. Extends parking transactions on Cloud without being required '
+ 'by NSP Gatekeeper/Edge.'),
+    'version': '19.0.5.0.0',
+    'sequence': 40,
+    'author': 'BKU Team',
+    'category': 'Services',
+    'depends': ['base', 'nsp_core', 'nsp_user', 'nsp_master_gatekeeper'],
+    'installable': True,
+    'application': True,
+    'auto_install': False,
+    'data': ['security/ir.model.access.csv',
+ 'data/provider_config_data.xml',
+ 'views/notification_views.xml',
+ 'views/notification_delivery_views.xml',
+ 'views/provider_config_views.xml',
+ 'views/menu_views.xml'],
+    'license': 'LGPL-3',
+    'external_dependencies': {'python': ['jwt', 'httpx', 'h2']},
+}

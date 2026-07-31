@@ -1,4 +1,5 @@
+# -*- coding: utf-8 -*-
+from . import provider_config
 from . import notification
-from . import parking_transaction
-
 from . import delivery
+from . import parking_transaction

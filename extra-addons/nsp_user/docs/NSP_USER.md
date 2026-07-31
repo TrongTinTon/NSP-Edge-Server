@@ -1,13 +1,17 @@
 # NSP User
 
-`nsp.user` is the NSP business identity used by Parking, RFID assignment, Friends, Vehicle Borrow and Notifications.
+`nsp.user` is the NSP business profile used by Parking, RFID assignment, Friends, Vehicle Borrow and Notifications.
 
 ## Odoo User linkage
 
-- `odoo_user_id` links one `nsp.user` to one active internal `res.users` account.
-- The same Odoo User is used for Web and NSP Mobile authentication.
-- The link is optional; an NSP User without an Odoo User cannot sign in to NSP Mobile.
-- Passwords, activation, Groups, ACLs and Record Rules are managed only through standard Odoo user administration.
+- Mobile authentication uses the internal Odoo User (`res.users`) login and password.
+- Every internal Odoo User has exactly one `nsp.user` business profile.
+- Every `nsp.user` must reference exactly one internal `res.users` account.
+- The link is mandatory, immutable from the NSP User form and protected by a unique database constraint.
+- Creating an internal Odoo User automatically creates its NSP User profile in the same transaction.
+- Existing internal Odoo Users are backfilled when `nsp_user` is installed.
+- Portal/public accounts are not Mobile identities and are excluded from this pairing rule.
+- Passwords, activation, Groups, ACLs and Record Rules remain managed through standard Odoo user administration.
 - `user_code` remains a hidden immutable technical identifier for Cloud/Edge synchronization.
 
 ## RFID and vehicles

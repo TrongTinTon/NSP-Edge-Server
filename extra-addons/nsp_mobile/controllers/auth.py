@@ -66,20 +66,26 @@ class NspMobileAuthController(http.Controller):
         return user
 
     def _business_user(self, odoo_user):
+        # Every internal Odoo User must resolve to exactly one NSP User profile.
+        odoo_user.sudo()._ensure_nsp_user_profile()
         mapped_user = request.env['nsp.user'].sudo().search([
             ('odoo_user_id', '=', odoo_user.id),
             ('active', '=', True),
-        ], limit=1)
-        if not mapped_user:
-            raise AccessError('This Odoo User is not linked to an active NSP User.')
+        ])
+        if len(mapped_user) != 1:
+            raise AccessError(
+                'This Odoo User must be linked to exactly one active NSP User.'
+            )
 
         user_env = request.env(user=odoo_user.id, su=False)
         business_user = user_env['nsp.user'].search([
             ('id', '=', mapped_user.id),
             ('active', '=', True),
-        ], limit=1)
-        if not business_user:
-            raise AccessError('This Odoo User has no permission to access the linked NSP User.')
+        ])
+        if len(business_user) != 1:
+            raise AccessError(
+                'This Odoo User has no permission to access its NSP User profile.'
+            )
         return business_user
 
     def _token_payload(self, result, application, odoo_user, business_user, device, session):
@@ -123,6 +129,15 @@ class NspMobileAuthController(http.Controller):
             device_data = body.get('device') or {}
             if not isinstance(device_data, dict):
                 raise BadRequest('device must be a JSON object.')
+            allowed_device_fields = {
+                'device_uid', 'platform', 'device_name', 'app_version',
+                'push_provider', 'push_token', 'push_enabled',
+            }
+            unsupported_device = sorted(set(device_data) - allowed_device_fields)
+            if unsupported_device:
+                raise BadRequest(
+                    'Unsupported device field(s): %s.' % ', '.join(unsupported_device)
+                )
             if not login or not password:
                 raise BadRequest('login and password are required.')
             if not str(device_data.get('device_uid') or '').strip():

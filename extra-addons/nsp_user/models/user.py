@@ -29,14 +29,15 @@ class NspUser(models.Model):
     odoo_user_id = fields.Many2one(
         "res.users",
         string="Odoo User",
+        required=True,
         copy=False,
         tracking=True,
-        ondelete="set null",
+        ondelete="restrict",
         domain=[("active", "=", True), ("share", "=", False)],
         groups="base.group_system",
         help=(
-            "Odoo account used for both Web and NSP Mobile authentication. "
-            "Access is controlled by standard Odoo Users, Groups, ACLs and Record Rules."
+            "Mandatory internal Odoo account used for Web and NSP Mobile authentication. "
+            "Each Odoo User is linked to exactly one NSP User business profile."
         ),
     )
 
@@ -117,6 +118,13 @@ class NspUser(models.Model):
 
     def write(self, vals):
         values = dict(vals)
+        if "odoo_user_id" in values:
+            new_user_id = int(values.get("odoo_user_id") or 0)
+            if any(rec.odoo_user_id.id != new_user_id for rec in self):
+                raise ValidationError(_(
+                    "The Odoo User link is immutable. Create the correct Odoo User "
+                    "and NSP User pair instead of reassigning an existing business identity."
+                ))
         if "user_code" in values:
             normalized = self._normalize_code(values.get("user_code"))
             if any(rec.user_code and rec.user_code != normalized for rec in self):
