@@ -5,7 +5,7 @@ from odoo import fields, models
 class NspEdgeServerRevision(models.Model):
     """Revision of the last published runtime configuration for one Edge.
 
-    Editable Device Whitelist, Reader Calibration and Parking Layout records do
+    Editable Device Whitelist, Lane Calibration and Parking Layout records do
     not bump this value. A revision changes only when a Parking Layout snapshot
     is explicitly published for the Edge.
     """

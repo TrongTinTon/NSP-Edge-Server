@@ -59,7 +59,7 @@
                         <h1><field name="name" placeholder="Parking Area A"/></h1>
                     </div>
 
-                    <div class="alert alert-info" role="alert">Parking Lanes and movement rules are synchronized from Cloud. Edge uses them as read-only runtime configuration.</div>
+                    <div class="alert alert-info" role="alert">Parking Lanes, Antenna Timelines and Parking Event Sequences are synchronized from Cloud. Edge uses them as read-only runtime configuration.</div>
 
                     <group>
                         <group string="Parking Operation">
@@ -70,13 +70,13 @@
                         </group>
 
                     <separator string="Lanes"/><div class="alert alert-info" role="alert">
-                Each Lane contains its directed antenna movement rules. The Edge receives this layout from Cloud and does not create infrastructure devices locally.
+                Each Lane contains an Antenna Timeline plus Check-in and Check-out sequences. Edge matches real-time RFID detections against those ordered sequences.
             </div>
             <field name="lane_ids" readonly="1">
                 <list create="0" edit="0" delete="0">
                     <field name="name" string="Lane Name"/>
                     <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" domain="[('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','CONTROLLER')]"/>
-                    <field name="transition_count" string="Movement Rules" readonly="1"/>
+                    <field name="transition_count" string="Timeline Points" readonly="1"/>
                     <field name="active" widget="boolean_toggle" readonly="1"/>
                 </list>
             </field>
@@ -101,7 +101,7 @@
                 <field name="name" string="Lane Name" decoration-bf="1"/>
                 <field name="code" string="Technical Code" optional="hide" readonly="1"/>
                 <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" domain="[('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','CONTROLLER')]"/>
-                <field name="transition_count" string="Movement Rules" readonly="1"/>
+                <field name="transition_count" string="Timeline Points" readonly="1"/>
                 <field name="active" widget="boolean_toggle"/>
             </list>
         </field>
@@ -124,23 +124,43 @@
                                         <field name="active"/>
                         </group>
                         <group string="Identity">
-                            <field name="transition_count" string="Movement Rules" readonly="1"/>
+                            <field name="transition_count" string="Timeline Points" readonly="1"/>
                             <field name="code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
                     </group>
-                    <group string="Movement Rules">
-                <div class="alert alert-info" role="alert" colspan="2">
-                    Directed rules are synchronized from Cloud. Event Type comes from the physical antenna order; Duration is the maximum allowed time between both detections for the same Vehicle RFID.
-                </div>
-                <field name="antenna_transition_ids" readonly="1" colspan="2">
-                    <list create="0" edit="0" delete="0">
-                        <field name="from_antenna_id" string="From Antenna" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" domain="[('device_id.controller_id','=',parent.controller_id),('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','ANTENNA')]"/>
-                        <field name="to_antenna_id" string="To Antenna" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" domain="[('device_id.controller_id','=',parent.controller_id),('active','=',True),('whitelist_id.active','=',True),('whitelist_id.device_type_code','=','ANTENNA')]"/>
-                        <field name="event_type" widget="badge" decoration-success="event_type == 'check_in'" decoration-info="event_type == 'check_out'"/>
-                        <field name="duration_seconds" string="Duration (s)"/>
-                    </list>
-                </field>
-            </group></sheet>
+                    <group string="Runtime Sequence Configuration">
+                        <group>
+                            <field name="direction" readonly="1"/>
+                            <field name="tolerance_type" readonly="1"/>
+                            <field name="tolerance_value" readonly="1"/>
+                            <field name="total_path_duration" readonly="1"/>
+                        </group>
+                    </group>
+                    <separator string="Antenna Timeline"/>
+                    <field name="timeline_line_ids" readonly="1">
+                        <list create="0" edit="0" delete="0">
+                            <field name="sequence" string="Order"/>
+                            <field name="antenna_id"/>
+                            <field name="reader_id"/>
+                            <field name="port_no"/>
+                            <field name="duration_from_previous"/>
+                            <field name="cumulative_time"/>
+                        </list>
+                    </field>
+                    <separator string="Parking Event Sequences"/>
+                    <group col="2">
+                        <group string="Check-in Sequence">
+                            <field name="checkin_sequence_ids" readonly="1">
+                                <list create="0" edit="0" delete="0"><field name="sequence"/><field name="antenna_id"/></list>
+                            </field>
+                        </group>
+                        <group string="Check-out Sequence">
+                            <field name="checkout_sequence_ids" readonly="1">
+                                <list create="0" edit="0" delete="0"><field name="sequence"/><field name="antenna_id"/></list>
+                            </field>
+                        </group>
+                    </group>
+                </sheet>
             </form>
         </field>
     </record>

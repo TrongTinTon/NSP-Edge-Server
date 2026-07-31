@@ -562,7 +562,11 @@ class ParkingDetectionEvent(models.Model):
             movement_events = transition["events"].filtered(
                 lambda rec: rec.state == "pending" and not rec.transaction_id
             )
-            if len(movement_events) != 2 or tag_id in blocked_tag_ids:
+            if (
+                not movement_events
+                or len(movement_events) != len(transition["events"])
+                or tag_id in blocked_tag_ids
+            ):
                 continue
 
             event_type = transition["event_type"]

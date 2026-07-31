@@ -14,7 +14,7 @@
               groups="nsp_core.group_nsp_it_parking"/>
 
     <menuitem id="menu_nsp_measurement"
-              name="Reader Calibration"
+              name="Lane Calibration"
               parent="nsp_core.menu_nsp_configuration"
               action="action_nsp_measurement_session"
               sequence="20"

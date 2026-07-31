@@ -125,7 +125,6 @@
                         </button>
                         <button t-att-class="tabClass('reader')" t-on-click="setReaderTab">Reader Status</button>
                         <button t-att-class="tabClass('session')" t-on-click="setSessionTab">Session</button>
-                        <button t-att-class="tabClass('notes')" t-on-click="setNotesTab">Notes</button>
                     </nav>
 
                     <section t-if="state.activeTab === 'timeline'" class="nsp-ml-panel">
@@ -269,16 +268,11 @@
                             <div><span>Edge Servers</span><strong class="nsp-ml__mono" t-esc="edgeServerCodes()"/></div>
                             <div><span>Vehicles</span><strong t-esc="state.vehicleCount"/></div>
                             <div><span>Vehicle RFID Tags</span><strong t-esc="state.vehicleTagCount"/></div>
-                            <div><span>Planned Start</span><strong t-esc="formatDateTime(state.plannedStartAt)"/></div>
                             <div><span>Started At</span><strong t-esc="formatDateTime(state.startedAt)"/></div>
                             <div><span>Ended At</span><strong t-esc="formatDateTime(state.endedAt)"/></div>
                         </div>
                     </section>
 
-                    <section t-if="state.activeTab === 'notes'" class="nsp-ml-panel">
-                        <header class="nsp-ml-panel__header"><h3>Calibration Notes</h3></header>
-                        <div class="nsp-ml__notes" t-esc="state.note || 'No notes.'"/>
-                    </section>
                 </main>
 
                 <aside class="nsp-ml__sidebar">

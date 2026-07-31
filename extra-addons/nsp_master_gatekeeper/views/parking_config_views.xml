@@ -81,7 +81,7 @@
                     </group>
                     <separator string="Lanes"/>
                     <div class="alert alert-info" role="alert">
-                        Each Lane imports or records an Antenna Timeline from Reader Calibration, then defines Check-in and Check-out sequences from those antennas. Publishing creates the runtime snapshot used by Edge.
+                        Each Lane imports or records an Antenna Timeline from Lane Calibration, then defines Check-in and Check-out sequences from those antennas. Publishing creates the runtime snapshot used by Edge.
                     </div>
                     <field name="lane_ids" mode="list,form"
                            context="{'default_parking_area_id': id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_parking_lane_form'}">
@@ -122,7 +122,7 @@
                 <field name="name" string="Lane Name" decoration-bf="1"/>
                 <field name="edge_server_id" string="Server"/>
                 <field name="controller_id"/>
-                <field name="transition_count" string="Movement Rules" readonly="1"/>
+                <field name="transition_count" string="Timeline Points" readonly="1"/>
                 <field name="active" widget="boolean_toggle"/>
                 <field name="code" string="Technical Code" optional="hide" readonly="1"/>
             </list>
@@ -153,13 +153,15 @@
                             <field name="active" widget="boolean_toggle"/>
                         </group>
                         <group>
-                            <field name="calibration_source_id" string="Calibration Source" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': False}"/>
+                            <field name="calibration_result_id" string="Accepted Result" domain="[('state','=','accepted')]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': False}"/>
+                            <button name="action_import_calibration_result" type="object" string="Import / Re-import Timeline" icon="fa-download" class="oe_highlight"/>
+                            <field name="calibration_source_id" string="Calibration Session" readonly="1"/>
                             <field name="total_path_duration" readonly="1"/>
                         </group>
                     </group>
-                    <separator string="1. Antenna Timeline (from Reader Calibration)"/>
+                    <separator string="1. Antenna Timeline (from Lane Calibration)"/>
                     <div class="alert alert-info" role="alert">
-                        Timeline records the antenna detection order and duration between consecutive antennas. It does not define Check-in or Check-out by itself.
+                        Importing an Accepted Result creates the Antenna Timeline and proposes A → B → C for Check-in and the reverse path for Check-out. You may adjust the event sequences without changing the calibrated durations.
                     </div>
                     <field name="timeline_line_ids" context="{'default_lane_id': id}">
                         <list editable="bottom" create="1" delete="1">

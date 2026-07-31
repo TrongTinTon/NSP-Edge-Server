@@ -424,12 +424,6 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             "revision": int(session.revision or 1),
             "readers": readers,
         }
-        if session.planned_start_at:
-            payload["planned_start_at"] = self._iso_datetime(session.planned_start_at)
-        if session.planned_end_at:
-            payload["planned_end_at"] = self._iso_datetime(session.planned_end_at)
-        if session.note:
-            payload["note"] = session.note
         return payload
 
     @api.model
@@ -524,7 +518,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 session = self.env["nsp.measurement.session"].sudo().search([
                     ("reader_line_ids.reader_id.controller_id", "=", controller.id),
                     ("status", "in", ["ready", "running"]),
-                ], order="planned_start_at asc, id asc", limit=1)
+                ], order="id asc", limit=1)
             if not session:
                 return self._ok({"data": {"measurement_available": False}}, message="No Measurement Session is available.")
             return self._ok({"data": {"measurement_available": True, **self._measurement_config_payload(session, controller=controller)}}, message="Measurement configuration loaded.")

@@ -20,7 +20,7 @@ class NspMeasurementSession(models.Model):
     """
 
     _name = "nsp.measurement.session"
-    _description = "NSP Measurement Session"
+    _description = "NSP Lane Calibration"
     _inherit = ["mail.thread", "mail.activity.mixin"]
     _rec_name = "measurement_code"
     _order = "create_date desc, id desc"
@@ -43,7 +43,7 @@ class NspMeasurementSession(models.Model):
     reader_line_ids = fields.One2many(
         "nsp.measurement.reader.line",
         "session_id",
-        string="Measurement Readers",
+        string="Readers",
         copy=True,
     )
     reader_count = fields.Integer(compute="_compute_scope_counts")
@@ -62,12 +62,9 @@ class NspMeasurementSession(models.Model):
         copy=False,
         index=True,
     )
-    planned_start_at = fields.Datetime(tracking=True)
-    planned_end_at = fields.Datetime(tracking=True)
     started_at = fields.Datetime(readonly=True, copy=False)
     ended_at = fields.Datetime(readonly=True, copy=False)
     applied_at = fields.Datetime(readonly=True, copy=False)
-    note = fields.Text()
     status = fields.Selection(
         [
             ("draft", "Draft"),
@@ -193,11 +190,11 @@ class NspMeasurementSession(models.Model):
                     ))
                 if tag_id in seen_tags:
                     raise ValidationError(_(
-                        "The same RFID Tag can be used only once in a Reader Calibration."
+                        "The same RFID Tag can be used only once in a Lane Calibration."
                     ))
                 if vehicle_id in seen_vehicles:
                     raise ValidationError(_(
-                        "The same Vehicle can be used only once in a Reader Calibration."
+                        "The same Vehicle can be used only once in a Lane Calibration."
                     ))
                 cleaned.append((0, 0, values))
                 seen_tags.add(tag_id)
@@ -238,7 +235,6 @@ class NspMeasurementSession(models.Model):
             values["target_line_ids"] = self._sanitize_target_commands(values.get("target_line_ids"))
         configuration_fields = {
             "measurement_code", "target_line_ids", "reader_line_ids",
-            "planned_start_at", "planned_end_at", "note",
         }
         if configuration_fields.intersection(values) and not self.env.context.get("measurement_sync"):
             protected = self.filtered(lambda session: session.status not in ("draft", "completed"))
@@ -253,16 +249,6 @@ class NspMeasurementSession(models.Model):
             self._validate_measurement_scope()
         return result
 
-    @api.constrains("planned_start_at", "planned_end_at")
-    def _check_planned_time(self):
-        for session in self:
-            if (
-                session.planned_start_at
-                and session.planned_end_at
-                and session.planned_end_at <= session.planned_start_at
-            ):
-                raise ValidationError(_("Planned end time must be later than planned start time."))
-
     @api.constrains("reader_line_ids", "target_line_ids")
     def _check_scope_constraint(self):
         self._validate_measurement_scope()
@@ -272,7 +258,7 @@ class NspMeasurementSession(models.Model):
             seen_readers = set()
             for line in session.reader_line_ids:
                 if line.reader_id.id in seen_readers:
-                    raise ValidationError(_("A Reader can be selected only once in a Reader Calibration."))
+                    raise ValidationError(_("A Reader can be selected only once in a Lane Calibration."))
                 seen_readers.add(line.reader_id.id)
 
             incomplete = session.target_line_ids.filtered(
@@ -286,11 +272,11 @@ class NspMeasurementSession(models.Model):
             vehicle_ids = session.target_line_ids.mapped("vehicle_id").ids
             if len(tag_ids) != len(set(tag_ids)):
                 raise ValidationError(_(
-                    "An RFID Tag can be selected only once in a Reader Calibration."
+                    "An RFID Tag can be selected only once in a Lane Calibration."
                 ))
             if len(vehicle_ids) != len(set(vehicle_ids)):
                 raise ValidationError(_(
-                    "A Vehicle can be selected only once in a Reader Calibration."
+                    "A Vehicle can be selected only once in a Lane Calibration."
                 ))
             for target in session.target_line_ids:
                 result = target._resolve_vehicle_scan(target.tag_id.id)
@@ -310,7 +296,7 @@ class NspMeasurementSession(models.Model):
                 for antenna in reader_line.antenna_port_ids.mapped("antenna_id"):
                     if antenna.id in seen_antennas:
                         raise ValidationError(_(
-                            "An Antenna can be assembled only once in the same Reader Calibration."
+                            "An Antenna can be assembled only once in the same Lane Calibration."
                         ))
                     seen_antennas.add(antenna.id)
         return True
@@ -321,9 +307,9 @@ class NspMeasurementSession(models.Model):
         if not self.target_line_ids:
             missing.append(_("Vehicles"))
         if not self.reader_line_ids:
-            missing.append(_("Measurement Readers"))
+            missing.append(_("Readers"))
         if missing:
-            raise ValidationError(_("Missing Reader Calibration configuration: %s") % ", ".join(missing))
+            raise ValidationError(_("Missing Lane Calibration configuration: %s") % ", ".join(missing))
         missing_antennas = self.reader_line_ids.filtered(
             lambda line: not line.antenna_port_ids.filtered("antenna_id")
         )
@@ -388,7 +374,7 @@ class NspMeasurementSession(models.Model):
             if session.status == "ready":
                 continue
             if session.status != "draft":
-                raise ValidationError(_("Only draft Measurement Sessions can be released."))
+                raise ValidationError(_("Only draft Lane Calibrations can be released."))
             session._require_ready_configuration()
             session.with_context(measurement_sync=True).write({"status": "ready"})
         return True
@@ -398,7 +384,7 @@ class NspMeasurementSession(models.Model):
             if session.status == "completed":
                 continue
             if session.status != "running":
-                raise ValidationError(_("Only running Measurement Sessions can be completed."))
+                raise ValidationError(_("Only running Lane Calibrations can be completed."))
             session.with_context(measurement_sync=True).write(
                 {"status": "completed", "ended_at": fields.Datetime.now()}
             )
@@ -407,7 +393,7 @@ class NspMeasurementSession(models.Model):
     def action_cancel(self):
         for session in self:
             if session.status in ("completed", "applied", "failed", "cancelled"):
-                raise ValidationError(_("This Measurement Session can no longer be cancelled."))
+                raise ValidationError(_("This Lane Calibration can no longer be cancelled."))
             session.with_context(measurement_sync=True).write(
                 {"status": "cancelled", "ended_at": fields.Datetime.now()}
             )
@@ -423,6 +409,35 @@ class NspMeasurementSession(models.Model):
             "applied_at": False,
         })
         return self.get_live_snapshot(self.id)
+
+    def action_prepare_device_reconfiguration(self):
+        """Create a new editable revision without changing historical Pass/Validation data."""
+        self.ensure_one()
+        if self.status not in ("completed", "failed", "applied"):
+            raise ValidationError(_(
+                "Devices can be changed only after the current measurement or validation has finished."
+            ))
+        running_pass = self.pass_ids.filtered(lambda item: item.state == "running")[:1]
+        if running_pass:
+            raise ValidationError(_("Stop the running Run before changing devices."))
+        running_run = self.validation_run_ids.filtered(lambda item: item.state == "running")[:1]
+        if running_run:
+            raise ValidationError(_("Stop the running Validation Run before changing devices."))
+        self.with_context(measurement_sync=True).write({
+            "revision": int(self.revision or 1) + 1,
+            "status": "draft",
+            "started_at": False,
+            "ended_at": False,
+            "applied_at": False,
+        })
+        action = self.action_open_session_form()
+        action["name"] = _("Revise · R%(revision)s") % {"revision": self.revision}
+        action["context"] = {
+            **dict(action.get("context") or {}),
+            "form_view_initial_mode": "edit",
+            "nsp_device_reconfiguration": True,
+        }
+        return action
 
     def action_measure_again(self, reader_settings=None):
         self.ensure_one()
@@ -445,7 +460,7 @@ class NspMeasurementSession(models.Model):
                     raise ValidationError(_("Invalid Reader settings.")) from exc
                 line = line_by_id.get(line_id)
                 if not line or line_id in seen:
-                    raise ValidationError(_("Reader settings do not match this Measurement Session."))
+                    raise ValidationError(_("Reader settings do not match this Lane Calibration."))
                 seen.add(line_id)
                 line.with_context(measurement_sync=True).write({
                     "reader_power_dbm": power,
@@ -466,7 +481,7 @@ class NspMeasurementSession(models.Model):
             raise ValidationError(_("Invalid Reader settings.")) from exc
         line = self.reader_line_ids.filtered(lambda item: item.id == line_id)[:1]
         if not line:
-            raise ValidationError(_("Reader does not belong to this Measurement Session."))
+            raise ValidationError(_("Reader does not belong to this Lane Calibration."))
         line.with_context(measurement_sync=True).write({
             "reader_power_dbm": power,
             "read_interval_ms": interval,
@@ -524,19 +539,16 @@ class NspMeasurementSession(models.Model):
         }
 
     def action_open_live(self):
+        """Keep API compatibility while using the unified Lane Calibration form."""
         self.ensure_one()
-        module = "nsp_master_gatekeeper"
-        return self._measurement_form_action(
-            f"{module}.view_nsp_measurement_session_live_form",
-            _("Cloud Live Measurement") if self._deployment_role() == "cloud" else _("Live Measurement"),
-        )
+        return self.action_open_session_form()
 
     def action_open_session_form(self):
         self.ensure_one()
         module = "nsp_master_gatekeeper"
         return self._measurement_form_action(
             f"{module}.view_nsp_measurement_session_form",
-            _("Measurement Session"),
+            _("Lane Calibration"),
         )
 
     def action_live_measure_again(self):
@@ -680,9 +692,6 @@ class NspMeasurementSession(models.Model):
             "started_at": fields.Datetime.to_string(session.started_at) if session.started_at else None,
             "ended_at": fields.Datetime.to_string(session.ended_at) if session.ended_at else None,
             "applied_at": fields.Datetime.to_string(session.applied_at) if session.applied_at else None,
-            "planned_start_at": fields.Datetime.to_string(session.planned_start_at) if session.planned_start_at else None,
-            "planned_end_at": fields.Datetime.to_string(session.planned_end_at) if session.planned_end_at else None,
-            "note": session.note or "",
             "raw_event_count": int(session.event_count or 0),
             "detection_count": len(steps),
             "unique_antennas": len({(step["serial_number"], step["antenna_no"]) for step in steps}),
@@ -816,7 +825,7 @@ class NspMeasurementSession(models.Model):
 
 
 class NspMeasurementTargetLine(models.Model):
-    """One Vehicle RFID target in a Reader Calibration.
+    """One Vehicle RFID target in a Lane Calibration.
 
     A scanned TID may already be assigned to a Vehicle. In that case the License
     Plate and existing owner are resolved immediately. When the TID is available,
@@ -826,7 +835,7 @@ class NspMeasurementTargetLine(models.Model):
     """
 
     _name = "nsp.measurement.target.line"
-    _description = "NSP Reader Calibration Vehicle"
+    _description = "NSP Lane Calibration Vehicle"
     _order = "session_id, license_plate, id"
 
     session_id = fields.Many2one(
@@ -836,7 +845,7 @@ class NspMeasurementTargetLine(models.Model):
         index=True,
         help=(
             "Assigned automatically when the Reader Assembly is attached to "
-            "a Reader Calibration. It may be temporarily empty while editing "
+            "a Lane Calibration. It may be temporarily empty while editing "
             "a new, unsaved calibration form."
         ),
     )
@@ -884,12 +893,12 @@ class NspMeasurementTargetLine(models.Model):
         (
             "measurement_target_tag_unique",
             "unique(session_id, tag_id)",
-            "This RFID Tag is already selected in the Reader Calibration.",
+            "This RFID Tag is already selected in the Lane Calibration.",
         ),
         (
             "measurement_target_vehicle_unique",
             "unique(session_id, vehicle_id)",
-            "This Vehicle is already selected in the Reader Calibration.",
+            "This Vehicle is already selected in the Lane Calibration.",
         ),
     ]
 
@@ -969,7 +978,7 @@ class NspMeasurementTargetLine(models.Model):
             if not line.tag_id or not line.vehicle_id:
                 continue
             if not line.vehicle_id.active:
-                raise ValidationError(_("An archived Vehicle cannot be used in Reader Calibration."))
+                raise ValidationError(_("An archived Vehicle cannot be used in Lane Calibration."))
             active = Assignment.search([
                 ("tag_id", "=", line.tag_id.id),
                 ("state", "=", "active"),
@@ -1044,7 +1053,7 @@ class NspMeasurementTargetLine(models.Model):
         Assignment = self.env["nsp.rfid.tag.assignment"].sudo()
         for line in self:
             if not line.tag_id or not line.vehicle_id:
-                raise ValidationError(_("Each Reader Calibration Vehicle requires an RFID Tag and License Plate."))
+                raise ValidationError(_("Each Lane Calibration Vehicle requires an RFID Tag and License Plate."))
             active = Assignment.search([
                 ("tag_id", "=", line.tag_id.id),
                 ("state", "=", "active"),
@@ -1078,7 +1087,7 @@ class NspMeasurementTargetLine(models.Model):
 
 
 class NspMeasurementReaderLine(models.Model):
-    """Contextual hardware assembly for one Reader Calibration.
+    """Contextual hardware assembly for one Lane Calibration.
 
     Server, Controller, RFID Reader and Antenna identities remain independent in
     Device Whitelist. This line stores only how they are assembled for this
@@ -1096,7 +1105,7 @@ class NspMeasurementReaderLine(models.Model):
         index=True,
         help=(
             "Assigned automatically when the Reader Assembly is attached to "
-            "a Reader Calibration. It may be temporarily empty while editing "
+            "a Lane Calibration. It may be temporarily empty while editing "
             "a new, unsaved calibration form."
         ),
     )
@@ -1168,7 +1177,7 @@ class NspMeasurementReaderLine(models.Model):
     _sql_constraints = [
         (
             "measurement_reader_unique", "unique(session_id, reader_id)",
-            "An RFID Reader can be selected only once in a Reader Calibration.",
+            "An RFID Reader can be selected only once in a Lane Calibration.",
         ),
         (
             "measurement_reader_power_range",
@@ -1254,7 +1263,7 @@ class NspMeasurementReaderLine(models.Model):
             values = dict(source)
             if not values.get("session_id") and context_session_id:
                 values["session_id"] = context_session_id
-            # A Reader Assembly opened from an unsaved Reader Calibration is
+            # A Reader Assembly opened from an unsaved Lane Calibration is
             # first kept as an x2many child without a database parent id. Odoo
             # assigns session_id when the parent form is saved. Do not block
             # that standard form workflow.
@@ -1545,6 +1554,6 @@ class NspMeasurementEvent(models.Model):
             session = event.session_id
             key = (event.serial_number, int(event.antenna_no or 0))
             if key not in session._allowed_antenna_pairs():
-                raise ValidationError(_("Measurement observation antenna is not part of the Measurement Session."))
+                raise ValidationError(_("Measurement observation antenna is not part of the Lane Calibration."))
             if event.tid not in session._allowed_target_tids():
-                raise ValidationError(_("Only selected Vehicle RFID Tags may be stored in this Reader Calibration."))
+                raise ValidationError(_("Only selected Vehicle RFID Tags may be stored in this Lane Calibration."))

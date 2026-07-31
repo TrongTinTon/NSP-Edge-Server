@@ -940,16 +940,18 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 "antennas": antenna_rows,
             })
         vehicles = []
-        for line in session.target_line_ids.sorted(
-            key=lambda item: ((item.license_plate or ""), item.id)
-        ):
-            vehicle = line.vehicle_id
+        targets = session._sync_vehicle_targets() if hasattr(session, "_sync_vehicle_targets") else [
+            {"vehicle_tid": line.vehicle_tid, "vehicle": line.vehicle_id, "license_plate": line.license_plate}
+            for line in session.target_line_ids
+        ]
+        for row in sorted(targets, key=lambda item: ((item.get("license_plate") or ""), item.get("vehicle_tid") or "")):
+            vehicle = row.get("vehicle")
             item = {
-                "vehicle_tid": line.vehicle_tid or "",
-                "vehicle_code": vehicle.vehicle_code or "",
-                "license_plate": line.license_plate or "",
+                "vehicle_tid": row.get("vehicle_tid") or "",
+                "vehicle_code": vehicle.vehicle_code or "" if vehicle else "",
+                "license_plate": row.get("license_plate") or "",
             }
-            owner_code = self._user_code(vehicle.owner_id) if vehicle.owner_id else ""
+            owner_code = self._user_code(vehicle.owner_id) if vehicle and vehicle.owner_id else ""
             if owner_code:
                 item["owner_user_code"] = owner_code
             vehicles.append(item)
@@ -961,12 +963,6 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "vehicles": vehicles,
             "readers": readers,
         }
-        if session.planned_start_at:
-            payload["planned_start_at"] = self._iso_datetime(session.planned_start_at)
-        if session.planned_end_at:
-            payload["planned_end_at"] = self._iso_datetime(session.planned_end_at)
-        if session.note:
-            payload["note"] = session.note
         return payload
 
     @api.model

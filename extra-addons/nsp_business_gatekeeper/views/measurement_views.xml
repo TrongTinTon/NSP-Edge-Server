@@ -23,14 +23,10 @@
         <field name="name">nsp.measurement.session.list</field>
         <field name="model">nsp.measurement.session</field>
         <field name="arch" type="xml">
-            <list string="Reader Calibration" decoration-info="status == 'running'" decoration-success="status in ('completed','applied')" decoration-danger="status == 'failed'">
+            <list string="Lane Calibration" decoration-info="status == 'running'" decoration-success="status in ('completed','applied')" decoration-danger="status == 'failed'">
                 <field name="measurement_code" readonly="1"/>
                 <field name="revision"/>
-                <field name="target_count" string="Vehicles"/>
-                <field name="controller_count" string="Controllers"/>
-                <field name="reader_count" string="Readers"/>
                 <field name="status" widget="badge"/>
-                <field name="event_count" string="Current Reads"/>
             </list>
         </field>
     </record>
@@ -39,71 +35,50 @@
         <field name="name">nsp.measurement.session.form</field>
         <field name="model">nsp.measurement.session</field>
         <field name="arch" type="xml">
-            <form string="Reader Calibration" create="0" edit="0" delete="0">
+            <form string="Lane Calibration" create="0" edit="0" delete="0">
                 <header>
-                    <button name="action_ready" type="object" string="Release to Controllers" icon="fa-cloud-upload" class="oe_highlight" invisible="status != 'draft'"/>
-                    <button name="action_open_live" type="object" string="Live Reader Calibration" icon="fa-line-chart" class="oe_highlight" invisible="status == 'draft'"/>
-                    <button name="action_complete" type="object" string="Complete" icon="fa-check-circle" invisible="status != 'running'"/>
-                    <button name="action_cancel" type="object" string="Cancel" icon="fa-times-circle" invisible="status in ('completed','applied','failed','cancelled')"/>
-                    <field name="status" widget="statusbar" statusbar_visible="draft,ready,running,completed,applied"/>
+                    <button name="action_complete" type="object" string="Complete" icon="fa-check"
+                            help="Complete the current calibration." class="oe_highlight"
+                            invisible="status != 'running'"/>
+                    <button name="action_cancel" type="object" string="Cancel" icon="fa-times"
+                            help="Cancel the current calibration."
+                            invisible="status not in ('ready','running')"/>
+                    <field name="status" widget="statusbar" statusbar_visible="draft,ready,running,completed,applied,failed,cancelled"/>
                 </header>
                 <sheet>
-                    <div class="oe_button_box" name="button_box">
-                        <button name="action_view_events" type="object" class="oe_stat_button" icon="fa-list-ol">
-                            <field name="event_count" widget="statinfo" string="Current Reads"/>
-                        </button>
-                    </div>
+                    <field name="is_cloud_deployment" invisible="1"/>
                     <div class="oe_title">
-                        <label for="measurement_code" string="Calibration Code"/>
+                        <label for="measurement_code" string="Lane Calibration"/>
                         <h1><field name="measurement_code" readonly="1" widget="CopyClipboardChar"/></h1>
-                        <div class="text-muted">Revision <field name="revision" readonly="1" class="oe_inline"/></div>
+                        <div class="text-muted" title="Revision"><i class="fa fa-code-fork me-1"/>R<field name="revision" readonly="1" class="oe_inline"/></div>
                     </div>
-                    <group>
-                        <group string="Calibration Scope">
-                            <field name="target_count" string="Vehicles" readonly="1"/>
-                            <field name="target_tag_count" string="Vehicle RFID Tags" readonly="1"/>
-                            <field name="controller_count" readonly="1"/>
-                            <field name="reader_count" readonly="1"/>
-                        </group>
-                        <group string="Schedule">
-                            <field name="planned_start_at" readonly="status != 'draft'"/>
-                            <field name="planned_end_at" readonly="status != 'draft'"/>
-                            <field name="started_at" readonly="1"/>
-                            <field name="ended_at" readonly="1"/>
-                            <field name="applied_at" readonly="1"/>
-                        </group>
-                    </group>
                     <notebook>
-                        <page string="Vehicles">
-                            <field name="target_line_ids" readonly="1">
-                                <list create="0" edit="0" delete="0">
-                                    <field name="vehicle_tid" string="RFID Tag"/>
-                                    <field name="license_plate" string="License Plate"/>
-                                    <field name="owner_id" string="Owner"/>
-                                    <field name="vehicle_detection_state" string="Status" widget="badge"/>
-                                </list>
-                            </field>
+                        <page string="Live" name="live">
+                            <field name="live_dashboard" widget="nsp_business_measurement_live_dashboard" nolabel="1" readonly="1"/>
                         </page>
-                        <page string="Device Assembly">
-                            <div class="alert alert-info" role="alert">
-                                This is the released calibration assembly received from Cloud. Server, Controller, RFID Reader and Antenna identities remain independent in Device Whitelist.
-                            </div>
+                        <page string="Devices" name="devices">
                             <field name="reader_line_ids" mode="list,form" readonly="1"
                                    context="{'form_view_ref': 'nsp_business_gatekeeper.view_nsp_measurement_reader_line_form'}">
                                 <list create="0" edit="0" delete="0">
                                     <field name="edge_server_id" string="Server"/>
                                     <field name="controller_id" string="Controller"/>
-                                    <field name="reader_id" string="RFID Reader"/>
-                                    <field name="serial_number" readonly="1" optional="hide"/>
+                                    <field name="reader_id" string="Reader"/>
                                     <field name="antenna_count" string="Antennas" readonly="1"/>
-                                    <field name="reader_power_dbm" string="Power (dBm)"/>
-                                    <field name="read_interval_ms" string="Interval (ms)"/>
-                                    <field name="reader_status" readonly="1" widget="badge" optional="hide"/>
+                                    <field name="reader_power_dbm" string="Power"/>
+                                    <field name="read_interval_ms" string="Interval"/>
+                                    <field name="reader_status" string="State" readonly="1" widget="badge" optional="hide"/>
                                 </list>
                             </field>
                         </page>
-                        <page string="Notes">
-                            <field name="note" placeholder="Test plan, operating conditions, or acceptance criteria" readonly="status not in ('draft','completed')"/>
+                        <page string="Vehicles" name="vehicles">
+                            <field name="target_line_ids" readonly="1">
+                                <list create="0" edit="0" delete="0">
+                                    <field name="vehicle_tid" string="RFID Tag"/>
+                                    <field name="license_plate" string="Plate"/>
+                                    <field name="owner_id" string="Owner"/>
+                                    <field name="vehicle_detection_state" string="State" widget="badge"/>
+                                </list>
+                            </field>
                         </page>
                     </notebook>
                 </sheet>
@@ -114,34 +89,34 @@
 
 
     <record id="view_nsp_measurement_reader_line_form" model="ir.ui.view">
-        <field name="name">nsp.measurement.reader.line.edge.assembly.form</field>
+        <field name="name">nsp.measurement.reader.line.edge.form</field>
         <field name="model">nsp.measurement.reader.line</field>
         <field name="arch" type="xml">
-            <form string="Released Reader Assembly" create="0" edit="0" delete="0">
+            <form string="Reader" create="0" edit="0" delete="0">
                 <sheet>
-                    <div class="oe_title"><h1>Released Reader Assembly</h1></div>
+                    <div class="oe_title"><h1><i class="fa fa-rss me-2"/>Reader</h1></div>
                     <group>
-                        <group string="Assembly">
+                        <group string="Device">
                             <field name="edge_server_id" string="Server"/>
                             <field name="controller_id" string="Controller"/>
-                            <field name="reader_id" string="RFID Reader"/>
-                            <field name="serial_number"/>
-                            <field name="reader_status" widget="badge"/>
+                            <field name="reader_id" string="Reader"/>
+                            <field name="serial_number" string="Serial"/>
+                            <field name="reader_status" string="State" widget="badge"/>
                         </group>
-                        <group string="Reader Parameters">
+                        <group string="Settings">
                             <field name="reader_power_dbm" string="Power (dBm)"/>
-                            <field name="read_interval_ms" string="Read Interval (ms)"/>
-                            <field name="reader_tid_addr" string="TID Start Address (Words)"/>
-                            <field name="reader_tid_len" string="TID Length (Words)"/>
+                            <field name="read_interval_ms" string="Interval (ms)"/>
+                            <field name="reader_tid_addr" string="TID Start"/>
+                            <field name="reader_tid_len" string="TID Length"/>
                         </group>
                     </group>
-                    <separator string="Antenna Port Mapping"/>
+                    <separator string="Antennas"/>
                     <field name="antenna_port_ids" nolabel="1" readonly="1">
                         <list create="0" edit="0" delete="0">
-                            <field name="port_no" string="No."/>
+                            <field name="port_no" string="Port"/>
                             <field name="antenna_id" string="Antenna"/>
-                            <field name="antenna_management_code" string="Management Code" optional="hide"/>
-                            <field name="antenna_serial_number" string="Serial Number" optional="hide"/>
+                            <field name="antenna_management_code" string="Code" optional="hide"/>
+                            <field name="antenna_serial_number" string="Serial" optional="hide"/>
                         </list>
                     </field>
                 </sheet>
@@ -149,39 +124,6 @@
         </field>
     </record>
 
-
-    <record id="view_nsp_measurement_session_live_form" model="ir.ui.view">
-        <field name="name">nsp.measurement.session.live.form</field>
-        <field name="model">nsp.measurement.session</field>
-        <field name="arch" type="xml">
-            <form string="Live Reader Calibration" create="0" delete="0" duplicate="0">
-                <header>
-                    <button name="action_open_session_form" type="object" string="Configuration" icon="fa-arrow-left"/>
-                    <button name="action_view_events" type="object" string="Observations" icon="fa-list-ol"/>
-                    <button name="action_live_measure_again" type="object" string="Measure Again" icon="fa-repeat" invisible="status not in ('running','completed','failed')"/>
-                    <button name="action_live_complete" type="object" string="Complete" icon="fa-check-circle" class="oe_highlight" invisible="status != 'running'"/>
-                    <button name="action_live_apply_to_operation" type="object" string="Apply to Operation" icon="fa-check" class="oe_highlight" invisible="not is_cloud_deployment or status != 'completed'"/>
-                    <button name="action_live_cancel" type="object" string="Cancel" icon="fa-times-circle" invisible="status not in ('ready','running')"/>
-                    <field name="status" widget="statusbar" statusbar_visible="draft,ready,running,completed,applied,failed,cancelled"/>
-                </header>
-                <sheet class="nsp-measurement-live-form">
-                    <field name="is_cloud_deployment" invisible="1"/>
-                    <div class="oe_title">
-                        <label for="measurement_code" string="Live Reader Calibration"/>
-                        <h1><field name="measurement_code" readonly="1" widget="CopyClipboardChar"/></h1>
-                    </div>
-                    <group class="nsp-measurement-live-meta">
-                        <field name="revision" readonly="1"/>
-                        <field name="target_count" string="Vehicles" readonly="1"/>
-                        <field name="controller_count" readonly="1"/>
-                        <field name="reader_count" readonly="1"/>
-                    </group>
-                    <field name="live_dashboard" widget="nsp_business_measurement_live_dashboard" nolabel="1" readonly="1"/>
-                </sheet>
-                <chatter/>
-            </form>
-        </field>
-    </record>
 
     <record id="view_nsp_measurement_event_search" model="ir.ui.view">
         <field name="name">nsp.measurement.event.search</field>
@@ -246,7 +188,7 @@
     </record>
 
     <record id="action_nsp_measurement_session" model="ir.actions.act_window">
-        <field name="name">Reader Calibration</field>
+        <field name="name">Lane Calibration</field>
         <field name="res_model">nsp.measurement.session</field>
         <field name="view_mode">list,form</field>
         <field name="search_view_id" ref="view_nsp_measurement_session_search"/>

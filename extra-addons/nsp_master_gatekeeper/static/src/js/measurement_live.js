@@ -33,9 +33,6 @@ export class NspMeasurementLive extends Component {
             startedAt: null,
             endedAt: null,
             appliedAt: null,
-            plannedStartAt: null,
-            plannedEndAt: null,
-            note: "",
             steps: [],
             rawEventCount: 0,
             detectionCount: 0,
@@ -112,7 +109,7 @@ export class NspMeasurementLive extends Component {
                 [this.sessionId, 0, 5000]
             );
             if (!data?.found) {
-                this.state.error = "Reader Calibration was not found.";
+                this.state.error = "Lane Calibration was not found.";
                 return;
             }
             const returnedSessionId = this.normalizeSessionId(data.session_id);
@@ -138,9 +135,6 @@ export class NspMeasurementLive extends Component {
             this.state.startedAt = data.started_at || null;
             this.state.endedAt = data.ended_at || null;
             this.state.appliedAt = data.applied_at || null;
-            this.state.plannedStartAt = data.planned_start_at || null;
-            this.state.plannedEndAt = data.planned_end_at || null;
-            this.state.note = data.note || "";
             this.state.steps = data.steps || [];
             this.state.rawEventCount = Number(data.raw_event_count || 0);
             this.state.detectionCount = Number(data.detection_count || 0);
@@ -151,7 +145,7 @@ export class NspMeasurementLive extends Component {
             this.state.hasLoaded = true;
             this.state.error = "";
         } catch (error) {
-            this.state.error = error?.data?.message || error?.message || "Unable to load live Reader Calibration data.";
+            this.state.error = error?.data?.message || error?.message || "Unable to load Lane Calibration data.";
         } finally {
             this.loading = false;
         }
@@ -205,9 +199,6 @@ export class NspMeasurementLive extends Component {
         this.state.activeTab = "session";
     }
 
-    setNotesTab() {
-        this.state.activeTab = "notes";
-    }
 
     tabClass(tab) {
         return this.state.activeTab === tab ? "nsp-ml__tab nsp-ml__tab--active" : "nsp-ml__tab";

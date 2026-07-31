@@ -7,7 +7,7 @@ from odoo.addons.nsp_core.utils import new_management_code
 class Vehicle(models.Model):
     """Vehicle identity with one optional owner and one active RFID Tag.
 
-    Reader Calibration may quick-create a Vehicle from a License Plate before an
+    Lane Calibration may quick-create a Vehicle from a License Plate before an
     owner is known. Ownership can be assigned later without changing the Vehicle
     identity or RFID assignment.
     """
@@ -39,7 +39,7 @@ class Vehicle(models.Model):
         tracking=True,
         ondelete="restrict",
         index=True,
-        help="Optional while creating a test Vehicle in Reader Calibration.",
+        help="Optional while creating a test Vehicle in Lane Calibration.",
     )
     vehicle_type_id = fields.Many2one(
         "nsp.vehicle.type",

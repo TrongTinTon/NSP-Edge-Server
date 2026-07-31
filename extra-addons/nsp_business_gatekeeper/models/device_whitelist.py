@@ -11,7 +11,7 @@ class DeviceWhitelist(models.Model):
 
     This model deliberately contains no parent, Reader port or operation
     parameters. Server, Controller, RFID Reader and Antenna relationships exist
-    only in the active Reader Calibration or Parking Layout runtime assembly.
+    only in the active Lane Calibration or Parking Layout runtime assembly.
     """
 
     _name = "nsp.device.whitelist"

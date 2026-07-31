@@ -1174,17 +1174,17 @@ class NspSyncJob(models.Model):
         return borrow
 
     def _apply_measurement_config(self, item):
-        """Apply one released Reader Calibration assembly from Cloud."""
+        """Apply one released Lane Calibration assembly from Cloud."""
         self.ensure_one()
         if not isinstance(item, dict):
-            raise UserError(_("Reader Calibration item must be an object."))
+            raise UserError(_("Lane Calibration item must be an object."))
         unsupported_outer = set(item) - {
             "measurement_code", "status", "desired_state", "revision",
-            "vehicles", "readers", "planned_start_at", "planned_end_at", "note",
+            "vehicles", "readers",
         }
         if unsupported_outer:
             raise UserError(
-                _("Unsupported Reader Calibration field(s): %s")
+                _("Unsupported Lane Calibration field(s): %s")
                 % ", ".join(sorted(unsupported_outer))
             )
 
@@ -1194,17 +1194,17 @@ class NspSyncJob(models.Model):
         if not code:
             raise UserError(_("Calibration Code is required."))
         if not isinstance(vehicle_payloads, list) or not vehicle_payloads:
-            raise UserError(_("Reader Calibration must contain at least one Vehicle."))
+            raise UserError(_("Lane Calibration must contain at least one Vehicle."))
         if not isinstance(reader_payloads, list) or not reader_payloads:
-            raise UserError(_("Reader Calibration must contain at least one RFID Reader assembly."))
+            raise UserError(_("Lane Calibration must contain at least one RFID Reader assembly."))
 
         status = str(item.get("status") or "ready").strip().lower()
         if status not in ("ready", "running", "completed", "applied", "failed", "cancelled"):
-            raise UserError(_("Invalid Reader Calibration status: %s") % status)
+            raise UserError(_("Invalid Lane Calibration status: %s") % status)
         try:
             revision = max(int(item.get("revision") or 1), 1)
         except (TypeError, ValueError) as exc:
-            raise UserError(_("Invalid Reader Calibration revision.")) from exc
+            raise UserError(_("Invalid Lane Calibration revision.")) from exc
 
         # Vehicles and RFID assignments are authoritative master snapshots applied
         # by their dedicated sync jobs before this configuration is activated.
@@ -1214,13 +1214,13 @@ class NspSyncJob(models.Model):
         vehicle_codes = set()
         for payload in vehicle_payloads:
             if not isinstance(payload, dict):
-                raise UserError(_("Reader Calibration Vehicle must be an object."))
+                raise UserError(_("Lane Calibration Vehicle must be an object."))
             unsupported = set(payload) - {
                 "vehicle_tid", "vehicle_code", "license_plate", "owner_user_code",
             }
             if unsupported:
                 raise UserError(
-                    _("Unsupported Reader Calibration Vehicle field(s): %s")
+                    _("Unsupported Lane Calibration Vehicle field(s): %s")
                     % ", ".join(sorted(unsupported))
                 )
             tid = Tag._normalize_tid(payload.get("vehicle_tid"))
@@ -1229,7 +1229,7 @@ class NspSyncJob(models.Model):
             owner_code = str(payload.get("owner_user_code") or "").strip().upper()
             if not tid or not vehicle_code or not plate:
                 raise UserError(_(
-                    "Each Reader Calibration Vehicle requires RFID Tag, Vehicle Code and License Plate."
+                    "Each Lane Calibration Vehicle requires RFID Tag, Vehicle Code and License Plate."
                 ))
             if tid in all_tids:
                 raise UserError(_("Duplicate Vehicle RFID Tag: %s") % tid)
@@ -1317,7 +1317,7 @@ class NspSyncJob(models.Model):
                     "Every Reader assembly requires Server, Controller, Reader Management Code and Reader Serial Number."
                 ))
             if reader_code in seen_readers or serial in {row["serial_number"] for row in normalized_readers}:
-                raise UserError(_("RFID Reader is duplicated in Reader Calibration."))
+                raise UserError(_("RFID Reader is duplicated in Lane Calibration."))
             seen_readers.add(reader_code)
             parameters = payload.get("reader_parameters") or {}
             if not isinstance(parameters, dict) or set(parameters) - {
@@ -1352,7 +1352,7 @@ class NspSyncJob(models.Model):
                 if port_no <= 0 or port_no in used_ports or not antenna_code:
                     raise UserError(_("Antenna Port Mapping is missing or duplicated."))
                 if antenna_code in used_antennas:
-                    raise UserError(_("An Antenna can be assembled only once in one Reader Calibration."))
+                    raise UserError(_("An Antenna can be assembled only once in one Lane Calibration."))
                 used_ports.add(port_no)
                 used_antennas.add(antenna_code)
                 antenna_serial = str(antenna.get("serial_number") or "").strip().upper() or False
@@ -1526,9 +1526,6 @@ class NspSyncJob(models.Model):
             "measurement_code": code,
             "revision": revision,
             "status": status,
-            "planned_start_at": self._remote_datetime(item.get("planned_start_at")),
-            "planned_end_at": self._remote_datetime(item.get("planned_end_at")),
-            "note": str(item.get("note") or "").strip() or False,
             "target_line_ids": [(5, 0, 0)] + target_commands,
             "reader_line_ids": [(5, 0, 0)] + line_commands,
         }
@@ -1872,7 +1869,7 @@ class NspSyncJob(models.Model):
 
             # Upsert only identities referenced by this published projection.
             # Do not globally reconcile the identity cache here because active
-            # Reader Calibration snapshots may reference additional identities.
+            # Lane Calibration snapshots may reference additional identities.
             identity_cache = self._prepare_apply_cache("device_whitelist", whitelist)
             for item in whitelist:
                 self._apply_device_whitelist(item, cache=identity_cache)

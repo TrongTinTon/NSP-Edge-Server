@@ -23,14 +23,10 @@
         <field name="name">nsp.measurement.session.list</field>
         <field name="model">nsp.measurement.session</field>
         <field name="arch" type="xml">
-            <list string="Reader Calibration" decoration-info="status == 'running'" decoration-success="status in ('completed','applied')" decoration-danger="status == 'failed'">
+            <list string="Lane Calibration" decoration-info="status == 'running'" decoration-success="status in ('completed','applied')" decoration-danger="status == 'failed'">
                 <field name="measurement_code" readonly="1"/>
                 <field name="revision"/>
-                <field name="target_count" string="Vehicles"/>
-                <field name="controller_count" string="Controllers"/>
-                <field name="reader_count" string="Readers"/>
                 <field name="status" widget="badge"/>
-                <field name="event_count" string="Current Reads"/>
             </list>
         </field>
     </record>
@@ -39,89 +35,63 @@
         <field name="name">nsp.measurement.session.form</field>
         <field name="model">nsp.measurement.session</field>
         <field name="arch" type="xml">
-            <form string="Reader Calibration">
+            <form string="Lane Calibration">
                 <header>
-                    <button name="action_ready" type="object" string="Release to Controllers" icon="fa-cloud-upload" class="oe_highlight" invisible="status != 'draft'"/>
-                    <button name="action_open_live" type="object" string="Live Reader Calibration" icon="fa-line-chart" class="oe_highlight" invisible="status == 'draft'"/>
-                    <button name="action_complete" type="object" string="Complete" icon="fa-check-circle" invisible="status != 'running'"/>
-                    <button name="action_cancel" type="object" string="Cancel" icon="fa-times-circle" invisible="status in ('completed','applied','failed','cancelled')"/>
-                    <field name="status" widget="statusbar" statusbar_visible="draft,ready,running,completed,applied"/>
+                    <button name="action_ready" type="object" string="Release" icon="fa-cloud-upload"
+                            help="Release this revision to Controllers." class="oe_highlight"
+                            invisible="status != 'draft'"/>
+                    <button name="action_prepare_device_reconfiguration" type="object" string="Revise" icon="fa-pencil"
+                            help="Create a new editable revision and measure again."
+                            invisible="status not in ('completed','failed','applied')"/>
+                    <button name="action_cancel" type="object" string="Cancel" icon="fa-times"
+                            help="Cancel the current calibration."
+                            invisible="status in ('completed','applied','failed','cancelled')"/>
+                    <field name="status" widget="statusbar" statusbar_visible="draft,ready,running,completed,applied,failed,cancelled"/>
                 </header>
                 <sheet>
-                    <div class="oe_button_box" name="button_box">
-                        <button name="action_view_events" type="object" class="oe_stat_button" icon="fa-list-ol">
-                            <field name="event_count" widget="statinfo" string="Current Reads"/>
-                        </button>
-                    </div>
+                    <field name="is_cloud_deployment" invisible="1"/>
                     <div class="oe_title">
-                        <label for="measurement_code" string="Calibration Code"/>
+                        <label for="measurement_code" string="Lane Calibration"/>
                         <h1><field name="measurement_code" readonly="1" widget="CopyClipboardChar"/></h1>
-                        <div class="text-muted">Revision <field name="revision" readonly="1" class="oe_inline"/></div>
+                        <div class="text-muted" title="Revision"><i class="fa fa-code-fork me-1"/>R<field name="revision" readonly="1" class="oe_inline"/></div>
                     </div>
-                    <group>
-                        <group string="Calibration Scope">
-                            <field name="target_count" string="Vehicles" readonly="1"/>
-                            <field name="target_tag_count" string="Vehicle RFID Tags" readonly="1"/>
-                            <field name="controller_count" readonly="1"/>
-                            <field name="reader_count" readonly="1"/>
-                        </group>
-                        <group string="Schedule">
-                            <field name="planned_start_at" readonly="status != 'draft'"/>
-                            <field name="planned_end_at" readonly="status != 'draft'"/>
-                            <field name="started_at" readonly="1"/>
-                            <field name="ended_at" readonly="1"/>
-                            <field name="applied_at" readonly="1"/>
-                        </group>
-                    </group>
-                    <notebook>
-                        <page string="Vehicles">
-                            <div class="alert alert-info" role="alert">
-                                Scan a Vehicle RFID Tag. If the tag is already assigned, the License Plate and existing Owner are shown automatically. For a new test tag, type a License Plate and use Quick Create; saving assigns the scanned RFID Tag to that Vehicle. If the Vehicle has no Owner, create or select a User directly in the Owner field.
-                            </div>
-                            <field name="target_line_ids" readonly="status != 'draft'">
-                                <list editable="bottom" delete="1">
-                                    <field name="vehicle_scan_tid" string="RFID Tag"
-                                           widget="nsp_rfid_scan"
-                                           options="{'target_field': 'tag_id', 'resolved_value_field': 'vehicle_tid', 'expected_target': 'vehicle_or_available', 'require_available': False, 'require_active_assignment': False, 'skip_duplicates': True}"
-                                           placeholder="Scan or paste Vehicle RFID TID"/>
-                                    <field name="tag_id" column_invisible="True"/>
-                                    <field name="vehicle_tid" column_invisible="True"/>
-                                    <field name="vehicle_id" string="License Plate"
-                                           domain="[('active', '=', True)]"
-                                           options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
-                                           context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_form'}"/>
-                                    <field name="owner_locked" column_invisible="True"/>
-                                    <field name="owner_id" string="Owner" readonly="owner_locked"
-                                           domain="[('active', '=', True)]"
-                                           options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
-                                           context="{'form_view_ref': 'nsp_user.view_nsp_user_form'}"/>
-                                    <field name="vehicle_detection_state" string="Status" widget="badge" readonly="1" optional="hide"/>
-                                </list>
-                            </field>
-                        </page>
-                        <page string="Device Assembly">
-                            <div class="alert alert-info" role="alert">
-                                Assemble independent Device Whitelist identities for this calibration only: Server → Controller → RFID Reader, then map Reader ports to Antennas. No permanent device hierarchy is created.
-                            </div>
-                            <field name="reader_line_ids" mode="list,form" readonly="status != 'draft'"
-                                   context="{'default_session_id': id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_measurement_reader_line_form'}">
-                                <list create="1" edit="1" delete="1">
-                                    <control><create string="Add Reader Assembly"/></control>
-                                    <field name="edge_server_id" string="Server"/>
-                                    <field name="controller_id" string="Controller"/>
-                                    <field name="reader_id" string="RFID Reader"/>
-                                    <field name="serial_number" readonly="1" optional="hide"/>
-                                    <field name="antenna_count" string="Antennas" readonly="1"/>
-                                    <field name="reader_power_dbm" string="Power (dBm)"/>
-                                    <field name="read_interval_ms" string="Interval (ms)"/>
-                                    <field name="reader_status" readonly="1" widget="badge" optional="hide"/>
-                                </list>
-                            </field>
-                        </page>
-                        <page string="Notes">
-                            <field name="note" placeholder="Test plan, operating conditions, or acceptance criteria" readonly="status not in ('draft','completed')"/>
-                        </page>
-                    </notebook>
+
+                    <separator string="Devices"/>
+                    <field name="reader_line_ids" mode="list,form" readonly="status != 'draft'"
+                           context="{'default_session_id': id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_measurement_reader_line_form'}">
+                        <list create="1" edit="1" delete="1">
+                            <control><create string="Add Reader"/></control>
+                            <field name="edge_server_id" string="Server"/>
+                            <field name="controller_id" string="Controller"/>
+                            <field name="reader_id" string="Reader"/>
+                            <field name="antenna_count" string="Antennas" readonly="1"/>
+                            <field name="reader_power_dbm" string="Power"/>
+                            <field name="read_interval_ms" string="Interval"/>
+                            <field name="reader_status" string="State" readonly="1" widget="badge" optional="hide"/>
+                        </list>
+                    </field>
+
+                    <separator string="Vehicles"/>
+                    <field name="target_line_ids" readonly="status != 'draft'">
+                        <list editable="bottom" create="1" delete="1">
+                            <control><create string="Add Vehicle"/></control>
+                            <field name="vehicle_scan_tid" string="RFID Tag" widget="nsp_rfid_scan"
+                                   options="{'target_field': 'tag_id', 'resolved_value_field': 'vehicle_tid', 'expected_target': 'vehicle_or_available', 'require_available': False, 'require_active_assignment': False, 'skip_duplicates': True}"
+                                   placeholder="Scan RFID TID"/>
+                            <field name="tag_id" column_invisible="True"/>
+                            <field name="vehicle_tid" column_invisible="True"/>
+                            <field name="vehicle_id" string="Plate" domain="[('active', '=', True)]"
+                                   options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                   context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_form'}"/>
+                            <field name="owner_locked" column_invisible="True"/>
+                            <field name="owner_id" string="Owner" readonly="owner_locked" domain="[('active', '=', True)]"
+                                   options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                   context="{'form_view_ref': 'nsp_user.view_nsp_user_form'}"/>
+                            <field name="vehicle_detection_state" string="State" widget="badge" readonly="1" optional="hide"/>
+                        </list>
+                    </field>
+
+                    <field name="calibration_workspace" widget="nsp_calibration_workspace" nolabel="1" readonly="1" invisible="status == 'draft'"/>
                 </sheet>
                 <chatter/>
             </form>
@@ -129,98 +99,48 @@
     </record>
 
 
-
-
     <record id="view_nsp_measurement_reader_line_form" model="ir.ui.view">
-        <field name="name">nsp.measurement.reader.line.assembly.form</field>
+        <field name="name">nsp.measurement.reader.line.form</field>
         <field name="model">nsp.measurement.reader.line</field>
         <field name="arch" type="xml">
-            <form string="Reader Assembly">
+            <form string="Reader">
                 <sheet>
                     <field name="session_id" invisible="1"/>
-                    <div class="oe_title">
-                        <h1>Reader Assembly</h1>
-                    </div>
-                    <div class="alert alert-info" role="alert">
-                        This assembly exists only inside the current Reader Calibration. Device Whitelist identities remain independent and can be assembled differently in another calibration or Parking Layout.
-                    </div>
+                    <div class="oe_title"><h1><i class="fa fa-rss me-2"/>Reader</h1></div>
                     <group>
-                        <group string="Calibration Assembly">
+                        <group string="Device">
                             <field name="available_edge_server_ids" invisible="1"/>
-                            <field name="edge_server_id" string="Server"
-                                   domain="[('id','in',available_edge_server_ids)]"
+                            <field name="edge_server_id" string="Server" domain="[('id','in',available_edge_server_ids)]"
                                    options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                             <field name="available_controller_ids" invisible="1"/>
-                            <field name="controller_id" string="Controller"
-                                   domain="[('id','in',available_controller_ids)]"
+                            <field name="controller_id" string="Controller" domain="[('id','in',available_controller_ids)]"
                                    options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                             <field name="available_reader_ids" invisible="1"/>
-                            <field name="reader_id" string="RFID Reader"
-                                   domain="[('id','in',available_reader_ids)]"
+                            <field name="reader_id" string="Reader" domain="[('id','in',available_reader_ids)]"
                                    options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                            <field name="serial_number" readonly="1"/>
-                            <field name="reader_status" widget="badge" readonly="1"/>
+                            <field name="serial_number" string="Serial" readonly="1"/>
+                            <field name="reader_status" string="State" widget="badge" readonly="1"/>
                         </group>
-                        <group string="Reader Calibration Parameters">
+                        <group string="Settings">
                             <field name="reader_power_dbm" string="Power (dBm)"/>
-                            <field name="read_interval_ms" string="Read Interval (ms)"/>
-                            <field name="reader_tid_addr" string="TID Start Address (Words)"/>
-                            <field name="reader_tid_len" string="TID Length (Words)"/>
+                            <field name="read_interval_ms" string="Interval (ms)"/>
+                            <field name="reader_tid_addr" string="TID Start"/>
+                            <field name="reader_tid_len" string="TID Length"/>
                         </group>
                     </group>
-                    <separator string="Antenna Port Mapping"/>
-                    <div class="alert alert-info" role="alert">
-                        Each row is one physical port on the selected RFID Reader. Select an independent Antenna identity from Device Whitelist. Blank ports are disabled for this calibration.
-                    </div>
-                    <field name="antenna_port_ids" nolabel="1"
-                           context="{'default_reader_line_id': id}">
+                    <separator string="Antennas"/>
+                    <field name="antenna_port_ids" nolabel="1" context="{'default_reader_line_id': id}">
                         <list editable="bottom" create="1" delete="1" open_form_view="0">
-                            <control>
-                                <create string="Add a line"/>
-                            </control>
+                            <control><create string="Add Antenna"/></control>
                             <field name="reader_line_id" column_invisible="1"/>
-                            <field name="port_no" string="No." decoration-bf="1"/>
+                            <field name="port_no" string="Port" decoration-bf="1"/>
                             <field name="available_antenna_ids" column_invisible="1"/>
-                            <field name="antenna_id" string="Antenna"
-                                   domain="[('id','in',available_antenna_ids)]"
+                            <field name="antenna_id" string="Antenna" domain="[('id','in',available_antenna_ids)]"
                                    context="{'list_view_ref': 'nsp_master_gatekeeper.view_nsp_device_antenna_identity_list', 'search_view_ref': 'nsp_master_gatekeeper.view_nsp_device_antenna_identity_search'}"
                                    options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                         </list>
                     </field>
                 </sheet>
-            </form>
-        </field>
-    </record>
-
-    <record id="view_nsp_measurement_session_live_form" model="ir.ui.view">
-        <field name="name">nsp.measurement.session.live.form</field>
-        <field name="model">nsp.measurement.session</field>
-        <field name="arch" type="xml">
-            <form string="Live Reader Calibration" create="0" delete="0" duplicate="0">
-                <header>
-                    <button name="action_open_session_form" type="object" string="Configuration" icon="fa-arrow-left"/>
-                    <button name="action_view_events" type="object" string="Observations" icon="fa-list-ol"/>
-                    <button name="action_live_measure_again" type="object" string="Measure Again" icon="fa-repeat" invisible="status not in ('running','completed','failed')"/>
-                    <button name="action_live_complete" type="object" string="Complete" icon="fa-check-circle" class="oe_highlight" invisible="status != 'running'"/>
-                    <button name="action_live_apply_to_operation" type="object" string="Apply to Operation" icon="fa-check" class="oe_highlight" invisible="not is_cloud_deployment or status != 'completed'"/>
-                    <button name="action_live_cancel" type="object" string="Cancel" icon="fa-times-circle" invisible="status not in ('ready','running')"/>
-                    <field name="status" widget="statusbar" statusbar_visible="draft,ready,running,completed,applied,failed,cancelled"/>
-                </header>
-                <sheet class="nsp-measurement-live-form">
-                    <field name="is_cloud_deployment" invisible="1"/>
-                    <div class="oe_title">
-                        <label for="measurement_code" string="Live Reader Calibration"/>
-                        <h1><field name="measurement_code" readonly="1" widget="CopyClipboardChar"/></h1>
-                    </div>
-                    <group class="nsp-measurement-live-meta">
-                        <field name="revision" readonly="1"/>
-                        <field name="target_count" string="Vehicles" readonly="1"/>
-                        <field name="controller_count" readonly="1"/>
-                        <field name="reader_count" readonly="1"/>
-                    </group>
-                    <field name="live_dashboard" widget="nsp_master_measurement_live_dashboard" nolabel="1" readonly="1"/>
-                </sheet>
-                <chatter/>
             </form>
         </field>
     </record>
@@ -288,7 +208,7 @@
     </record>
 
     <record id="action_nsp_measurement_session" model="ir.actions.act_window">
-        <field name="name">Reader Calibration</field>
+        <field name="name">Lane Calibration</field>
         <field name="res_model">nsp.measurement.session</field>
         <field name="view_mode">list,form</field>
         <field name="search_view_id" ref="view_nsp_measurement_session_search"/>
@@ -300,4 +220,152 @@
         <field name="view_mode">list,form</field>
         <field name="search_view_id" ref="view_nsp_measurement_event_search"/>
     </record>
+
+    <record id="view_nsp_measurement_result_form" model="ir.ui.view">
+        <field name="name">nsp.measurement.result.form</field>
+        <field name="model">nsp.measurement.result</field>
+        <field name="arch" type="xml">
+            <form string="Result">
+                <header>
+                    <button name="action_submit_validation" type="object" string="Validate" icon="fa-flask" help="Send this result to Validation." class="oe_highlight" invisible="state != 'draft'"/>
+                    <button name="action_accept" type="object" string="Accept" icon="fa-check" help="Accept this validated result." class="oe_highlight" invisible="state != 'validation' or validation_state != 'passed'"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,validation,accepted,superseded"/>
+                </header>
+                <sheet>
+                    <div class="oe_title"><h1><field name="name" readonly="1"/></h1></div>
+                    <group>
+                        <group>
+                            <field name="session_id" readonly="1"/>
+                            <field name="revision" readonly="1"/>
+                            <field name="reference_vehicle_id" readonly="1"/>
+                            <field name="accepted_pass_count" readonly="1"/>
+                        </group>
+                        <group>
+                            <field name="path_display" readonly="1"/>
+                            <field name="total_duration" readonly="1"/>
+                            <field name="tolerance_percent"/>
+                            <field name="validation_state" widget="badge" readonly="1"/>
+                            <field name="validated_run_id" readonly="1"/>
+                            <field name="validated_at" readonly="1"/>
+                            <field name="accepted_at" readonly="1"/>
+                        </group>
+                    </group>
+                    <separator string="Timeline"/>
+                    <field name="line_ids" readonly="state != 'draft'">
+                        <list editable="bottom" create="0" delete="0">
+                            <field name="sequence"/>
+                            <field name="antenna_id"/>
+                            <field name="reader_id"/>
+                            <field name="port_no"/>
+                            <field name="duration_standard"/>
+                            <field name="duration_min" optional="hide"/>
+                            <field name="duration_average" optional="hide"/>
+                            <field name="duration_p95" optional="hide"/>
+                            <field name="duration_max" optional="hide"/>
+                            <field name="sample_count"/>
+                            <field name="cumulative_time"/>
+                        </list>
+                    </field>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_nsp_measurement_validation_run_form" model="ir.ui.view">
+        <field name="name">nsp.measurement.validation.run.form</field>
+        <field name="model">nsp.measurement.validation.run</field>
+        <field name="arch" type="xml">
+            <form string="Validation">
+                <header>
+                    <button name="action_load_active_vehicles" type="object" string="Load" help="Load active Vehicles." icon="fa-car" invisible="state != 'draft'"/>
+                    <button name="action_start" type="object" string="Start" icon="fa-play" help="Start Validation." class="oe_highlight" invisible="state != 'draft'"/>
+                    <button name="action_stop_and_analyse" type="object" string="Stop" icon="fa-stop" help="Stop and analyse." class="oe_highlight" invisible="state != 'running'"/>
+                    <button name="action_new_run_all" type="object" string="New" icon="fa-plus" help="Create a new run for all Vehicles." invisible="state not in ('passed','failed','completed')"/>
+                    <button name="action_retest_failed" type="object" string="Failed" icon="fa-repeat" help="Re-test failed Vehicles." invisible="state not in ('passed','failed','completed')"/>
+                    <button name="action_retest_selected" type="object" string="Selected" icon="fa-check-square-o" help="Re-test selected Vehicles." invisible="state not in ('passed','failed','completed')"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,running,passed,failed"/>
+                </header>
+                <sheet>
+                    <div class="oe_title"><h1><field name="name"/></h1></div>
+                    <group>
+                        <group>
+                            <field name="session_id" readonly="1"/>
+                            <field name="result_id" domain="[('state','=','validation')]" readonly="state != 'draft'"/>
+                            <field name="test_mode"/>
+                            <field name="planned_vehicle_count"/>
+                            <field name="measurement_revision" readonly="1"/>
+                            <field name="started_at" readonly="1"/>
+                            <field name="ended_at" readonly="1"/>
+                        </group>
+                        <group string="Criteria">
+                            <field name="minimum_complete_rate"/>
+                            <field name="minimum_antenna_rate"/>
+                            <field name="maximum_wrong_order_rate"/>
+                            <field name="complete_rate" readonly="1"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Vehicles">
+                            <field name="vehicle_line_ids" readonly="state != 'draft'">
+                                <list editable="bottom" create="1" delete="1" decoration-success="result == 'complete'" decoration-warning="result in ('incomplete','transition_timeout')" decoration-danger="result in ('not_detected','wrong_order')">
+                                    <field name="retry_selected" optional="show"/>
+                                    <field name="vehicle_id" options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False}"/>
+                                    <field name="tag_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True}"/>
+                                    <field name="license_plate" readonly="1"/>
+                                    <field name="vehicle_tid" readonly="1"/>
+                                    <field name="detected_sequence" readonly="1"/>
+                                    <field name="result" widget="badge" readonly="1"/>
+                                    <field name="missing_or_error" readonly="1"/>
+                                    <field name="total_duration" readonly="1"/>
+                                    <field name="detected_at" readonly="1"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Antennas">
+                            <field name="antenna_stat_ids" readonly="1">
+                                <list create="0" delete="0">
+                                    <field name="antenna_id"/>
+                                    <field name="expected_count"/>
+                                    <field name="detected_count"/>
+                                    <field name="missed_count"/>
+                                    <field name="detection_rate"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Durations">
+                            <field name="transition_stat_ids" readonly="1">
+                                <list create="0" delete="0">
+                                    <field name="from_antenna_id"/>
+                                    <field name="to_antenna_id"/>
+                                    <field name="sample_count"/>
+                                    <field name="duration_min"/>
+                                    <field name="duration_median"/>
+                                    <field name="duration_average"/>
+                                    <field name="duration_p95"/>
+                                    <field name="duration_max"/>
+                                    <field name="timeout_count"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Advice">
+                            <field name="recommendation" nolabel="1" readonly="1"/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_nsp_measurement_result" model="ir.actions.act_window">
+        <field name="name">Results</field>
+        <field name="res_model">nsp.measurement.result</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <record id="action_nsp_measurement_validation_run" model="ir.actions.act_window">
+        <field name="name">Validation</field>
+        <field name="res_model">nsp.measurement.validation.run</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
 </odoo>
