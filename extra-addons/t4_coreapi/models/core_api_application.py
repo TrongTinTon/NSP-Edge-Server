@@ -218,7 +218,7 @@ class CoreApiApplication(models.Model):
                 rec.auth_curl_example = (
                     f"curl -X POST '{auth_url}?db={db_name}'\n"
                     f"  -H 'Content-Type: application/json'\n"
-                    f"  -d '{{\"login\": \"<mobile_login>\", \"password\": \"<password>\", \"device\": {{\"device_uid\": \"<device_uid>\", \"platform\": \"android\"}}}}'"
+                    f"  -d '{{\"login\": \"<odoo_login>\", \"password\": \"<password>\", \"device\": {{\"device_uid\": \"<device_uid>\", \"platform\": \"android\"}}}}'"
                 )
             else:
                 auth_url = f'{base}{AUTH_TOKEN_PATH}'
@@ -511,7 +511,7 @@ class CoreApiApplication(models.Model):
         if application.state != 'active':
             return self.browse(), _('Application "%s" is inactive.') % application.name
         if application.application_kind == 'mobile':
-            return self.browse(), _('Mobile applications use Mobile User authentication, not shared Client Secret authentication.')
+            return self.browse(), _('Mobile applications use Odoo User authentication, not shared Client Secret authentication.')
 
         if not application.client_secret or not SECRET_CRYPT_CONTEXT.verify(
             client_secret, application.client_secret

@@ -70,7 +70,24 @@ class IrHttp(models.AbstractModel):
                 raise TooManyRequests(str(e)) from e
             raise
 
-        request.update_env(user=request.env.ref('base.public_user').id)
+        request_user_id = request.env.ref('base.public_user').id
+        if token_rec.token_kind == 'mobile':
+            if token_rec.subject_model != 'res.users' or not token_rec.subject_record_id:
+                raise Unauthorized(
+                    'Mobile token has no valid Odoo User binding.',
+                    www_authenticate='Bearer realm="Core API"',
+                )
+            subject_user = request.env['res.users'].sudo().browse(
+                token_rec.subject_record_id
+            ).exists()
+            if not subject_user or not subject_user.active:
+                raise Unauthorized(
+                    'Odoo User is inactive or no longer available.',
+                    www_authenticate='Bearer realm="Core API"',
+                )
+            request_user_id = subject_user.id
+
+        request.update_env(user=request_user_id, su=False)
         request.update_context(
             core_api_application_id=application.id,
             core_api_token_id=token_rec.id,

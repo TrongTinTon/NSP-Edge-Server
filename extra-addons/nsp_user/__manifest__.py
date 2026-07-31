@@ -1,8 +1,8 @@
 {
     'name': 'NSP User',
     'summary': 'NSP master business users and friendships',
-    'description': 'Master Business Identity for NSP people. RFID tag and vehicle management are added by NSP Vehicle without coupling the base user model to device data.',
-    'version': '19.0.12.0.2',
+    'description': 'NSP business users linked optionally one-to-one with standard Odoo Users for Web and Mobile authentication. Access remains controlled by Odoo Groups, ACLs and Record Rules.',
+    'version': '19.0.13.0.0',
     'sequence': 10,
     'author': 'BKU Team',
     'category': 'Services',

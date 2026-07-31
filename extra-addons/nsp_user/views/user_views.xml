@@ -7,10 +7,9 @@
                 <field name="name"/>
                 <field name="phone"/>
                 <field name="email"/>
-                <field name="user_code" string="Technical Code"/>
-                <field name="web_user_id" groups="base.group_system"/>
+                <field name="odoo_user_id" groups="base.group_system"/>
                 <filter string="Active" name="active" domain="[('active','=',True)]"/>
-                <filter string="Web Access" name="web_access" domain="[('web_user_id','!=',False)]" groups="base.group_system"/>
+                <filter string="Has Odoo User" name="has_odoo_user" domain="[('odoo_user_id','!=',False)]" groups="base.group_system"/>
                 <filter string="Archived" name="archived" domain="[('active','=',False)]"/>
             </search>
         </field>
@@ -25,9 +24,8 @@
                 <field name="name" decoration-bf="1"/>
                 <field name="phone" optional="show"/>
                 <field name="email" optional="show"/>
+                <field name="odoo_user_id" string="Odoo User" optional="hide" groups="base.group_system"/>
                 <field name="active" readonly="1" optional="hide"/>
-                <field name="web_user_id" string="Web Account" optional="hide" groups="base.group_system"/>
-                <field name="user_code" string="Technical Code" optional="hide"/>
             </list>
         </field>
     </record>
@@ -82,34 +80,9 @@
                                 </list>
                             </field>
                         </page>
-                        <page string="Web Access" groups="base.group_system">
-                            <group>
-                                <group string="Odoo Backend Account">
-                                    <field name="web_user_id" options="{'no_create': True}"/>
-                                    <button
-                                        name="action_open_web_user"
-                                        type="object"
-                                        string="Open Web Account"
-                                        icon="fa-external-link"
-                                        class="btn-secondary"
-                                        invisible="not web_user_id"
-                                    />
-                                </group>
-                                <group string="Identity Boundary">
-                                    <div class="text-muted" colspan="2">
-                                        Link an internal Odoo account only when this NSP User needs backend access.
-                                        Odoo Web login, Groups, ACLs and Record Rules are managed on the linked Web Account.
-                                        RFID, Vehicle, Parking, Mobile and Notification ownership remain on this NSP User.
-                                    </div>
-                                </group>
-                            </group>
-                        </page>
-                        <page string="Note">
-                            <field name="note" nolabel="1"/>
-                        </page>
-                        <page string="Technical" groups="nsp_core.group_nsp_it_parking,base.group_system">
-                            <group>
-                                <field name="user_code" readonly="1" widget="CopyClipboardChar"/>
+                        <page string="Settings" groups="base.group_system">
+                            <group string="User">
+                                <field name="odoo_user_id" options="{'no_create': True, 'no_open': True}"/>
                             </group>
                         </page>
                     </notebook>

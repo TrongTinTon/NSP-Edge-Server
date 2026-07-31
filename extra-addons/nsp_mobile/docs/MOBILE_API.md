@@ -1,24 +1,27 @@
 # NSP Mobile API v1
 
-## Security model
+## Identity and authorization
 
-- Mobile authentication is user-bound and does not use the Service Application Client Secret.
-- Login/refresh/logout are Core API authentication routes:
+- Mobile login uses the active internal Odoo User (`res.users`) login and password.
+- The Odoo User must be linked to one active `nsp.user` through `odoo_user_id`.
+- There is no separate Mobile Access flag, Mobile Login or Mobile Password.
+- Odoo User activation, Groups, ACLs and Record Rules determine access to Mobile business operations.
+- Odoo multi-factor authentication is never bypassed; accounts requiring an MFA step are rejected until the Mobile MFA flow is implemented.
+- Login/refresh/logout routes are:
   - `POST /v1/mobile/auth/login`
   - `POST /v1/mobile/auth/refresh`
   - `POST /v1/mobile/auth/logout`
 - A successful login issues a rotating Core API Mobile Token bound to:
-  - `nsp.user`
-  - `nsp.mobile.session`
-  - `nsp.mobile.device`
-- Business endpoints are normal `core.api.endpoint` routes owned by the system `NSP Mobile` Core API Application.
-- Business requests never accept `user_id` or `user_code` to select the current user. The authenticated user always comes from the Mobile Token.
+  - `res.users` as the authenticated subject;
+  - `nsp.mobile.session`;
+  - `nsp.mobile.device`.
+- Business requests never accept `user_id` or `user_code` to choose the current user. The linked `nsp.user` is resolved from the authenticated Odoo User.
 
 ## Authentication request
 
 ```json
 {
-  "login": "user@example.com",
+  "login": "odoo.user@example.com",
   "password": "********",
   "device": {
     "device_uid": "device-generated-stable-id",
@@ -58,10 +61,10 @@
 - `POST /v1/mobile/notifications/read-all`
 - `GET /v1/mobile/realtime/events?after_id=...`
 
+## Password change
+
+`POST /v1/mobile/auth/change-password` changes the standard Odoo User password. Existing Mobile sessions are revoked and the client must sign in again.
+
 ## Notification delivery
 
 `nsp.notification` remains the source of truth. `nsp.notification.delivery` is transport state.
-
-- Realtime provider is implemented as device-bound event delivery acknowledged by `/mobile/realtime/events`.
-- Push providers are provider-agnostic (`none`, `fcm`, `apns`, `custom`) at the device layer.
-- FCM/APNs network adapters are intentionally not hard-coded into this base module. A provider module can extend `nsp.notification.delivery.service` without changing Parking or Mobile business logic.

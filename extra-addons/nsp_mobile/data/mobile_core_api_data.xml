@@ -8,7 +8,7 @@
         <field name="token_ttl_hours">1</field>
         <field name="refresh_token_ttl_days">30</field>
         <field name="rate_limit_per_minute">180</field>
-        <field name="notes">System Mobile Application. Mobile users authenticate with user credentials and receive user-bound Mobile Tokens; shared Client Secret authentication is disabled for this application.</field>
+        <field name="notes">System Mobile Application. Users authenticate with linked Odoo User credentials and receive res.users-bound Mobile Tokens. Authorization uses standard Odoo Groups, ACLs and Record Rules.</field>
     </record>
     <record id="action_endpoint_manager_nsp_mobile" model="action.endpoint.manager">
         <field name="name">NSP Mobile Core API Endpoints</field>

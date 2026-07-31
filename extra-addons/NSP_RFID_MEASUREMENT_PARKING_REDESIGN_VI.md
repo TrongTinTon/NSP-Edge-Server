@@ -30,7 +30,7 @@ Model `nsp.rfid.tag.assignment` lưu lịch sử cấp/revoke:
 
 ## 3. Giao diện User và Vehicle
 
-- User form cho phép scan/nhập Employee TID, revoke tag và xem lịch sử.
+- User form cho phép scan/nhập Employee TID và revoke tag. Không có tab RFID Assignment History; thao tác cấp/revoke được ghi vào Chatter chuẩn của Odoo, gồm người thao tác và thời điểm.
 - Tab Vehicles trên User cho phép tạo nhanh phương tiện và cấp Vehicle TID.
 - Không còn menu Vehicles độc lập.
 - Model `nsp.vehicle` vẫn được giữ để phục vụ parking, mobile, history và Vehicle Borrow.

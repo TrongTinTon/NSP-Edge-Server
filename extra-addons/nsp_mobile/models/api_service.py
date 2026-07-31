@@ -2,7 +2,7 @@
 from datetime import timedelta
 
 from odoo import api, fields, models, _
-from odoo.exceptions import AccessError, ValidationError
+from odoo.exceptions import AccessDenied, AccessError, ValidationError
 from odoo.addons.t4_coreapi.utils.core_api_utils import endpoint, get_body, get_params
 
 
@@ -15,9 +15,26 @@ class NspMobileApiService(models.Model):
         ctx = self.env.context
         if ctx.get('core_api_token_kind') != 'mobile':
             raise AccessError(_('Mobile Token is required.'))
-        if ctx.get('core_api_subject_model') != 'nsp.user' or not ctx.get('core_api_subject_id'):
-            raise AccessError(_('Mobile Token has no valid user binding.'))
-        user = self.env['nsp.user'].sudo().browse(int(ctx['core_api_subject_id'])).exists()
+        if ctx.get('core_api_subject_model') != 'res.users' or not ctx.get('core_api_subject_id'):
+            raise AccessError(_('Mobile Token has no valid Odoo User binding.'))
+
+        odoo_user = self.env['res.users'].sudo().browse(
+            int(ctx['core_api_subject_id'])
+        ).exists()
+        if not odoo_user or not odoo_user.active or self.env.uid != odoo_user.id:
+            raise AccessError(_('Odoo User is inactive or no longer authorized.'))
+
+        mapped_user = self.env['nsp.user'].sudo().search([
+            ('odoo_user_id', '=', odoo_user.id),
+            ('active', '=', True),
+        ], limit=1)
+        user = self.env['nsp.user'].search([
+            ('id', '=', mapped_user.id),
+            ('active', '=', True),
+        ], limit=1) if mapped_user else self.env['nsp.user']
+        if not user:
+            raise AccessError(_('No accessible active NSP User is linked to this Odoo User.'))
+
         session = self.env['nsp.mobile.session'].sudo().search([
             ('session_uid', '=', ctx.get('core_api_session_uid')),
             ('user_id', '=', user.id),
@@ -28,10 +45,10 @@ class NspMobileApiService(models.Model):
             ('user_id', '=', user.id),
             ('active', '=', True),
         ], limit=1)
-        if not user or not user.active or not user.mobile_enabled or not session or not device:
+        if not session or not device:
             raise AccessError(_('Mobile session is no longer active.'))
         session.touch()
-        return user, device, session
+        return user, odoo_user, device, session
 
     @api.model
     def _pagination(self, params, default=50, maximum=200):
@@ -157,9 +174,13 @@ class NspMobileApiService(models.Model):
 
     @endpoint('NSP Mobile Profile', route_path='mobile/me', methods='GET', code='nsp_mobile_me')
     def api_me(self):
-        user, device, session = self._mobile_context()
+        user, odoo_user, device, session = self._mobile_context()
         return {'data': {
-            'user': self._user_data(user, include_contact=True),
+            'user': {
+                **self._user_data(user, include_contact=True),
+                'odoo_user_id': odoo_user.id,
+                'login': odoo_user.login,
+            },
             'device': {
                 'device_uid': device.device_uid, 'platform': device.platform,
                 'device_name': device.device_name or None, 'app_version': device.app_version or None,
@@ -170,7 +191,7 @@ class NspMobileApiService(models.Model):
 
     @endpoint('NSP Mobile Profile Update', route_path='mobile/me/update', methods='PATCH', code='nsp_mobile_me_update')
     def api_me_update(self):
-        user, _device, _session = self._mobile_context()
+        user, _odoo_user, _device, _session = self._mobile_context()
         body = get_body(self)
         allowed = {'name', 'email', 'phone'}
         unsupported = sorted(set(body) - allowed)
@@ -181,12 +202,12 @@ class NspMobileApiService(models.Model):
             if key in body:
                 vals[key] = str(body.get(key) or '').strip() or False
         if vals:
-            user.sudo().write(vals)
+            user.write(vals)
         return {'data': {'user': self._user_data(user, include_contact=True)}, 'message': 'OK'}
 
     @endpoint('NSP Mobile Devices Register', route_path='mobile/devices/register', methods='POST', code='nsp_mobile_device_register')
     def api_device_register(self):
-        user, device, _session = self._mobile_context()
+        user, _odoo_user, device, _session = self._mobile_context()
         body = get_body(self)
         requested_uid = str(body.get('device_uid') or device.device_uid).strip()
         if requested_uid != device.device_uid:
@@ -196,61 +217,76 @@ class NspMobileApiService(models.Model):
 
     @endpoint('NSP Mobile Device Heartbeat', route_path='mobile/devices/heartbeat', methods='POST', code='nsp_mobile_device_heartbeat')
     def api_device_heartbeat(self):
-        _user, device, _session = self._mobile_context()
+        _user, _odoo_user, device, _session = self._mobile_context()
         device.touch(sync=True)
         return {'data': {}, 'message': 'OK'}
 
     @endpoint('NSP Mobile Device Unregister', route_path='mobile/devices/unregister', methods='POST', code='nsp_mobile_device_unregister')
     def api_device_unregister(self):
-        _user, device, session = self._mobile_context()
+        _user, _odoo_user, device, session = self._mobile_context()
         session.revoke()
         device.sudo().write({'active': False, 'push_enabled': False, 'push_token': False})
         return {'data': {}, 'message': 'OK'}
 
     @endpoint('NSP Mobile Vehicles', route_path='mobile/vehicles', methods='GET', code='nsp_mobile_vehicles')
     def api_vehicles(self):
-        user, _device, _session = self._mobile_context()
-        vehicles = self.env['nsp.vehicle'].sudo().search([('owner_id', '=', user.id), ('active', '=', True)], order='license_plate')
+        user, _odoo_user, _device, _session = self._mobile_context()
+        vehicles = self.env['nsp.vehicle'].search([
+            ('owner_id', '=', user.id),
+            ('active', '=', True),
+        ], order='license_plate')
         latest = {}
         if vehicles:
-            self.env.cr.execute('''
-                SELECT DISTINCT ON (vehicle_id) id, vehicle_id
-                  FROM nsp_parking_transaction
-                 WHERE vehicle_id = ANY(%s) AND status = 'allowed'
-                 ORDER BY vehicle_id, event_time DESC, id DESC
-            ''', [vehicles.ids])
-            tx_ids = [row[0] for row in self.env.cr.fetchall()]
-            for tx in self.env['nsp.parking.transaction'].sudo().browse(tx_ids):
-                latest[tx.vehicle_id.id] = tx
+            transactions = self.env['nsp.parking.transaction'].search([
+                ('vehicle_id', 'in', vehicles.ids),
+                ('status', '=', 'allowed'),
+            ], order='vehicle_id, event_time desc, id desc')
+            for transaction in transactions:
+                latest.setdefault(transaction.vehicle_id.id, transaction)
         now = fields.Datetime.now()
-        borrows = self.env['nsp.vehicle.borrow'].sudo().search([
-            ('vehicle_id', 'in', vehicles.ids), ('state', '=', 'active'), ('returned_at', '=', False),
-            ('valid_from', '<=', now), ('valid_to', '>=', now),
+        borrows = self.env['nsp.vehicle.borrow'].search([
+            ('vehicle_id', 'in', vehicles.ids),
+            ('state', '=', 'active'),
+            ('returned_at', '=', False),
+            ('valid_from', '<=', now),
+            ('valid_to', '>=', now),
         ]) if vehicles else self.env['nsp.vehicle.borrow']
         borrow_by_vehicle = {rec.vehicle_id.id: rec for rec in borrows}
-        return {'data': {'items': [self._vehicle_data(v, latest.get(v.id), borrow_by_vehicle.get(v.id)) for v in vehicles]}, 'message': 'OK'}
+        return {
+            'data': {
+                'items': [
+                    self._vehicle_data(
+                        vehicle,
+                        latest.get(vehicle.id),
+                        borrow_by_vehicle.get(vehicle.id),
+                    )
+                    for vehicle in vehicles
+                ]
+            },
+            'message': 'OK',
+        }
 
     @endpoint('NSP Mobile Vehicle Detail', route_path='mobile/vehicle', methods='GET', code='nsp_mobile_vehicle')
     def api_vehicle(self):
-        user, _device, _session = self._mobile_context()
+        user, _odoo_user, _device, _session = self._mobile_context()
         params = get_params(self)
         try:
             vehicle_id = int(params.get('vehicle_id') or 0)
         except (TypeError, ValueError):
             vehicle_id = 0
-        vehicle = self.env['nsp.vehicle'].sudo().search([('id', '=', vehicle_id), ('owner_id', '=', user.id), ('active', '=', True)], limit=1)
+        vehicle = self.env['nsp.vehicle'].search([('id', '=', vehicle_id), ('owner_id', '=', user.id), ('active', '=', True)], limit=1)
         if not vehicle:
             raise AccessError(_('Vehicle not found or not owned by the current user.'))
-        latest = self.env['nsp.parking.transaction'].sudo().search([('vehicle_id', '=', vehicle.id), ('status', '=', 'allowed')], order='event_time desc, id desc', limit=1)
-        borrow = self.env['nsp.vehicle.borrow'].sudo().find_valid_borrow(vehicle)
+        latest = self.env['nsp.parking.transaction'].search([('vehicle_id', '=', vehicle.id), ('status', '=', 'allowed')], order='event_time desc, id desc', limit=1)
+        borrow = self.env['nsp.vehicle.borrow'].find_valid_borrow(vehicle)
         return {'data': self._vehicle_data(vehicle, latest, borrow), 'message': 'OK'}
 
     @endpoint('NSP Mobile Parking History', route_path='mobile/parking-history', methods='GET', code='nsp_mobile_parking_history')
     def api_parking_history(self):
-        user, _device, _session = self._mobile_context()
+        user, _odoo_user, _device, _session = self._mobile_context()
         params = get_params(self)
         limit, offset = self._pagination(params)
-        owned = self.env['nsp.vehicle'].sudo().search([('owner_id', '=', user.id)])
+        owned = self.env['nsp.vehicle'].search([('owner_id', '=', user.id)])
         domain = [('vehicle_id', 'in', owned.ids)]
         if params.get('vehicle_id'):
             try:
@@ -260,48 +296,48 @@ class NspMobileApiService(models.Model):
             if vehicle_id not in owned.ids:
                 raise AccessError(_('Vehicle not found or not owned by the current user.'))
             domain.append(('vehicle_id', '=', vehicle_id))
-        Tx = self.env['nsp.parking.transaction'].sudo()
+        Tx = self.env['nsp.parking.transaction']
         total = Tx.search_count(domain)
         records = Tx.search(domain, order='event_time desc, id desc', limit=limit, offset=offset)
         return {'data': {'total': total, 'items': [self._transaction_data(rec) for rec in records]}, 'message': 'OK'}
 
     @endpoint('NSP Mobile Friend Search', route_path='mobile/friends/search', methods='GET', code='nsp_mobile_friend_search')
     def api_friend_search(self):
-        user, _device, _session = self._mobile_context()
+        user, _odoo_user, _device, _session = self._mobile_context()
         q = str(get_params(self).get('q') or '').strip()
         if len(q) < 2:
             return {'data': {'items': []}, 'message': 'OK'}
-        candidates = self.env['nsp.user'].sudo().search([
-            ('id', '!=', user.id), ('active', '=', True), ('mobile_enabled', '=', True),
+        candidates = self.env['nsp.user'].search([
+            ('id', '!=', user.id), ('active', '=', True),
             '|', '|', ('name', 'ilike', q), ('email', 'ilike', q), ('phone', 'ilike', q),
         ], limit=20, order='name')
         return {'data': {'items': [self._user_data(rec) for rec in candidates]}, 'message': 'OK'}
 
     @endpoint('NSP Mobile Friends', route_path='mobile/friends', methods='GET', code='nsp_mobile_friends')
     def api_friends(self):
-        user, _device, _session = self._mobile_context()
-        friendships = self.env['nsp.user.friendship'].sudo().search([
+        user, _odoo_user, _device, _session = self._mobile_context()
+        friendships = self.env['nsp.user.friendship'].search([
             ('state', '=', 'accepted'), '|', ('requester_id', '=', user.id), ('addressee_id', '=', user.id),
         ], order='id desc')
         return {'data': {'items': [self._friendship_data(rec, user) for rec in friendships]}, 'message': 'OK'}
 
     @endpoint('NSP Mobile Friend Requests', route_path='mobile/friends/requests', methods='GET', code='nsp_mobile_friend_requests')
     def api_friend_requests(self):
-        user, _device, _session = self._mobile_context()
-        records = self.env['nsp.user.friendship'].sudo().search([
+        user, _odoo_user, _device, _session = self._mobile_context()
+        records = self.env['nsp.user.friendship'].search([
             ('state', '=', 'pending'), '|', ('requester_id', '=', user.id), ('addressee_id', '=', user.id),
         ], order='id desc')
         return {'data': {'items': [self._friendship_data(rec, user) for rec in records]}, 'message': 'OK'}
 
     @endpoint('NSP Mobile Friend Request Create', route_path='mobile/friends/request', methods='POST', code='nsp_mobile_friend_request')
     def api_friend_request(self):
-        user, _device, _session = self._mobile_context()
+        user, _odoo_user, _device, _session = self._mobile_context()
         body = get_body(self)
         friend_id = self._body_int(body, 'friend_id')
-        friend = self.env['nsp.user'].sudo().browse(friend_id).exists()
+        friend = self.env['nsp.user'].browse(friend_id).exists()
         if not friend or not friend.active or friend == user:
             raise ValidationError(_('Invalid friend_id.'))
-        Friendship = self.env['nsp.user.friendship'].sudo()
+        Friendship = self.env['nsp.user.friendship']
         pair_key = Friendship._make_pair_key(user.id, friend.id)
         existing = Friendship.search([('pair_key', '=', pair_key)], limit=1)
         if existing:
@@ -311,9 +347,9 @@ class NspMobileApiService(models.Model):
 
     @endpoint('NSP Mobile Friend Request Accept', route_path='mobile/friends/accept', methods='POST', code='nsp_mobile_friend_accept')
     def api_friend_accept(self):
-        user, _device, _session = self._mobile_context()
+        user, _odoo_user, _device, _session = self._mobile_context()
         body = get_body(self)
-        friendship = self.env['nsp.user.friendship'].sudo().search([
+        friendship = self.env['nsp.user.friendship'].search([
             ('id', '=', self._body_int(body, 'friendship_id')), ('addressee_id', '=', user.id), ('state', '=', 'pending')
         ], limit=1)
         if not friendship:
@@ -323,9 +359,9 @@ class NspMobileApiService(models.Model):
 
     @endpoint('NSP Mobile Friend Cancel', route_path='mobile/friends/cancel', methods='POST', code='nsp_mobile_friend_cancel')
     def api_friend_cancel(self):
-        user, _device, _session = self._mobile_context()
+        user, _odoo_user, _device, _session = self._mobile_context()
         body = get_body(self)
-        friendship = self.env['nsp.user.friendship'].sudo().search([
+        friendship = self.env['nsp.user.friendship'].search([
             ('id', '=', self._body_int(body, 'friendship_id')), '|', ('requester_id', '=', user.id), ('addressee_id', '=', user.id)
         ], limit=1)
         if not friendship:
@@ -335,27 +371,27 @@ class NspMobileApiService(models.Model):
 
     @endpoint('NSP Mobile Borrows', route_path='mobile/borrows', methods='GET', code='nsp_mobile_borrows')
     def api_borrows(self):
-        user, _device, _session = self._mobile_context()
-        records = self.env['nsp.vehicle.borrow'].sudo().search([
+        user, _odoo_user, _device, _session = self._mobile_context()
+        records = self.env['nsp.vehicle.borrow'].search([
             '|', ('vehicle_id.owner_id', '=', user.id), ('borrower_id', '=', user.id)
         ], order='valid_from desc, id desc', limit=200)
         return {'data': {'items': [self._borrow_data(rec) for rec in records]}, 'message': 'OK'}
 
     @endpoint('NSP Mobile Borrow Create', route_path='mobile/borrows/create', methods='POST', code='nsp_mobile_borrow_create')
     def api_borrow_create(self):
-        user, _device, _session = self._mobile_context()
+        user, _odoo_user, _device, _session = self._mobile_context()
         body = get_body(self)
         vehicle_id = self._body_int(body, 'vehicle_id')
         borrower_id = self._body_int(body, 'borrower_id')
-        vehicle = self.env['nsp.vehicle'].sudo().search([('id', '=', vehicle_id), ('owner_id', '=', user.id), ('active', '=', True)], limit=1)
+        vehicle = self.env['nsp.vehicle'].search([('id', '=', vehicle_id), ('owner_id', '=', user.id), ('active', '=', True)], limit=1)
         if not vehicle:
             raise AccessError(_('Vehicle not found or not owned by the current user.'))
-        borrower = self.env['nsp.user'].sudo().browse(borrower_id).exists()
+        borrower = self.env['nsp.user'].browse(borrower_id).exists()
         if not borrower or not borrower.active:
             raise ValidationError(_('Borrower not found.'))
         valid_from = self._parse_datetime(body.get('valid_from'), 'valid_from', default=fields.Datetime.now())
         valid_to = self._parse_datetime(body.get('valid_to'), 'valid_to', default=valid_from + timedelta(days=1))
-        borrow = self.env['nsp.vehicle.borrow'].sudo().create({
+        borrow = self.env['nsp.vehicle.borrow'].create({
             'vehicle_id': vehicle.id, 'borrower_id': borrower_id,
             'valid_from': valid_from, 'valid_to': valid_to,
         })
@@ -363,9 +399,9 @@ class NspMobileApiService(models.Model):
 
     @endpoint('NSP Mobile Borrow End', route_path='mobile/borrows/end', methods='POST', code='nsp_mobile_borrow_end')
     def api_borrow_end(self):
-        user, _device, _session = self._mobile_context()
+        user, _odoo_user, _device, _session = self._mobile_context()
         body = get_body(self)
-        borrow = self.env['nsp.vehicle.borrow'].sudo().search([
+        borrow = self.env['nsp.vehicle.borrow'].search([
             ('id', '=', self._body_int(body, 'borrow_id')), ('vehicle_id.owner_id', '=', user.id), ('state', '=', 'active')
         ], limit=1)
         if not borrow:
@@ -375,9 +411,9 @@ class NspMobileApiService(models.Model):
 
     @endpoint('NSP Mobile Borrow Cancel', route_path='mobile/borrows/cancel', methods='POST', code='nsp_mobile_borrow_cancel')
     def api_borrow_cancel(self):
-        user, _device, _session = self._mobile_context()
+        user, _odoo_user, _device, _session = self._mobile_context()
         body = get_body(self)
-        borrow = self.env['nsp.vehicle.borrow'].sudo().search([
+        borrow = self.env['nsp.vehicle.borrow'].search([
             ('id', '=', self._body_int(body, 'borrow_id')), ('vehicle_id.owner_id', '=', user.id)
         ], limit=1)
         if not borrow:
@@ -387,63 +423,68 @@ class NspMobileApiService(models.Model):
 
     @endpoint('NSP Mobile Notifications', route_path='mobile/notifications', methods='GET', code='nsp_mobile_notifications')
     def api_notifications(self):
-        user, _device, _session = self._mobile_context()
+        user, _odoo_user, _device, _session = self._mobile_context()
         params = get_params(self)
         limit, offset = self._pagination(params)
         domain = [('recipient_user_id', '=', user.id), ('active', '=', True)]
         state = str(params.get('state') or '').strip()
         if state in ('unread', 'read'):
             domain.append(('state', '=', state))
-        Notification = self.env['nsp.notification'].sudo()
+        Notification = self.env['nsp.notification']
         total = Notification.search_count(domain)
         records = Notification.search(domain, order='event_time desc, id desc', limit=limit, offset=offset)
         return {'data': {'total': total, 'items': [self._notification_data(rec) for rec in records]}, 'message': 'OK'}
 
     @endpoint('NSP Mobile Notification Unread Count', route_path='mobile/notifications/unread-count', methods='GET', code='nsp_mobile_notification_unread_count')
     def api_notification_unread_count(self):
-        user, _device, _session = self._mobile_context()
-        count = self.env['nsp.notification'].sudo().search_count([
+        user, _odoo_user, _device, _session = self._mobile_context()
+        count = self.env['nsp.notification'].search_count([
             ('recipient_user_id', '=', user.id), ('state', '=', 'unread'), ('active', '=', True)
         ])
         return {'data': {'count': count}, 'message': 'OK'}
 
     @endpoint('NSP Mobile Notification Read', route_path='mobile/notifications/read', methods='POST', code='nsp_mobile_notification_read')
     def api_notification_read(self):
-        user, _device, _session = self._mobile_context()
+        user, _odoo_user, _device, _session = self._mobile_context()
         body = get_body(self)
-        rec = self.env['nsp.notification'].sudo().search([
+        rec = self.env['nsp.notification'].search([
             ('id', '=', self._body_int(body, 'notification_id')), ('recipient_user_id', '=', user.id), ('active', '=', True)
         ], limit=1)
         if not rec:
             raise AccessError(_('Notification not found.'))
-        rec.write({'state': 'read', 'read_at': fields.Datetime.now(), 'read_by': False})
+        rec.write({'state': 'read', 'read_at': fields.Datetime.now(), 'read_by': self.env.user.id})
         return {'data': self._notification_data(rec), 'message': 'OK'}
 
     @endpoint('NSP Mobile Notification Read All', route_path='mobile/notifications/read-all', methods='POST', code='nsp_mobile_notification_read_all')
     def api_notification_read_all(self):
-        user, _device, _session = self._mobile_context()
-        records = self.env['nsp.notification'].sudo().search([
+        user, _odoo_user, _device, _session = self._mobile_context()
+        records = self.env['nsp.notification'].search([
             ('recipient_user_id', '=', user.id), ('state', '=', 'unread'), ('active', '=', True)
         ])
         if records:
-            records.write({'state': 'read', 'read_at': fields.Datetime.now(), 'read_by': False})
+            records.write({'state': 'read', 'read_at': fields.Datetime.now(), 'read_by': self.env.user.id})
         return {'data': {'updated': len(records)}, 'message': 'OK'}
 
     @endpoint('NSP Mobile Change Password', route_path='mobile/auth/change-password', methods='POST', code='nsp_mobile_change_password')
     def api_change_password(self):
-        user, _device, _session = self._mobile_context()
+        _user, odoo_user, _device, _session = self._mobile_context()
         body = get_body(self)
         current_password = str(body.get('current_password') or '')
         new_password = str(body.get('new_password') or '')
-        if not user.check_mobile_password(current_password):
-            raise AccessError(_('Current password is incorrect.'))
-        current_session_uid = self.env.context.get('core_api_session_uid')
-        user.with_context(keep_mobile_session_uid=current_session_uid)._set_mobile_password(new_password)
-        return {'data': {}, 'message': 'OK'}
+        if len(new_password) < 8:
+            raise ValidationError(_('New password must contain at least 8 characters.'))
+        try:
+            odoo_user.with_user(odoo_user).change_password(current_password, new_password)
+        except AccessDenied as exc:
+            raise AccessError(_('Current password is incorrect.')) from exc
+        return {
+            'data': {'reauthenticate': True},
+            'message': 'Password changed. Sign in again with the Odoo User password.',
+        }
 
     @endpoint('NSP Mobile Realtime Events', route_path='mobile/realtime/events', methods='GET', code='nsp_mobile_realtime_events')
     def api_realtime_events(self):
-        user, device, _session = self._mobile_context()
+        user, _odoo_user, device, _session = self._mobile_context()
         params = get_params(self)
         try:
             after_id = max(0, int(params.get('after_id') or 0))

@@ -36,19 +36,6 @@
                         </list>
                     </field>
                 </page>
-                <page string="RFID Assignment History" name="nsp_user_rfid_history">
-                    <field name="employee_tag_assignment_ids" nolabel="1">
-                        <list create="0" edit="0" delete="0" decoration-muted="state == 'revoked'">
-                            <field name="tid"/>
-                            <field name="state" widget="badge" decoration-success="state == 'active'" decoration-muted="state == 'revoked'"/>
-                            <field name="assigned_at"/>
-                            <field name="assigned_by_id"/>
-                            <field name="revoked_at"/>
-                            <field name="revoked_by_id"/>
-                            <button name="action_revoke" type="object" string="Revoke" invisible="state != 'active'"/>
-                        </list>
-                    </field>
-                </page>
             </xpath>
         </field>
     </record>
