@@ -103,7 +103,6 @@
                         <page string="Settings" name="nsp_user_settings" groups="base.group_system">
                             <group>
                                 <group string="System" name="nsp_user_system_settings">
-                                    <field name="user_code" string="Code" readonly="1" widget="CopyClipboardChar"/>
                                     <field name="odoo_user_id" string="Login"
                                            options="{'no_create': True, 'no_open': True}"/>
                                 </group>

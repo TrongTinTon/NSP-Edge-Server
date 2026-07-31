@@ -2,7 +2,7 @@
     'name': 'NSP User',
     'summary': 'NSP master business users and friendships',
     'description': 'NSP business users linked optionally one-to-one with standard Odoo Users for Web and Mobile authentication. Access remains controlled by Odoo Groups, ACLs and Record Rules.',
-    'version': '19.0.13.1.0',
+    'version': '19.0.13.2.0',
     'sequence': 10,
     'author': 'BKU Team',
     'category': 'Services',
