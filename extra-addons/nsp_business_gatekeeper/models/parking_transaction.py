@@ -93,9 +93,9 @@ class ParkingTransaction(models.Model):
         string="Decision", required=True, default="allowed", index=True,
     )
     error_code = fields.Selection([
-        ("missing_user_tid", "Missing User RFID Card"),
+        ("missing_employee_tid", "Missing Employee RFID Tag"),
         ("vehicle_not_found", "Vehicle Not Found"),
-        ("user_not_assigned", "User Card Not Assigned"),
+        ("employee_tag_not_assigned", "Employee Tag Not Assigned"),
         ("unauthorized_vehicle_user", "Unauthorized Vehicle User"),
         ("check_out_without_check_in", "Check-out Without Previous Check-in"),
         ("continuity_duplicate", "Duplicate Event Type"),
@@ -169,9 +169,9 @@ class ParkingTransaction(models.Model):
     @api.model
     def _error_catalog(self):
         return {
-            "missing_user_tid": ("missing_tag", "critical"),
+            "missing_employee_tid": ("missing_tag", "critical"),
             "vehicle_not_found": ("auth", "critical"),
-            "user_not_assigned": ("auth", "critical"),
+            "employee_tag_not_assigned": ("auth", "critical"),
             "unauthorized_vehicle_user": ("borrow", "critical"),
             "check_out_without_check_in": ("continuity", "warning"),
             "continuity_duplicate": ("continuity", "warning"),
@@ -184,9 +184,9 @@ class ParkingTransaction(models.Model):
         text = str(message or "").lower()
         mapping = (
             ("vehicle not found", "vehicle_not_found"),
-            ("user tid is required", "missing_user_tid"),
-            ("missing user", "missing_user_tid"),
-            ("user tid is not assigned", "user_not_assigned"),
+            ("user tid is required", "missing_employee_tid"),
+            ("missing user", "missing_employee_tid"),
+            ("user tid is not assigned", "employee_tag_not_assigned"),
             ("borrow", "unauthorized_vehicle_user"),
             ("no previous check-in", "check_out_without_check_in"),
             ("already", "continuity_duplicate"),
@@ -225,27 +225,12 @@ class ParkingTransaction(models.Model):
         return primary, " ".join(messages) or False
 
     def _resolve_vehicle_by_tid(self, vehicle_tid):
-        tid = str(vehicle_tid or "").strip()
-        if not tid:
-            return self.env["nsp.vehicle"].browse()
-        line = self.env["nsp.vehicle.card"].sudo().search([
-            ("card_id.tid", "=", tid),
-            ("state", "=", "active"),
-            ("vehicle_id.active", "=", True),
-        ], limit=1)
-        return line.vehicle_id if line else self.env["nsp.vehicle"].browse()
+        assignment = self.env["nsp.rfid.tag.assignment"].sudo().active_for_tid(vehicle_tid)
+        return assignment.vehicle_id if assignment and assignment.vehicle_id.active else self.env["nsp.vehicle"].browse()
 
     def _resolve_user_by_tid(self, user_tid):
-        tid = str(user_tid or "").strip()
-        if not tid:
-            return self.env["nsp.user"].browse()
-        line = self.env["nsp.user.card"].sudo().search([
-            ("card_id.tid", "=", tid),
-            ("card_id.card_type", "=", "user_card"),
-            ("state", "=", "active"),
-            ("user_id.active", "=", True),
-        ], limit=1)
-        return line.user_id if line else self.env["nsp.user"].browse()
+        assignment = self.env["nsp.rfid.tag.assignment"].sudo().active_for_tid(user_tid)
+        return assignment.user_id if assignment and assignment.user_id.active else self.env["nsp.user"].browse()
 
     @api.model
     def _validate_vehicle_borrow_access(self, vehicle, user, event_time):
@@ -323,16 +308,20 @@ class ParkingTransaction(models.Model):
         return records
 
     def _live_monitor_display_meta(self):
-        """Return customer-facing display policy for one final transaction.
+        """Return the gate-facing decision for the final transaction.
 
-        Operational warnings such as duplicate continuity are intentionally not
-        shown as red stop messages. They remain auditable in Parking Transaction
-        and IT Dashboard, but they are not actionable for a driver at the gate.
+        Check-out is the security-critical decision: every denied Check-out is
+        displayed as a stop alert. Benign duplicate Check-in reads remain hidden
+        from drivers while staying auditable in Parking Transactions.
         """
         self.ensure_one()
-        if self.event_type != "check_in":
-            return {"display_kind": "none", "display_title": "", "display_reason": ""}
         if self.status == "allowed":
+            if self.event_type == "check_out":
+                return {
+                    "display_kind": "entry",
+                    "display_title": _("ĐƯỢC PHÉP LẤY XE"),
+                    "display_reason": "",
+                }
             return {
                 "display_kind": "entry",
                 "display_title": _("MỜI VÀO"),
@@ -341,20 +330,26 @@ class ParkingTransaction(models.Model):
 
         code = self.error_code or "unknown"
         _category, severity = self._error_catalog().get(code, ("unknown", "warning"))
-        if severity != "critical":
+        if self.event_type == "check_in" and severity != "critical":
             return {"display_kind": "ignore", "display_title": "", "display_reason": ""}
 
         reasons = {
             "vehicle_not_found": _("THẺ XE CHƯA ĐƯỢC CẤP"),
             "parking_area_not_operational": _("BÃI XE TẠM NGƯNG VẬN HÀNH"),
-            "missing_user_tid": _("THIẾU THẺ NGƯỜI DÙNG"),
-            "user_not_assigned": _("THẺ NGƯỜI DÙNG CHƯA ĐƯỢC CẤP"),
-            "unauthorized_vehicle_user": _("NGƯỜI DÙNG KHÔNG ĐƯỢC PHÉP SỬ DỤNG XE"),
+            "missing_employee_tid": _("THIẾU THẺ NHÂN VIÊN"),
+            "employee_tag_not_assigned": _("THẺ NHÂN VIÊN CHƯA ĐƯỢC CẤP"),
+            "unauthorized_vehicle_user": _("NGƯỜI QUÉT KHÔNG ĐƯỢC PHÉP LẤY XE"),
+            "check_out_without_check_in": _("XE KHÔNG CÓ TRẠNG THÁI ĐANG TRONG BÃI"),
+            "continuity_duplicate": _("TRẠNG THÁI XE KHÔNG HỢP LỆ"),
         }
         return {
             "display_kind": "alert",
-            "display_title": _("VUI LÒNG DỪNG LẠI"),
-            "display_reason": reasons.get(code, _("VUI LÒNG LIÊN HỆ NHÂN VIÊN BẢO VỆ")),
+            "display_title": _("KHÔNG ĐƯỢC PHÉP LẤY XE")
+            if self.event_type == "check_out" else _("VUI LÒNG DỪNG LẠI"),
+            "display_reason": reasons.get(
+                code,
+                _("VUI LÒNG LIÊN HỆ NHÂN VIÊN BẢO VỆ"),
+            ),
         }
 
     def _live_monitor_payload(self, slot_snapshot=None):
@@ -368,6 +363,7 @@ class ParkingTransaction(models.Model):
         area = self.parking_area_id
         vehicle = self.vehicle_id
         owner = vehicle.owner_id if vehicle else self.env["nsp.user"].browse()
+        gate_user = self.user_id if self.event_type == "check_out" and self.user_id else owner
         vehicle_type = vehicle.vehicle_type_id if vehicle else self.env["nsp.vehicle.type"].browse()
         vehicle_type_code = str(vehicle_type.code or "").strip().lower() if vehicle_type else ""
         capacity = max(int(area.motorbike_capacity or 0), 0) if area else 0
@@ -385,7 +381,10 @@ class ParkingTransaction(models.Model):
                 slot_delta = 1
 
         license_plate = (self.license_plate or self.vehicle_tid or "-").strip().upper()
-        employee_name = (owner.name or _("Unknown employee")).strip().upper() if owner else _("Unknown employee").upper()
+        employee_name = (
+            (gate_user.name or _("Unknown employee")).strip().upper()
+            if gate_user else _("Unknown employee").upper()
+        )
         return {
             "id": self.id,
             "transaction_uid": self.transaction_uid,
@@ -463,7 +462,7 @@ class ParkingTransaction(models.Model):
 
     @api.model
     def create_from_detection_group(
-        self, detections, resolved_event_type=False, vehicle_by_card=None, user_by_card=None
+        self, detections, resolved_event_type=False, vehicle_by_tag=None, user_by_tag=None
     ):
         """Create one vehicle-centric Parking Transaction.
 
@@ -484,22 +483,22 @@ class ParkingTransaction(models.Model):
         if event_type not in ("check_in", "check_out"):
             raise ValidationError(_("unresolved_parking_event_type"))
         vehicle_events = detections.filtered(
-            lambda rec: rec.card_id.card_type == "vehicle_card"
+            lambda rec: bool(rec.vehicle_id)
         )
         if not vehicle_events:
-            raise ValidationError(_("Vehicle RFID card/TID is required for every Parking Transaction."))
+            raise ValidationError(_("Vehicle RFID Tag/TID is required for every Parking Transaction."))
 
-        vehicle_cards = vehicle_events.mapped("card_id")
-        if len(vehicle_cards) != 1:
+        vehicle_records = vehicle_events.mapped("vehicle_id")
+        if len(vehicle_records) != 1:
             raise ValidationError(_("mixed_vehicle_detection_group"))
         ordered_vehicle = vehicle_events.sorted(key=lambda rec: (rec.detected_at, rec.id))
         vehicle_event = ordered_vehicle[-1]
         event_time = vehicle_event.detected_at
-        vehicle_tid = vehicle_event.card_id.tid
-        if vehicle_by_card is None:
+        vehicle_tid = vehicle_event.tag_id.tid
+        if vehicle_by_tag is None:
             vehicle = self._resolve_vehicle_by_tid(vehicle_tid)
         else:
-            vehicle = vehicle_by_card.get(vehicle_event.card_id.id) or self.env["nsp.vehicle"].browse()
+            vehicle = vehicle_by_tag.get(vehicle_event.tag_id.id) or vehicle_event.vehicle_id
 
         # Entry is intentionally vehicle-only. Even if User reads exist in the
         # same RF field, they are not part of Check-in business validation.
@@ -508,15 +507,15 @@ class ParkingTransaction(models.Model):
         user = self.env["nsp.user"].browse()
         if event_type == "check_out":
             user_events = detections.filtered(
-                lambda rec: rec.card_id.card_type == "user_card"
+                lambda rec: bool(rec.user_id)
             )
             user_event = user_events[:1]
             if user_event:
-                user_tid = user_event.card_id.tid
-                if user_by_card is None:
+                user_tid = user_event.tag_id.tid
+                if user_by_tag is None:
                     user = self._resolve_user_by_tid(user_tid)
                 else:
-                    user = user_by_card.get(user_event.card_id.id) or self.env["nsp.user"].browse()
+                    user = user_by_tag.get(user_event.tag_id.id) or user_event.user_id
 
         errors = []
         if lane.parking_area_id.state != "operational":
@@ -527,9 +526,9 @@ class ParkingTransaction(models.Model):
         borrow = self.env["nsp.vehicle.borrow"].browse()
         if event_type == "check_out":
             if not user_event:
-                errors.append(("missing_user_tid", _("User RFID card/TID is required for Check-out.")))
+                errors.append(("missing_employee_tid", _("Employee RFID Tag/TID is required for Check-out.")))
             elif not user:
-                errors.append(("user_not_assigned", _("User TID is not assigned to an active NSP User.")))
+                errors.append(("employee_tag_not_assigned", _("User TID is not assigned to an active NSP User.")))
             elif vehicle:
                 borrow_ok, borrow_error, borrow = self._validate_vehicle_borrow_access(
                     vehicle, user, event_time

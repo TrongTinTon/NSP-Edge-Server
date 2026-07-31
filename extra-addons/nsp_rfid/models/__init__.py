@@ -1,1 +1,1 @@
-from . import rfid_card
+from . import rfid_tag

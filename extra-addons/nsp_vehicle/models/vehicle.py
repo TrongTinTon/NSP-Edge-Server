@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
-from odoo import api, fields, models
-from odoo.addons.nsp_core.utils import (
-    new_management_code,
-    strip_empty_x2many_create_commands,
-)
+from odoo import api, fields, models, _
+from odoo.exceptions import ValidationError
+from odoo.addons.nsp_core.utils import new_management_code
 
 
 class Vehicle(models.Model):
-    """Internal vehicle master data and RFID assignments."""
+    """Vehicle master owned by one NSP User with one active RFID Tag."""
 
     _name = "nsp.vehicle"
     _description = "Vehicle Management"
@@ -16,38 +14,82 @@ class Vehicle(models.Model):
     _order = "license_plate, id"
 
     vehicle_code = fields.Char(
-        string="Technical Code", required=True, readonly=True, copy=False, index=True,
+        string="Technical Code",
+        required=True,
+        readonly=True,
+        copy=False,
+        index=True,
         default=lambda self: new_management_code("VEH"),
         help="Stable system-generated identifier used for Cloud/Edge synchronization.",
     )
-    license_plate = fields.Char(string="License Plate", required=True, tracking=True, index=True)
-    owner_id = fields.Many2one(
-        "nsp.user", string="Owner", required=True, tracking=True,
-        ondelete="restrict", index=True,
+    license_plate = fields.Char(
+        string="License Plate",
+        required=True,
+        tracking=True,
+        index=True,
     )
-    vehicle_type_id = fields.Many2one("nsp.vehicle.type", string="Vehicle Type", ondelete="set null", tracking=True)
-    brand_id = fields.Many2one("nsp.reference.brand", string="Brand", ondelete="set null", tracking=True, index=True)
-    model_id = fields.Many2one("nsp.reference.model", string="Model", ondelete="set null", tracking=True, index=True)
-    color_id = fields.Many2one("nsp.vehicle.color", string="Color", ondelete="set null", tracking=True)
+    owner_id = fields.Many2one(
+        "nsp.user",
+        string="Owner",
+        required=True,
+        tracking=True,
+        ondelete="restrict",
+        index=True,
+    )
+    vehicle_type_id = fields.Many2one(
+        "nsp.vehicle.type",
+        string="Vehicle Type",
+        ondelete="set null",
+        tracking=True,
+    )
+    brand_id = fields.Many2one(
+        "nsp.reference.brand",
+        string="Brand",
+        ondelete="set null",
+        tracking=True,
+        index=True,
+    )
+    model_id = fields.Many2one(
+        "nsp.reference.model",
+        string="Model",
+        ondelete="set null",
+        tracking=True,
+        index=True,
+    )
+    color_id = fields.Many2one(
+        "nsp.vehicle.color",
+        string="Color",
+        ondelete="set null",
+        tracking=True,
+    )
     active = fields.Boolean(default=True, tracking=True, index=True)
 
-    vehicle_card_ids = fields.One2many(
-        "nsp.vehicle.card", "vehicle_id", string="Vehicle Cards",
-        help="All cards assigned to this vehicle. Only active assignments are synchronized.",
+    tag_assignment_ids = fields.One2many(
+        "nsp.rfid.tag.assignment",
+        "vehicle_id",
+        string="RFID Tag History",
+        readonly=True,
+    )
+    active_tag_assignment_id = fields.Many2one(
+        "nsp.rfid.tag.assignment",
+        compute="_compute_active_tag",
+        string="RFID Tag",
     )
     tid = fields.Char(
-        string="Primary Active TID", compute="_compute_vehicle_card_tids",
-        readonly=True, copy=False,
-        help="First active Vehicle Card TID for display/API convenience. Master Card is the source of truth.",
+        compute="_compute_active_tag",
+        string="RFID TID",
     )
-    vehicle_tid_tids = fields.Char(
-        string="All Active Vehicle TIDs", compute="_compute_vehicle_card_tids", readonly=True,
-    )
-    active_vehicle_card_count = fields.Integer(
-        string="Active Vehicle Cards", compute="_compute_vehicle_card_tids",
+    rfid_tid_input = fields.Char(
+        string="Assign RFID TID",
+        compute="_compute_rfid_tid_input",
+        inverse="_inverse_rfid_tid_input",
+        store=False,
+        help="Scan or enter a TID. A missing whitelist record is created automatically.",
     )
     borrow_ids = fields.One2many(
-        "nsp.vehicle.borrow", "vehicle_id", string="Authorized Users",
+        "nsp.vehicle.borrow",
+        "vehicle_id",
+        string="Authorized Users",
         help="Temporary vehicle-use permissions granted by the owner to accepted friends.",
     )
 
@@ -56,112 +98,89 @@ class Vehicle(models.Model):
         ("license_plate_uniq", "unique(license_plate)", "This license plate already exists in the system!"),
     ]
 
-    @api.depends("vehicle_card_ids.state", "vehicle_card_ids.card_id.tid")
-    def _compute_vehicle_card_tids(self):
-        for rec in self:
-            tids = rec.vehicle_card_ids.filtered(
-                lambda line: line.state == "active" and line.card_id.tid
-            ).mapped("card_id.tid")
-            rec.tid = tids[0] if tids else False
-            rec.vehicle_tid_tids = ",".join(tids) if tids else False
-            rec.active_vehicle_card_count = len(tids)
+    @api.depends("tag_assignment_ids.state", "tag_assignment_ids.tid")
+    def _compute_active_tag(self):
+        assignments = self.env["nsp.rfid.tag.assignment"].sudo().search([
+            ("vehicle_id", "in", self.ids),
+            ("state", "=", "active"),
+        ], order="assigned_at desc, id desc") if self.ids else self.env["nsp.rfid.tag.assignment"].browse()
+        assignment_by_vehicle = {}
+        for assignment in assignments:
+            assignment_by_vehicle.setdefault(assignment.vehicle_id.id, assignment)
+        empty = self.env["nsp.rfid.tag.assignment"].browse()
+        for vehicle in self:
+            assignment = assignment_by_vehicle.get(vehicle.id, empty)
+            vehicle.active_tag_assignment_id = assignment
+            vehicle.tid = assignment.tid if assignment else False
+
+    @api.depends("tid")
+    def _compute_rfid_tid_input(self):
+        for vehicle in self:
+            vehicle.rfid_tid_input = vehicle.tid or False
+
+    def _assign_rfid_tid(self, raw_tid):
+        Assignment = self.env["nsp.rfid.tag.assignment"]
+        Tag = self.env["nsp.rfid.tag"]
+        for vehicle in self:
+            tid = Tag._normalize_tid(raw_tid)
+            if not tid:
+                continue
+            if not vehicle.active:
+                raise ValidationError(_("An archived Vehicle cannot receive an RFID Tag."))
+            current = Assignment.sudo().active_for_vehicle(vehicle)
+            if current:
+                if current.tid == tid:
+                    continue
+                raise ValidationError(_(
+                    "Vehicle %s already has an active RFID Tag. Revoke it before assigning another TID."
+                ) % vehicle.display_name)
+            tag = Tag.sudo().get_or_create_by_tid(tid)
+            Assignment.sudo().with_context(
+                rfid_audit_user_id=self.env.user.id,
+            ).create({
+                "tag_id": tag.id,
+                "vehicle_id": vehicle.id,
+            })
+
+    def _inverse_rfid_tid_input(self):
+        for vehicle in self:
+            vehicle._assign_rfid_tid(vehicle.rfid_tid_input)
 
     @api.model
     def _normalize_license_plate(self, value):
-        if not value:
-            return value
-        return " ".join(str(value).strip().upper().split())
-
-    def _sanitize_vehicle_card_commands(self, commands):
-        commands = strip_empty_x2many_create_commands(
-            commands,
-            required_field="card_id",
-            ignored_fields={
-                "vehicle_id",
-                "state",
-                "assigned_at",
-                "revoked_at",
-            },
-        )
-        if not commands:
-            return commands
-
-        assignments = self.mapped("vehicle_card_ids") if self else self.env["nsp.vehicle.card"]
-        removed_ids = {
-            int(command[1])
-            for command in commands
-            if isinstance(command, (list, tuple))
-            and len(command) > 1
-            and command[0] in (2, 3)
-            and command[1]
-        }
-        existing_cards = assignments.filtered(lambda rec: rec.id not in removed_ids).mapped("card_id")
-        seen_card_ids = set(existing_cards.ids)
-        seen_tids = {
-            self.env["nsp.rfid.card"]._normalize_tid(tid)
-            for tid in existing_cards.mapped("tid")
-            if tid
-        }
-
-        cleaned = []
-        Card = self.env["nsp.rfid.card"]
-        for command in commands:
-            if not isinstance(command, (list, tuple)) or len(command) < 3 or command[0] != 0:
-                cleaned.append(command)
-                continue
-
-            values = command[2] if isinstance(command[2], dict) else {}
-            card_id = values.get("card_id")
-            if isinstance(card_id, (list, tuple)):
-                card_id = card_id[0] if card_id else False
-            card_id = int(card_id) if card_id else False
-            tid = Card._normalize_tid(values.get("scan_tid"))
-            if not card_id and tid:
-                card = Card.search([("tid", "=", tid)], limit=1)
-                card_id = card.id or False
-
-            if (card_id and card_id in seen_card_ids) or (tid and tid in seen_tids):
-                continue
-
-            cleaned.append(command)
-            if card_id:
-                seen_card_ids.add(card_id)
-                card = Card.browse(card_id)
-                if card.exists() and card.tid:
-                    seen_tids.add(Card._normalize_tid(card.tid))
-            if tid:
-                seen_tids.add(tid)
-
-        return cleaned
+        return " ".join(str(value or "").strip().upper().split()) or False
 
     @api.model_create_multi
     def create(self, vals_list):
         prepared = []
+        pending_tids = []
         for source in vals_list:
             vals = dict(source)
+            pending_tids.append(vals.pop("rfid_tid_input", False))
             vals["vehicle_code"] = str(
                 vals.get("vehicle_code") or new_management_code("VEH")
             ).strip().upper()
-            if "vehicle_card_ids" in vals:
-                vals["vehicle_card_ids"] = self._sanitize_vehicle_card_commands(
-                    vals.get("vehicle_card_ids")
-                )
-            if vals.get("license_plate"):
-                vals["license_plate"] = self._normalize_license_plate(vals["license_plate"])
+            vals["license_plate"] = self._normalize_license_plate(vals.get("license_plate"))
             prepared.append(vals)
-        return super().create(prepared)
+        records = super().create(prepared)
+        for vehicle, tid in zip(records, pending_tids):
+            if tid:
+                vehicle._assign_rfid_tid(tid)
+        return records
 
     def write(self, vals):
         values = dict(vals)
-        if "vehicle_card_ids" in values:
-            values["vehicle_card_ids"] = self._sanitize_vehicle_card_commands(
-                values.get("vehicle_card_ids")
-            )
+        pending_tid = values.pop("rfid_tid_input", None)
         if values.get("vehicle_code"):
             values["vehicle_code"] = str(values["vehicle_code"]).strip().upper()
-        if values.get("license_plate"):
-            values["license_plate"] = self._normalize_license_plate(values["license_plate"])
-        return super().write(values)
+        if "license_plate" in values:
+            values["license_plate"] = self._normalize_license_plate(values.get("license_plate"))
+        if values.get("active") is False:
+            self._revoke_rfid_tag(actor_user_id=self.env.user.id)
+        result = super().write(values)
+        if pending_tid is not None:
+            self._assign_rfid_tid(pending_tid)
+        return result
 
     @api.onchange("brand_id")
     def _onchange_brand_id(self):
@@ -173,8 +192,18 @@ class Vehicle(models.Model):
     def _check_model_brand(self):
         for record in self:
             if record.model_id and record.model_id.brand_id != record.brand_id:
-                from odoo.exceptions import ValidationError
-                raise ValidationError("Vehicle Model must belong to the selected Brand.")
+                raise ValidationError(_("Vehicle Model must belong to the selected Brand."))
+
+    def _revoke_rfid_tag(self, actor_user_id=False):
+        Assignment = self.env["nsp.rfid.tag.assignment"].sudo()
+        for vehicle in self:
+            Assignment.active_for_vehicle(vehicle).with_context(
+                rfid_audit_user_id=actor_user_id or self.env.user.id,
+            ).action_revoke()
+
+    def action_revoke_rfid_tag(self):
+        self._revoke_rfid_tag(actor_user_id=self.env.user.id)
+        return True
 
     def action_archive(self):
         self.write({"active": False})

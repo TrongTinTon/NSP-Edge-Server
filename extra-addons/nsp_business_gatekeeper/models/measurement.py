@@ -132,7 +132,7 @@ class NspMeasurementSession(models.Model):
             session.reader_count = len(session.reader_line_ids)
             session.target_count = len(session.target_line_ids)
             session.target_tag_count = sum(
-                int(bool(line.user_card_id)) + int(bool(line.vehicle_card_id))
+                int(bool(line.user_assignment_id)) + int(bool(line.vehicle_assignment_id))
                 for line in session.target_line_ids
             )
 
@@ -155,7 +155,7 @@ class NspMeasurementSession(models.Model):
 
         One target line is one real-world measurement pair: one active User RFID Tag
         and one active Vehicle RFID Tag. The License Plate is resolved from the active
-        Vehicle Card assignment. Partially entered rows are never silently discarded.
+        Vehicle RFID Tag assignment. Partially entered rows are never silently discarded.
         """
         if not commands:
             return commands
@@ -175,12 +175,12 @@ class NspMeasurementSession(models.Model):
         }
         existing = self.mapped("target_line_ids") if self and not clear_all else Target
         existing = existing.filtered(lambda line: line.id not in removed_ids)
-        seen_users = set(existing.mapped("user_card_id").ids)
-        seen_vehicles = set(existing.mapped("vehicle_card_id").ids)
+        seen_users = set(existing.mapped("user_assignment_id").ids)
+        seen_vehicles = set(existing.mapped("vehicle_assignment_id").ids)
         seen_pairs = {
-            (line.user_card_id.id, line.vehicle_card_id.id)
+            (line.user_assignment_id.id, line.vehicle_assignment_id.id)
             for line in existing
-            if line.user_card_id and line.vehicle_card_id
+            if line.user_assignment_id and line.vehicle_assignment_id
         }
 
         cleaned = []
@@ -191,8 +191,8 @@ class NspMeasurementSession(models.Model):
             operation = command[0]
             if operation == 0 and len(command) >= 3:
                 values = Target._prepare_scanned_values(dict(command[2] or {}))
-                user_id = Target._many2one_id(values.get("user_card_id"))
-                vehicle_id = Target._many2one_id(values.get("vehicle_card_id"))
+                user_id = Target._many2one_id(values.get("user_assignment_id"))
+                vehicle_id = Target._many2one_id(values.get("vehicle_assignment_id"))
                 has_user_input = bool(user_id or Target._normalize_tid(values.get("user_scan_tid")))
                 has_vehicle_input = bool(vehicle_id or Target._normalize_tid(values.get("vehicle_scan_tid")))
 
@@ -223,7 +223,7 @@ class NspMeasurementSession(models.Model):
             if operation == 1 and len(command) >= 3:
                 values = dict(command[2] or {})
                 if {
-                    "user_scan_tid", "user_card_id", "vehicle_scan_tid", "vehicle_card_id"
+                    "user_scan_tid", "user_assignment_id", "vehicle_scan_tid", "vehicle_assignment_id"
                 }.intersection(values):
                     values = Target._prepare_scanned_values(values)
                 cleaned.append((1, command[1], values))
@@ -252,39 +252,23 @@ class NspMeasurementSession(models.Model):
 
     def write(self, vals):
         values = dict(vals)
-        usage_cards = (
-            (self.mapped("target_line_ids.user_card_id") | self.mapped("target_line_ids.vehicle_card_id"))
-            if "status" in values or "target_line_ids" in values
-            else self.env["nsp.rfid.card"]
-        )
         if "target_line_ids" in values:
             values["target_line_ids"] = self._sanitize_target_commands(values.get("target_line_ids"))
         configuration_fields = {
-            "measurement_code",
-            "target_line_ids",
-            "reader_line_ids",
-            "planned_start_at",
-            "planned_end_at",
-            "note",
+            "measurement_code", "target_line_ids", "reader_line_ids",
+            "planned_start_at", "planned_end_at", "note",
         }
         if configuration_fields.intersection(values) and not self.env.context.get("measurement_sync"):
             protected = self.filtered(lambda session: session.status not in ("draft", "completed"))
             if protected:
-                raise ValidationError(
-                    _("Measurement configuration can be edited only while Draft or after completion before Measure Again.")
-                )
+                raise ValidationError(_(
+                    "Measurement configuration can be edited only while Draft or after completion before Measure Again."
+                ))
         if "measurement_code" in values:
             values["measurement_code"] = str(values.get("measurement_code") or "").strip().upper()
         result = super().write(values)
         if {"target_line_ids", "reader_line_ids"}.intersection(values):
             self._validate_measurement_scope()
-        if "status" in values or "target_line_ids" in values:
-            usage_cards |= (
-                self.mapped("target_line_ids.user_card_id")
-                | self.mapped("target_line_ids.vehicle_card_id")
-            )
-            if usage_cards:
-                usage_cards.invalidate_recordset(["is_used", "usage_state", "assigned_to"])
         return result
 
     @api.constrains("planned_start_at", "planned_end_at")
@@ -320,14 +304,14 @@ class NspMeasurementSession(models.Model):
                 if invalid:
                     raise ValidationError(_("Every Measurement Antenna must belong to its Reader."))
             incomplete = session.target_line_ids.filtered(
-                lambda line: not line.user_card_id or not line.vehicle_card_id or not line.license_plate
+                lambda line: not line.user_assignment_id or not line.vehicle_assignment_id or not line.license_plate
             )
             if incomplete:
                 raise ValidationError(_(
                     "Every RFID Target line must contain one User RFID Tag, one Vehicle RFID Tag and a License Plate."
                 ))
-            user_ids = session.target_line_ids.mapped("user_card_id").ids
-            vehicle_ids = session.target_line_ids.mapped("vehicle_card_id").ids
+            user_ids = session.target_line_ids.mapped("user_assignment_id").ids
+            vehicle_ids = session.target_line_ids.mapped("vehicle_assignment_id").ids
             if len(user_ids) != len(set(user_ids)):
                 raise ValidationError(_(
                     "A User RFID Tag can be selected only once in a Measurement Session."
@@ -337,8 +321,8 @@ class NspMeasurementSession(models.Model):
                     "A Vehicle RFID Tag can be selected only once in a Measurement Session."
                 ))
             for target in session.target_line_ids:
-                user = target._resolve_card(target.user_card_id.id, expected_type="user_card")
-                vehicle = target._resolve_card(target.vehicle_card_id.id, expected_type="vehicle_card")
+                user = target._resolve_assignment(target.user_assignment_id.id, expected_target="user")
+                vehicle = target._resolve_assignment(target.vehicle_assignment_id.id, expected_target="vehicle")
                 if int(user.get("user_id") or 0) != target.user_id.id:
                     raise ValidationError(_(
                         "User RFID Tag assignment changed after this Measurement target was created."
@@ -388,9 +372,9 @@ class NspMeasurementSession(models.Model):
 
     def _allowed_target_tids(self):
         self.ensure_one()
-        Card = self.env["nsp.rfid.card"]
+        Tag = self.env["nsp.rfid.tag"]
         tids = self.target_line_ids.mapped("user_tid") + self.target_line_ids.mapped("vehicle_tid")
-        return {Card._normalize_tid(tid) for tid in tids if tid}
+        return {Tag._normalize_tid(tid) for tid in tids if tid}
 
     def _allowed_antenna_pairs(self):
         self.ensure_one()
@@ -508,7 +492,7 @@ class NspMeasurementSession(models.Model):
         return self._release_new_revision()
 
     def action_apply_reader_settings(self, reader_line_id, power_dbm, read_interval_ms):
-        """Apply one Reader card and release a new shared revision."""
+        """Apply one Reader configuration and release a new shared revision."""
         self.ensure_one()
         if self.status not in ("running", "completed", "failed"):
             raise ValidationError(_("Reader settings can be applied only while running, completed, or failed."))
@@ -651,14 +635,14 @@ class NspMeasurementSession(models.Model):
             vehicle = tag_stats(line.vehicle_tid)
             result.append({
                 "id": line.id,
-                "user_card_id": line.user_card_id.id,
+                "user_assignment_id": line.user_assignment_id.id,
                 "user_tid": line.user_tid or "",
                 "user_name": line.user_id.display_name or "",
                 "user_detected": user["detected"],
                 "user_read_count": user["read_count"],
                 "user_first_read_at": user["first_read_at"],
                 "user_last_read_at": user["last_read_at"],
-                "vehicle_card_id": line.vehicle_card_id.id,
+                "vehicle_assignment_id": line.vehicle_assignment_id.id,
                 "vehicle_tid": line.vehicle_tid or "",
                 "vehicle_id": line.vehicle_id.id,
                 "license_plate": line.license_plate or "",
@@ -780,17 +764,17 @@ class NspMeasurementSession(models.Model):
             (line.reader_id.serial_number or "").strip().upper(): line
             for line in self.reader_line_ids
         }
-        cards = {}
+        targets_by_tid = {}
         for line in self.target_line_ids:
             if line.user_tid:
-                cards[line.user_tid] = {
-                    "card_type": "user_card",
+                targets_by_tid[line.user_tid] = {
+                    "assignment_role": "employee",
                     "assigned_to": line.user_id.display_name or "",
                     "license_plate": line.license_plate or "",
                 }
             if line.vehicle_tid:
-                cards[line.vehicle_tid] = {
-                    "card_type": "vehicle_card",
+                targets_by_tid[line.vehicle_tid] = {
+                    "assignment_role": "vehicle",
                     "assigned_to": line.license_plate or "",
                     "license_plate": line.license_plate or "",
                 }
@@ -806,7 +790,7 @@ class NspMeasurementSession(models.Model):
                 current.pop("_key", None)
                 steps.append(current)
             line = lines.get((event.serial_number or "").strip().upper())
-            target = cards.get(event.tid)
+            target = targets_by_tid.get(event.tid)
             controller = line.reader_id.controller_id if line else self.env["nsp.controller"]
             current = {
                 "_key": key,
@@ -814,7 +798,7 @@ class NspMeasurementSession(models.Model):
                 "first_seen_at": self._event_timestamp(event),
                 "last_seen_at": self._event_timestamp(event),
                 "tid": event.tid,
-                "card_type": target.get("card_type", "") if target else "",
+                "assignment_role": target.get("assignment_role", "") if target else "",
                 "assigned_to": target.get("assigned_to", "") if target else "",
                 "license_plate": target.get("license_plate", "") if target else "",
                 "controller_code": controller.controller_id if controller else "",
@@ -896,100 +880,77 @@ class NspMeasurementTargetLine(models.Model):
     _order = "session_id, license_plate, id"
 
     session_id = fields.Many2one(
-        "nsp.measurement.session",
-        required=True,
-        ondelete="cascade",
-        index=True,
+        "nsp.measurement.session", required=True, ondelete="cascade", index=True,
     )
     user_scan_tid = fields.Char(
-        string="User RFID Tag",
-        store=False,
-        copy=False,
-        help="Keyboard-scanned User RFID TID used to resolve the active User Card assignment.",
+        string="Employee RFID Tag", store=False, copy=False,
+        help="Keyboard-scanned TID resolved through the active User assignment.",
     )
-    user_card_id = fields.Many2one(
-        "nsp.rfid.card",
-        string="User RFID Tag",
-        required=True,
-        ondelete="restrict",
-        index=True,
-        domain=[
-            ("card_type", "=", "user_card"),
-            ("is_measurement_card", "=", True),
-        ],
+    user_assignment_id = fields.Many2one(
+        "nsp.rfid.tag.assignment", string="Employee RFID Tag", required=True,
+        ondelete="restrict", index=True,
+        domain=[("state", "=", "active"), ("user_id", "!=", False)],
     )
-    user_tid = fields.Char(related="user_card_id.tid", readonly=True, store=True, index=True)
+    user_tid = fields.Char(
+        related="user_assignment_id.tag_id.tid", readonly=True, store=True, index=True,
+    )
     user_id = fields.Many2one(
-        "nsp.user",
-        string="User",
-        required=True,
-        readonly=True,
-        ondelete="restrict",
-        index=True,
+        related="user_assignment_id.user_id", string="User", readonly=True,
+        store=True, ondelete="restrict", index=True,
     )
 
     vehicle_scan_tid = fields.Char(
-        string="Vehicle RFID Tag",
-        store=False,
-        copy=False,
-        help="Keyboard-scanned Vehicle RFID TID used to resolve the active Vehicle Card assignment.",
+        string="Vehicle RFID Tag", store=False, copy=False,
+        help="Keyboard-scanned TID resolved through the active Vehicle assignment.",
     )
-    vehicle_card_id = fields.Many2one(
-        "nsp.rfid.card",
-        string="Vehicle RFID Tag",
-        required=True,
-        ondelete="restrict",
-        index=True,
-        domain=[
-            ("card_type", "=", "vehicle_card"),
-            ("is_measurement_card", "=", True),
-        ],
+    vehicle_assignment_id = fields.Many2one(
+        "nsp.rfid.tag.assignment", string="Vehicle RFID Tag", required=True,
+        ondelete="restrict", index=True,
+        domain=[("state", "=", "active"), ("vehicle_id", "!=", False)],
     )
-    vehicle_tid = fields.Char(related="vehicle_card_id.tid", readonly=True, store=True, index=True)
+    vehicle_tid = fields.Char(
+        related="vehicle_assignment_id.tag_id.tid", readonly=True, store=True, index=True,
+    )
     vehicle_id = fields.Many2one(
-        "nsp.vehicle",
-        string="Vehicle",
-        required=True,
-        readonly=True,
-        ondelete="restrict",
-        index=True,
+        related="vehicle_assignment_id.vehicle_id", string="Vehicle", readonly=True,
+        store=True, ondelete="restrict", index=True,
     )
-    license_plate = fields.Char(required=True, readonly=True, index=True)
+    license_plate = fields.Char(
+        related="vehicle_assignment_id.vehicle_id.license_plate",
+        readonly=True, store=True, index=True,
+    )
 
     user_detection_state = fields.Selection(
         [("pending", "Not Detected"), ("detected", "Detected")],
-        compute="_compute_detection_state",
-        string="User Tag Status",
+        compute="_compute_detection_state", string="Employee Tag Status",
     )
     vehicle_detection_state = fields.Selection(
         [("pending", "Not Detected"), ("detected", "Detected")],
-        compute="_compute_detection_state",
-        string="Vehicle Tag Status",
+        compute="_compute_detection_state", string="Vehicle Tag Status",
     )
     pair_detection_state = fields.Selection(
         [("pending", "Incomplete"), ("detected", "Detected")],
-        compute="_compute_detection_state",
-        string="Pair Status",
+        compute="_compute_detection_state", string="Pair Status",
     )
-    user_detection_count = fields.Integer(compute="_compute_detection_state", string="User Reads")
+    user_detection_count = fields.Integer(compute="_compute_detection_state", string="Employee Reads")
     vehicle_detection_count = fields.Integer(compute="_compute_detection_state", string="Vehicle Reads")
 
     _sql_constraints = [
         (
             "measurement_target_user_unique",
-            "unique(session_id, user_card_id)",
-            "This User RFID Tag is already selected in the Measurement Session.",
+            "unique(session_id, user_assignment_id)",
+            "This Employee RFID Tag is already selected in the Measurement Session.",
         ),
         (
             "measurement_target_vehicle_unique",
-            "unique(session_id, vehicle_card_id)",
+            "unique(session_id, vehicle_assignment_id)",
             "This Vehicle RFID Tag is already selected in the Measurement Session.",
         ),
     ]
 
     @api.model
     def _normalize_tid(self, value):
-        return self.env["nsp.rfid.card"]._normalize_tid(value)
+        return self.env["nsp.rfid.tag"]._normalize_tid(value)
 
     @api.model
     def _many2one_id(self, value):
@@ -1003,54 +964,48 @@ class NspMeasurementTargetLine(models.Model):
             return 0
 
     @api.model
-    def _resolve_card(self, card_id=False, scan_tid=False, expected_type=False):
-        Card = self.env["nsp.rfid.card"].sudo()
-        resolved_id = self._many2one_id(card_id)
-        card = Card.browse(resolved_id).exists() if resolved_id else Card.browse()
-        tid = Card._normalize_tid(scan_tid or (card.tid if card else False))
+    def _resolve_assignment(self, assignment_id=False, scan_tid=False, expected_target=False):
+        Assignment = self.env["nsp.rfid.tag.assignment"].sudo()
+        resolved_id = self._many2one_id(assignment_id)
+        assignment = Assignment.browse(resolved_id).exists() if resolved_id else Assignment.browse()
+        tid = self._normalize_tid(scan_tid or (assignment.tid if assignment else False))
         if not tid:
             return {}
-        result = Card.nsp_validate_scan(
+        result = self.env["nsp.rfid.tag"].sudo().nsp_validate_scan(
             tid,
-            expected_card_type=expected_type,
-            require_available=False,
-            allow_card_id=resolved_id or False,
-            require_measurement_card=True,
             require_active_assignment=True,
+            expected_target=expected_target,
         )
-        if not result.get("valid") or not result.get("card_id"):
+        if not result.get("valid") or not result.get("assignment_id"):
             raise ValidationError(result.get("message") or _("Invalid Measurement RFID Tag."))
-        if resolved_id and int(result["card_id"]) != resolved_id:
-            raise ValidationError(_("The scanned RFID Tag does not match the selected Master Card."))
+        if resolved_id and int(result["assignment_id"]) != resolved_id:
+            raise ValidationError(_("The scanned RFID Tag does not match the selected active assignment."))
         return result
 
     @api.model
     def _prepare_scanned_values(self, vals):
         values = dict(vals)
         user_requested = bool(
-            values.get("user_card_id") or self._normalize_tid(values.get("user_scan_tid"))
+            values.get("user_assignment_id") or self._normalize_tid(values.get("user_scan_tid"))
         )
         vehicle_requested = bool(
-            values.get("vehicle_card_id") or self._normalize_tid(values.get("vehicle_scan_tid"))
+            values.get("vehicle_assignment_id") or self._normalize_tid(values.get("vehicle_scan_tid"))
         )
         if user_requested:
-            result = self._resolve_card(
-                values.get("user_card_id"), values.get("user_scan_tid"), "user_card"
+            result = self._resolve_assignment(
+                values.get("user_assignment_id"), values.get("user_scan_tid"), "user"
             )
             values.update({
-                "user_card_id": int(result["card_id"]),
+                "user_assignment_id": int(result["assignment_id"]),
                 "user_scan_tid": result.get("tid"),
-                "user_id": int(result.get("user_id") or 0),
             })
         if vehicle_requested:
-            result = self._resolve_card(
-                values.get("vehicle_card_id"), values.get("vehicle_scan_tid"), "vehicle_card"
+            result = self._resolve_assignment(
+                values.get("vehicle_assignment_id"), values.get("vehicle_scan_tid"), "vehicle"
             )
             values.update({
-                "vehicle_card_id": int(result["card_id"]),
+                "vehicle_assignment_id": int(result["assignment_id"]),
                 "vehicle_scan_tid": result.get("tid"),
-                "vehicle_id": int(result.get("vehicle_id") or 0),
-                "license_plate": str(result.get("license_plate") or "").strip().upper(),
             })
         return values
 
@@ -1061,8 +1016,7 @@ class NspMeasurementTargetLine(models.Model):
         if session_ids:
             rows = self.env["nsp.measurement.event"].sudo()._read_group(
                 [("session_id", "in", session_ids)],
-                ["session_id", "revision", "tid"],
-                ["__count"],
+                ["session_id", "revision", "tid"], ["__count"],
             )
             counts = {
                 (session.id, int(revision or 1), tid): int(count or 0)
@@ -1078,51 +1032,36 @@ class NspMeasurementTargetLine(models.Model):
             line.vehicle_detection_state = "detected" if vehicle_count else "pending"
             line.pair_detection_state = "detected" if user_count and vehicle_count else "pending"
 
-    def _invalidate_card_usage(self, cards):
-        if cards:
-            cards.invalidate_recordset(["is_used", "usage_state", "assigned_to"])
-
     @api.model_create_multi
     def create(self, vals_list):
         prepared = [self._prepare_scanned_values(vals) for vals in vals_list]
-        user_ids = [self._many2one_id(vals.get("user_card_id")) for vals in prepared]
-        vehicle_ids = [self._many2one_id(vals.get("vehicle_card_id")) for vals in prepared]
+        user_ids = [self._many2one_id(vals.get("user_assignment_id")) for vals in prepared]
+        vehicle_ids = [self._many2one_id(vals.get("vehicle_assignment_id")) for vals in prepared]
         if len(user_ids) != len(set(user_ids)):
-            raise ValidationError(_("The same User RFID Tag is entered more than once."))
+            raise ValidationError(_("The same Employee RFID Tag is entered more than once."))
         if len(vehicle_ids) != len(set(vehicle_ids)):
             raise ValidationError(_("The same Vehicle RFID Tag is entered more than once."))
-        records = super().create(prepared)
-        records._invalidate_card_usage(records.mapped("user_card_id") | records.mapped("vehicle_card_id"))
-        return records
+        return super().create(prepared)
 
     def write(self, vals):
-        before = self.mapped("user_card_id") | self.mapped("vehicle_card_id")
-        result = super().write(self._prepare_scanned_values(vals))
-        self._invalidate_card_usage(
-            before | self.mapped("user_card_id") | self.mapped("vehicle_card_id")
-        )
-        return result
+        return super().write(self._prepare_scanned_values(vals))
 
-    def unlink(self):
-        cards = self.mapped("user_card_id") | self.mapped("vehicle_card_id")
-        result = super().unlink()
-        self._invalidate_card_usage(cards)
-        return result
-
-    @api.constrains(
-        "user_card_id", "vehicle_card_id", "user_id", "vehicle_id", "license_plate"
-    )
+    @api.constrains("user_assignment_id", "vehicle_assignment_id", "session_id")
     def _check_target_pair(self):
+        Borrow = self.env["nsp.vehicle.borrow"].sudo()
         for line in self:
-            user = line._resolve_card(line.user_card_id.id, expected_type="user_card")
-            vehicle = line._resolve_card(line.vehicle_card_id.id, expected_type="vehicle_card")
-            if int(user.get("user_id") or 0) != line.user_id.id:
-                raise ValidationError(_("User RFID Tag assignment does not match the selected User."))
-            if int(vehicle.get("vehicle_id") or 0) != line.vehicle_id.id:
-                raise ValidationError(_("Vehicle RFID Tag assignment does not match the selected Vehicle."))
-            plate = str(vehicle.get("license_plate") or "").strip().upper()
-            if plate != str(line.license_plate or "").strip().upper():
-                raise ValidationError(_("License Plate does not match the Vehicle RFID Tag assignment."))
+            user = line.user_assignment_id.user_id
+            vehicle = line.vehicle_assignment_id.vehicle_id
+            if not user or line.user_assignment_id.state != "active":
+                raise ValidationError(_("Employee RFID Tag must have an active User assignment."))
+            if not vehicle or line.vehicle_assignment_id.state != "active":
+                raise ValidationError(_("Vehicle RFID Tag must have an active Vehicle assignment."))
+            if vehicle.owner_id != user:
+                when = line.session_id.planned_start_at or fields.Datetime.now()
+                if not Borrow.find_valid_borrow(vehicle, borrower=user, borrow_time=when):
+                    raise ValidationError(_(
+                        "The selected User must own the Vehicle or have an active Vehicle Borrow permission."
+                    ))
 
     @api.onchange("user_scan_tid")
     def _onchange_user_scan_tid(self):
@@ -1130,16 +1069,13 @@ class NspMeasurementTargetLine(models.Model):
             if not line._normalize_tid(line.user_scan_tid):
                 continue
             try:
-                result = line._resolve_card(scan_tid=line.user_scan_tid, expected_type="user_card")
+                result = line._resolve_assignment(scan_tid=line.user_scan_tid, expected_target="user")
             except ValidationError:
-                # The scan widget owns interactive invalid feedback. Do not turn
-                # an invalid scan into a generic Odoo popup that hides the red
-                # field state and the specific inline validation message.
-                line.user_card_id = False
-                line.user_id = False
+                line.user_assignment_id = False
                 continue
-            line.user_card_id = self.env["nsp.rfid.card"].browse(int(result["card_id"]))
-            line.user_id = self.env["nsp.user"].browse(int(result["user_id"]))
+            line.user_assignment_id = self.env["nsp.rfid.tag.assignment"].browse(
+                int(result["assignment_id"])
+            )
             line.user_scan_tid = result.get("tid")
 
     @api.onchange("vehicle_scan_tid")
@@ -1148,15 +1084,13 @@ class NspMeasurementTargetLine(models.Model):
             if not line._normalize_tid(line.vehicle_scan_tid):
                 continue
             try:
-                result = line._resolve_card(scan_tid=line.vehicle_scan_tid, expected_type="vehicle_card")
+                result = line._resolve_assignment(scan_tid=line.vehicle_scan_tid, expected_target="vehicle")
             except ValidationError:
-                line.vehicle_card_id = False
-                line.vehicle_id = False
-                line.license_plate = False
+                line.vehicle_assignment_id = False
                 continue
-            line.vehicle_card_id = self.env["nsp.rfid.card"].browse(int(result["card_id"]))
-            line.vehicle_id = self.env["nsp.vehicle"].browse(int(result["vehicle_id"]))
-            line.license_plate = str(result.get("license_plate") or "").strip().upper()
+            line.vehicle_assignment_id = self.env["nsp.rfid.tag.assignment"].browse(
+                int(result["assignment_id"])
+            )
             line.vehicle_scan_tid = result.get("tid")
 
 
@@ -1363,7 +1297,7 @@ class NspMeasurementEvent(models.Model):
             vals = dict(source)
             vals["event_uid"] = str(vals.get("event_uid") or "").strip()
             vals["serial_number"] = str(vals.get("serial_number") or "").strip().upper()
-            vals["tid"] = self.env["nsp.rfid.card"]._normalize_tid(vals.get("tid"))
+            vals["tid"] = self.env["nsp.rfid.tag"]._normalize_tid(vals.get("tid"))
             vals["revision"] = max(int(vals.get("revision") or 1), 1)
             vals["read_at_ms"] = max(0, min(int(vals.get("read_at_ms") or 0), 999))
             vals["read_interval_ms"] = max(1, min(int(vals.get("read_interval_ms") or 200), 60000))

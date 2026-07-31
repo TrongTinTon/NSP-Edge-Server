@@ -6,7 +6,9 @@
         <field name="arch" type="xml">
             <search>
                 <field name="event_uid"/>
-                <field name="card_id" context="{'nsp_simple_card_name': True}"/>
+                <field name="tag_id"/>
+                <field name="user_id"/>
+                <field name="vehicle_id"/>
                 <field name="lane_id"/>
                 <field name="antenna_id"/>
                 <field name="state"/>
@@ -14,8 +16,8 @@
                 <filter string="Pending" name="pending" domain="[('state','=','pending')]"/>
                 <filter string="Processed" name="processed" domain="[('state','=','processed')]"/>
                 <filter string="Errors" name="error" domain="[('state','=','error')]"/>
-                <filter string="Vehicle Cards" name="vehicle_cards" domain="[('card_id.card_type','=','vehicle_card')]"/>
-                <filter string="User Cards" name="user_cards" domain="[('card_id.card_type','=','user_card')]"/>
+                <filter string="Vehicle Tags" name="vehicle_tags" domain="[('vehicle_id','!=',False)]"/>
+                <filter string="Employee Tags" name="employee_tags" domain="[('user_id','!=',False)]"/>
                 <separator/>
                 <filter string="Lane" name="group_lane" context="{'group_by':'lane_id'}"/>
                 <filter string="State" name="group_state" context="{'group_by':'state'}"/>
@@ -31,7 +33,9 @@
                 <field name="detected_at"/>
                 <field name="lane_id"/>
                 <field name="antenna_id" optional="hide"/>
-                <field name="card_id" context="{'nsp_simple_card_name': True}"/>
+                <field name="tag_id"/>
+                <field name="vehicle_id" optional="show"/>
+                <field name="user_id" optional="show"/>
                 <field name="state" widget="badge"
                        decoration-success="state == 'processed'"
                        decoration-danger="state == 'error'"
@@ -47,6 +51,5 @@
         <field name="res_model">nsp.parking.detection.event</field>
         <field name="view_mode">list</field>
         <field name="search_view_id" ref="view_nsp_parking_detection_event_search"/>
-        <field name="context">{'nsp_simple_card_name': True}</field>
     </record>
 </odoo>

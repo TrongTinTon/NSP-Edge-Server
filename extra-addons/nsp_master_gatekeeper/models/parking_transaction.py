@@ -43,9 +43,9 @@ class ParkingTransaction(models.Model):
         index=True,
     )
     error_code = fields.Selection([
-        ("missing_user_tid", "Missing User RFID Card"),
+        ("missing_employee_tid", "Missing Employee RFID Tag"),
         ("vehicle_not_found", "Vehicle Not Found"),
-        ("user_not_assigned", "User Card Not Assigned"),
+        ("employee_tag_not_assigned", "Employee Tag Not Assigned"),
         ("unauthorized_vehicle_user", "Unauthorized Vehicle User"),
         ("check_out_without_check_in", "Check-out Without Previous Check-in"),
         ("continuity_duplicate", "Duplicate Event Type"),
@@ -93,9 +93,9 @@ class ParkingTransaction(models.Model):
     def _error_code_from_message(self, message):
         text = str(message or "").lower()
         checks = [
-            ("missing user", "missing_user_tid"),
+            ("missing user", "missing_employee_tid"),
             ("vehicle not found", "vehicle_not_found"),
-            ("not assigned", "user_not_assigned"),
+            ("not assigned", "employee_tag_not_assigned"),
             ("unauthorized", "unauthorized_vehicle_user"),
             ("without previous check-in", "check_out_without_check_in"),
             ("duplicate", "continuity_duplicate"),
@@ -113,27 +113,13 @@ class ParkingTransaction(models.Model):
 
     @api.model
     def _resolve_vehicle_by_tid(self, vehicle_tid):
-        tid = str(vehicle_tid or "").strip()
-        if not tid:
-            return self.env["nsp.vehicle"].browse()
-        line = self.env["nsp.vehicle.card"].sudo().search([
-            ("card_id.tid", "=", tid),
-            ("state", "=", "active"),
-            ("vehicle_id.active", "=", True),
-        ], order="assigned_at desc, id desc", limit=1)
-        return line.vehicle_id
+        assignment = self.env["nsp.rfid.tag.assignment"].sudo().active_for_tid(vehicle_tid)
+        return assignment.vehicle_id if assignment and assignment.vehicle_id.active else self.env["nsp.vehicle"].browse()
 
     @api.model
     def _resolve_user_by_tid(self, user_tid):
-        tid = str(user_tid or "").strip()
-        if not tid:
-            return self.env["nsp.user"].browse()
-        line = self.env["nsp.user.card"].sudo().search([
-            ("card_id.tid", "=", tid),
-            ("state", "=", "active"),
-            ("user_id.active", "=", True),
-        ], order="assigned_at desc, id desc", limit=1)
-        return line.user_id
+        assignment = self.env["nsp.rfid.tag.assignment"].sudo().active_for_tid(user_tid)
+        return assignment.user_id if assignment and assignment.user_id.active else self.env["nsp.user"].browse()
 
     @api.model
     def create_idempotent(self, vals, existing_by_uid=None):

@@ -3,10 +3,7 @@ from collections import defaultdict
 
 from odoo import api, fields, models, _
 from odoo.exceptions import AccessError, UserError, ValidationError
-from odoo.addons.nsp_core.utils import (
-    new_management_code,
-    strip_empty_x2many_create_commands,
-)
+from odoo.addons.nsp_core.utils import new_management_code
 
 
 class NspUser(models.Model):
@@ -46,22 +43,6 @@ class NspUser(models.Model):
         ),
     )
 
-    user_card_ids = fields.One2many(
-        "nsp.user.card",
-        "user_id",
-        string="User Cards",
-        help="RFID cards assigned to this user. Only active assignments are synchronized.",
-    )
-    user_rfid_tid = fields.Char(
-        string="Primary Active User TID",
-        compute="_compute_card_summary",
-        readonly=True,
-    )
-    active_user_card_count = fields.Integer(
-        string="Active User Cards",
-        compute="_compute_card_summary",
-    )
-
     friendship_sent_ids = fields.One2many(
         "nsp.user.friendship", "requester_id", string="Sent Friend Requests"
     )
@@ -95,26 +76,6 @@ class NspUser(models.Model):
     def _normalize_phone(self, value):
         return str(value or "").strip() or False
 
-    @api.depends("user_card_ids.state", "user_card_ids.card_id.tid", "user_card_ids.assigned_at")
-    def _compute_card_summary(self):
-        """Compute all user card summaries with one assignment query for the record batch."""
-        summary = defaultdict(list)
-        persisted_ids = [rec.id for rec in self if isinstance(rec.id, int)]
-        if persisted_ids:
-            lines = self.env["nsp.user.card"].sudo().search([
-                ("user_id", "in", persisted_ids),
-                ("state", "=", "active"),
-                ("card_id.tid", "!=", False),
-            ], order="user_id, assigned_at desc, id desc")
-            for line in lines:
-                if line.user_id and line.tid:
-                    summary[line.user_id.id].append(line.tid)
-
-        for rec in self:
-            tids = summary.get(rec.id, []) if isinstance(rec.id, int) else []
-            rec.user_rfid_tid = tids[0] if tids else False
-            rec.active_user_card_count = len(tids)
-
     @api.depends(
         "friendship_sent_ids.state",
         "friendship_received_ids.state",
@@ -142,68 +103,6 @@ class NspUser(models.Model):
         for rec in self:
             rec.accepted_friendship_ids = Friendship.browse(mapped.get(rec.id, []))
 
-    def _sanitize_user_card_commands(self, commands):
-        commands = strip_empty_x2many_create_commands(
-            commands,
-            required_field="card_id",
-            ignored_fields={
-                "user_id",
-                "state",
-                "assigned_at",
-                "revoked_at",
-            },
-        )
-        if not commands:
-            return commands
-
-        assignments = self.mapped("user_card_ids") if self else self.env["nsp.user.card"]
-        removed_ids = {
-            int(command[1])
-            for command in commands
-            if isinstance(command, (list, tuple))
-            and len(command) > 1
-            and command[0] in (2, 3)
-            and command[1]
-        }
-        existing_cards = assignments.filtered(lambda rec: rec.id not in removed_ids).mapped("card_id")
-        seen_card_ids = set(existing_cards.ids)
-        seen_tids = {
-            self.env["nsp.rfid.card"]._normalize_tid(tid)
-            for tid in existing_cards.mapped("tid")
-            if tid
-        }
-
-        cleaned = []
-        Card = self.env["nsp.rfid.card"]
-        for command in commands:
-            if not isinstance(command, (list, tuple)) or len(command) < 3 or command[0] != 0:
-                cleaned.append(command)
-                continue
-
-            values = command[2] if isinstance(command[2], dict) else {}
-            card_id = values.get("card_id")
-            if isinstance(card_id, (list, tuple)):
-                card_id = card_id[0] if card_id else False
-            card_id = int(card_id) if card_id else False
-            tid = Card._normalize_tid(values.get("scan_tid"))
-            if not card_id and tid:
-                card = Card.search([("tid", "=", tid)], limit=1)
-                card_id = card.id or False
-
-            if (card_id and card_id in seen_card_ids) or (tid and tid in seen_tids):
-                continue
-
-            cleaned.append(command)
-            if card_id:
-                seen_card_ids.add(card_id)
-                card = Card.browse(card_id)
-                if card.exists() and card.tid:
-                    seen_tids.add(Card._normalize_tid(card.tid))
-            if tid:
-                seen_tids.add(tid)
-
-        return cleaned
-
     @api.model_create_multi
     def create(self, vals_list):
         prepared = []
@@ -212,10 +111,6 @@ class NspUser(models.Model):
             vals["user_code"] = self._normalize_code(
                 vals.get("user_code") or new_management_code("USER")
             )
-            if "user_card_ids" in vals:
-                vals["user_card_ids"] = self._sanitize_user_card_commands(
-                    vals.get("user_card_ids")
-                )
             if "email" in vals:
                 vals["email"] = self._normalize_email(vals.get("email"))
             if "phone" in vals:
@@ -225,10 +120,6 @@ class NspUser(models.Model):
 
     def write(self, vals):
         values = dict(vals)
-        if "user_card_ids" in values:
-            values["user_card_ids"] = self._sanitize_user_card_commands(
-                values.get("user_card_ids")
-            )
         if "user_code" in values:
             normalized = self._normalize_code(values.get("user_code"))
             if any(rec.user_code and rec.user_code != normalized for rec in self):
@@ -270,13 +161,9 @@ class NspUser(models.Model):
         }
 
     def action_archive(self):
-        active = self.filtered("active")
-        if active:
-            active.write({"active": False})
+        self.filtered("active").write({"active": False})
         return True
 
     def action_unarchive(self):
-        archived = self.filtered(lambda rec: not rec.active)
-        if archived:
-            archived.write({"active": True})
+        self.filtered(lambda rec: not rec.active).write({"active": True})
         return True

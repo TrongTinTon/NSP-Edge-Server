@@ -84,7 +84,7 @@
                         <page string="Target Pairs">
                             <field name="target_line_ids" readonly="1">
                                 <list create="0" edit="0" delete="0">
-                                    <field name="user_tid" string="User RFID Tag"/>
+                                    <field name="user_tid" string="Employee RFID Tag"/>
                                     <field name="vehicle_tid" string="Vehicle RFID Tag"/>
                                     <field name="license_plate" string="License Plate"/>
                                 </list>

@@ -27,9 +27,9 @@
                 <filter string="Check-out" name="check_out" domain="[('event_type','=','check_out')]"/>
                 <filter string="Allowed" name="allowed" domain="[('status','=','allowed')]"/>
                 <filter string="Denied" name="denied" domain="[('status','=','denied')]"/>
-                <filter string="Missing User Card" name="missing_user_tid" domain="[('error_code','=','missing_user_tid')]"/>
+                <filter string="Missing Employee Tag" name="missing_employee_tid" domain="[('error_code','=','missing_employee_tid')]"/>
                 <filter string="Authentication Errors" name="auth_errors"
-                        domain="[('error_code','in',['vehicle_not_found','user_not_assigned','unauthorized_vehicle_user'])]"/>
+                        domain="[('error_code','in',['vehicle_not_found','employee_tag_not_assigned','unauthorized_vehicle_user'])]"/>
                 <separator/>
                 <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
                 <filter string="Lane" name="group_lane" context="{'group_by':'lane_id'}"/>

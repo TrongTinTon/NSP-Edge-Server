@@ -32,12 +32,6 @@ class VehicleCloudSyncMixin(models.AbstractModel):
         if "code" in values:
             values["code"] = str(values.get("code") or "").strip().upper()
 
-        # Self-heal records created by an older source where Technical Code was blank.
-        if not self.env.context.get("nsp_skip_code_self_heal"):
-            for record in self.filtered(lambda item: not (item.code or "").strip()):
-                record.with_context(nsp_skip_code_self_heal=True).write({
-                    "code": record._new_technical_code().strip().upper(),
-                })
         return super().write(values)
 
     @api.constrains("name", "code")

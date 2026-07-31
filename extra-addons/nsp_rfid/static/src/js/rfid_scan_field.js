@@ -39,9 +39,9 @@ export class NspRfidScanField extends Component {
         placeholder: { type: String, optional: true },
         targetField: { type: String },
         resolvedValueField: { type: String, optional: true },
-        expectedCardType: { type: String, optional: true },
+        expectedTarget: { type: String, optional: true },
         requireAvailable: { type: Boolean, optional: true },
-        requireMeasurementCard: { type: Boolean, optional: true },
+        createMissing: { type: Boolean, optional: true },
         requireActiveAssignment: { type: Boolean, optional: true },
         autoFocus: { type: Boolean, optional: true },
         autoNextRow: { type: Boolean, optional: true },
@@ -50,9 +50,9 @@ export class NspRfidScanField extends Component {
     };
     static defaultProps = {
         placeholder: "",
-        expectedCardType: "",
+        expectedTarget: "",
         requireAvailable: false,
-        requireMeasurementCard: false,
+        createMissing: false,
         requireActiveAssignment: false,
         autoFocus: false,
         autoNextRow: false,
@@ -183,9 +183,9 @@ export class NspRfidScanField extends Component {
 
         this.state.value = tid;
 
-        // User/Vehicle card lists are append-only scan workflows. When the
+        // RFID target lists are append-only scan workflows. When the
         // same TID is already present in an earlier row, ignore the repeated
-        // scan and keep the current blank row ready for the next card. Do not
+        // scan and keep the current blank row ready for the next tag. Do not
         // validate again and, importantly, do not create another line.
         if (this.props.autoNextRow || this.props.skipDuplicates) {
             const duplicateInput = this.findDuplicateInput(tid);
@@ -198,18 +198,18 @@ export class NspRfidScanField extends Component {
         this.state.status = "validating";
         this.state.message = "";
 
-        const allowCardId = extractMany2OneId(this.resolvedValue);
+        const allowTagId = extractMany2OneId(this.resolvedValue);
         let result;
         try {
             result = await this.orm.call(
-                "nsp.rfid.card",
+                "nsp.rfid.tag",
                 "nsp_validate_scan",
                 [tid],
                 {
-                    expected_card_type: this.props.expectedCardType || false,
+                    expected_target: this.props.expectedTarget || false,
                     require_available: Boolean(this.props.requireAvailable),
-                    allow_card_id: allowCardId || false,
-                    require_measurement_card: Boolean(this.props.requireMeasurementCard),
+                    allow_tag_id: allowTagId || false,
+                    create_missing: Boolean(this.props.createMissing),
                     require_active_assignment: Boolean(this.props.requireActiveAssignment),
                 }
             );
@@ -219,7 +219,7 @@ export class NspRfidScanField extends Component {
             return;
         }
 
-        if (!result?.valid || !result.card_id) {
+        if (!result?.valid || !result.tag_id) {
             await this.setInvalid(result?.message || _t("RFID tag is not valid."));
             return;
         }
@@ -271,16 +271,16 @@ export class NspRfidScanField extends Component {
         const resolvedInputValue = this.props.resolvedValueField
             ? this.props.record.data[this.props.resolvedValueField]
             : "";
-        const hasResolvedCard = Boolean(extractMany2OneId(this.resolvedValue));
+        const hasResolvedTag = Boolean(extractMany2OneId(this.resolvedValue));
 
         // A repeated scan normally happens on the auto-created blank row.
         // Clear that virtual row so it remains reusable and is stripped before
         // save. Existing valid rows are restored instead of being destroyed.
         await this.props.record.update({
-            [this.props.name]: hasResolvedCard ? (resolvedInputValue || false) : false,
-            ...(hasResolvedCard ? {} : { [this.props.targetField]: false }),
+            [this.props.name]: hasResolvedTag ? (resolvedInputValue || false) : false,
+            ...(hasResolvedTag ? {} : { [this.props.targetField]: false }),
         });
-        this.state.value = hasResolvedCard ? (resolvedInputValue || "") : "";
+        this.state.value = hasResolvedTag ? (resolvedInputValue || "") : "";
         this.state.status = "idle";
         this.state.message = "";
         this.refocus();
@@ -434,9 +434,9 @@ export const nspRfidScanField = {
     supportedOptions: [
         { label: _t("Target Many2one Field"), name: "target_field", type: "string" },
         { label: _t("Resolved Value Field"), name: "resolved_value_field", type: "string" },
-        { label: _t("Expected Card Type"), name: "expected_card_type", type: "string" },
-        { label: _t("Require Available Card"), name: "require_available", type: "boolean" },
-        { label: _t("Require Measurement / Test Card"), name: "require_measurement_card", type: "boolean" },
+        { label: _t("Expected Assignment Target"), name: "expected_target", type: "string" },
+        { label: _t("Require Available Tag"), name: "require_available", type: "boolean" },
+        { label: _t("Create Missing Whitelist Tag"), name: "create_missing", type: "boolean" },
         { label: _t("Require Active Assignment"), name: "require_active_assignment", type: "boolean" },
         { label: _t("Auto Focus"), name: "autofocus", type: "boolean" },
         { label: _t("Auto Next Row"), name: "auto_next_row", type: "boolean" },
@@ -447,9 +447,9 @@ export const nspRfidScanField = {
         placeholder,
         targetField: options.target_field,
         resolvedValueField: options.resolved_value_field || "",
-        expectedCardType: options.expected_card_type || "",
+        expectedTarget: options.expected_target || "",
         requireAvailable: Boolean(options.require_available),
-        requireMeasurementCard: Boolean(options.require_measurement_card),
+        createMissing: Boolean(options.create_missing),
         requireActiveAssignment: Boolean(options.require_active_assignment),
         autoFocus: Boolean(options.autofocus),
         autoNextRow: Boolean(options.auto_next_row),

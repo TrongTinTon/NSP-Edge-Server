@@ -74,8 +74,8 @@ class Device(models.Model):
         help="Transmit power applied uniformly to all antenna ports of this Reader.",
     )
     read_interval_ms = fields.Integer(string="Read Interval ms", default=200)
-    tid_addr = fields.Integer(string="TID Start Address", default=2)
-    tid_len = fields.Integer(string="TID Length", default=4)
+    tid_addr = fields.Integer(string="TID Start Address (Words)", default=2, help="Start offset in 16-bit WORD units.")
+    tid_len = fields.Integer(string="TID Length (Words)", default=4, help="Read length in 16-bit WORD units; 1 WORD equals 2 bytes.")
 
     antennas = fields.Integer(string="Antennas", compute="_compute_antenna_count")
     antennas_ids = fields.One2many(
@@ -95,8 +95,8 @@ class Device(models.Model):
         ("device_code_controller_unique", "unique(controller_id, device_code)", "Device Code must be unique per Controller."),
         ("reader_power_range", "CHECK(power_dbm >= 0 AND power_dbm <= 40)", "Power must be between 0 and 40 dBm."),
         ("read_interval_positive", "CHECK(read_interval_ms > 0)", "Read Interval must be greater than zero."),
-        ("tid_addr_non_negative", "CHECK(tid_addr >= 0)", "TID Start Address cannot be negative."),
-        ("tid_len_positive", "CHECK(tid_len > 0)", "TID Length must be greater than zero."),
+        ("tid_addr_non_negative", "CHECK(tid_addr >= 0)", "TID Start Address (Words) cannot be negative."),
+        ("tid_len_positive", "CHECK(tid_len > 0)", "TID Length (Words) must be greater than zero."),
     ]
 
     @api.model

@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import logging
 import os
-from bisect import bisect_left
 from datetime import timedelta
 
 from psycopg2 import IntegrityError
@@ -45,9 +44,17 @@ class ParkingDetectionEvent(models.Model):
         "nsp.device.antenna", string="Antenna", required=True,
         ondelete="restrict", readonly=True, index=True,
     )
-    card_id = fields.Many2one(
-        "nsp.rfid.card", string="RFID Card", required=True,
+    tag_id = fields.Many2one(
+        "nsp.rfid.tag", string="RFID Tag", required=True,
         ondelete="restrict", readonly=True, index=True,
+    )
+    user_id = fields.Many2one(
+        "nsp.user", string="Resolved User", ondelete="restrict",
+        readonly=True, index=True,
+    )
+    vehicle_id = fields.Many2one(
+        "nsp.vehicle", string="Resolved Vehicle", ondelete="restrict",
+        readonly=True, index=True,
     )
     state = fields.Selection(
         [
@@ -78,7 +85,7 @@ class ParkingDetectionEvent(models.Model):
             """
             CREATE INDEX IF NOT EXISTS nsp_parking_detection_transition_idx
                 ON nsp_parking_detection_event
-                   (lane_id, card_id, antenna_id, detected_at, id)
+                   (lane_id, tag_id, antenna_id, detected_at, id)
              WHERE state = 'pending' AND transaction_id IS NULL
             """
         )
@@ -121,7 +128,9 @@ class ParkingDetectionEvent(models.Model):
             "detected_at": detected_at or "",
             "lane_id": int(value("lane_id") or 0),
             "antenna_id": int(value("antenna_id") or 0),
-            "card_id": int(value("card_id") or 0),
+            "tag_id": int(value("tag_id") or 0),
+            "user_id": int(value("user_id") or 0),
+            "vehicle_id": int(value("vehicle_id") or 0),
         }
 
     @api.model
@@ -158,7 +167,7 @@ class ParkingDetectionEvent(models.Model):
                 str(payload.get("serial_number") or "").strip().upper(),
                 int(payload.get("antenna_no") or 0),
             )
-            for payload, _card in detections
+            for payload, _assignment in detections
         }
         keys.discard(("", 0))
         if not keys:
@@ -234,13 +243,13 @@ class ParkingDetectionEvent(models.Model):
         return resolved, errors
 
     @api.model
-    def _ingest_controller_detection(self, controller, payload, card, topology_cache):
+    def _ingest_controller_detection(self, controller, payload, assignment, topology_cache):
         if not isinstance(payload, dict):
             raise ValidationError(_("invalid_payload"))
 
         event_uid = str(payload.get("event_uid") or "").strip()
         serial_number = str(payload.get("serial_number") or "").strip().upper()
-        tid = self.env["nsp.rfid.card"]._normalize_tid(payload.get("tid"))
+        tid = self.env["nsp.rfid.tag"]._normalize_tid(payload.get("tid"))
         try:
             antenna_no = int(payload.get("antenna_no") or 0)
         except Exception as exc:
@@ -262,11 +271,10 @@ class ParkingDetectionEvent(models.Model):
             raise ValidationError(_("detected_at is required"))
         if not tid:
             raise ValidationError(_("tid is required"))
-        if not card or card._name != "nsp.rfid.card" or not card.exists():
-            raise ValidationError(_("invalid_rfid_card"))
-        card.ensure_one()
-        if card.tid != tid:
-            raise ValidationError(_("invalid_rfid_card"))
+        if not assignment or assignment.state != "active" or assignment.tid != tid:
+            raise ValidationError(_("rfid_tag_not_actively_assigned"))
+        if bool(assignment.user_id) == bool(assignment.vehicle_id):
+            raise ValidationError(_("invalid_rfid_assignment"))
 
         topology = topology_cache.get((serial_number, antenna_no))
         if topology is None:
@@ -278,7 +286,9 @@ class ParkingDetectionEvent(models.Model):
             "detected_at": detected_at,
             "lane_id": lane.id,
             "antenna_id": antenna.id,
-            "card_id": card.id,
+            "tag_id": assignment.tag_id.id,
+            "user_id": assignment.user_id.id if assignment.user_id else False,
+            "vehicle_id": assignment.vehicle_id.id if assignment.vehicle_id else False,
             "state": "pending",
         }
         record, duplicate = self.create_idempotent(vals)
@@ -293,7 +303,7 @@ class ParkingDetectionEvent(models.Model):
 
         topology_cache, topology_errors = self._resolve_topology_batch(controller, detections)
         touched_lanes = self.env["nsp.parking.lane"].browse()
-        for payload, card in detections:
+        for payload, assignment in detections:
             try:
                 antenna_no = int(payload.get("antenna_no") or 0)
             except Exception:
@@ -313,7 +323,7 @@ class ParkingDetectionEvent(models.Model):
             try:
                 with self.env.cr.savepoint():
                     _record, duplicate, lane = self._ingest_controller_detection(
-                        controller, payload, card, topology_cache
+                        controller, payload, assignment, topology_cache
                     )
                 if not duplicate:
                     touched_lanes |= lane
@@ -341,46 +351,70 @@ class ParkingDetectionEvent(models.Model):
             ("lane_id", "=", lane.id),
             ("state", "=", "pending"),
             ("transaction_id", "=", False),
-            ("card_id.card_type", "=", "user_card"),
+            ("user_id", "!=", False),
         ], order="detected_at asc, id asc")
         return events, [event.detected_at for event in events]
 
     @api.model
+    def _authorized_user_ids(self, vehicle, event_time):
+        """Return the owner and active borrowers allowed to take this vehicle out."""
+        if not vehicle or not vehicle.active:
+            return set()
+        user_ids = set()
+        if vehicle.owner_id and vehicle.owner_id.active:
+            user_ids.add(vehicle.owner_id.id)
+        borrows = self.env["nsp.vehicle.borrow"].sudo().search([
+            ("vehicle_id", "=", vehicle.id),
+            ("state", "=", "active"),
+            ("returned_at", "=", False),
+            ("valid_from", "<=", event_time),
+            ("valid_to", ">=", event_time),
+            ("borrower_id.active", "=", True),
+        ])
+        user_ids.update(borrows.mapped("borrower_id").ids)
+        return user_ids
+
+    @api.model
     def _nearest_user_from_pool(
-        self, user_events, user_times, anchor_at, window_seconds, consumed_ids
+        self,
+        user_events,
+        anchor_at,
+        window_seconds,
+        consumed_ids,
+        authorized_user_ids=None,
+        allow_unauthorized=False,
     ):
-        """Return nearest unused User read inside this transition's measured Duration."""
+        """Choose the nearest unused Employee Tag read in the transition window.
+
+        When the owner or an active borrower is present, an authorized read wins
+        over a closer unrelated employee read. If no authorized read exists, the
+        nearest read is returned so the denied decision remains fully auditable.
+        """
         if not user_events:
             return self.browse()
         window = max(0.001, float(window_seconds or 0.0))
-        index = bisect_left(user_times, anchor_at)
-        left = index - 1
-        right = index
-
-        while left >= 0 or right < len(user_events):
-            candidates = []
-            if left >= 0:
-                candidates.append(user_events[left])
-            if right < len(user_events):
-                candidates.append(user_events[right])
-            candidates.sort(
-                key=lambda rec: (
-                    abs((rec.detected_at - anchor_at).total_seconds()),
-                    rec.detected_at,
-                    rec.id,
-                )
+        candidates = user_events.filtered(
+            lambda event: (
+                event.id not in consumed_ids
+                and event.state == "pending"
+                and not event.transaction_id
+                and abs((event.detected_at - anchor_at).total_seconds()) <= window
             )
-            best = candidates[0]
-            distance = abs((best.detected_at - anchor_at).total_seconds())
-            if distance > window:
-                return self.browse()
-            if best.id not in consumed_ids and best.state == "pending" and not best.transaction_id:
-                return best
-            if left >= 0 and best.id == user_events[left].id:
-                left -= 1
-            else:
-                right += 1
-        return self.browse()
+        ).sorted(key=lambda event: (
+            abs((event.detected_at - anchor_at).total_seconds()),
+            event.detected_at,
+            event.id,
+        ))
+        if not candidates:
+            return self.browse()
+        authorized = set(authorized_user_ids or [])
+        if authorized:
+            eligible = candidates.filtered(lambda event: event.user_id.id in authorized)
+            if eligible:
+                return eligible[:1]
+        if not allow_unauthorized:
+            return self.browse()
+        return candidates[:1]
 
     @api.model
     def _lane_max_duration(self, lane):
@@ -394,7 +428,7 @@ class ParkingDetectionEvent(models.Model):
             ("lane_id", "=", lane.id),
             ("state", "=", "pending"),
             ("transaction_id", "=", False),
-            ("card_id.card_type", "=", "user_card"),
+            ("user_id", "!=", False),
             ("detected_at", "<", cutoff),
         ])
         if stale:
@@ -402,22 +436,9 @@ class ParkingDetectionEvent(models.Model):
 
     @api.model
     def _assignment_maps(self, events):
-        card_ids = events.mapped("card_id").ids
-        if not card_ids:
-            return {}, {}
-        vehicle_lines = self.env["nsp.vehicle.card"].sudo().search([
-            ("card_id", "in", card_ids),
-            ("state", "=", "active"),
-            ("vehicle_id.active", "=", True),
-        ])
-        user_lines = self.env["nsp.user.card"].sudo().search([
-            ("card_id", "in", card_ids),
-            ("state", "=", "active"),
-            ("user_id.active", "=", True),
-        ])
         return (
-            {line.card_id.id: line.vehicle_id for line in vehicle_lines},
-            {line.card_id.id: line.user_id for line in user_lines},
+            {event.tag_id.id: event.vehicle_id for event in events if event.vehicle_id},
+            {event.tag_id.id: event.user_id for event in events if event.user_id},
         )
 
     @api.model
@@ -436,8 +457,8 @@ class ParkingDetectionEvent(models.Model):
             ("lane_id", "=", lane.id),
             ("state", "=", "pending"),
             ("transaction_id", "=", False),
-            ("card_id.card_type", "=", "vehicle_card"),
-        ], order="card_id asc, detected_at asc, id asc")
+            ("vehicle_id", "!=", False),
+        ], order="tag_id asc, detected_at asc, id asc")
         if not vehicle_events:
             return []
 
@@ -445,12 +466,12 @@ class ParkingDetectionEvent(models.Model):
         for rule in rules:
             rules_by_target.setdefault(rule.to_antenna_id.id, []).append(rule)
 
-        events_by_card = {}
+        events_by_tag = {}
         for event in vehicle_events:
-            events_by_card.setdefault(event.card_id.id, []).append(event)
+            events_by_tag.setdefault(event.tag_id.id, []).append(event)
 
         transitions = []
-        for card_id, events in events_by_card.items():
+        for tag_id, events in events_by_tag.items():
             used_ids = set()
             seen_by_antenna = {}
             for target in events:
@@ -471,7 +492,7 @@ class ParkingDetectionEvent(models.Model):
                     used_ids.add(source.id)
                     used_ids.add(target.id)
                     transitions.append({
-                        "card_id": card_id,
+                        "tag_id": tag_id,
                         "event_type": rule.event_type,
                         "duration_seconds": float(rule.duration_seconds or 0.0),
                         "start_at": source.detected_at,
@@ -482,7 +503,7 @@ class ParkingDetectionEvent(models.Model):
                 seen_by_antenna.setdefault(target.antenna_id.id, []).append(target)
 
         transitions.sort(
-            key=lambda item: (item["end_at"], item["start_at"], item["card_id"])
+            key=lambda item: (item["end_at"], item["start_at"], item["tag_id"])
         )
         return transitions
 
@@ -493,7 +514,7 @@ class ParkingDetectionEvent(models.Model):
             ("lane_id", "=", lane.id),
             ("state", "=", "pending"),
             ("transaction_id", "=", False),
-            ("card_id.card_type", "=", "vehicle_card"),
+            ("vehicle_id", "!=", False),
             ("detected_at", "<", cutoff),
         ])
         if stale:
@@ -502,7 +523,7 @@ class ParkingDetectionEvent(models.Model):
     @api.model
     def _create_transaction_for_vehicle(
         self, vehicle_events, event_type, user_event=False,
-        vehicle_by_card=None, user_by_card=None,
+        vehicle_by_tag=None, user_by_tag=None,
     ):
         group = vehicle_events
         if event_type == "check_out" and user_event:
@@ -510,8 +531,8 @@ class ParkingDetectionEvent(models.Model):
         transaction = self.env["nsp.parking.transaction"].sudo().create_from_detection_group(
             group,
             resolved_event_type=event_type,
-            vehicle_by_card=vehicle_by_card,
-            user_by_card=user_by_card,
+            vehicle_by_tag=vehicle_by_tag,
+            user_by_tag=user_by_tag,
         )
         group.write({"state": "processed", "transaction_id": transaction.id})
         return transaction
@@ -526,22 +547,22 @@ class ParkingDetectionEvent(models.Model):
                 self._expire_orphan_user_events(lane, now)
             return transactions
 
-        user_events, user_times = self._pending_user_pool(lane)
+        user_events, _user_times = self._pending_user_pool(lane)
         vehicle_events = self.browse([
             event.id
             for transition in transitions
             for event in transition["events"]
         ])
-        vehicle_by_card, user_by_card = self._assignment_maps(vehicle_events | user_events)
+        vehicle_by_tag, user_by_tag = self._assignment_maps(vehicle_events | user_events)
         consumed_user_ids = set()
-        blocked_card_ids = set()
+        blocked_tag_ids = set()
 
         for transition in transitions:
-            card_id = transition["card_id"]
+            tag_id = transition["tag_id"]
             movement_events = transition["events"].filtered(
                 lambda rec: rec.state == "pending" and not rec.transaction_id
             )
-            if len(movement_events) != 2 or card_id in blocked_card_ids:
+            if len(movement_events) != 2 or tag_id in blocked_tag_ids:
                 continue
 
             event_type = transition["event_type"]
@@ -551,9 +572,9 @@ class ParkingDetectionEvent(models.Model):
             # This prevents lingering reads from creating duplicate business transactions
             # without reintroducing a global fixed suppression value.
             vehicle_event = movement_events.filtered(
-                lambda rec: rec.card_id.card_type == "vehicle_card"
+                lambda rec: bool(rec.vehicle_id)
             ).sorted(key=lambda rec: (rec.detected_at, rec.id))[-1:]
-            vehicle_tid = vehicle_event.card_id.tid if vehicle_event else False
+            vehicle_tid = vehicle_event.tag_id.tid if vehicle_event else False
             recent = self.env["nsp.parking.transaction"].sudo().search([
                 ("lane_id", "=", lane.id),
                 ("event_type", "=", event_type),
@@ -567,16 +588,26 @@ class ParkingDetectionEvent(models.Model):
 
             user_event = self.browse()
             if event_type == "check_out":
+                vehicle = movement_events.mapped("vehicle_id")[:1]
+                authorized_user_ids = self._authorized_user_ids(
+                    vehicle,
+                    transition["end_at"],
+                )
+                deadline = transition["end_at"] + timedelta(seconds=duration)
+                deadline_reached = bool(finalize_expired and now >= deadline)
                 user_event = self._nearest_user_from_pool(
                     user_events,
-                    user_times,
                     transition["end_at"],
                     duration,
                     consumed_user_ids,
+                    authorized_user_ids=authorized_user_ids,
+                    allow_unauthorized=deadline_reached,
                 )
-                deadline = transition["end_at"] + timedelta(seconds=duration)
-                if not user_event and (not finalize_expired or now < deadline):
-                    blocked_card_ids.add(card_id)
+                if not user_event and not deadline_reached:
+                    # Keep the vehicle transition pending until the configured
+                    # Duration expires so an owner/active borrower read that
+                    # arrives after the vehicle can still authorize Check-out.
+                    blocked_tag_ids.add(tag_id)
                     continue
 
             try:
@@ -585,8 +616,8 @@ class ParkingDetectionEvent(models.Model):
                         movement_events,
                         event_type,
                         user_event=user_event,
-                        vehicle_by_card=vehicle_by_card,
-                        user_by_card=user_by_card,
+                        vehicle_by_tag=vehicle_by_tag,
+                        user_by_tag=user_by_tag,
                     )
                     transactions |= transaction
                     if user_event:

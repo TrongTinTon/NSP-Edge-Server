@@ -76,8 +76,8 @@
                         </group>
                     </group>
                     <group string="TID Parameters">
-                        <field name="tid_addr" string="TID Start Address"/>
-                        <field name="tid_len" string="TID Length"/>
+                        <field name="tid_addr" string="TID Start Address (Words)" readonly="1"/>
+                        <field name="tid_len" string="TID Length (Words)" readonly="1"/>
                     </group>
                     <notebook>
                         <page name="antennas" string="Antennas">

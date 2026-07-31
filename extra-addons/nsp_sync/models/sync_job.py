@@ -17,7 +17,7 @@ SYNC_ROUTE_DIRECTIONS = {
     "users/sync": "pull",
     "vehicle-config/sync": "pull",
     "vehicles/sync": "pull",
-    "cards/sync": "pull",
+    "rfid-tags/sync": "pull",
     "vehicle-borrow/sync": "pull",
     "measurement-config/sync": "pull",
     "measurement-events/sync": "push",
@@ -32,7 +32,7 @@ DEFAULT_JOB_SETTINGS = {
     "users/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
     "vehicle-config/sync": {"schedule_interval_minutes": 5, "batch_size": 1000},
     "vehicles/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
-    "cards/sync": {"schedule_interval_minutes": 5, "batch_size": 1000},
+    "rfid-tags/sync": {"schedule_interval_minutes": 5, "batch_size": 1000},
     "vehicle-borrow/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
     "measurement-config/sync": {"schedule_interval_minutes": 1, "batch_size": 100},
     "measurement-events/sync": {"schedule_interval_minutes": 1, "batch_size": 100},
@@ -45,7 +45,7 @@ ACTION_KINDS = {
     "users/sync": "user",
     "vehicle-config/sync": "vehicle_config",
     "vehicles/sync": "vehicle",
-    "cards/sync": "card",
+    "rfid-tags/sync": "rfid_tag",
     "vehicle-borrow/sync": "vehicle_borrow",
     "measurement-config/sync": "measurement_config",
     "measurement-events/sync": "measurement_event",
@@ -941,246 +941,183 @@ class NspSyncJob(models.Model):
         return vehicle
 
     @api.model
-    def _card_assignment_values(self, item):
-        assignment = item.get("assignment")
-        if not isinstance(assignment, dict):
-            raise UserError(_("Card assignment must be an object."))
-        unsupported = sorted(set(assignment) - {"type", "code"})
-        if unsupported:
-            raise UserError(_("Unsupported Card assignment field(s): %s") % ", ".join(unsupported))
-        assignment_type = str(assignment.get("type") or "unassigned").strip().lower()
-        assignment_code = str(assignment.get("code") or "").strip().upper()
-        if assignment_type not in ("unassigned", "user", "vehicle"):
-            raise UserError(
-                _("Invalid Card assignment type: %s") % (assignment_type or "-")
-            )
-        if assignment_type != "unassigned" and not assignment_code:
-            raise UserError(_("Assigned Card requires assignment.code."))
-        assigned_at = (
-            self._remote_datetime(item.get("assigned_at"))
-            if item.get("assigned_at") else False
-        )
-        return assignment_type, assignment_code, assigned_at
-
-    @api.model
-    def _normalize_card_snapshot_item(self, item):
+    def _normalize_rfid_tag_snapshot_item(self, item):
         if not isinstance(item, dict):
-            raise UserError(_("Cards snapshot items must be objects."))
-        supported_fields = {"card_uid", "card_type", "is_measurement_card", "assignment", "assigned_at"}
-        unsupported_fields = sorted(set(item) - supported_fields)
-        if unsupported_fields:
-            raise UserError(_("Unsupported Card field(s): %s") % ", ".join(unsupported_fields))
-
-        tid = str(item.get("card_uid") or "").strip().upper().replace(" ", "")
-        card_type = str(item.get("card_type") or "").strip().lower()
+            raise UserError(_("RFID Tag snapshot items must be objects."))
+        unsupported = sorted(set(item) - {"tid", "assignment"})
+        if unsupported:
+            raise UserError(_("Unsupported RFID Tag field(s): %s") % ", ".join(unsupported))
+        tid = self.env["nsp.rfid.tag"]._normalize_tid(item.get("tid"))
         if not tid:
-            raise UserError(_("Card UID is required."))
-        if card_type not in ("vehicle_card", "user_card"):
-            raise UserError(_("Invalid Card Type for %s.") % tid)
+            raise UserError(_("RFID Tag TID is required."))
 
-        is_measurement_card = bool(item.get("is_measurement_card"))
-        assignment_type, assignment_code, assigned_at = self._card_assignment_values(item)
-        expected_type = {"user": "user_card", "vehicle": "vehicle_card"}.get(assignment_type)
-        if expected_type and card_type != expected_type:
-            raise UserError(
-                _("Card %(tid)s type %(card_type)s does not match %(assignment_type)s assignment.")
-                % {"tid": tid, "card_type": card_type, "assignment_type": assignment_type}
+        assignment = item.get("assignment") or False
+        target = "unassigned"
+        code = ""
+        assigned_at = False
+        if assignment:
+            if not isinstance(assignment, dict):
+                raise UserError(_("RFID Tag assignment must be an object."))
+            unsupported_assignment = sorted(set(assignment) - {"target", "code", "assigned_at"})
+            if unsupported_assignment:
+                raise UserError(
+                    _("Unsupported RFID Tag assignment field(s): %s")
+                    % ", ".join(unsupported_assignment)
+                )
+            target = str(assignment.get("target") or "").strip().lower()
+            code = str(assignment.get("code") or "").strip().upper()
+            assigned_at = (
+                self._remote_datetime(assignment.get("assigned_at"))
+                if assignment.get("assigned_at") else False
             )
+            if target not in ("user", "vehicle"):
+                raise UserError(_("RFID Tag assignment target must be user or vehicle."))
+            if not code:
+                raise UserError(_("Assigned RFID Tag requires assignment.code."))
         return {
             "tid": tid,
-            "card_type": card_type,
-            "is_measurement_card": is_measurement_card,
-            "assignment_type": assignment_type,
-            "assignment_code": assignment_code,
+            "target": target,
+            "code": code,
             "assigned_at": assigned_at,
             "source": item,
         }
 
-    def _apply_card_snapshot(self, data, request_payload=False):
-        """Apply one complete Card snapshot with batched lookups and writes."""
+    def _apply_rfid_tag_snapshot(self, data, request_payload=False):
+        """Apply the complete Cloud RFID whitelist and active assignment snapshot."""
         self.ensure_one()
         items = self._items_from_response(data)
         if not isinstance(items, list):
-            raise UserError(_("Cards snapshot must contain an items array."))
+            raise UserError(_("RFID Tag snapshot must contain an items array."))
 
         normalized = []
         seen = set()
         for item in items:
-            info = self._normalize_card_snapshot_item(item)
+            info = self._normalize_rfid_tag_snapshot_item(item)
             if info["tid"] in seen:
-                raise UserError(_("Duplicate Card UID in snapshot: %s") % info["tid"])
+                raise UserError(_("Duplicate RFID TID in snapshot: %s") % info["tid"])
             seen.add(info["tid"])
             normalized.append(info)
 
-        tids = [info["tid"] for info in normalized]
-        Card = self.env["nsp.rfid.card"].sudo().with_context(measurement_sync=True)
+        Tag = self.env["nsp.rfid.tag"].sudo()
+        Assignment = self.env["nsp.rfid.tag.assignment"].sudo()
         User = self.env["nsp.user"].sudo().with_context(active_test=False)
         Vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False)
-        UserLine = self.env["nsp.user.card"].sudo().with_context(active_test=False)
-        VehicleLine = self.env["nsp.vehicle.card"].sudo().with_context(active_test=False)
 
-        counts = {"master_cards": len(normalized), "user_cards": 0, "vehicle_cards": 0, "unassigned_cards": 0}
-        assignment_by_card = {}
+        user_codes = {info["code"] for info in normalized if info["target"] == "user"}
+        vehicle_codes = {info["code"] for info in normalized if info["target"] == "vehicle"}
+        users = User.search([("user_code", "in", list(user_codes))]) if user_codes else User.browse()
+        vehicles = Vehicle.search([("vehicle_code", "in", list(vehicle_codes))]) if vehicle_codes else Vehicle.browse()
+        user_by_code = {user.user_code: user for user in users}
+        vehicle_by_code = {vehicle.vehicle_code: vehicle for vehicle in vehicles}
+        for info in normalized:
+            if info["target"] == "user" and info["code"] not in user_by_code:
+                raise UserError(
+                    _("RFID Tag %(tid)s User %(code)s was not found. Run users/sync first.")
+                    % info
+                )
+            if info["target"] == "vehicle" and info["code"] not in vehicle_by_code:
+                raise UserError(
+                    _("RFID Tag %(tid)s Vehicle %(code)s was not found. Run vehicles/sync first.")
+                    % info
+                )
 
-        with self.env.cr.savepoint():
-            existing_cards = Card.search([("tid", "in", tids)]) if tids else Card.browse()
-            card_by_tid = {card.tid: card for card in existing_cards}
+        tids = [info["tid"] for info in normalized]
+        existing_tags = Tag.search([("tid", "in", tids)]) if tids else Tag.browse()
+        tag_by_tid = {tag.tid: tag for tag in existing_tags}
+        missing = [info for info in normalized if info["tid"] not in tag_by_tid]
+        if missing:
+            created = Tag.create([{"tid": info["tid"]} for info in missing])
+            tag_by_tid.update({tag.tid: tag for tag in created})
 
-            create_vals = [
-                {
-                    "tid": info["tid"],
-                    "card_type": info["card_type"],
-                    "is_measurement_card": info["is_measurement_card"],
+        all_snapshot_tags = Tag.browse([tag_by_tid[info["tid"]].id for info in normalized])
+        active_assignments = Assignment.search([
+            ("tag_id", "in", all_snapshot_tags.ids), ("state", "=", "active"),
+        ]) if all_snapshot_tags else Assignment.browse()
+        active_by_tag = {assignment.tag_id.id: assignment for assignment in active_assignments}
+
+        counts = {
+            "whitelisted_tags": len(normalized),
+            "employee_assignments": 0,
+            "vehicle_assignments": 0,
+            "unassigned_tags": 0,
+        }
+        synced_records = {}
+        for info in normalized:
+            tag = tag_by_tid[info["tid"]]
+            current = active_by_tag.get(tag.id, Assignment.browse())
+            target = info["target"]
+            desired_user = user_by_code.get(info["code"]) if target == "user" else User.browse()
+            desired_vehicle = vehicle_by_code.get(info["code"]) if target == "vehicle" else Vehicle.browse()
+
+            same = bool(
+                current
+                and current.user_id == desired_user
+                and current.vehicle_id == desired_vehicle
+                and target != "unassigned"
+            )
+            if current and not same:
+                current.action_revoke()
+                current = Assignment.browse()
+
+            if target == "unassigned":
+                counts["unassigned_tags"] += 1
+                synced_records[tag.id] = tag
+                continue
+
+            if target == "user":
+                counts["employee_assignments"] += 1
+            else:
+                counts["vehicle_assignments"] += 1
+
+            if not current:
+                # Reconcile stale target ownership before creating the desired assignment.
+                stale_target = Assignment.search([
+                    ("state", "=", "active"),
+                    ("user_id" if target == "user" else "vehicle_id", "=",
+                     desired_user.id if target == "user" else desired_vehicle.id),
+                ], limit=1)
+                if stale_target:
+                    stale_target.action_revoke()
+                vals = {
+                    "tag_id": tag.id,
+                    "user_id": desired_user.id if desired_user else False,
+                    "vehicle_id": desired_vehicle.id if desired_vehicle else False,
                 }
-                for info in normalized if info["tid"] not in card_by_tid
-            ]
-            if create_vals:
-                created = Card.create(create_vals)
-                card_by_tid.update({card.tid: card for card in created})
-
-            for info in normalized:
-                card = card_by_tid[info["tid"]]
-                card_values = {}
-                if card.card_type != info["card_type"]:
-                    card_values["card_type"] = info["card_type"]
-                if bool(card.is_measurement_card) != bool(info["is_measurement_card"]):
-                    card_values["is_measurement_card"] = bool(info["is_measurement_card"])
-                if card_values:
-                    card.write(card_values)
-                info["card"] = card
-
-            user_codes = {
-                info["assignment_code"] for info in normalized
-                if info["assignment_type"] == "user"
-            }
-            vehicle_codes = {
-                info["assignment_code"].upper() for info in normalized
-                if info["assignment_type"] == "vehicle"
-            }
-            users = User.search([("user_code", "in", list(user_codes))]) if user_codes else User.browse()
-            vehicles = Vehicle.search([("vehicle_code", "in", list(vehicle_codes))]) if vehicle_codes else Vehicle.browse()
-            user_by_code = {user.user_code: user for user in users}
-            vehicle_by_code = {vehicle.vehicle_code: vehicle for vehicle in vehicles}
-
-            for info in normalized:
-                if info["assignment_type"] == "user" and info["assignment_code"] not in user_by_code:
-                    raise UserError(
-                        _("Card %(tid)s owner User %(code)s was not found. Run users/sync first.")
-                        % {"tid": info["tid"], "code": info["assignment_code"]}
-                    )
-                if info["assignment_type"] == "vehicle" and info["assignment_code"].upper() not in vehicle_by_code:
-                    raise UserError(
-                        _("Card %(tid)s owner Vehicle %(code)s was not found. Run vehicles/sync first.")
-                        % {"tid": info["tid"], "code": info["assignment_code"]}
-                    )
-
-            card_ids = [info["card"].id for info in normalized]
-            user_lines = UserLine.search([("card_id", "in", card_ids)]) if card_ids else UserLine.browse()
-            vehicle_lines = VehicleLine.search([("card_id", "in", card_ids)]) if card_ids else VehicleLine.browse()
-            user_line_by_pair = {(line.card_id.id, line.user_id.id): line for line in user_lines}
-            vehicle_line_by_pair = {(line.card_id.id, line.vehicle_id.id): line for line in vehicle_lines}
-
-            desired = {}
-            for info in normalized:
-                card = info["card"]
-                if info["assignment_type"] == "user":
-                    owner = user_by_code[info["assignment_code"]]
-                    desired[card.id] = ("user", owner.id)
-                elif info["assignment_type"] == "vehicle":
-                    owner = vehicle_by_code[info["assignment_code"].upper()]
-                    desired[card.id] = ("vehicle", owner.id)
-                else:
-                    desired[card.id] = ("unassigned", 0)
-
-            revoke_users = user_lines.filtered(
-                lambda line: line.state == "active" and desired.get(line.card_id.id) != ("user", line.user_id.id)
-            )
-            revoke_vehicles = vehicle_lines.filtered(
-                lambda line: line.state == "active" and desired.get(line.card_id.id) != ("vehicle", line.vehicle_id.id)
-            )
-            if revoke_users:
-                revoke_users.action_revoke()
-            if revoke_vehicles:
-                revoke_vehicles.action_revoke()
-
-            create_user_vals = []
-            create_vehicle_vals = []
-            for info in normalized:
-                card = info["card"]
-                assignment_type = info["assignment_type"]
-                counts[{"user": "user_cards", "vehicle": "vehicle_cards", "unassigned": "unassigned_cards"}[assignment_type]] += 1
-
-                if assignment_type == "unassigned":
-                    assignment_by_card[card.id] = card
-                    continue
-
-                if assignment_type == "user":
-                    owner = user_by_code[info["assignment_code"]]
-                    line = user_line_by_pair.get((card.id, owner.id))
-                    vals = {"state": "active", "revoked_at": False}
-                    if info["assigned_at"]:
-                        vals["assigned_at"] = info["assigned_at"]
-                    if line:
-                        changed = {name: value for name, value in vals.items() if line[name] != value}
-                        if changed:
-                            line.write(changed)
-                        assignment_by_card[card.id] = line
-                    else:
-                        vals.update({"user_id": owner.id, "card_id": card.id})
-                        create_user_vals.append((card.id, vals))
-                    continue
-
-                owner = vehicle_by_code[info["assignment_code"].upper()]
-                line = vehicle_line_by_pair.get((card.id, owner.id))
-                vals = {"state": "active", "revoked_at": False}
                 if info["assigned_at"]:
                     vals["assigned_at"] = info["assigned_at"]
-                if line:
-                    changed = {name: value for name, value in vals.items() if line[name] != value}
-                    if changed:
-                        line.write(changed)
-                    assignment_by_card[card.id] = line
-                else:
-                    vals.update({"vehicle_id": owner.id, "card_id": card.id})
-                    create_vehicle_vals.append((card.id, vals))
+                current = Assignment.with_context(rfid_assignment_sync=True).create(vals)
+            synced_records[tag.id] = current
 
-            if create_user_vals:
-                created = UserLine.create([vals for _card_id, vals in create_user_vals])
-                for (card_id, _vals), line in zip(create_user_vals, created):
-                    assignment_by_card[card_id] = line
-            if create_vehicle_vals:
-                created = VehicleLine.create([vals for _card_id, vals in create_vehicle_vals])
-                for (card_id, _vals), line in zip(create_vehicle_vals, created):
-                    assignment_by_card[card_id] = line
-
-            stale = Card.search([("tid", "not in", tids)]) if tids else Card.search([])
-            removed = len(stale)
-            if stale:
-                stale.unlink()
+        # Whitelist TIDs are audit identities and are never deleted. If a TID is
+        # absent from the authoritative snapshot, revoke only its active local
+        # assignment. Cloud normally keeps every historical TID, so this branch
+        # is a defensive reconciliation path.
+        stale_tags = Tag.search([("tid", "not in", tids)]) if tids else Tag.search([])
+        stale_active = Assignment.search([
+            ("tag_id", "in", stale_tags.ids),
+            ("state", "=", "active"),
+        ]) if stale_tags else Assignment.browse()
+        stale_assignment_count = len(stale_active)
+        if stale_active:
+            stale_active.with_context(rfid_assignment_sync=True).action_revoke()
 
         Record = self.env["nsp.sync.record"].sudo()
         for info in normalized:
-            card = info["card"]
-            assignment_type = info["assignment_type"]
-            record = assignment_by_card.get(card.id, card)
+            tag = tag_by_tid[info["tid"]]
             Record.mark_result(
                 sync_job=self,
                 action_code=self.sync_action_code,
                 action_name=self.sync_action_name,
                 route_suffix=self.route_suffix,
-                record=record,
-                record_key=card.tid,
+                record=synced_records.get(tag.id, tag),
+                record_key=tag.tid,
                 status="synced",
-                message=(
-                    "Created/updated User Card assignment." if assignment_type == "user"
-                    else "Created/updated Vehicle Card assignment." if assignment_type == "vehicle"
-                    else "Master Card synchronized without an active assignment."
-                ),
+                message="RFID Tag whitelist and active assignment synchronized.",
                 payload=request_payload,
                 response=info["source"],
                 operation="pull",
             )
-        return counts, removed
+        return counts, stale_assignment_count
 
     @api.model
     def _apply_vehicle_borrow(self, item, cache=None):
@@ -1248,7 +1185,7 @@ class NspSyncJob(models.Model):
         except (TypeError, ValueError) as exc:
             raise UserError(_("Invalid Measurement revision.")) from exc
 
-        Card = self.env["nsp.rfid.card"].sudo()
+        Tag = self.env["nsp.rfid.tag"].sudo()
         normalized_targets = []
         all_tids = set()
         seen_users = set()
@@ -1262,8 +1199,8 @@ class NspSyncJob(models.Model):
                     _("Unsupported Measurement RFID Target field(s): %s")
                     % ", ".join(sorted(unsupported))
                 )
-            user_tid = Card._normalize_tid(payload.get("user_tid"))
-            vehicle_tid = Card._normalize_tid(payload.get("vehicle_tid"))
+            user_tid = Tag._normalize_tid(payload.get("user_tid"))
+            vehicle_tid = Tag._normalize_tid(payload.get("vehicle_tid"))
             plate = str(payload.get("license_plate") or "").strip().upper()
             if not user_tid or not vehicle_tid:
                 raise UserError(_(
@@ -1282,26 +1219,32 @@ class NspSyncJob(models.Model):
                 "license_plate": plate,
             })
 
-        cards = Card.search([("tid", "in", list(all_tids))])
-        card_by_tid = {card.tid: card for card in cards}
-        missing_tids = sorted(all_tids - set(card_by_tid))
+        assignments = self.env["nsp.rfid.tag.assignment"].sudo().search([
+            ("tid", "in", list(all_tids)), ("state", "=", "active"),
+        ])
+        assignment_by_tid = {assignment.tid: assignment for assignment in assignments}
+        missing_tids = sorted(all_tids - set(assignment_by_tid))
         if missing_tids:
             raise UserError(
-                _("RFID Target(s) have not been synchronized to this Edge Server: %s")
+                _("RFID Target assignment(s) have not been synchronized to this Edge Server: %s")
                 % ", ".join(missing_tids[:20])
             )
 
         target_commands = []
         Target = self.env["nsp.measurement.target.line"].sudo()
         for payload in normalized_targets:
-            user_card = card_by_tid[payload["user_tid"]]
-            vehicle_card = card_by_tid[payload["vehicle_tid"]]
+            user_assignment = assignment_by_tid[payload["user_tid"]]
+            vehicle_assignment = assignment_by_tid[payload["vehicle_tid"]]
+            if not user_assignment.user_id or not vehicle_assignment.vehicle_id:
+                raise UserError(_("Measurement target assignment role does not match its position."))
             values = Target._prepare_scanned_values({
-                "user_card_id": user_card.id,
-                "vehicle_card_id": vehicle_card.id,
+                "user_assignment_id": user_assignment.id,
+                "vehicle_assignment_id": vehicle_assignment.id,
             })
             expected_plate = payload.get("license_plate")
-            actual_plate = str(values.get("license_plate") or "").strip().upper()
+            actual_plate = str(
+                vehicle_assignment.vehicle_id.license_plate or ""
+            ).strip().upper()
             if expected_plate and actual_plate != expected_plate:
                 raise UserError(_(
                     "Vehicle RFID Tag %(tid)s resolves to License Plate %(actual)s, not %(expected)s."
@@ -1875,7 +1818,7 @@ class NspSyncJob(models.Model):
         self.ensure_one()
         # Full snapshots do not use incremental cursors. This guarantees that
         # deletions, revocations and assignment changes are reflected on Edge.
-        if self._action_kind() in ("gatekeeper_config", "vehicle_config", "card", "user", "vehicle", "vehicle_borrow", "measurement_config"):
+        if self._action_kind() in ("gatekeeper_config", "vehicle_config", "rfid_tag", "user", "vehicle", "vehicle_borrow", "measurement_config"):
             return {"edge_server_code": self.edge_server_code}
         payload = {"edge_server_code": self.edge_server_code, "limit": self.batch_size}
         if self.sync_cursor:
@@ -1887,7 +1830,7 @@ class NspSyncJob(models.Model):
         if not isinstance(item, dict):
             return False
         for field_name in (
-            "record_key", "card_uid", "borrow_uid", "branch_code", "user_code",
+            "record_key", "tid", "borrow_uid", "branch_code", "user_code",
             "vehicle_code", "license_plate", "parking_area_code", "transaction_uid",
             "measurement_code", "event_uid", "serial_number", "code",
             "controller_code", "edge_server_code",
@@ -2319,22 +2262,22 @@ class NspSyncJob(models.Model):
                 },
             }
 
-        if kind == "card":
-            counts, removed = self._apply_card_snapshot(data, request_payload=request_payload)
+        if kind == "rfid_tag":
+            counts, stale_assignment_count = self._apply_rfid_tag_snapshot(data, request_payload=request_payload)
             self.write({"last_pull_at": fields.Datetime.now(), "sync_cursor": False})
             return {
-                "pulled": counts["master_cards"],
+                "pulled": counts["whitelisted_tags"],
                 "failed": 0,
                 "has_more": False,
                 "message": (
-                    "Cards snapshot applied: %(master)s Master Card(s), %(users)s User Card(s), "
-                    "%(vehicles)s Vehicle Card(s), %(unassigned)s unassigned; removed %(removed)s stale Card(s)."
+                    "RFID Tag Whitelist applied: %(tags)s tag(s), %(employees)s employee assignment(s), "
+                    "%(vehicles)s vehicle assignment(s), %(unassigned)s unassigned; revoked %(stale)s stale local assignment(s)."
                 ) % {
-                    "master": counts["master_cards"],
-                    "users": counts["user_cards"],
-                    "vehicles": counts["vehicle_cards"],
-                    "unassigned": counts["unassigned_cards"],
-                    "removed": removed,
+                    "tags": counts["whitelisted_tags"],
+                    "employees": counts["employee_assignments"],
+                    "vehicles": counts["vehicle_assignments"],
+                    "unassigned": counts["unassigned_tags"],
+                    "stale": stale_assignment_count,
                 },
             }
 

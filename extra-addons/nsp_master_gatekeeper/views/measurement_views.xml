@@ -83,24 +83,24 @@
                     <notebook>
                         <page string="Target Pairs">
                             <div class="alert alert-info" role="alert">
-                                One line represents one person and one vehicle. Scan, paste, or type the User RFID Tag, then the Vehicle RFID Tag. A valid value shows a green border; an invalid value shows a red border and the reason. The License Plate is resolved automatically from the active Vehicle Card assignment.
+                                One line represents one person and one vehicle. Scan, paste, or type the Employee RFID Tag, then the Vehicle RFID Tag. A valid value shows a green border; an invalid value shows a red border and the reason. The License Plate is resolved automatically from the active Vehicle RFID Tag assignment.
                             </div>
                             <field name="target_line_ids" readonly="status != 'draft'">
                                 <list editable="bottom" delete="1">
                                     <field name="user_scan_tid"
-                                           string="User RFID Tag"
+                                           string="Employee RFID Tag"
                                            widget="nsp_rfid_scan"
-                                           options="{'target_field': 'user_card_id', 'resolved_value_field': 'user_tid', 'expected_card_type': 'user_card', 'require_available': False, 'require_measurement_card': True, 'require_active_assignment': True, 'skip_duplicates': True, 'next_scan_field': 'vehicle_scan_tid'}"
+                                           options="{'target_field': 'user_assignment_id', 'resolved_value_field': 'user_tid', 'expected_target': 'user', 'require_available': False, 'require_active_assignment': True, 'skip_duplicates': True, 'next_scan_field': 'vehicle_scan_tid'}"
                                            placeholder="Scan or paste User RFID TID"/>
-                                    <field name="user_card_id" column_invisible="True"/>
+                                    <field name="user_assignment_id" column_invisible="True"/>
                                     <field name="user_tid" column_invisible="True"/>
                                     <field name="user_id" column_invisible="True"/>
                                     <field name="vehicle_scan_tid"
                                            string="Vehicle RFID Tag"
                                            widget="nsp_rfid_scan"
-                                           options="{'target_field': 'vehicle_card_id', 'resolved_value_field': 'vehicle_tid', 'expected_card_type': 'vehicle_card', 'require_available': False, 'require_measurement_card': True, 'require_active_assignment': True, 'skip_duplicates': True, 'auto_next_row': True}"
+                                           options="{'target_field': 'vehicle_assignment_id', 'resolved_value_field': 'vehicle_tid', 'expected_target': 'vehicle', 'require_available': False, 'require_active_assignment': True, 'skip_duplicates': True, 'auto_next_row': True}"
                                            placeholder="Scan or paste Vehicle RFID TID"/>
-                                    <field name="vehicle_card_id" column_invisible="True"/>
+                                    <field name="vehicle_assignment_id" column_invisible="True"/>
                                     <field name="vehicle_tid" column_invisible="True"/>
                                     <field name="vehicle_id" column_invisible="True"/>
                                     <field name="license_plate" string="License Plate" readonly="1"/>

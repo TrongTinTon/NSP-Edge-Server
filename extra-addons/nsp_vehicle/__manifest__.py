@@ -1,1 +1,25 @@
-{'name': 'NSP Vehicle', 'summary': 'Vehicle management for NSP Gatekeeper', 'description': 'Manage NSP vehicles, photos, RFID card assignments, authorized borrowers, and vehicle-specific type/color configuration. Brand and Model use the shared NSP Reference Data.', 'version': '19.0.16.1.5', 'sequence': 30, 'author': 'BKU Team', 'category': 'Services', 'depends': ['base', 'nsp_core', 'mail', 'nsp_rfid', 'nsp_user'], 'installable': True, 'application': True, 'auto_install': False, 'data': ['security/ir.model.access.csv', 'data/vehicle_borrow_sequence.xml', 'data/vehicle_master_data.xml', 'views/vehicle_master_data_views.xml', 'views/vehicle_views.xml', 'views/vehicle_card_views.xml', 'views/vehicle_borrow_views.xml', 'views/menu_views.xml'], 'license': 'LGPL-3'}
+{
+    'name': 'NSP Vehicle',
+    'summary': 'User-owned vehicles, RFID assignments and borrowing for NSP',
+    'description': 'Manage vehicles from the User form, one active employee tag per User, one active tag per Vehicle, immutable revoke audit, Friends and Vehicle Borrow.',
+    'version': '19.0.17.1.1',
+    'sequence': 30,
+    'author': 'BKU Team',
+    'category': 'Services',
+    'depends': ['base', 'nsp_core', 'mail', 'nsp_rfid', 'nsp_user'],
+    'installable': True,
+    'application': False,
+    'auto_install': False,
+    'data': [
+        'security/ir.model.access.csv',
+        'data/vehicle_borrow_sequence.xml',
+        'data/vehicle_master_data.xml',
+        'views/vehicle_master_data_views.xml',
+        'views/rfid_tag_assignment_views.xml',
+        'views/vehicle_views.xml',
+        'views/user_vehicle_views.xml',
+        'views/vehicle_borrow_views.xml',
+        'views/menu_views.xml',
+    ],
+    'license': 'LGPL-3',
+}

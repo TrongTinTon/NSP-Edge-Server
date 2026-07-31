@@ -29,7 +29,7 @@
         <field name="model">nsp.user</field>
         <field name="inherit_id" ref="nsp_user.view_nsp_user_list"/>
         <field name="arch" type="xml">
-            <xpath expr="//field[@name='active_user_card_count']" position="after">
+            <xpath expr="//field[@name='email']" position="after">
                 <field name="mobile_enabled" string="Mobile" optional="hide"/>
                 <field name="mobile_login" optional="hide" groups="nsp_core.group_nsp_it_parking,base.group_system"/>
             </xpath>

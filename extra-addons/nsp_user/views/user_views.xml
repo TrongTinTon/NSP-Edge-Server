@@ -25,8 +25,6 @@
                 <field name="name" decoration-bf="1"/>
                 <field name="phone" optional="show"/>
                 <field name="email" optional="show"/>
-                <field name="user_rfid_tid" string="Primary User TID" optional="show"/>
-                <field name="active_user_card_count" optional="show"/>
                 <field name="active" readonly="1" optional="hide"/>
                 <field name="web_user_id" string="Web Account" optional="hide" groups="base.group_system"/>
                 <field name="user_code" string="Technical Code" optional="hide"/>
@@ -51,38 +49,12 @@
                         <h1><field name="name" placeholder="User name"/></h1>
                     </div>
                     <group>
-                        <group string="Contact">
+                        <group name="contact" string="Contact">
                             <field name="phone"/>
                             <field name="email"/>
                         </group>
-                        <group string="RFID Summary">
-                            <field name="user_rfid_tid" readonly="1"/>
-                            <field name="active_user_card_count" readonly="1"/>
-                        </group>
                     </group>
                     <notebook>
-                        <page string="User Cards">
-                            <div class="alert alert-info" role="alert">
-                                Click <strong>Add a line</strong>, focus <strong>Master Card</strong>, then scan one User Card. A valid scan automatically creates and focuses the next row; an invalid scan stays on the current row and shows the reason.
-                            </div>
-                            <field name="user_card_ids" context="{'default_user_id': id}">
-                                <list editable="bottom" delete="1">
-                                    <field name="scan_tid"
-                                           string="Master Card"
-                                           widget="nsp_rfid_scan"
-                                           options="{'target_field': 'card_id', 'resolved_value_field': 'tid', 'expected_card_type': 'user_card', 'require_available': True, 'auto_next_row': True}"
-                                           placeholder="Scan User Card TID and press Enter"/>
-                                    <field name="card_id" column_invisible="True"/>
-                                    <field name="tid" column_invisible="True"/>
-                                    <field name="state" widget="badge" readonly="1" decoration-success="state == 'active'" decoration-muted="state == 'revoked'"/>
-                                    <field name="assigned_at" optional="hide"/>
-                                    <field name="revoked_at" readonly="1" optional="hide"/>
-                                    <field name="note" optional="hide"/>
-                                    <button name="action_revoke" type="object" string="Revoke" invisible="state != 'active'"/>
-                                    <button name="action_activate" type="object" string="Activate" invisible="state != 'revoked'" class="btn-primary"/>
-                                </list>
-                            </field>
-                        </page>
                         <page string="Friends" groups="nsp_core.group_nsp_it_parking,base.group_system">
                             <separator string="Accepted Friends"/>
                             <field name="accepted_friendship_ids" nolabel="1">

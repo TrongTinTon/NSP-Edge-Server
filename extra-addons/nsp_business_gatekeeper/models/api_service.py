@@ -536,7 +536,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         self._measurement_require_fields(item, ["event_uid", "serial_number", "antenna_no", "tid", "read_at"])
         event_uid = str(item.get("event_uid") or "").strip()
         serial_number = str(item.get("serial_number") or "").strip().upper()
-        tid = self.env["nsp.rfid.card"].sudo()._normalize_tid(item.get("tid"))
+        tid = self.env["nsp.rfid.tag"].sudo()._normalize_tid(item.get("tid"))
         try:
             antenna_no = int(item.get("antenna_no") or 0)
         except Exception:
@@ -670,7 +670,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             try:
                 if not isinstance(item, dict):
                     raise ValueError("invalid_payload")
-                incoming_tid = self.env["nsp.rfid.card"].sudo()._normalize_tid(item.get("tid"))
+                incoming_tid = self.env["nsp.rfid.tag"].sudo()._normalize_tid(item.get("tid"))
                 if incoming_tid not in target_tids:
                     results[index] = {
                         "index": index,
@@ -948,7 +948,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         item_fields = {"event_uid", "serial_number", "antenna_no", "detected_at", "tid"}
         normalized = []
         tids = set()
-        Card = self.env["nsp.rfid.card"].sudo()
+        Tag = self.env["nsp.rfid.tag"].sudo()
 
         # Validate the whole transport contract before writing any detection.
         for index, item in enumerate(incoming):
@@ -970,7 +970,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
 
             event_uid = str(item.get("event_uid") or "").strip()
             serial_number = str(item.get("serial_number") or "").strip().upper()
-            tid = Card._normalize_tid(item.get("tid"))
+            tid = Tag._normalize_tid(item.get("tid"))
             detected_at = self._safe_datetime_value(item.get("detected_at"), default_now=False)
             try:
                 antenna_no = int(item.get("antenna_no") or 0)
@@ -1006,16 +1006,18 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             normalized.append(payload)
             tids.add(tid)
 
-        # One database lookup for all cards in the batch. Unknown TIDs are
-        # terminally ignored at the API boundary and are never persisted.
-        cards_by_tid = {
-            card.tid: card
-            for card in Card.search([("tid", "in", list(tids))])
-        }
+        # Only currently assigned whitelist tags participate in parking.
+        # Unknown, unassigned and revoked TIDs are terminally ignored and never
+        # become raw parking detections.
+        assignments = self.env["nsp.rfid.tag.assignment"].sudo().search([
+            ("tid", "in", list(tids)),
+            ("state", "=", "active"),
+        ]) if tids else self.env["nsp.rfid.tag.assignment"].browse()
+        assignment_by_tid = {assignment.tid: assignment for assignment in assignments}
         accepted = [
-            (payload, cards_by_tid[payload["tid"]])
+            (payload, assignment_by_tid[payload["tid"]])
             for payload in normalized
-            if payload["tid"] in cards_by_tid
+            if payload["tid"] in assignment_by_tid
         ]
 
         if accepted:

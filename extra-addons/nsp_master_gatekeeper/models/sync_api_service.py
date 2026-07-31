@@ -455,42 +455,21 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         next_cursor = self._encode_sync_cursor(page_records[-1]) if page_records else ((data or {}).get("sync_cursor") or False)
         return page_records, next_cursor, has_more, fields.Datetime.now()
 
-    def _card_sync_payload(self, card, user_line=False, vehicle_line=False):
-        """Serialize one Master Card using preloaded active assignments."""
-        if user_line and vehicle_line:
-            _logger.error(
-                "Card %s has simultaneous active User and Vehicle assignments; "
-                "Vehicle assignment is selected for sync.", card.tid,
-            )
-
-        assignment = {"type": "unassigned", "code": False}
-        card_type = card.card_type
-        assigned_at = False
-        if vehicle_line:
-            vehicle = vehicle_line.vehicle_id
-            assignment = {
-                "type": "vehicle",
-                "code": vehicle.vehicle_code or "",
-            }
-            card_type = "vehicle_card"
-            assigned_at = vehicle_line.assigned_at
-        elif user_line:
-            user = user_line.user_id
-            assignment = {
-                "type": "user",
-                "code": self._user_code(user),
-            }
-            card_type = "user_card"
-            assigned_at = user_line.assigned_at
-
-        payload = {
-            "card_uid": card.tid,
-            "card_type": card_type,
-            "is_measurement_card": bool(card.is_measurement_card),
-            "assignment": assignment,
-        }
-        if assigned_at:
-            payload["assigned_at"] = self._iso_datetime(assigned_at)
+    def _rfid_tag_sync_payload(self, tag, assignment=False):
+        payload = {"tid": tag.tid}
+        if assignment:
+            if assignment.user_id:
+                payload["assignment"] = {
+                    "target": "user",
+                    "code": self._user_code(assignment.user_id),
+                    "assigned_at": self._iso_datetime(assignment.assigned_at),
+                }
+            elif assignment.vehicle_id:
+                payload["assignment"] = {
+                    "target": "vehicle",
+                    "code": assignment.vehicle_id.vehicle_code or "",
+                    "assigned_at": self._iso_datetime(assignment.assigned_at),
+                }
         return payload
 
     @endpoint("NSP Gatekeeper Configuration Sync", route_path="gatekeeper-config/sync", methods="POST", code="nsp_gatekeeper_config_sync")
@@ -567,8 +546,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "server_time": self._iso_datetime(fields.Datetime.now()),
         }, message="Vehicle Configuration snapshot loaded.")
 
-    @endpoint("NSP Gatekeeper Cards Sync", route_path="cards/sync", methods="POST", code="nsp_cards_sync")
-    def api_cards_sync(self):
+    @endpoint("NSP RFID Tag Whitelist Sync", route_path="rfid-tags/sync", methods="POST", code="nsp_rfid_tags_sync")
+    def api_rfid_tags_sync(self):
         data = self._payload()
         _application, _actor_kind, _edge_server, error = self._auth_edge_server_sync(data)
         if error:
@@ -581,50 +560,35 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 error_code="invalid_payload",
                 details={"unsupported_fields": unsupported},
             )
-        cards = self.env["nsp.rfid.card"].sudo().search([], order="tid asc, id asc")
-        card_ids = cards.ids
-        user_by_card = {}
-        vehicle_by_card = {}
-        if card_ids:
-            user_lines = self.env["nsp.user.card"].sudo().search([
-                ("card_id", "in", card_ids), ("state", "=", "active"),
-            ], order="assigned_at desc, id desc")
-            vehicle_lines = self.env["nsp.vehicle.card"].sudo().search([
-                ("card_id", "in", card_ids), ("state", "=", "active"),
-            ], order="assigned_at desc, id desc")
-            for line in user_lines:
-                user_by_card.setdefault(line.card_id.id, line)
-            for line in vehicle_lines:
-                vehicle_by_card.setdefault(line.card_id.id, line)
+        tags = self.env["nsp.rfid.tag"].sudo().search([], order="tid asc, id asc")
+        assignments = self.env["nsp.rfid.tag.assignment"].sudo().search([
+            ("tag_id", "in", tags.ids), ("state", "=", "active"),
+        ], order="assigned_at desc, id desc") if tags else self.env["nsp.rfid.tag.assignment"].browse()
+        assignment_by_tag = {}
+        for assignment in assignments:
+            assignment_by_tag.setdefault(assignment.tag_id.id, assignment)
         items = [
-            self._card_sync_payload(
-                card,
-                user_line=user_by_card.get(card.id),
-                vehicle_line=vehicle_by_card.get(card.id),
-            )
-            for card in cards
+            self._rfid_tag_sync_payload(tag, assignment_by_tag.get(tag.id))
+            for tag in tags
         ]
-        user_card_count = sum(
-            1 for item in items
-            if (item.get("assignment") or {}).get("type") == "user"
+        employee_count = sum(
+            1 for item in items if (item.get("assignment") or {}).get("target") == "user"
         )
-        vehicle_card_count = sum(
-            1 for item in items
-            if (item.get("assignment") or {}).get("type") == "vehicle"
+        vehicle_count = sum(
+            1 for item in items if (item.get("assignment") or {}).get("target") == "vehicle"
         )
-        unassigned_count = len(items) - user_card_count - vehicle_card_count
         return self._ok({
             "items": items,
             "summary": {
-                "master_cards": len(items),
-                "user_cards": user_card_count,
-                "vehicle_cards": vehicle_card_count,
-                "unassigned_cards": unassigned_count,
+                "whitelisted_tags": len(items),
+                "employee_assignments": employee_count,
+                "vehicle_assignments": vehicle_count,
+                "unassigned_tags": len(items) - employee_count - vehicle_count,
             },
             "next_sync_cursor": False,
             "has_more": False,
             "server_time": self._iso_datetime(fields.Datetime.now()),
-        }, message="Cards snapshot loaded.")
+        }, message="RFID Tag Whitelist snapshot loaded.")
 
     @endpoint("NSP Gatekeeper Users Sync", route_path="users/sync", methods="POST", code="nsp_users_sync")
     def api_users_sync(self):
@@ -919,7 +883,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             self._measurement_reject_unknown_fields(data, {"edge_server_code"})
             Session = self.env["nsp.measurement.session"].sudo()
             records = Session.search([
-                ("status", "!=", "draft"),
+                ("status", "in", ("ready", "running")),
                 ("reader_line_ids.reader_id.controller_id.edge_server_id", "=", edge_server.id),
             ], order="measurement_code,id")
             return self._ok({
@@ -944,7 +908,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         self._measurement_require_fields(item, ["event_uid", "serial_number", "antenna_no", "tid", "read_at"])
         event_uid = str(item.get("event_uid") or "").strip()
         serial_number = str(item.get("serial_number") or "").strip().upper()
-        tid = self.env["nsp.rfid.card"].sudo()._normalize_tid(item.get("tid"))
+        tid = self.env["nsp.rfid.tag"].sudo()._normalize_tid(item.get("tid"))
         try:
             antenna_no = int(item.get("antenna_no") or 0)
         except Exception:
@@ -1070,7 +1034,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             try:
                 if not isinstance(item, dict):
                     raise ValueError("invalid_payload")
-                incoming_tid = self.env["nsp.rfid.card"].sudo()._normalize_tid(item.get("tid"))
+                incoming_tid = self.env["nsp.rfid.tag"].sudo()._normalize_tid(item.get("tid"))
                 if incoming_tid not in target_tids:
                     results[index] = {
                         "index": index,
@@ -1337,23 +1301,19 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         ]) if devices and antenna_nos else Antenna.browse()
         antenna_by_key = {(record.device_id.id, int(record.antenna_no or 0)): record for record in antennas}
 
-        VehicleCard = self.env["nsp.vehicle.card"].sudo()
-        vehicle_lines = VehicleCard.search([
-            ("card_id.tid", "in", list(vehicle_tids)),
+        Assignment = self.env["nsp.rfid.tag.assignment"].sudo()
+        assignments = Assignment.search([
+            ("tid", "in", list(vehicle_tids | user_tids)),
             ("state", "=", "active"),
-        ]) if vehicle_tids else VehicleCard.browse()
-        vehicle_by_tid = {}
-        for line in vehicle_lines:
-            vehicle_by_tid.setdefault(line.card_id.tid, line.vehicle_id)
-
-        UserCard = self.env["nsp.user.card"].sudo()
-        user_lines = UserCard.search([
-            ("card_id.tid", "in", list(user_tids)),
-            ("state", "=", "active"),
-        ]) if user_tids else UserCard.browse()
-        user_by_tid = {}
-        for line in user_lines:
-            user_by_tid.setdefault(line.card_id.tid, line.user_id)
+        ]) if (vehicle_tids or user_tids) else Assignment.browse()
+        vehicle_by_tid = {
+            assignment.tid: assignment.vehicle_id
+            for assignment in assignments if assignment.vehicle_id
+        }
+        user_by_tid = {
+            assignment.tid: assignment.user_id
+            for assignment in assignments if assignment.user_id
+        }
 
         Transaction = self.env["nsp.parking.transaction"].sudo()
         existing = Transaction.search([("transaction_uid", "in", list(uids))]) if uids else Transaction.browse()
