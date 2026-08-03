@@ -15,11 +15,10 @@ _logger = logging.getLogger(__name__)
 class ParkingDetectionEvent(models.Model):
     """Short-lived Edge RFID read used to build final parking transactions.
 
-    Controller reports only physical reads. Edge resolves the Reader/Antenna/Lane,
-    then matches the same Vehicle RFID against a Cloud-configured directed antenna
-    transition. A transition carries its own Event Type and Duration, so no fixed
-    lane-wide grouping/transition window is required. Raw detections stay on
-    Edge and never synchronize to Cloud.
+    Controller reports physical reads only. Edge resolves each Reader/Antenna
+    against the published Lane Antenna Timeline, collapses repeated reads, and
+    matches the resulting timeline against explicit Check-in/Check-out antenna
+    sequences. Raw detections remain on Edge and never synchronize to Cloud.
     """
 
     _name = "nsp.parking.detection.event"
@@ -83,7 +82,7 @@ class ParkingDetectionEvent(models.Model):
         )
         self.env.cr.execute(
             """
-            CREATE INDEX IF NOT EXISTS nsp_parking_detection_transition_idx
+            CREATE INDEX IF NOT EXISTS nsp_parking_detection_sequence_idx
                 ON nsp_parking_detection_event
                    (lane_id, tag_id, antenna_id, detected_at, id)
              WHERE state = 'pending' AND transaction_id IS NULL
@@ -161,7 +160,7 @@ class ParkingDetectionEvent(models.Model):
 
     @api.model
     def _resolve_topology_batch(self, controller, detections):
-        """Resolve Reader/Antenna to one active Parking Lane for this Controller."""
+        """Resolve each Reader port to exactly one active Lane Timeline."""
         keys = {
             (
                 str(payload.get("serial_number") or "").strip().upper(),
@@ -173,64 +172,57 @@ class ParkingDetectionEvent(models.Model):
         if not keys:
             return {}, {}
 
-        serials = {serial for serial, _antenna_no in keys}
-        allowed_serials = set(
-            self.env["nsp.device.whitelist"].sudo().search([
-                ("serial_number", "in", list(serials)),
-            ]).mapped("serial_number")
-        )
-
+        serials = {serial for serial, _port in keys}
         devices = self.env["nsp.device"].sudo().search([
             ("controller_id", "=", controller.id),
-            ("serial_number", "in", list(allowed_serials)),
+            ("serial_number", "in", list(serials)),
             ("active", "=", True),
-        ]) if allowed_serials else self.env["nsp.device"].browse()
-        device_by_serial = {device.serial_number: device for device in devices}
-
-        antenna_numbers = {antenna_no for _serial, antenna_no in keys}
+            ("cloud_removed", "=", False),
+        ])
+        device_by_serial = {
+            str(device.serial_number or "").strip().upper(): device
+            for device in devices
+        }
+        ports = {port for _serial, port in keys}
         antennas = self.env["nsp.device.antenna"].sudo().search([
             ("device_id", "in", devices.ids),
-            ("antenna_no", "in", list(antenna_numbers)),
+            ("antenna_no", "in", list(ports)),
             ("active", "=", True),
-        ]) if devices and antenna_numbers else self.env["nsp.device.antenna"].browse()
+            ("cloud_removed", "=", False),
+        ]) if devices and ports else self.env["nsp.device.antenna"].browse()
         antenna_by_key = {
-            (antenna.device_id.serial_number, antenna.antenna_no): antenna
+            (
+                str(antenna.device_id.serial_number or "").strip().upper(),
+                int(antenna.antenna_no or 0),
+            ): antenna
             for antenna in antennas
         }
 
-        Transition = self.env["nsp.parking.antenna.transition"].sudo()
-        transitions = Transition.search([
+        timeline_rows = self.env["nsp.parking.lane.timeline"].sudo().search([
             ("lane_id.active", "=", True),
-            "|",
-            ("from_antenna_id", "in", antennas.ids),
-            ("to_antenna_id", "in", antennas.ids),
-        ]) if antennas else Transition.browse()
-
-        lanes_by_antenna = {}
-        for transition in transitions:
-            for antenna in (transition.from_antenna_id, transition.to_antenna_id):
-                if antenna.id not in antennas.ids:
-                    continue
-                lanes_by_antenna.setdefault(antenna.id, set()).add(transition.lane_id.id)
+            ("lane_id.parking_area_id.state", "=", "operational"),
+            ("antenna_id", "in", antennas.ids),
+        ]) if antennas else self.env["nsp.parking.lane.timeline"].browse()
+        lane_ids_by_antenna = {}
+        for row in timeline_rows:
+            lane_ids_by_antenna.setdefault(row.antenna_id.id, set()).add(row.lane_id.id)
 
         resolved = {}
         errors = {}
         Lane = self.env["nsp.parking.lane"].sudo()
         for key in keys:
-            serial, _antenna_no = key
-            if serial not in allowed_serials:
-                errors[key] = "device_not_whitelisted"
-                continue
-            if serial not in device_by_serial:
+            serial, _port = key
+            device = device_by_serial.get(serial)
+            if not device:
                 errors[key] = "device_not_found"
                 continue
             antenna = antenna_by_key.get(key)
             if not antenna:
                 errors[key] = "antenna_not_found"
                 continue
-            lane_ids = lanes_by_antenna.get(antenna.id, set())
+            lane_ids = lane_ids_by_antenna.get(antenna.id, set())
             if not lane_ids:
-                errors[key] = "no_antenna_transition"
+                errors[key] = "no_antenna_timeline"
                 continue
             if len(lane_ids) != 1:
                 errors[key] = "ambiguous_antenna_lane"
@@ -278,7 +270,7 @@ class ParkingDetectionEvent(models.Model):
 
         topology = topology_cache.get((serial_number, antenna_no))
         if topology is None:
-            raise ValidationError(_("no_antenna_transition"))
+            raise ValidationError(_("no_antenna_timeline"))
         antenna, lane = topology
 
         vals = {
@@ -341,7 +333,7 @@ class ParkingDetectionEvent(models.Model):
 
         for lane in touched_lanes:
             # Cross-request movement is normal. Ingestion never expires incomplete
-            # transitions; finalization belongs to the periodic pending-event job.
+            # sequences; finalization belongs to the periodic pending-event job.
             self._process_pending_for_lane(lane, finalize_expired=False)
         return True
 
@@ -384,7 +376,7 @@ class ParkingDetectionEvent(models.Model):
         authorized_user_ids=None,
         allow_unauthorized=False,
     ):
-        """Choose the nearest unused Employee Tag read in the transition window.
+        """Choose the nearest unused Employee Tag read in the configured sequence window.
 
         When the owner or an active borrower is present, an authorized read wins
         over a closer unrelated employee read. If no authorized read exists, the
@@ -418,8 +410,7 @@ class ParkingDetectionEvent(models.Model):
 
     @api.model
     def _lane_max_duration(self, lane):
-        durations = lane.antenna_transition_ids.mapped("duration_seconds")
-        return max([float(value or 0.0) for value in durations] or [1.0])
+        return lane.max_sequence_window()
 
     @api.model
     def _expire_orphan_user_events(self, lane, now):
@@ -442,17 +433,10 @@ class ParkingDetectionEvent(models.Model):
         )
 
     @api.model
-    def _build_vehicle_transitions(self, lane):
-        """Build non-overlapping directed transitions from pending Vehicle reads.
-
-        The target read chooses the nearest earlier source read that matches a
-        configured rule and is inside that rule's Duration. Repeated reads on one
-        antenna therefore do not need a separate fixed suppression window.
-        """
-        rules = lane.antenna_transition_ids
-        if not rules:
+    def _build_vehicle_sequence_matches(self, lane):
+        """Match pending Vehicle reads against configured event sequences."""
+        if not lane.event_sequence_ids or not lane.timeline_line_ids:
             return []
-
         vehicle_events = self.search([
             ("lane_id", "=", lane.id),
             ("state", "=", "pending"),
@@ -462,50 +446,64 @@ class ParkingDetectionEvent(models.Model):
         if not vehicle_events:
             return []
 
-        rules_by_target = {}
-        for rule in rules:
-            rules_by_target.setdefault(rule.to_antenna_id.id, []).append(rule)
+        timeline = lane.timeline_line_ids.sorted("sequence")
+        allowed_by_pair = {}
+        for index in range(1, len(timeline)):
+            source = timeline[index - 1].antenna_id.id
+            target = timeline[index].antenna_id.id
+            allowed_by_pair[frozenset((source, target))] = max(
+                0.001, lane.allowed_duration_for_step(timeline[index].sequence)
+            )
+
+        sequence_specs = []
+        for event_type in ("check_in", "check_out"):
+            rows = lane.event_sequence_ids.filtered(
+                lambda row: row.sequence_type == event_type
+            ).sorted("sequence")
+            if rows:
+                sequence_specs.append((event_type, rows.mapped("antenna_id").ids))
 
         events_by_tag = {}
         for event in vehicle_events:
             events_by_tag.setdefault(event.tag_id.id, []).append(event)
 
-        transitions = []
-        for tag_id, events in events_by_tag.items():
-            used_ids = set()
-            seen_by_antenna = {}
-            for target in events:
-                candidate_rules = rules_by_target.get(target.antenna_id.id, [])
-                candidates = []
-                for rule in candidate_rules:
-                    for source in reversed(seen_by_antenna.get(rule.from_antenna_id.id, [])):
-                        if source.id in used_ids:
-                            continue
-                        gap = (target.detected_at - source.detected_at).total_seconds()
-                        if gap < 0:
-                            continue
-                        if gap <= float(rule.duration_seconds or 0.0):
-                            candidates.append((gap, source.detected_at, source.id, rule.id, source, rule))
+        matches = []
+        for tag_id, raw_events in events_by_tag.items():
+            collapsed = []
+            for event in raw_events:
+                if collapsed and collapsed[-1].antenna_id == event.antenna_id:
+                    continue
+                collapsed.append(event)
+            for event_type, expected_ids in sequence_specs:
+                length = len(expected_ids)
+                if length < 2 or len(collapsed) < length:
+                    continue
+                for offset in range(0, len(collapsed) - length + 1):
+                    window = collapsed[offset:offset + length]
+                    actual_ids = [event.antenna_id.id for event in window]
+                    if actual_ids != expected_ids:
+                        continue
+                    total_allowed = 0.0
+                    valid = True
+                    for index in range(1, length):
+                        allowed = allowed_by_pair.get(frozenset((actual_ids[index - 1], actual_ids[index])))
+                        gap = (window[index].detected_at - window[index - 1].detected_at).total_seconds()
+                        if allowed is None or gap < 0 or gap > allowed:
+                            valid = False
                             break
-                if candidates and target.id not in used_ids:
-                    _gap, _at, _source_id, _rule_id, source, rule = min(candidates)
-                    used_ids.add(source.id)
-                    used_ids.add(target.id)
-                    transitions.append({
+                        total_allowed += allowed
+                    if not valid:
+                        continue
+                    matches.append({
                         "tag_id": tag_id,
-                        "event_type": rule.event_type,
-                        "duration_seconds": float(rule.duration_seconds or 0.0),
-                        "start_at": source.detected_at,
-                        "end_at": target.detected_at,
-                        "events": source | target,
-                        "rule": rule,
+                        "event_type": event_type,
+                        "duration_seconds": max(0.001, total_allowed),
+                        "start_at": window[0].detected_at,
+                        "end_at": window[-1].detected_at,
+                        "events": self.browse([event.id for event in window]),
                     })
-                seen_by_antenna.setdefault(target.antenna_id.id, []).append(target)
-
-        transitions.sort(
-            key=lambda item: (item["end_at"], item["start_at"], item["tag_id"])
-        )
-        return transitions
+        matches.sort(key=lambda item: (item["end_at"], item["start_at"], item["tag_id"]))
+        return matches
 
     @api.model
     def _expire_stale_vehicle_events(self, lane, now):
@@ -538,10 +536,10 @@ class ParkingDetectionEvent(models.Model):
         return transaction
 
     @api.model
-    def _process_transitions(self, lane, now, finalize_expired=True):
+    def _process_sequence_matches(self, lane, now, finalize_expired=True):
         transactions = self.env["nsp.parking.transaction"].browse()
-        transitions = self._build_vehicle_transitions(lane)
-        if not transitions:
+        matches = self._build_vehicle_sequence_matches(lane)
+        if not matches:
             if finalize_expired:
                 self._expire_stale_vehicle_events(lane, now)
                 self._expire_orphan_user_events(lane, now)
@@ -550,29 +548,29 @@ class ParkingDetectionEvent(models.Model):
         user_events, _user_times = self._pending_user_pool(lane)
         vehicle_events = self.browse([
             event.id
-            for transition in transitions
-            for event in transition["events"]
+            for match in matches
+            for event in match["events"]
         ])
         vehicle_by_tag, user_by_tag = self._assignment_maps(vehicle_events | user_events)
         consumed_user_ids = set()
         blocked_tag_ids = set()
 
-        for transition in transitions:
-            tag_id = transition["tag_id"]
-            movement_events = transition["events"].filtered(
+        for match in matches:
+            tag_id = match["tag_id"]
+            movement_events = match["events"].filtered(
                 lambda rec: rec.state == "pending" and not rec.transaction_id
             )
             if (
                 not movement_events
-                or len(movement_events) != len(transition["events"])
+                or len(movement_events) != len(match["events"])
                 or tag_id in blocked_tag_ids
             ):
                 continue
 
-            event_type = transition["event_type"]
-            duration = transition["duration_seconds"]
+            event_type = match["event_type"]
+            duration = match["duration_seconds"]
 
-            # Use the configured transition Duration as the physical debounce window too.
+            # Use the calibrated sequence window as the physical debounce window too.
             # This prevents lingering reads from creating duplicate business transactions
             # without reintroducing a global fixed suppression value.
             vehicle_event = movement_events.filtered(
@@ -583,8 +581,8 @@ class ParkingDetectionEvent(models.Model):
                 ("lane_id", "=", lane.id),
                 ("event_type", "=", event_type),
                 ("vehicle_tid", "=", vehicle_tid),
-                ("event_time", ">=", transition["end_at"] - timedelta(seconds=duration)),
-                ("event_time", "<=", transition["end_at"]),
+                ("event_time", ">=", match["end_at"] - timedelta(seconds=duration)),
+                ("event_time", "<=", match["end_at"]),
             ], order="event_time desc, id desc", limit=1) if vehicle_tid else self.env["nsp.parking.transaction"].browse()
             if recent:
                 movement_events.write({"state": "processed", "transaction_id": recent.id})
@@ -595,20 +593,20 @@ class ParkingDetectionEvent(models.Model):
                 vehicle = movement_events.mapped("vehicle_id")[:1]
                 authorized_user_ids = self._authorized_user_ids(
                     vehicle,
-                    transition["end_at"],
+                    match["end_at"],
                 )
-                deadline = transition["end_at"] + timedelta(seconds=duration)
+                deadline = match["end_at"] + timedelta(seconds=duration)
                 deadline_reached = bool(finalize_expired and now >= deadline)
                 user_event = self._nearest_user_from_pool(
                     user_events,
-                    transition["end_at"],
+                    match["end_at"],
                     duration,
                     consumed_user_ids,
                     authorized_user_ids=authorized_user_ids,
                     allow_unauthorized=deadline_reached,
                 )
                 if not user_event and not deadline_reached:
-                    # Keep the vehicle transition pending until the configured
+                    # Keep the vehicle sequence pending until the configured
                     # Duration expires so an owner/active borrower read that
                     # arrives after the vehicle can still authorize Check-out.
                     blocked_tag_ids.add(tag_id)
@@ -628,7 +626,7 @@ class ParkingDetectionEvent(models.Model):
                         consumed_user_ids.add(user_event.id)
             except Exception:
                 _logger.exception(
-                    "Parking transition processing failed: lane=%s event_type=%s ids=%s",
+                    "Parking sequence processing failed: lane=%s event_type=%s ids=%s",
                     lane.id, event_type, movement_events.ids,
                 )
                 movement_events.write({"state": "error"})
@@ -648,7 +646,7 @@ class ParkingDetectionEvent(models.Model):
             (f"nsp.parking:lane:{lane.id}",),
         )
         now = fields.Datetime.to_datetime(now or fields.Datetime.now())
-        return self._process_transitions(lane, now, finalize_expired=finalize_expired)
+        return self._process_sequence_matches(lane, now, finalize_expired=finalize_expired)
 
     @api.model
     def process_pending_events(self):

@@ -85,8 +85,8 @@
                         </group>
                     </group>
                     <div class="alert alert-info" role="alert"
-                         invisible="route_suffix not in ('measurement-events/sync', 'measurement-status/sync')">
-                        Measurement Events and Measurement Status are forwarded to Cloud immediately.
+                         invisible="route_suffix not in ('edge/lane-calibrations/events', 'edge/lane-calibrations/status')">
+                        Lane Calibration Events and Status are forwarded to Cloud immediately.
                         Schedule Interval (Minutes) is only the fallback retry interval when immediate forwarding fails.
                     </div>
                     <group string="Last Message">

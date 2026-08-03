@@ -12,45 +12,45 @@ from odoo.exceptions import UserError, ValidationError
 _logger = logging.getLogger(__name__)
 
 SYNC_ROUTE_DIRECTIONS = {
-    "edge-server/status": "push",
-    "gatekeeper-config/sync": "pull",
+    "edge/status": "push",
+    "edge/parking-runtime/snapshot": "pull",
     "users/sync": "pull",
     "vehicle-config/sync": "pull",
     "vehicles/sync": "pull",
     "rfid-tags/sync": "pull",
     "vehicle-borrow/sync": "pull",
-    "measurement-config/sync": "pull",
-    "measurement-events/sync": "push",
-    "measurement-status/sync": "push",
-    "parking-transactions/sync": "push",
+    "edge/lane-calibrations/snapshot": "pull",
+    "edge/lane-calibrations/events": "push",
+    "edge/lane-calibrations/status": "push",
+    "edge/parking-transactions": "push",
 }
 NSP_SYNC_ALLOWED_ROUTES = tuple(SYNC_ROUTE_DIRECTIONS)
 JOB_SEQUENCE = {route: sequence * 10 for sequence, route in enumerate(NSP_SYNC_ALLOWED_ROUTES, start=1)}
 DEFAULT_JOB_SETTINGS = {
-    "edge-server/status": {"schedule_interval_minutes": 1, "batch_size": 1},
-    "gatekeeper-config/sync": {"schedule_interval_minutes": 1, "batch_size": 1},
+    "edge/status": {"schedule_interval_minutes": 1, "batch_size": 1},
+    "edge/parking-runtime/snapshot": {"schedule_interval_minutes": 1, "batch_size": 1},
     "users/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
     "vehicle-config/sync": {"schedule_interval_minutes": 5, "batch_size": 1000},
     "vehicles/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
     "rfid-tags/sync": {"schedule_interval_minutes": 5, "batch_size": 1000},
     "vehicle-borrow/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
-    "measurement-config/sync": {"schedule_interval_minutes": 1, "batch_size": 100},
-    "measurement-events/sync": {"schedule_interval_minutes": 1, "batch_size": 100},
-    "measurement-status/sync": {"schedule_interval_minutes": 1, "batch_size": 100},
-    "parking-transactions/sync": {"schedule_interval_minutes": 1, "batch_size": 200},
+    "edge/lane-calibrations/snapshot": {"schedule_interval_minutes": 1, "batch_size": 100},
+    "edge/lane-calibrations/events": {"schedule_interval_minutes": 1, "batch_size": 100},
+    "edge/lane-calibrations/status": {"schedule_interval_minutes": 1, "batch_size": 100},
+    "edge/parking-transactions": {"schedule_interval_minutes": 1, "batch_size": 200},
 }
 ACTION_KINDS = {
-    "edge-server/status": "edge_server_status",
-    "gatekeeper-config/sync": "gatekeeper_config",
+    "edge/status": "edge_server_status",
+    "edge/parking-runtime/snapshot": "parking_runtime",
     "users/sync": "user",
     "vehicle-config/sync": "vehicle_config",
     "vehicles/sync": "vehicle",
     "rfid-tags/sync": "rfid_tag",
     "vehicle-borrow/sync": "vehicle_borrow",
-    "measurement-config/sync": "measurement_config",
-    "measurement-events/sync": "measurement_event",
-    "measurement-status/sync": "measurement_status",
-    "parking-transactions/sync": "parking_transaction",
+    "edge/lane-calibrations/snapshot": "lane_calibration",
+    "edge/lane-calibrations/events": "lane_calibration_event",
+    "edge/lane-calibrations/status": "lane_calibration_status",
+    "edge/parking-transactions": "parking_transaction",
 }
 
 class NspSyncJob(models.Model):
@@ -111,7 +111,7 @@ class NspSyncJob(models.Model):
         default="pull",
         index=True,
     )
-    schedule_interval_minutes = fields.Integer(default=1, required=True, string="Schedule Interval (Minutes)", help="Fallback retry interval. Measurement Events and status are forwarded immediately; this schedule is used only when immediate forwarding fails.")
+    schedule_interval_minutes = fields.Integer(default=1, required=True, string="Schedule Interval (Minutes)", help="Fallback retry interval. Lane Calibration Events and Status are forwarded immediately; this schedule is used only when immediate forwarding fails.")
     batch_size = fields.Integer(default=100, required=True)
     sync_cursor = fields.Char(
         string="Pull Cursor",
@@ -568,7 +568,7 @@ class NspSyncJob(models.Model):
         self.ensure_one()
         route = (self.route_suffix or "").strip().strip("/")
         base = {"edge_server_code": self.edge_server_code}
-        if route == "edge-server/status":
+        if route == "edge/status":
             base.update(self._remote_push_item(items[0] if items else self._serialize_edge_server_status()))
             return base
         base["items"] = [self._remote_push_item(item) for item in items]
@@ -1173,7 +1173,7 @@ class NspSyncJob(models.Model):
         cache.setdefault("borrow_by_code", {})[code] = borrow
         return borrow
 
-    def _apply_measurement_config(self, item):
+    def _apply_lane_calibration(self, item):
         """Apply one released Lane Calibration assembly from Cloud."""
         self.ensure_one()
         if not isinstance(item, dict):
@@ -1535,294 +1535,14 @@ class NspSyncJob(models.Model):
             session = Session.create(vals)
         return session
 
-    def _apply_parking_config(self, item):
-        """Apply one Parking Area topology snapshot against existing physical cache.
-
-        Controller/Reader/Antenna declarations are synchronized once at the top-level
-        Gatekeeper snapshot. Parking areas carry only business topology, avoiding the
-        previous duplicate physical configuration inside every Parking Area payload.
-        """
-        self.ensure_one()
-        if not isinstance(item, dict):
-            raise UserError(_("Parking Configuration item must be an object."))
-
-        unsupported = set(item) - {
-            "parking_area_code", "parking_area_name", "branch_code", "state",
-            "published_revision", "lanes",
-        }
-        if unsupported:
-            raise UserError(
-                _("Unsupported Parking Configuration field(s): %s")
-                % ", ".join(sorted(unsupported))
-            )
-
-        branch_code = str(item.get("branch_code") or "").strip().upper()
-        area_code = str(item.get("parking_area_code") or "").strip().upper()
-        if not branch_code or not area_code:
-            raise UserError(_("Branch Code and Parking Area Code are required."))
-        state = str(item.get("state") or "draft").strip().lower()
-        if state not in ("draft", "operational", "maintenance", "blocked"):
-            raise UserError(_("Invalid Parking Area state: %s") % state)
-
-        branch = self.env["nsp.branch"].sudo().with_context(active_test=False).search(
-            [("code", "=", branch_code)], limit=1
-        )
-        if not branch:
-            raise UserError(
-                _("Branch %(code)s was not found in the current Gatekeeper configuration snapshot.")
-                % {"code": branch_code}
-            )
-
-        Parking = self.env["nsp.parking.area"].sudo()
-        parking = Parking.search([("code", "=", area_code)], limit=1)
-        parking_vals = {
-            "code": area_code,
-            "name": str(item.get("parking_area_name") or area_code).strip(),
-            "branch_id": branch.id,
-            "state": state,
-        }
-        if parking:
-            self._write_changed(parking, parking_vals)
-        else:
-            parking = Parking.create(parking_vals)
-
-        Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
-        controllers = Controller.search([])
-        controller_by_code = {record.controller_id: record for record in controllers}
-
-        Antenna = self.env["nsp.device.antenna"].sudo().with_context(active_test=False)
-        antennas = Antenna.search([])
-        antenna_by_key = {
-            (record.device_id.serial_number, int(record.antenna_no or 0)): record
-            for record in antennas
-        }
-
-        lanes_data = item.get("lanes") or []
-        if not isinstance(lanes_data, list):
-            raise UserError(_("Parking lanes must be an array."))
-
-        lane_specs = {}
-        transition_specs = []
-        for lane_item in lanes_data:
-            if not isinstance(lane_item, dict):
-                raise UserError(_("Parking lanes must contain objects."))
-            unsupported_lane = set(lane_item) - {
-                "lane_code", "lane_name", "server_code",
-                "controller_code", "readers", "antenna_transitions",
-            }
-            if unsupported_lane:
-                raise UserError(
-                    _("Unsupported Parking Lane field(s): %s")
-                    % ", ".join(sorted(unsupported_lane))
-                )
-
-            lane_code = str(lane_item.get("lane_code") or "").strip().upper()
-            server_code = str(lane_item.get("server_code") or "").strip().upper()
-            controller_code = str(lane_item.get("controller_code") or "").strip().upper()
-            if not lane_code or lane_code in lane_specs or not server_code or not controller_code:
-                raise UserError(_("Parking Lane Code, Server Code and Controller Code are required."))
-            controller = controller_by_code.get(controller_code)
-            if not controller or not controller.active or controller.cloud_removed:
-                raise UserError(
-                    _("Controller %s is missing or inactive in Gatekeeper configuration.")
-                    % controller_code
-                )
-            if not controller.edge_server_id or controller.edge_server_id.edge_server_code != server_code:
-                raise UserError(_(
-                    "Controller %(controller)s is not assembled under Server %(server)s."
-                ) % {"controller": controller_code, "server": server_code})
-
-            lane_specs[lane_code] = {
-                "parking_area_id": parking.id,
-                "code": lane_code,
-                "name": str(lane_item.get("lane_name") or lane_code).strip(),
-                "controller_id": controller.id,
-                "active": True,
-            }
-
-            transitions_data = lane_item.get("antenna_transitions") or []
-            if not isinstance(transitions_data, list):
-                raise UserError(_("Antenna transitions must be an array."))
-            if state == "operational" and not transitions_data:
-                raise UserError(
-                    _("Operational Lane %s requires at least one Antenna Transition.")
-                    % lane_code
-                )
-
-            seen_paths = set()
-            for transition_item in transitions_data:
-                if not isinstance(transition_item, dict):
-                    raise UserError(_("Antenna transitions must contain objects."))
-                unsupported_transition = set(transition_item) - {
-                    "from_reader_code", "from_serial_number", "from_antenna_no", "from_antenna_code",
-                    "to_reader_code", "to_serial_number", "to_antenna_no", "to_antenna_code",
-                    "event_type", "duration_seconds",
-                }
-                if unsupported_transition:
-                    raise UserError(
-                        _("Unsupported Antenna Transition field(s): %s")
-                        % ", ".join(sorted(unsupported_transition))
-                    )
-
-                from_serial = str(transition_item.get("from_serial_number") or "").strip().upper()
-                to_serial = str(transition_item.get("to_serial_number") or "").strip().upper()
-                event_type = str(transition_item.get("event_type") or "").strip().lower()
-                try:
-                    from_no = int(transition_item.get("from_antenna_no") or 0)
-                    to_no = int(transition_item.get("to_antenna_no") or 0)
-                    duration = float(transition_item.get("duration_seconds") or 0.0)
-                except (TypeError, ValueError) as exc:
-                    raise UserError(_("Invalid Antenna Transition number or Duration.")) from exc
-                if not from_serial or not to_serial or from_no <= 0 or to_no <= 0:
-                    raise UserError(_("Antenna Transition requires valid From/To antennas."))
-                if event_type not in ("check_in", "check_out"):
-                    raise UserError(_("Antenna Transition Event Type must be check_in or check_out."))
-                if duration <= 0:
-                    raise UserError(_("Antenna Transition Duration must be greater than zero."))
-
-                from_antenna = antenna_by_key.get((from_serial, from_no))
-                to_antenna = antenna_by_key.get((to_serial, to_no))
-                if not from_antenna or not to_antenna:
-                    raise UserError(
-                        _("Antenna Transition references an antenna missing from Reader configuration.")
-                    )
-                expected_from_reader = str(transition_item.get("from_reader_code") or "").strip().upper()
-                expected_to_reader = str(transition_item.get("to_reader_code") or "").strip().upper()
-                expected_from_antenna = str(transition_item.get("from_antenna_code") or "").strip().upper()
-                expected_to_antenna = str(transition_item.get("to_antenna_code") or "").strip().upper()
-                if expected_from_reader and from_antenna.device_id.device_code != expected_from_reader:
-                    raise UserError(_("From Reader Management Code does not match the published assembly."))
-                if expected_to_reader and to_antenna.device_id.device_code != expected_to_reader:
-                    raise UserError(_("To Reader Management Code does not match the published assembly."))
-                if expected_from_antenna and from_antenna.technical_code != expected_from_antenna:
-                    raise UserError(_("From Antenna Management Code does not match the published assembly."))
-                if expected_to_antenna and to_antenna.technical_code != expected_to_antenna:
-                    raise UserError(_("To Antenna Management Code does not match the published assembly."))
-                if (
-                    not from_antenna.active
-                    or from_antenna.cloud_removed
-                    or not from_antenna.device_id.active
-                    or from_antenna.device_id.cloud_removed
-                    or not to_antenna.active
-                    or to_antenna.cloud_removed
-                    or not to_antenna.device_id.active
-                    or to_antenna.device_id.cloud_removed
-                ):
-                    raise UserError(
-                        _("Antenna Transition references an inactive or removed Reader/Antenna.")
-                    )
-                if from_antenna == to_antenna:
-                    raise UserError(_("From Antenna and To Antenna must be different."))
-                if (
-                    from_antenna.device_id.controller_id != controller
-                    or to_antenna.device_id.controller_id != controller
-                ):
-                    raise UserError(
-                        _("Both transition antennas must belong to the Lane Controller.")
-                    )
-
-                path_key = (from_antenna.id, to_antenna.id)
-                if path_key in seen_paths:
-                    raise UserError(_("Duplicate directed Antenna Transition in Lane %s.") % lane_code)
-                seen_paths.add(path_key)
-                transition_specs.append({
-                    "lane_code": lane_code,
-                    "from_antenna_id": from_antenna.id,
-                    "to_antenna_id": to_antenna.id,
-                    "event_type": event_type,
-                    "duration_seconds": duration,
-                })
-
-        Lane = self.env["nsp.parking.lane"].sudo().with_context(active_test=False)
-        existing_lanes = Lane.search([
-            ("parking_area_id", "=", parking.id),
-            ("code", "in", list(lane_specs)),
-        ]) if lane_specs else Lane.browse()
-        lane_by_code = {lane.code: lane for lane in existing_lanes}
-        for lane_code, lane_vals in lane_specs.items():
-            lane = lane_by_code.get(lane_code)
-            if lane:
-                self._write_changed(lane, lane_vals)
-            else:
-                lane = Lane.create(lane_vals)
-                lane_by_code[lane_code] = lane
-
-        Transition = self.env["nsp.parking.antenna.transition"].sudo()
-        area_lanes = Lane.search([("parking_area_id", "=", parking.id)])
-        existing_transitions = Transition.search([
-            ("lane_id", "in", area_lanes.ids)
-        ]) if area_lanes else Transition.browse()
-        transition_by_key = {
-            (rule.lane_id.code, rule.from_antenna_id.id, rule.to_antenna_id.id): rule
-            for rule in existing_transitions
-        }
-        desired_keys = set()
-        create_vals = []
-        for spec in transition_specs:
-            key = (
-                spec["lane_code"], spec["from_antenna_id"], spec["to_antenna_id"]
-            )
-            desired_keys.add(key)
-            vals = {
-                "lane_id": lane_by_code[spec["lane_code"]].id,
-                "from_antenna_id": spec["from_antenna_id"],
-                "to_antenna_id": spec["to_antenna_id"],
-                "event_type": spec["event_type"],
-                "duration_seconds": spec["duration_seconds"],
-            }
-            rule = transition_by_key.get(key)
-            if rule:
-                self._write_changed(rule, vals)
-            else:
-                create_vals.append(vals)
-        if create_vals:
-            Transition.create(create_vals)
-
-        stale_transitions = existing_transitions.filtered(
-            lambda rule: (
-                rule.lane_id.code,
-                rule.from_antenna_id.id,
-                rule.to_antenna_id.id,
-            ) not in desired_keys
-        )
-        if stale_transitions:
-            stale_transitions.unlink()
-
-        incoming_codes = set(lane_specs)
-        stale_lanes = area_lanes.filtered(lambda lane: lane.code not in incoming_codes and lane.active)
-        if stale_lanes:
-            stale_lanes.mapped("antenna_transition_ids").unlink()
-            stale_lanes.write({"active": False})
-
-        if parking.state == "operational":
-            issues = parking._operational_issues()
-            if issues:
-                raise UserError("; ".join(str(issue) for issue in issues))
-        return parking
-
-    def _reconcile_parking_config_snapshot(self, items):
-        self.ensure_one()
-        incoming_codes = {
-            str(item.get("parking_area_code") or "").strip().upper()
-            for item in (items or [])
-            if isinstance(item, dict) and item.get("parking_area_code")
-        }
-        Parking = self.env["nsp.parking.area"].sudo()
-        stale = Parking.search([("code", "not in", list(incoming_codes))]) if incoming_codes else Parking.search([])
-        if stale:
-            stale.mapped("lane_ids.antenna_transition_ids").unlink()
-            stale.mapped("lane_ids").write({"active": False})
-            stale.write({"state": "blocked"})
-        return len(stale)
-
-    def _apply_gatekeeper_config_snapshot(self, data, request_payload=False):
+    def _apply_parking_runtime_snapshot(self, data, request_payload=False):
         """Apply only the device projection referenced by published Parking Layouts."""
         self.ensure_one()
         if not isinstance(data, dict):
-            raise UserError(_("Gatekeeper Configuration response must be an object."))
+            raise UserError(_("Parking Runtime response must be an object."))
         revision = int(data.get("revision") or 0)
         if revision <= 0:
-            raise UserError(_("Gatekeeper Configuration revision is required."))
+            raise UserError(_("Parking Runtime revision is required."))
         if revision < int(self.snapshot_revision or 0):
             return {"applied": 0, "removed": 0, "revision": revision, "stale": True}
 
@@ -1837,7 +1557,7 @@ class NspSyncJob(models.Model):
             ("device_whitelist", whitelist),
         ):
             if not isinstance(value, list):
-                raise UserError(_("Gatekeeper Configuration %s must be an array.") % name)
+                raise UserError(_("Parking Runtime %s must be an array.") % name)
 
         with self.env.cr.savepoint():
             Branch = self.env["nsp.branch"].sudo().with_context(active_test=False)
@@ -2062,6 +1782,7 @@ class NspSyncJob(models.Model):
             for area in areas:
                 self._apply_parking_config(area)
             removed_area = self._reconcile_parking_config_snapshot(areas)
+            self._validate_operational_parking_topology()
             self.write({
                 "snapshot_revision": revision,
                 "last_pull_at": fields.Datetime.now(),
@@ -2083,7 +1804,7 @@ class NspSyncJob(models.Model):
             "user": self._apply_user,
             "vehicle": self._apply_vehicle,
             "vehicle_borrow": self._apply_vehicle_borrow,
-            "measurement_config": self._apply_measurement_config,
+            "lane_calibration": self._apply_lane_calibration,
         }
         handler = handlers.get(kind)
         if not handler:
@@ -2186,7 +1907,7 @@ class NspSyncJob(models.Model):
         self.ensure_one()
         # Full snapshots do not use incremental cursors. This guarantees that
         # deletions, revocations and assignment changes are reflected on Edge.
-        if self._action_kind() in ("gatekeeper_config", "vehicle_config", "rfid_tag", "user", "vehicle", "vehicle_borrow", "measurement_config"):
+        if self._action_kind() in ("parking_runtime", "vehicle_config", "rfid_tag", "user", "vehicle", "vehicle_borrow", "lane_calibration"):
             return {"edge_server_code": self.edge_server_code}
         payload = {"edge_server_code": self.edge_server_code, "limit": self.batch_size}
         if self.sync_cursor:
@@ -2207,9 +1928,9 @@ class NspSyncJob(models.Model):
                 return str(item[field_name])
         return False
 
-    # --------------------------- measurement push ---------------------
+    # ------------------------ lane calibration push -------------------
     @api.model
-    def _measurement_event_payload(self, event):
+    def _lane_calibration_event_payload(self, event):
         read_at = False
         if event.read_at:
             parsed = fields.Datetime.to_datetime(event.read_at)
@@ -2243,24 +1964,24 @@ class NspSyncJob(models.Model):
             payload["rssi_dbm"] = float(event.rssi_dbm)
         return payload
 
-    def _pending_measurement_events(self, limit):
+    def _pending_lane_calibration_events(self, limit):
         self.ensure_one(); Record=self.env["nsp.sync.record"].sudo(); Event=self.env["nsp.measurement.event"].sudo(); action_code=str(self.sync_action_code or "").strip(); source_code=str(self.edge_server_code or "NSP").strip() or "NSP"
         synced=Record.search([("source_code","=",source_code),("sync_action_code","=",action_code),("operation","=","push"),("status","=","synced")]).mapped("record_key")
         domain=[("event_uid","not in",synced)] if synced else []
         return Event.search(domain,order="read_at,id",limit=max(1,int(limit or 1)))
 
-    def _push_measurement_event_records(self, events, timeout=120):
+    def _push_lane_calibration_event_records(self, events, timeout=120):
         self.ensure_one()
         events = events.sudo().exists().sorted(key=lambda event: event.id)
         if not events:
-            return {"pushed": 0, "failed": 0, "has_more": False, "message": "No Measurement Events to push."}
+            return {"pushed": 0, "failed": 0, "has_more": False, "message": "No Lane Calibration Events to push."}
         session = events[0].session_id
         events = events.filtered(lambda event: event.session_id == session)
         Record = self.env["nsp.sync.record"].sudo()
         payload = {
             "edge_server_code": self.edge_server_code,
             "measurement_code": session.measurement_code,
-            "events": [self._measurement_event_payload(event) for event in events],
+            "events": [self._lane_calibration_event_payload(event) for event in events],
         }
         for event in events:
             Record.mark_pending(
@@ -2271,7 +1992,7 @@ class NspSyncJob(models.Model):
                 record=event,
                 record_key=event.event_uid,
                 message="Waiting for Cloud response.",
-                payload=self._measurement_event_payload(event),
+                payload=self._lane_calibration_event_payload(event),
                 operation="push",
             )
         try:
@@ -2287,7 +2008,7 @@ class NspSyncJob(models.Model):
                     record_key=event.event_uid,
                     status="failed",
                     message=str(exc),
-                    payload=self._measurement_event_payload(event),
+                    payload=self._lane_calibration_event_payload(event),
                     operation="push",
                 )
             raise
@@ -2312,7 +2033,7 @@ class NspSyncJob(models.Model):
                 record_key=event.event_uid,
                 status="failed" if rejected else "synced",
                 message=(result or {}).get("message") or ("Rejected by Cloud." if rejected else "Accepted by Cloud."),
-                payload=self._measurement_event_payload(event),
+                payload=self._lane_calibration_event_payload(event),
                 response=result or data,
                 operation="push",
             )
@@ -2328,7 +2049,7 @@ class NspSyncJob(models.Model):
                 "%s: %s" % (code, count)
                 for code, count in sorted(reasons.items())
             )
-            message = _("Cloud rejected %s Measurement Event(s).") % failed
+            message = _("Cloud rejected %s Lane Calibration Event(s).") % failed
             if reason_text:
                 message += " " + _("Reasons: %s") % reason_text
             raise UserError(message)
@@ -2336,16 +2057,16 @@ class NspSyncJob(models.Model):
         return {
             "pushed": len(events),
             "failed": 0,
-            "has_more": bool(self._pending_measurement_events(1)),
-            "message": "Pushed %s Measurement Event(s)." % len(events),
+            "has_more": bool(self._pending_lane_calibration_events(1)),
+            "message": "Pushed %s Lane Calibration Event(s)." % len(events),
         }
 
-    def _run_measurement_event_push_once(self):
+    def _run_lane_calibration_event_push_once(self):
         self.ensure_one()
-        events = self._pending_measurement_events(
+        events = self._pending_lane_calibration_events(
             max(1, min(int(self.batch_size or 100), 100))
         )
-        return self._push_measurement_event_records(events)
+        return self._push_lane_calibration_event_records(events)
 
     @api.model
     def _ensure_edge_sync_jobs(self):
@@ -2353,7 +2074,7 @@ class NspSyncJob(models.Model):
 
         New route types may be introduced after an Edge connection already
         exists.  Do not require an operator to re-authenticate merely to create
-        those jobs: the scheduler and immediate Measurement forwarding can
+        those jobs: the scheduler and immediate Lane Calibration forwarding can
         self-heal the job set.
         """
         if self._deployment_role() != "edge_server":
@@ -2369,7 +2090,7 @@ class NspSyncJob(models.Model):
             return self.browse()
 
     @api.model
-    def _measurement_push_job(self, route_suffix):
+    def _lane_calibration_push_job(self, route_suffix):
         domain = [
             ("active", "=", True),
             ("route_suffix", "=", route_suffix),
@@ -2382,22 +2103,22 @@ class NspSyncJob(models.Model):
         return job
 
     @api.model
-    def push_measurement_events_now(self, events):
-        job = self._measurement_push_job("measurement-events/sync")
+    def push_lane_calibration_events_now(self, events):
+        job = self._lane_calibration_push_job("edge/lane-calibrations/events")
         if not job:
             _logger.warning(
-                "Measurement Event forwarding deferred: no measurement-events/sync job is available."
+                "Lane Calibration Event forwarding deferred: no edge/lane-calibrations/events job is available."
             )
             return False
         try:
-            job._push_measurement_event_records(events, timeout=3)
+            job._push_lane_calibration_event_records(events, timeout=3)
             return True
         except Exception:
-            _logger.exception("Immediate Measurement Event forwarding failed; fallback retry remains pending.")
+            _logger.exception("Immediate Lane Calibration Event forwarding failed; fallback retry remains pending.")
             return False
 
     @api.model
-    def _measurement_status_payload(self, session):
+    def _lane_calibration_status_payload(self, session):
         occurred_at = session.ended_at or session.started_at or session.write_date or fields.Datetime.now()
         return {
             "edge_server_code": self.edge_server_code,
@@ -2406,7 +2127,7 @@ class NspSyncJob(models.Model):
             "occurred_at": self._iso_utc(occurred_at),
         }
 
-    def _pending_measurement_status_sessions(self, limit):
+    def _pending_lane_calibration_status_sessions(self, limit):
         self.ensure_one(); Session=self.env["nsp.measurement.session"].sudo(); Record=self.env["nsp.sync.record"].sudo(); result=Session.search([("status","!=","draft")],order="write_date,id")
         pending=[]
         for session in result:
@@ -2415,15 +2136,15 @@ class NspSyncJob(models.Model):
             if len(pending)>=max(1,int(limit or 1)): break
         return Session.browse(pending)
 
-    def _push_measurement_status_records(self, sessions, timeout=120):
+    def _push_lane_calibration_status_records(self, sessions, timeout=120):
         self.ensure_one()
         sessions = sessions.sudo().exists().sorted(key=lambda session: (session.write_date, session.id))
         if not sessions:
-            return {"pushed": 0, "failed": 0, "has_more": False, "message": "No Measurement status to push."}
+            return {"pushed": 0, "failed": 0, "has_more": False, "message": "No Lane Calibration Status to push."}
         Record = self.env["nsp.sync.record"].sudo()
         pushed = 0
         for session in sessions:
-            payload = self._measurement_status_payload(session)
+            payload = self._lane_calibration_status_payload(session)
             Record.mark_pending(
                 sync_job=self,
                 action_code=self.sync_action_code,
@@ -2459,7 +2180,7 @@ class NspSyncJob(models.Model):
                 record=session,
                 record_key=session.measurement_code,
                 status="synced",
-                message="Measurement status accepted by Cloud.",
+                message="Lane Calibration Status accepted by Cloud.",
                 payload=payload,
                 response=data,
                 operation="push",
@@ -2469,30 +2190,30 @@ class NspSyncJob(models.Model):
         return {
             "pushed": pushed,
             "failed": 0,
-            "has_more": bool(self._pending_measurement_status_sessions(1)),
-            "message": "Pushed %s Measurement status record(s)." % pushed,
+            "has_more": bool(self._pending_lane_calibration_status_sessions(1)),
+            "message": "Pushed %s Lane Calibration Status record(s)." % pushed,
         }
 
-    def _run_measurement_status_push_once(self):
+    def _run_lane_calibration_status_push_once(self):
         self.ensure_one()
-        sessions = self._pending_measurement_status_sessions(
+        sessions = self._pending_lane_calibration_status_sessions(
             max(1, min(int(self.batch_size or 100), 1000))
         )
-        return self._push_measurement_status_records(sessions)
+        return self._push_lane_calibration_status_records(sessions)
 
     @api.model
-    def push_measurement_status_now(self, session):
-        job = self._measurement_push_job("measurement-status/sync")
+    def push_lane_calibration_status_now(self, session):
+        job = self._lane_calibration_push_job("edge/lane-calibrations/status")
         if not job:
             _logger.warning(
-                "Measurement status forwarding deferred: no measurement-status/sync job is available."
+                "Lane Calibration Status forwarding deferred: no edge/lane-calibrations/status job is available."
             )
             return False
         try:
-            job._push_measurement_status_records(session, timeout=3)
+            job._push_lane_calibration_status_records(session, timeout=3)
             return True
         except Exception:
-            _logger.exception("Immediate Measurement status forwarding failed; fallback retry remains pending.")
+            _logger.exception("Immediate Lane Calibration Status forwarding failed; fallback retry remains pending.")
             return False
 
     # --------------------------- execution ----------------------------
@@ -2518,10 +2239,10 @@ class NspSyncJob(models.Model):
     def run_push_once(self):
         self.ensure_one()
         kind = self._action_kind()
-        if kind == "measurement_event":
-            return self._run_measurement_event_push_once()
-        if kind == "measurement_status":
-            return self._run_measurement_status_push_once()
+        if kind == "lane_calibration_event":
+            return self._run_lane_calibration_event_push_once()
+        if kind == "lane_calibration_status":
+            return self._run_lane_calibration_status_push_once()
         batch = self._serialize_push_batch(kind)
         items = batch["items"]
         if not items:
@@ -2605,9 +2326,9 @@ class NspSyncJob(models.Model):
         )
         kind = self._action_kind()
 
-        if kind == "gatekeeper_config":
-            result = self._apply_gatekeeper_config_snapshot(data, request_payload=request_payload)
-            return {"pulled": result["applied"], "failed": 0, "has_more": False, "message": "Gatekeeper snapshot revision %s applied; %s stale record(s) removed/archived." % (result["revision"], result["removed"])}
+        if kind == "parking_runtime":
+            result = self._apply_parking_runtime_snapshot(data, request_payload=request_payload)
+            return {"pulled": result["applied"], "failed": 0, "has_more": False, "message": "Parking Runtime snapshot revision %s applied; %s stale record(s) removed/archived." % (result["revision"], result["removed"])}
 
         if kind == "vehicle_config":
             records, removed = self._apply_vehicle_config_snapshot(
@@ -2652,12 +2373,12 @@ class NspSyncJob(models.Model):
         items = self._items_from_response(data)
         next_cursor = data.get("next_sync_cursor") or False
         has_more = bool(data.get("has_more"))
-        full_snapshot = kind in ("user", "vehicle", "vehicle_borrow", "measurement_config")
+        full_snapshot = kind in ("user", "vehicle", "vehicle_borrow", "lane_calibration")
         if not items:
             removed = 0
             if kind in ("user", "vehicle", "vehicle_borrow"):
                 removed = self._reconcile_business_snapshot(kind, [])
-            elif kind == "measurement_config":
+            elif kind == "lane_calibration":
                 removed = self._reconcile_measurement_snapshot([])
             self.write({
                 "last_pull_at": fields.Datetime.now(),
@@ -2678,7 +2399,7 @@ class NspSyncJob(models.Model):
             raise UserError(json.dumps(failed, ensure_ascii=False))
         if kind in ("user", "vehicle", "vehicle_borrow"):
             removed = self._reconcile_business_snapshot(kind, items)
-        elif kind == "measurement_config":
+        elif kind == "lane_calibration":
             removed = self._reconcile_measurement_snapshot(items)
         else:
             removed = 0
@@ -2731,7 +2452,7 @@ class NspSyncJob(models.Model):
     @api.model
     def run_due_jobs(self):
         # Existing Cloud Connections may predate newer Sync routes (notably
-        # Measurement Events/Status).  Repair the default job set before every
+        # Lane Calibration Events/Status). Repair the default job set before every
         # scheduler pass so pending Edge records always gain a durable retry path.
         self._ensure_edge_sync_jobs()
         now = fields.Datetime.now()

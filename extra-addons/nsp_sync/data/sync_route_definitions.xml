@@ -5,21 +5,21 @@
     <field name="model_id" ref="model_nsp_sync_job"/>
   </record>
   <record id="api_edge_status" model="ir.actions.core_api">
-    <field name="name">Edge Server Status</field>
+    <field name="name">Edge Status</field>
     <field name="model_id" ref="model_nsp_sync_job"/>
     <field name="code">model.api_client_route_not_available()</field>
     <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_sync_routes"/>
-    <field name="endpoint_code">nsp_edge_server_status</field>
-    <field name="route_suffix">edge-server/status</field>
+    <field name="endpoint_code">nsp_edge_status</field>
+    <field name="route_suffix">edge/status</field>
     <field name="http_methods">POST</field>
   </record>
   <record id="api_gatekeeper_config" model="ir.actions.core_api">
-    <field name="name">Gatekeeper Config Sync</field>
+    <field name="name">Parking Runtime Snapshot</field>
     <field name="model_id" ref="model_nsp_sync_job"/>
     <field name="code">model.api_client_route_not_available()</field>
     <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_sync_routes"/>
-    <field name="endpoint_code">nsp_gatekeeper_config_sync</field>
-    <field name="route_suffix">gatekeeper-config/sync</field>
+    <field name="endpoint_code">nsp_edge_parking_runtime_snapshot</field>
+    <field name="route_suffix">edge/parking-runtime/snapshot</field>
     <field name="http_methods">POST</field>
   </record>
   <record id="api_users" model="ir.actions.core_api">
@@ -68,39 +68,39 @@
     <field name="http_methods">POST</field>
   </record>
   <record id="api_measurement_config" model="ir.actions.core_api">
-    <field name="name">Measurement Config Sync</field>
+    <field name="name">Lane Calibration Snapshot</field>
     <field name="model_id" ref="model_nsp_sync_job"/>
     <field name="code">model.api_client_route_not_available()</field>
     <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_sync_routes"/>
-    <field name="endpoint_code">nsp_measurement_config_sync</field>
-    <field name="route_suffix">measurement-config/sync</field>
+    <field name="endpoint_code">nsp_edge_lane_calibration_snapshot</field>
+    <field name="route_suffix">edge/lane-calibrations/snapshot</field>
     <field name="http_methods">POST</field>
   </record>
   <record id="api_measurement_events" model="ir.actions.core_api">
-    <field name="name">Measurement Events Sync</field>
+    <field name="name">Lane Calibration Events</field>
     <field name="model_id" ref="model_nsp_sync_job"/>
     <field name="code">model.api_client_route_not_available()</field>
     <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_sync_routes"/>
-    <field name="endpoint_code">nsp_measurement_events_sync</field>
-    <field name="route_suffix">measurement-events/sync</field>
+    <field name="endpoint_code">nsp_edge_lane_calibration_events</field>
+    <field name="route_suffix">edge/lane-calibrations/events</field>
     <field name="http_methods">POST</field>
   </record>
   <record id="api_measurement_status" model="ir.actions.core_api">
-    <field name="name">Measurement Status Sync</field>
+    <field name="name">Lane Calibration Status</field>
     <field name="model_id" ref="model_nsp_sync_job"/>
     <field name="code">model.api_client_route_not_available()</field>
     <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_sync_routes"/>
-    <field name="endpoint_code">nsp_measurement_status_sync</field>
-    <field name="route_suffix">measurement-status/sync</field>
+    <field name="endpoint_code">nsp_edge_lane_calibration_status</field>
+    <field name="route_suffix">edge/lane-calibrations/status</field>
     <field name="http_methods">POST</field>
   </record>
   <record id="api_parking_transactions" model="ir.actions.core_api">
-    <field name="name">Parking Transactions Sync</field>
+    <field name="name">Parking Transactions</field>
     <field name="model_id" ref="model_nsp_sync_job"/>
     <field name="code">model.api_client_route_not_available()</field>
     <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_sync_routes"/>
-    <field name="endpoint_code">nsp_parking_transactions_sync</field>
-    <field name="route_suffix">parking-transactions/sync</field>
+    <field name="endpoint_code">nsp_edge_parking_transactions</field>
+    <field name="route_suffix">edge/parking-transactions</field>
     <field name="http_methods">POST</field>
   </record>
 </odoo>

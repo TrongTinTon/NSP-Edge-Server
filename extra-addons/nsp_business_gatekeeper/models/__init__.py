@@ -5,8 +5,6 @@ from . import device
 from . import runtime_state
 from . import device_type
 from . import parking_config
-from . import parking_sequence
-from . import parking_sequence_detection
 from . import parking_detection_event
 from . import parking_transaction
 from . import measurement

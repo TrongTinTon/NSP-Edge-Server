@@ -32,7 +32,7 @@ def is_gateway_path(path):
 
 
 def build_gateway_path(version_code, route_suffix=''):
-    """Build a public gateway route, e.g. /v1/edge-server/status."""
+    """Build a public gateway route, e.g. /v1/edge/status."""
     version = (version_code or '').strip('/')
     suffix = (route_suffix or '').strip('/')
     if not version:

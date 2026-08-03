@@ -265,8 +265,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         device.write(vals)
         return device
 
-    @endpoint("NSP Gatekeeper Edge Server Status", route_path="edge-server/status", methods="POST", code="nsp_gatekeeper_edge_server_status")
-    def api_edge_server_status(self):
+    @endpoint("NSP Edge Status", route_path="edge/status", methods="POST", code="nsp_edge_status")
+    def api_edge_status(self):
         """Accept one Edge heartbeat including its Controllers and Reader runtime inventory."""
         data = self._payload()
         _application, _actor, edge_server, error = self._auth_edge_server_sync(data)
@@ -519,9 +519,12 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             payload = self._published_parking_payload_for_edge(area, edge_code)
             if not payload:
                 continue
-            area_payloads.append(payload)
             branch_ids.add(area.branch_id.id)
+            runtime_lanes = []
             for lane in payload.get("lanes") or []:
+                runtime_lanes.append({
+                    key: value for key, value in lane.items() if key != "readers"
+                })
                 server_code = str(lane.get("server_code") or "").strip().upper()
                 controller_code = str(lane.get("controller_code") or "").strip().upper()
                 if not server_code or not controller_code:
@@ -563,6 +566,9 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     if previous and previous != reader_payload:
                         raise ValueError("reader_published_with_conflicting_configuration")
                     controller["devices"][reader_code] = reader_payload
+            runtime_payload = dict(payload)
+            runtime_payload["lanes"] = runtime_lanes
+            area_payloads.append(runtime_payload)
 
         Whitelist = self.env["nsp.device.whitelist"].sudo().with_context(active_test=False)
         identities = Whitelist.search([
@@ -614,8 +620,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "device_whitelist": whitelist_payload,
         }
 
-    @endpoint("NSP Gatekeeper Configuration Sync", route_path="gatekeeper-config/sync", methods="POST", code="nsp_gatekeeper_config_sync")
-    def api_gatekeeper_config_sync(self):
+    @endpoint("NSP Edge Parking Runtime Snapshot", route_path="edge/parking-runtime/snapshot", methods="POST", code="nsp_edge_parking_runtime_snapshot")
+    def api_parking_runtime_snapshot(self):
         data = self._payload()
         _app, _actor, edge, error = self._auth_edge_server_sync(data)
         if error:
@@ -640,7 +646,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "revision": int(edge.config_revision or 1),
             **projection,
             "server_time": self._iso_datetime(fields.Datetime.now()),
-        }, message="Published Gatekeeper assembly snapshot loaded.")
+        }, message="Published Parking runtime snapshot loaded.")
 
     @endpoint("NSP Vehicle Configuration Sync", route_path="vehicle-config/sync", methods="POST", code="nsp_vehicle_config_sync")
     def api_vehicle_config_sync(self):
@@ -1036,8 +1042,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             session.message_post(body=str(message))
         return session
 
-    @endpoint("NSP Measurement Configuration Sync", route_path="measurement-config/sync", methods="POST", code="nsp_measurement_config_sync")
-    def api_measurement_config_sync(self):
+    @endpoint("NSP Edge Lane Calibration Snapshot", route_path="edge/lane-calibrations/snapshot", methods="POST", code="nsp_edge_lane_calibration_snapshot")
+    def api_lane_calibration_snapshot(self):
         data = self._payload()
         _application, _actor, edge_server, error = self._auth_edge_server_sync(data)
         if error:
@@ -1054,7 +1060,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 "next_sync_cursor": False,
                 "has_more": False,
                 "server_time": self._iso_datetime(fields.Datetime.now()),
-            }, message="Measurement configuration snapshot loaded.")
+            }, message="Lane Calibration snapshot loaded.")
         except Exception as exc:
             return self._measurement_error_response(exc)
 
@@ -1348,8 +1354,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "results": final_results,
         }, created_records
 
-    @endpoint("NSP Measurement Events Sync", route_path="measurement-events/sync", methods="POST", code="nsp_measurement_events_sync")
-    def api_measurement_events_sync(self):
+    @endpoint("NSP Edge Lane Calibration Events", route_path="edge/lane-calibrations/events", methods="POST", code="nsp_edge_lane_calibration_events")
+    def api_lane_calibration_events(self):
         data = self._payload()
         _application, _actor, edge_server, error = self._auth_edge_server_sync(data)
         if error:
@@ -1366,12 +1372,12 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             result, _records = self._measurement_process_event_batch(
                 session, items, allow_final=True, accept_snapshot=True,
             )
-            return self._ok(result, message="Measurement Events synchronized.")
+            return self._ok(result, message="Lane Calibration Events synchronized.")
         except Exception as exc:
             return self._measurement_error_response(exc)
 
-    @endpoint("NSP Measurement Status Sync", route_path="measurement-status/sync", methods="POST", code="nsp_measurement_status_sync")
-    def api_measurement_status_sync(self):
+    @endpoint("NSP Edge Lane Calibration Status", route_path="edge/lane-calibrations/status", methods="POST", code="nsp_edge_lane_calibration_status")
+    def api_lane_calibration_status(self):
         data = self._payload()
         _application, _actor, edge_server, error = self._auth_edge_server_sync(data)
         if error:
@@ -1386,7 +1392,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             self._measurement_set_status(
                 session, data.get("status"), occurred_at, data.get("message")
             )
-            return self._ok({"data": self._measurement_session_payload(session)}, message="Measurement status synchronized.")
+            return self._ok({"data": self._measurement_session_payload(session)}, message="Lane Calibration Status synchronized.")
         except Exception as exc:
             return self._measurement_error_response(exc)
 
@@ -1614,8 +1620,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             vals, existing_by_uid=cache.get("transaction_by_uid")
         )
 
-    @endpoint("NSP Gatekeeper Parking Transactions Sync", route_path="parking-transactions/sync", methods="POST", code="nsp_parking_transactions_sync")
-    def api_parking_transactions_sync(self):
+    @endpoint("NSP Edge Parking Transactions", route_path="edge/parking-transactions", methods="POST", code="nsp_edge_parking_transactions")
+    def api_parking_transactions(self):
         data = self._payload()
         _application, _actor, edge_server, error = self._auth_edge_server_sync(data)
         if error:

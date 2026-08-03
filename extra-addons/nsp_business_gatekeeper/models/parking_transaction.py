@@ -443,7 +443,7 @@ class ParkingTransaction(models.Model):
 
         Event Type is resolved directly by the configured directed Antenna Transition.
         Check-in never uses User RFID. Check-out requires exactly one User RFID
-        detection selected by the detection processor inside that transition's Duration.
+        detection selected by the detection processor inside the configured event-sequence Duration.
         """
         detections = detections.filtered(lambda rec: rec.state == "pending")
         if not detections:

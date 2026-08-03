@@ -89,10 +89,6 @@
                         <list create="1" edit="1" delete="1">
                             <control><create string="Add Lane"/></control>
                             <field name="name" string="Lane" decoration-bf="1"/>
-                            <field name="direction" widget="badge"
-                                   decoration-success="direction == 'entry'"
-                                   decoration-warning="direction == 'exit'"
-                                   decoration-info="direction == 'bidirectional'"/>
                             <field name="available_edge_server_ids" column_invisible="1"/>
                             <field name="edge_server_id" string="Server"
                                    domain="[('id','in',available_edge_server_ids)]"
@@ -105,7 +101,7 @@
                             <field name="calibration_result_id" string="Calibration"
                                    domain="[('state','=','accepted')]"
                                    options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': False}"/>
-                            <field name="transition_count" string="Points" readonly="1"/>
+                            <field name="timeline_point_count" string="Points" readonly="1"/>
                             <field name="active" widget="boolean_toggle"/>
                         </list>
                     </field>
@@ -128,13 +124,9 @@
             <list string="Lanes">
                 <field name="parking_area_id" string="Layout"/>
                 <field name="name" string="Lane" decoration-bf="1"/>
-                <field name="direction" widget="badge"
-                                   decoration-success="direction == 'entry'"
-                                   decoration-warning="direction == 'exit'"
-                                   decoration-info="direction == 'bidirectional'"/>
                 <field name="controller_id" string="Controller"/>
                 <field name="calibration_result_id" string="Calibration"/>
-                <field name="transition_count" string="Points" readonly="1"/>
+                <field name="timeline_point_count" string="Points" readonly="1"/>
                 <field name="active" widget="boolean_toggle"/>
             </list>
         </field>
@@ -146,9 +138,9 @@
         <field name="arch" type="xml">
             <form string="Lane">
                 <header>
-                    <button name="action_import_calibration_result" type="object" string="Import"
+                    <button name="action_import_calibration_result" type="object" string="Import Timeline"
                             icon="fa-download" class="oe_highlight"
-                            help="Import the selected accepted calibration."
+                            help="Import the accepted Lane Calibration timeline and clear existing event sequences."
                             invisible="not calibration_result_id"/>
                 </header>
                 <sheet>
@@ -159,10 +151,6 @@
                     </div>
                     <group>
                         <group>
-                            <field name="direction" widget="selection_badge"
-                                   decoration-success="direction == 'entry'"
-                                   decoration-warning="direction == 'exit'"
-                                   decoration-info="direction == 'bidirectional'"/>
                         </group>
                         <group string="Devices">
                             <field name="edge_server_id" string="Server"

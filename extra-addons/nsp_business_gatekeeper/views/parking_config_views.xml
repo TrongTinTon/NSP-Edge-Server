@@ -68,12 +68,8 @@
                     <field name="lane_ids" readonly="1" nolabel="1">
                         <list create="0" edit="0" delete="0">
                             <field name="name" string="Lane" decoration-bf="1"/>
-                            <field name="direction" widget="badge"
-                                   decoration-success="direction == 'entry'"
-                                   decoration-warning="direction == 'exit'"
-                                   decoration-info="direction == 'bidirectional'"/>
                             <field name="controller_id" string="Controller"/>
-                            <field name="transition_count" string="Points" readonly="1"/>
+                            <field name="timeline_point_count" string="Points" readonly="1"/>
                             <field name="active" widget="boolean_toggle" readonly="1"/>
                         </list>
                     </field>
@@ -96,12 +92,8 @@
             <list string="Lanes" create="0" edit="0" delete="0">
                 <field name="parking_area_id" string="Layout"/>
                 <field name="name" string="Lane" decoration-bf="1"/>
-                <field name="direction" widget="badge"
-                                   decoration-success="direction == 'entry'"
-                                   decoration-warning="direction == 'exit'"
-                                   decoration-info="direction == 'bidirectional'"/>
                 <field name="controller_id" string="Controller"/>
-                <field name="transition_count" string="Points" readonly="1"/>
+                <field name="timeline_point_count" string="Points" readonly="1"/>
                 <field name="active" widget="boolean_toggle" readonly="1"/>
             </list>
         </field>
@@ -118,14 +110,10 @@
                     </div>
                     <group>
                         <group>
-                            <field name="direction" widget="badge" readonly="1"
-                                   decoration-success="direction == 'entry'"
-                                   decoration-warning="direction == 'exit'"
-                                   decoration-info="direction == 'bidirectional'"/>
                         </group>
                         <group string="Devices">
                             <field name="controller_id" string="Controller" readonly="1"/>
-                            <field name="transition_count" string="Points" readonly="1"/>
+                            <field name="timeline_point_count" string="Points" readonly="1"/>
                         </group>
                     </group>
                     <notebook>

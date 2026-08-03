@@ -47,19 +47,19 @@ class CoreApiEndpoint(models.Model):
     route_suffix = fields.Char(
         string='Route Path',
         required=True,
-        help='Route Path only, e.g. edge-server/status. Public URL is /{version}/{route_path}.' ,
+        help='Route Path only, e.g. edge/status. Public URL is /{version}/{route_path}.' ,
     )
     route_pattern = fields.Char(
         string='Gateway Path',
         compute='_compute_route_pattern',
         store=True,
         readonly=True,
-        help='Computed public path, e.g. /v1/edge-server/status.',
+        help='Computed public path, e.g. /v1/edge/status.',
     )
     public_gateway_url = fields.Char(
         string='Full Gateway URL',
         compute='_compute_public_gateway_url',
-        help='Full public URL including host domain, e.g. https://localhost:8069/v1/edge-server/status.',
+        help='Full public URL including host domain, e.g. https://localhost:8069/v1/edge/status.',
     )
     http_methods = fields.Char(
         string='Allowed Methods',

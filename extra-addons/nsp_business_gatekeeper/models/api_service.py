@@ -845,9 +845,9 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         if not events or "nsp.sync.job" not in self.env.registry.models:
             return False
         try:
-            return self.env["nsp.sync.job"].sudo().push_measurement_events_now(events)
+            return self.env["nsp.sync.job"].sudo().push_lane_calibration_events_now(events)
         except Exception:
-            _logger.exception("Immediate Measurement Event forwarding failed; fallback retry will handle it.")
+            _logger.exception("Immediate Lane Calibration Event forwarding failed; fallback retry will handle it.")
             return False
 
     @api.model
@@ -855,9 +855,9 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         if not session or "nsp.sync.job" not in self.env.registry.models:
             return False
         try:
-            return self.env["nsp.sync.job"].sudo().push_measurement_status_now(session)
+            return self.env["nsp.sync.job"].sudo().push_lane_calibration_status_now(session)
         except Exception:
-            _logger.exception("Immediate Measurement status forwarding failed; fallback retry will handle it.")
+            _logger.exception("Immediate Lane Calibration Status forwarding failed; fallback retry will handle it.")
             return False
 
     @endpoint("NSP Controller Measurement Events", route_path="controller/measurement/events", methods="POST", code="nsp_controller_measurement_events")
