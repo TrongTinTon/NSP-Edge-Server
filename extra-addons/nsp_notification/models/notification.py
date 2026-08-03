@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from odoo import api, fields, models, _
+from odoo.exceptions import AccessError
 
 
 class NspNotification(models.Model):
@@ -45,6 +46,26 @@ class NspNotification(models.Model):
     _sql_constraints = [
         ("dedupe_key_unique", "unique(dedupe_key)", "Notification dedupe key must be unique."),
     ]
+
+
+    _recipient_mutable_fields = frozenset({"state", "read_at", "read_by", "active"})
+
+    def write(self, vals):
+        if self.env.context.get("nsp_notification_system_write"):
+            return super().write(vals)
+        unsupported = sorted(set(vals) - self._recipient_mutable_fields)
+        if unsupported:
+            raise AccessError(_(
+                "Notification event content is immutable. Unsupported field(s): %s"
+            ) % ", ".join(unsupported))
+        return super().write(vals)
+
+    def unlink(self):
+        if self.env.context.get("nsp_notification_system_unlink"):
+            return super().unlink()
+        raise AccessError(_(
+            "Notifications are audit records and cannot be deleted. Archive them instead."
+        ))
 
     @api.model
     def notify_parking_transaction(self, transaction):

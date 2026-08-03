@@ -14,11 +14,11 @@ _logger = logging.getLogger(__name__)
 SYNC_ROUTE_DIRECTIONS = {
     "edge/status": "push",
     "edge/parking-runtime/snapshot": "pull",
-    "users/sync": "pull",
-    "vehicle-config/sync": "pull",
-    "vehicles/sync": "pull",
-    "rfid-tags/sync": "pull",
-    "vehicle-borrow/sync": "pull",
+    "edge/users/snapshot": "pull",
+    "edge/vehicle-reference/snapshot": "pull",
+    "edge/vehicles/snapshot": "pull",
+    "edge/rfid-assignments/snapshot": "pull",
+    "edge/vehicle-borrows/snapshot": "pull",
     "edge/lane-calibrations/snapshot": "pull",
     "edge/lane-calibrations/events": "push",
     "edge/lane-calibrations/status": "push",
@@ -29,11 +29,11 @@ JOB_SEQUENCE = {route: sequence * 10 for sequence, route in enumerate(NSP_SYNC_A
 DEFAULT_JOB_SETTINGS = {
     "edge/status": {"schedule_interval_minutes": 1, "batch_size": 1},
     "edge/parking-runtime/snapshot": {"schedule_interval_minutes": 1, "batch_size": 1},
-    "users/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
-    "vehicle-config/sync": {"schedule_interval_minutes": 5, "batch_size": 1000},
-    "vehicles/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
-    "rfid-tags/sync": {"schedule_interval_minutes": 5, "batch_size": 1000},
-    "vehicle-borrow/sync": {"schedule_interval_minutes": 5, "batch_size": 500},
+    "edge/users/snapshot": {"schedule_interval_minutes": 5, "batch_size": 500},
+    "edge/vehicle-reference/snapshot": {"schedule_interval_minutes": 5, "batch_size": 1000},
+    "edge/vehicles/snapshot": {"schedule_interval_minutes": 5, "batch_size": 500},
+    "edge/rfid-assignments/snapshot": {"schedule_interval_minutes": 5, "batch_size": 1000},
+    "edge/vehicle-borrows/snapshot": {"schedule_interval_minutes": 5, "batch_size": 500},
     "edge/lane-calibrations/snapshot": {"schedule_interval_minutes": 1, "batch_size": 100},
     "edge/lane-calibrations/events": {"schedule_interval_minutes": 1, "batch_size": 100},
     "edge/lane-calibrations/status": {"schedule_interval_minutes": 1, "batch_size": 100},
@@ -42,11 +42,11 @@ DEFAULT_JOB_SETTINGS = {
 ACTION_KINDS = {
     "edge/status": "edge_server_status",
     "edge/parking-runtime/snapshot": "parking_runtime",
-    "users/sync": "user",
-    "vehicle-config/sync": "vehicle_config",
-    "vehicles/sync": "vehicle",
-    "rfid-tags/sync": "rfid_tag",
-    "vehicle-borrow/sync": "vehicle_borrow",
+    "edge/users/snapshot": "user",
+    "edge/vehicle-reference/snapshot": "vehicle_config",
+    "edge/vehicles/snapshot": "vehicle",
+    "edge/rfid-assignments/snapshot": "rfid_tag",
+    "edge/vehicle-borrows/snapshot": "vehicle_borrow",
     "edge/lane-calibrations/snapshot": "lane_calibration",
     "edge/lane-calibrations/events": "lane_calibration_event",
     "edge/lane-calibrations/status": "lane_calibration_status",
@@ -904,7 +904,7 @@ class NspSyncJob(models.Model):
         owner = cache.get("user_by_code", {}).get(owner_user_code)
         if not owner:
             raise UserError(
-                _("Vehicle Owner %(code)s was not found. Run users/sync first.")
+                _("Vehicle Owner %(code)s was not found. Run edge/users/snapshot first.")
                 % {"code": owner_user_code}
             )
 
@@ -914,7 +914,7 @@ class NspSyncJob(models.Model):
                 return False
             record = cache.get(cache_key, {}).get(master_code)
             if not record:
-                raise UserError(_("%(label)s %(code)s was not found. Run vehicle-config/sync first.") % {
+                raise UserError(_("%(label)s %(code)s was not found. Run edge/vehicle-reference/snapshot first.") % {
                     "label": label, "code": master_code,
                 })
             return record
@@ -1020,12 +1020,12 @@ class NspSyncJob(models.Model):
         for info in normalized:
             if info["target"] == "user" and info["code"] not in user_by_code:
                 raise UserError(
-                    _("RFID Tag %(tid)s User %(code)s was not found. Run users/sync first.")
+                    _("RFID Tag %(tid)s User %(code)s was not found. Run edge/users/snapshot first.")
                     % info
                 )
             if info["target"] == "vehicle" and info["code"] not in vehicle_by_code:
                 raise UserError(
-                    _("RFID Tag %(tid)s Vehicle %(code)s was not found. Run vehicles/sync first.")
+                    _("RFID Tag %(tid)s Vehicle %(code)s was not found. Run edge/vehicles/snapshot first.")
                     % info
                 )
 

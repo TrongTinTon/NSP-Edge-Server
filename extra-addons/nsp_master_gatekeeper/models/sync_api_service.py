@@ -91,6 +91,37 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         return application, actor_kind, edge_server, node_error
 
     @api.model
+    def _auth_edge_snapshot_request(self, data=None):
+        """Authorize a Cloud-owned full replacement snapshot request.
+
+        Snapshot endpoints accept only the Edge identity. Pagination/cursors are
+        intentionally unsupported because each response is the authoritative
+        replacement set for its resource scope.
+        """
+        data = data or self._payload()
+        _application, _actor, edge_server, error = self._auth_edge_server_sync(data)
+        if error:
+            return edge_server, error
+        unsupported = sorted(set(data) - {"edge_server_code"})
+        if unsupported:
+            return edge_server, self._error(
+                "Unsupported field(s): %s" % ", ".join(unsupported),
+                400,
+                error_code="invalid_payload",
+                details={"unsupported_fields": unsupported},
+            )
+        return edge_server, None
+
+    @api.model
+    def _snapshot_meta(self, edge_server, scope):
+        return {
+            "edge_server_code": edge_server.edge_server_code,
+            "snapshot_scope": str(scope or "").strip(),
+            "snapshot_mode": "replace",
+            "server_time": self._iso_datetime(fields.Datetime.now()),
+        }
+
+    @api.model
     def _safe_datetime_value(self, value, default_now=False):
         if not value:
             return fields.Datetime.now() if default_now else False
@@ -648,20 +679,12 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "server_time": self._iso_datetime(fields.Datetime.now()),
         }, message="Published Parking runtime snapshot loaded.")
 
-    @endpoint("NSP Vehicle Configuration Sync", route_path="vehicle-config/sync", methods="POST", code="nsp_vehicle_config_sync")
-    def api_vehicle_config_sync(self):
+    @endpoint("NSP Edge Vehicle Reference Snapshot", route_path="edge/vehicle-reference/snapshot", methods="POST", code="nsp_edge_vehicle_reference_snapshot")
+    def api_vehicle_reference_snapshot(self):
         data = self._payload()
-        _application, _actor_kind, _edge_server, error = self._auth_edge_server_sync(data)
+        edge_server, error = self._auth_edge_snapshot_request(data)
         if error:
             return error
-        unsupported = sorted(set(data) - {"edge_server_code"})
-        if unsupported:
-            return self._error(
-                "Unsupported field(s): %s" % ", ".join(unsupported),
-                400,
-                error_code="invalid_payload",
-                details={"unsupported_fields": unsupported},
-            )
         VehicleType = self.env["nsp.vehicle.type"].sudo().with_context(active_test=False)
         VehicleBrand = self.env["nsp.reference.brand"].sudo().with_context(active_test=False)
         VehicleModel = self.env["nsp.reference.model"].sudo().with_context(active_test=False)
@@ -692,25 +715,15 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 "name": record.name,
                 "active": bool(record.active),
             } for record in colors],
-            "next_sync_cursor": False,
-            "has_more": False,
-            "server_time": self._iso_datetime(fields.Datetime.now()),
-        }, message="Vehicle Configuration snapshot loaded.")
+            **self._snapshot_meta(edge_server, "vehicle_reference"),
+        }, message="Vehicle reference snapshot loaded.")
 
-    @endpoint("NSP RFID Tag Whitelist Sync", route_path="rfid-tags/sync", methods="POST", code="nsp_rfid_tags_sync")
-    def api_rfid_tags_sync(self):
+    @endpoint("NSP Edge RFID Assignments Snapshot", route_path="edge/rfid-assignments/snapshot", methods="POST", code="nsp_edge_rfid_assignments_snapshot")
+    def api_rfid_assignments_snapshot(self):
         data = self._payload()
-        _application, _actor_kind, _edge_server, error = self._auth_edge_server_sync(data)
+        edge_server, error = self._auth_edge_snapshot_request(data)
         if error:
             return error
-        unsupported = sorted(set(data) - {"edge_server_code"})
-        if unsupported:
-            return self._error(
-                "Unsupported field(s): %s" % ", ".join(unsupported),
-                400,
-                error_code="invalid_payload",
-                details={"unsupported_fields": unsupported},
-            )
         tags = self.env["nsp.rfid.tag"].sudo().search([], order="tid asc, id asc")
         assignments = self.env["nsp.rfid.tag.assignment"].sudo().search([
             ("tag_id", "in", tags.ids), ("state", "=", "active"),
@@ -736,20 +749,17 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 "vehicle_assignments": vehicle_count,
                 "unassigned_tags": len(items) - employee_count - vehicle_count,
             },
-            "next_sync_cursor": False,
-            "has_more": False,
-            "server_time": self._iso_datetime(fields.Datetime.now()),
-        }, message="RFID Tag Whitelist snapshot loaded.")
+            **self._snapshot_meta(edge_server, "rfid_assignments"),
+        }, message="RFID assignments snapshot loaded.")
 
-    @endpoint("NSP Gatekeeper Users Sync", route_path="users/sync", methods="POST", code="nsp_users_sync")
-    def api_users_sync(self):
+    @endpoint("NSP Edge Users Snapshot", route_path="edge/users/snapshot", methods="POST", code="nsp_edge_users_snapshot")
+    def api_users_snapshot(self):
         data = self._payload()
-        application, actor_kind, edge_server, error = self._auth_edge_server_sync(data)
+        edge_server, error = self._auth_edge_snapshot_request(data)
         if error:
             return error
         User = self.env["nsp.user"].sudo()
         users = User.search([("user_code","!=",False),("user_code","!=","")], order="user_code,id")
-        next_cursor, has_more, server_time = False, False, fields.Datetime.now()
         items = []
         for user in users:
             item = {
@@ -759,19 +769,18 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             }
             items.append(item)
         return self._ok({
-            "items": items, "next_sync_cursor": next_cursor, "has_more": has_more,
-            "server_time": self._iso_datetime(server_time),
-        }, message="Users sync loaded.")
+            "items": items,
+            **self._snapshot_meta(edge_server, "users"),
+        }, message="Users snapshot loaded.")
 
-    @endpoint("NSP Gatekeeper Vehicles Sync", route_path="vehicles/sync", methods="POST", code="nsp_vehicles_sync")
-    def api_vehicles_sync(self):
+    @endpoint("NSP Edge Vehicles Snapshot", route_path="edge/vehicles/snapshot", methods="POST", code="nsp_edge_vehicles_snapshot")
+    def api_vehicles_snapshot(self):
         data = self._payload()
-        application, actor_kind, edge_server, error = self._auth_edge_server_sync(data)
+        edge_server, error = self._auth_edge_snapshot_request(data)
         if error:
             return error
         Vehicle = self.env["nsp.vehicle"].sudo()
         vehicles = Vehicle.search([], order="vehicle_code,id")
-        next_cursor, has_more, server_time = False, False, fields.Datetime.now()
         items = []
         for vehicle in vehicles:
             owner = vehicle.owner_id
@@ -790,21 +799,23 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 item["owner_user_code"] = owner_user_code
             items.append(item)
         return self._ok({
-            "items": items, "next_sync_cursor": next_cursor, "has_more": has_more,
-            "server_time": self._iso_datetime(server_time),
-        }, message="Vehicles sync loaded.")
+            "items": items,
+            **self._snapshot_meta(edge_server, "vehicles"),
+        }, message="Vehicles snapshot loaded.")
 
-    @endpoint("NSP Gatekeeper Vehicle Borrow Sync", route_path="vehicle-borrow/sync", methods="POST", code="nsp_vehicle_borrow_sync")
-    def api_vehicle_borrow_sync(self):
+    @endpoint("NSP Edge Vehicle Borrows Snapshot", route_path="edge/vehicle-borrows/snapshot", methods="POST", code="nsp_edge_vehicle_borrows_snapshot")
+    def api_vehicle_borrows_snapshot(self):
         data = self._payload()
-        application, actor_kind, edge_server, error = self._auth_edge_server_sync(data)
+        edge_server, error = self._auth_edge_snapshot_request(data)
         if error:
             return error
         if "nsp.vehicle.borrow" not in self.env.registry.models:
-            return self._ok({"items": [], "next_sync_cursor": data.get("sync_cursor") or False, "has_more": False, "server_time": self._iso_datetime(fields.Datetime.now())})
+            return self._ok({
+                "items": [],
+                **self._snapshot_meta(edge_server, "vehicle_borrows"),
+            }, message="Vehicle borrows snapshot loaded.")
         Borrow = self.env["nsp.vehicle.borrow"].sudo()
         records = Borrow.search([], order="borrow_code,id")
-        next_cursor, has_more, server_time = False, False, fields.Datetime.now()
         items = []
         for borrow in records:
             vehicle = borrow.vehicle_id
@@ -825,9 +836,9 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 item["returned_at"] = self._iso_datetime(borrow.returned_at)
             items.append(item)
         return self._ok({
-            "items": items, "next_sync_cursor": next_cursor, "has_more": has_more,
-            "server_time": self._iso_datetime(server_time),
-        }, message="Vehicle borrow sync loaded.")
+            "items": items,
+            **self._snapshot_meta(edge_server, "vehicle_borrows"),
+        }, message="Vehicle borrows snapshot loaded.")
 
     @api.model
     def _measurement_require_fields(self, data, required):

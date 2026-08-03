@@ -3,7 +3,7 @@
     'summary': 'Cloud notification center for NSP parking events',
     'description': ('Cloud-only NSP notification center. Extends parking transactions on Cloud without being required '
  'by NSP Gatekeeper/Edge.'),
-    'version': '19.0.5.0.0',
+    'version': '19.0.5.1.0',
     'sequence': 40,
     'author': 'BKU Team',
     'category': 'Services',

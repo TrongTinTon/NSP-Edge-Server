@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-from odoo import api, fields, models
+from odoo import api, fields, models, _
 from psycopg2 import IntegrityError
+from odoo.exceptions import AccessError
 
 
 class ParkingTransaction(models.Model):
@@ -84,6 +85,22 @@ class ParkingTransaction(models.Model):
                 rec.vehicle_id.license_plate if rec.vehicle_id and rec.vehicle_id.license_plate
                 else rec.license_plate or rec.vehicle_tid or ""
             )
+
+
+    def write(self, vals):
+        if self.env.context.get("nsp_parking_transaction_system_write"):
+            return super().write(vals)
+        raise AccessError(_(
+            "Parking Transactions are immutable Cloud business history. "
+            "Create a correcting transaction instead of changing an accepted Edge result."
+        ))
+
+    def unlink(self):
+        if self.env.context.get("nsp_parking_transaction_system_unlink"):
+            return super().unlink()
+        raise AccessError(_(
+            "Parking Transactions are immutable and cannot be deleted."
+        ))
 
     @api.model
     def _error_catalog(self):

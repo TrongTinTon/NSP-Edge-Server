@@ -33,7 +33,7 @@ class IrActionsCoreApi(models.Model):
     route_suffix = fields.Char(
         string='Route Path',
         help=(
-            'Route Path only, e.g. vehicles/sync. Core API derives the gateway '
+            'Route Path only, e.g. edge/vehicles/snapshot. Core API derives the gateway '
             'path from Application and API Version.'
         ),
     )
