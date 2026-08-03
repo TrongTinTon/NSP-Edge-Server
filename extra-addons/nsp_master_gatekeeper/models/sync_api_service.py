@@ -186,7 +186,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         if not isinstance(item, dict):
             raise ValueError("invalid_payload")
         allowed_fields = {
-            "serial_number", "antennas", "device_status",
+            "serial_number", "ports", "device_status",
             "last_seen_at", "firmware_version", "power_dbm", "read_interval_ms",
         }
         unsupported = sorted(set(item) - allowed_fields)
@@ -205,19 +205,23 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         if status not in ("online", "offline", "degraded"):
             raise ValueError("invalid_payload")
 
-        reported_antennas = item.get("antennas")
-        if reported_antennas is not None:
-            if not isinstance(reported_antennas, list):
-                raise ValueError("antennas must be an array")
-            try:
-                reported_numbers = {int(value) for value in reported_antennas}
-            except Exception as exc:
-                raise ValueError("invalid_antenna_number") from exc
-            if any(number <= 0 for number in reported_numbers):
-                raise ValueError("invalid_antenna_number")
-            declared_numbers = set(device.antennas_ids.mapped("antenna_no"))
-            if reported_numbers != declared_numbers:
-                raise ValueError("antenna_inventory_mismatch")
+        reported_ports = item.get("ports")
+        if reported_ports is not None:
+            if not isinstance(reported_ports, list):
+                raise ValueError("ports must be an array")
+            port_numbers = []
+            for value in reported_ports:
+                if isinstance(value, bool):
+                    raise ValueError("invalid_port_number")
+                try:
+                    port_no = int(value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("invalid_port_number") from exc
+                if port_no <= 0:
+                    raise ValueError("invalid_port_number")
+                port_numbers.append(port_no)
+            if len(port_numbers) != len(set(port_numbers)):
+                raise ValueError("duplicate_port_number")
 
         last_seen_at = self._safe_datetime_value(item.get("last_seen_at"), default_now=False)
         vals = {"status": status}
