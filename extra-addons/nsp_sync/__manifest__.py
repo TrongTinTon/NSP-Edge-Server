@@ -1,1 +1,29 @@
-{'name': 'NSP Sync', 'summary': 'Edge reliable transport for NSP', 'description': 'Edge-only reliable transport. Owns Cloud authentication, scheduled snapshot pull, durable outbox push, retry/backoff, ACK tracking and idempotent delivery. Do not install on Cloud.', 'version': '19.0.6.0.0', 'sequence': 2, 'author': 'BKU Team', 'category': 'Services', 'depends': ['base', 'nsp_core', 't4_coreapi', 'nsp_user', 'nsp_vehicle', 'nsp_rfid'], 'installable': True, 'application': True, 'auto_install': False, 'data': ['data/sync_route_definitions.xml', 'security/ir.model.access.csv', 'views/sync_record_views.xml', 'views/sync_auth_views.xml', 'views/sync_job_views.xml', 'views/menu_views.xml', 'data/sync_job_data.xml'], 'license': 'LGPL-3'}
+{
+    "name": "NSP Sync",
+    "summary": "Edge reliable transport for NSP",
+    "description": "Edge-only transport for Cloud authentication, snapshot pull, durable outbox push, retry, ACK tracking and idempotent delivery.",
+    "version": "19.0.7.2.0",
+    "sequence": 2,
+    "author": "BKU Team",
+    "category": "Services",
+    "depends": [
+        "base",
+        "nsp_core",
+        "t4_coreapi",
+        "nsp_user",
+        "nsp_vehicle",
+    ],
+    "installable": True,
+    "application": True,
+    "auto_install": False,
+    "data": [
+        "data/sync_route_definitions.xml",
+        "security/ir.model.access.csv",
+        "views/sync_record_views.xml",
+        "views/sync_auth_views.xml",
+        "views/sync_job_views.xml",
+        "views/menu_views.xml",
+        "data/sync_job_data.xml",
+    ],
+    "license": "LGPL-3",
+}

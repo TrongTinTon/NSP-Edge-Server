@@ -3,14 +3,14 @@ from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
 
 
-VALID_DEVICE_TYPE_CODES = {"SERVER", "CONTROLLER", "RFID_READER", "ANTENNA"}
+VALID_DEVICE_TYPE_CODES = {"SERVER", "CONTROLLER", "RFID_READER"}
 
 
 class DeviceWhitelist(models.Model):
     """Edge cache of device identities referenced by released assemblies.
 
     This model deliberately contains no parent, Reader port or operation
-    parameters. Server, Controller, RFID Reader and Antenna relationships exist
+    parameters. Server, Controller and RFID Reader relationships exist
     only in the active Lane Calibration or Parking Layout runtime assembly.
     """
 

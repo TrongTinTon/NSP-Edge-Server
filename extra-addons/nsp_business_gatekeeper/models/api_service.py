@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-import base64
 import json
 import logging
 from datetime import datetime, timezone
 
 from odoo import api, fields, models
-from odoo.addons.t4_coreapi.utils import endpoint, get_params, get_body
+from odoo.addons.t4_coreapi.utils import endpoint, get_body
 
 _logger = logging.getLogger(__name__)
 
@@ -221,17 +220,10 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
 
     @api.model
     def _apply_device_status(self, controller, item, cache=None):
-        """Apply Reader runtime status using Serial Number as the only device identity.
-
-        ``device_code`` is a server-side management code and is never accepted
-        from Controllers or Edge Server runtime reports. Antenna declarations are
-        server-managed; a runtime report may include antenna numbers only as an
-        inventory assertion.
-        """
         if not isinstance(item, dict):
             raise ValueError("invalid_payload")
         allowed_fields = {
-            "serial_number", "antennas", "device_status",
+            "serial_number", "ports", "device_status",
             "last_seen_at", "firmware_version", "power_dbm", "read_interval_ms",
         }
         unsupported = sorted(set(item) - allowed_fields)
@@ -250,26 +242,38 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         if status not in ("online", "offline", "degraded"):
             raise ValueError("invalid_payload")
 
-        reported_antennas = item.get("antennas")
-        if reported_antennas is not None:
-            if not isinstance(reported_antennas, list):
-                raise ValueError("antennas must be an array")
-            try:
-                reported_numbers = {int(value) for value in reported_antennas}
-            except Exception as exc:
-                raise ValueError("invalid_antenna_number") from exc
-            if any(number <= 0 for number in reported_numbers):
-                raise ValueError("invalid_antenna_number")
-            declared_numbers = set(device.antennas_ids.filtered("active").mapped("antenna_no"))
-            if reported_numbers != declared_numbers:
-                raise ValueError("antenna_inventory_mismatch")
+        reported_ports = item.get("ports")
+        normalized_ports = None
+        if reported_ports is not None:
+            if not isinstance(reported_ports, list):
+                raise ValueError("ports must be an array")
+            normalized_ports = []
+            seen_ports = set()
+            for value in reported_ports:
+                if isinstance(value, bool):
+                    raise ValueError("invalid_port_number")
+                try:
+                    port_no = int(value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("invalid_port_number") from exc
+                if port_no < 1 or port_no > 16 or port_no in seen_ports:
+                    raise ValueError("invalid_port_number")
+                seen_ports.add(port_no)
+                normalized_ports.append(port_no)
+            normalized_ports.sort()
 
-        last_seen_at = self._safe_datetime_value(item.get("last_seen_at"), default_now=False)
+        last_seen_at = self._safe_datetime_value(
+            item.get("last_seen_at"), default_now=False
+        )
         vals = {"status": status}
         if last_seen_at:
             vals["last_seen"] = last_seen_at
         elif status == "online":
             vals["last_seen"] = fields.Datetime.now()
+        if normalized_ports is not None:
+            vals["runtime_ports_json"] = json.dumps(
+                normalized_ports, separators=(",", ":")
+            )
         if item.get("firmware_version") not in (None, ""):
             vals["firmware_version"] = str(item.get("firmware_version"))
         if item.get("power_dbm") not in (None, ""):
@@ -284,6 +288,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             vals["runtime_read_interval_ms"] = read_interval
         device.write(vals)
         return device
+
 
     @endpoint("NSP Gatekeeper Devices Report", route_path="devices/report", methods="POST", code="nsp_gatekeeper_devices_report")
     def api_devices_report(self):
@@ -405,26 +410,30 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
     def _measurement_config_payload(self, session, controller=False):
         lines = session.reader_line_ids
         if controller:
-            lines = lines.filtered(lambda line: line.reader_id.controller_id == controller)
+            lines = lines.filtered(
+                lambda line: line.reader_id.controller_id == controller
+            )
         readers = []
-        for line in lines.sorted(key=lambda item: ((item.reader_id.serial_number or ""), item.id)):
+        for line in lines.sorted(
+            key=lambda item: ((item.reader_id.serial_number or ""), item.id)
+        ):
             readers.append({
                 "serial_number": line.reader_id.serial_number or "",
                 "power_dbm": int(line.reader_power_dbm or 0),
                 "read_interval_ms": int(line.read_interval_ms or 200),
-                "antennas": sorted(line.antenna_ids.filtered(
-                    lambda item: item.active and not item.cloud_removed
-                ).mapped("antenna_no")),
+                "ports": sorted(line.reader_port_ids.mapped("port_no")),
             })
-        payload = {
+        return {
             "measurement_code": session.measurement_code,
             "controller_code": controller.controller_id if controller else "",
             "status": session.status,
-            "desired_state": "running" if session.status in ("ready", "running") else "stopped",
+            "desired_state": (
+                "running" if session.status in ("ready", "running") else "stopped"
+            ),
             "revision": int(session.revision or 1),
             "readers": readers,
         }
-        return payload
+
 
     @api.model
     def _measurement_session_payload(self, session, include_detail=False):
@@ -438,22 +447,23 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         if session.ended_at:
             payload["ended_at"] = self._iso_datetime(session.ended_at)
         if include_detail:
-            payload["antenna_summary"] = [
+            payload["port_summary"] = [
                 {
                     **row,
                     "first_read_at": self._iso_datetime(row.get("first_read_at")),
                     "last_read_at": self._iso_datetime(row.get("last_read_at")),
                 }
-                for row in session._antenna_summary()
+                for row in session._port_summary()
             ]
         return payload
+
 
     @api.model
     def _measurement_error_response(self, exc):
         text = str(exc)
         code = text.split(":", 1)[0].strip()
         status = 400
-        if code.endswith("_not_found") or code in {"controller_not_found", "antenna_not_found"}:
+        if code.endswith("_not_found") or code in {"controller_not_found", "reader_port_not_found"}:
             status = 404
         elif code in {"controller_not_in_scope", "edge_server_not_in_scope", "route_not_allowed"}:
             status = 403
@@ -527,48 +537,38 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
 
     @api.model
     def _measurement_event_values(
-        self, session, item, allowed_antennas=None, accept_snapshot=False,
+        self, session, item, allowed_reader_ports=None, accept_snapshot=False,
         allow_historical_scope=False,
     ):
         allowed = {
-            "event_uid", "serial_number", "antenna_no", "tid", "read_at", "rssi_dbm",
+            "event_uid", "serial_number", "port_no", "tid", "read_at", "rssi_dbm",
             "revision", "power_dbm", "read_interval_ms",
         }
         self._measurement_reject_unknown_fields(item, allowed)
-        self._measurement_require_fields(item, ["event_uid", "serial_number", "antenna_no", "tid", "read_at"])
+        self._measurement_require_fields(
+            item, ["event_uid", "serial_number", "port_no", "tid", "read_at"]
+        )
         event_uid = str(item.get("event_uid") or "").strip()
         serial_number = str(item.get("serial_number") or "").strip().upper()
-        tid = self.env["nsp.rfid.tag"].sudo()._normalize_tid(item.get("tid"))
+        tid = self.env["nsp.rfid.runtime.assignment"].sudo()._normalize_tid(item.get("tid"))
         try:
-            antenna_no = int(item.get("antenna_no") or 0)
+            port_no = int(item.get("port_no") or 0)
         except Exception:
-            antenna_no = 0
-        if antenna_no <= 0:
-            raise ValueError("antenna_not_found")
+            port_no = 0
+        if port_no < 1 or port_no > 16:
+            raise ValueError("reader_port_not_found")
         reader_line = session._measurement_line_for_serial(serial_number)
         if allow_historical_scope:
-            # Cloud receives durable Measurement observations from an authenticated
-            # Edge. Old observations may belong to a previous Measurement revision
-            # whose Reader/Antenna selection is no longer the current Session
-            # configuration. Validate against the immutable physical ownership
-            # boundary (Controller -> Reader -> Antenna), not only the current
-            # Measurement Reader lines.
             reader = self.env["nsp.device"].sudo().search([
                 ("serial_number", "=", serial_number),
             ], limit=1)
             if not reader:
                 raise ValueError("reader_not_in_scope")
-            antenna = self.env["nsp.device.antenna"].sudo().search([
-                ("device_id", "=", reader.id),
-                ("antenna_no", "=", antenna_no),
-            ], limit=1)
-            if not antenna:
-                raise ValueError("antenna_not_found")
         else:
-            if allowed_antennas is None:
-                allowed_antennas = session._allowed_antenna_pairs()
-            if (serial_number, antenna_no) not in allowed_antennas:
-                raise ValueError("antenna_not_found")
+            if allowed_reader_ports is None:
+                allowed_reader_ports = session._allowed_reader_port_pairs()
+            if (serial_number, port_no) not in allowed_reader_ports:
+                raise ValueError("reader_port_not_found")
             if not reader_line:
                 raise ValueError("reader_not_in_scope")
         read_at = self._measurement_datetime(item.get("read_at"), required=True)
@@ -578,8 +578,8 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         else:
             try:
                 rssi = float(item.get("rssi_dbm"))
-            except Exception:
-                raise ValueError("invalid_rssi")
+            except Exception as exc:
+                raise ValueError("invalid_rssi") from exc
         if accept_snapshot:
             try:
                 revision = int(item.get("revision") or session.revision or 1)
@@ -622,7 +622,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             "session_id": session.id,
             "revision": revision,
             "serial_number": serial_number,
-            "antenna_no": antenna_no,
+            "port_no": port_no,
             "tid": tid,
             "read_at": read_at,
             "read_at_ms": read_at_ms,
@@ -631,21 +631,31 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             "read_interval_ms": read_interval_ms,
         }
 
+
     @api.model
     def _measurement_event_matches(self, event, values):
         return (
             event.session_id.id == values["session_id"]
             and int(event.revision or 1) == int(values["revision"] or 1)
             and event.serial_number == values["serial_number"]
-            and int(event.antenna_no or 0) == int(values["antenna_no"] or 0)
+            and int(event.port_no or 0) == int(values["port_no"] or 0)
             and event.tid == values["tid"]
-            and fields.Datetime.to_string(event.read_at) == fields.Datetime.to_string(values["read_at"])
+            and fields.Datetime.to_string(event.read_at)
+            == fields.Datetime.to_string(values["read_at"])
             and int(event.read_at_ms or 0) == int(values["read_at_ms"] or 0)
-            and (False if event.rssi_dbm in (False, None) else float(event.rssi_dbm))
-            == (False if values["rssi_dbm"] in (False, None) else float(values["rssi_dbm"]))
+            and (
+                False if event.rssi_dbm in (False, None)
+                else float(event.rssi_dbm)
+            )
+            == (
+                False if values["rssi_dbm"] in (False, None)
+                else float(values["rssi_dbm"])
+            )
             and int(event.power_dbm or 0) == int(values["power_dbm"] or 0)
-            and int(event.read_interval_ms or 0) == int(values["read_interval_ms"] or 0)
+            and int(event.read_interval_ms or 0)
+            == int(values["read_interval_ms"] or 0)
         )
+
 
     @api.model
     def _measurement_process_event_batch(
@@ -656,13 +666,13 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         Event = self.env["nsp.measurement.event"].sudo()
         if controller:
             lines = session.reader_line_ids.filtered(lambda line: line.reader_id.controller_id == controller)
-            allowed_antennas = {
-                ((line.reader_id.serial_number or "").strip().upper(), int(antenna.antenna_no or 0))
+            allowed_reader_ports = {
+                ((line.reader_id.serial_number or "").strip().upper(), int(port.port_no or 0))
                 for line in lines
-                for antenna in line.antenna_ids
+                for port in line.reader_port_ids
             }
         else:
-            allowed_antennas = session._allowed_antenna_pairs()
+            allowed_reader_ports = session._allowed_reader_port_pairs()
         target_tids = session._allowed_target_tids()
         prepared = []
         results = [None] * len(items)
@@ -672,7 +682,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             try:
                 if not isinstance(item, dict):
                     raise ValueError("invalid_payload")
-                incoming_tid = self.env["nsp.rfid.tag"].sudo()._normalize_tid(item.get("tid"))
+                incoming_tid = self.env["nsp.rfid.runtime.assignment"].sudo()._normalize_tid(item.get("tid"))
                 if incoming_tid not in target_tids:
                     results[index] = {
                         "index": index,
@@ -684,7 +694,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 values = self._measurement_event_values(
                     session,
                     item,
-                    allowed_antennas=allowed_antennas,
+                    allowed_reader_ports=allowed_reader_ports,
                     accept_snapshot=accept_snapshot,
                     allow_historical_scope=allow_historical_scope,
                 )
@@ -743,7 +753,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                     first["session_id"] == values["session_id"]
                     and first["revision"] == values["revision"]
                     and first["serial_number"] == values["serial_number"]
-                    and int(first["antenna_no"]) == int(values["antenna_no"])
+                    and int(first["port_no"]) == int(values["port_no"])
                     and first["tid"] == values["tid"]
                     and fields.Datetime.to_string(first["read_at"]) == fields.Datetime.to_string(values["read_at"])
                     and int(first["read_at_ms"] or 0) == int(values["read_at_ms"] or 0)
@@ -911,7 +921,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         """Accept a batch of raw TID detections from one authenticated Controller.
 
         The Controller only reports physical detections. One batch may contain
-        detections from multiple Readers and antennas owned by that Controller.
+        detections from multiple Reader ports owned by that Controller.
         Edge validates, suppresses repeated reads, groups detections, and creates
         Parking Transactions internally. The Controller receives only one minimal
         acknowledgement for an accepted batch.
@@ -947,10 +957,10 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 details={"field": "detections", "max_items": 1000},
             )
 
-        item_fields = {"event_uid", "serial_number", "antenna_no", "detected_at", "tid"}
+        item_fields = {"event_uid", "serial_number", "port_no", "detected_at", "tid"}
         normalized = []
         tids = set()
-        Tag = self.env["nsp.rfid.tag"].sudo()
+        RuntimeAssignment = self.env["nsp.rfid.runtime.assignment"].sudo()
 
         # Validate the whole transport contract before writing any detection.
         for index, item in enumerate(incoming):
@@ -972,20 +982,20 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
 
             event_uid = str(item.get("event_uid") or "").strip()
             serial_number = str(item.get("serial_number") or "").strip().upper()
-            tid = Tag._normalize_tid(item.get("tid"))
+            tid = RuntimeAssignment._normalize_tid(item.get("tid"))
             detected_at = self._safe_datetime_value(item.get("detected_at"), default_now=False)
             try:
-                antenna_no = int(item.get("antenna_no") or 0)
+                port_no = int(item.get("port_no") or 0)
             except (TypeError, ValueError):
-                antenna_no = 0
+                port_no = 0
 
             missing = []
             if not event_uid:
                 missing.append("event_uid")
             if not serial_number:
                 missing.append("serial_number")
-            if antenna_no <= 0:
-                missing.append("antenna_no")
+            if port_no < 1 or port_no > 16:
+                missing.append("port_no")
             if not detected_at:
                 missing.append("detected_at")
             if not tid:
@@ -1001,21 +1011,22 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             payload = {
                 "event_uid": event_uid,
                 "serial_number": serial_number,
-                "antenna_no": antenna_no,
+                "port_no": port_no,
                 "detected_at": detected_at,
                 "tid": tid,
             }
             normalized.append(payload)
             tids.add(tid)
 
-        # Only currently assigned whitelist tags participate in parking.
-        # Unknown, unassigned and revoked TIDs are terminally ignored and never
-        # become raw parking detections.
-        assignments = self.env["nsp.rfid.tag.assignment"].sudo().search([
+        assignments = RuntimeAssignment.search([
             ("tid", "in", list(tids)),
-            ("state", "=", "active"),
-        ]) if tids else self.env["nsp.rfid.tag.assignment"].browse()
-        assignment_by_tid = {assignment.tid: assignment for assignment in assignments}
+        ]) if tids else RuntimeAssignment.browse()
+        assignment_by_tid = {
+            assignment.tid: assignment
+            for assignment in assignments
+            if (assignment.user_id and assignment.user_id.active)
+            or (assignment.vehicle_id and assignment.vehicle_id.active)
+        }
         accepted = [
             (payload, assignment_by_tid[payload["tid"]])
             for payload in normalized

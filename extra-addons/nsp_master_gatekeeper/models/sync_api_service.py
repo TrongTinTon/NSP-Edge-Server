@@ -394,22 +394,21 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "server_time": self._iso_datetime(fields.Datetime.now()),
         }, message="Edge Server status and managed device runtime accepted.")
 
-    def _rfid_tag_sync_payload(self, tag, assignment=False):
-        payload = {"tid": tag.tid}
-        if assignment:
-            if assignment.user_id:
-                payload["assignment"] = {
-                    "target": "user",
-                    "code": self._user_code(assignment.user_id),
-                    "assigned_at": self._iso_datetime(assignment.assigned_at),
-                }
-            elif assignment.vehicle_id:
-                payload["assignment"] = {
-                    "target": "vehicle",
-                    "code": assignment.vehicle_id.vehicle_code or "",
-                    "assigned_at": self._iso_datetime(assignment.assigned_at),
-                }
-        return payload
+    def _rfid_assignment_sync_payload(self, assignment):
+        target = "user" if assignment.user_id else "vehicle"
+        code = (
+            self._user_code(assignment.user_id)
+            if assignment.user_id
+            else assignment.vehicle_id.vehicle_code or ""
+        )
+        return {
+            "tid": assignment.tid,
+            "assignment": {
+                "target": target,
+                "code": code,
+                "assigned_at": self._iso_datetime(assignment.assigned_at),
+            },
+        }
 
     @api.model
     def _published_parking_payload_for_edge(self, area, edge_code):
@@ -820,39 +819,32 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             **self._snapshot_meta(edge_server, "vehicle_reference"),
         }, message="Vehicle reference snapshot loaded.")
 
-    @endpoint("NSP Edge RFID Assignments Snapshot", route_path="edge/rfid-assignments/snapshot", methods="POST", code="nsp_edge_rfid_assignments_snapshot")
+    @endpoint("NSP Edge RFID Runtime Assignments Snapshot", route_path="edge/rfid-assignments/snapshot", methods="POST", code="nsp_edge_rfid_assignments_snapshot")
     def api_rfid_assignments_snapshot(self):
         data = self._payload()
         edge_server, error = self._auth_edge_snapshot_request(data)
         if error:
             return error
-        tags = self.env["nsp.rfid.tag"].sudo().search([], order="tid asc, id asc")
         assignments = self.env["nsp.rfid.tag.assignment"].sudo().search([
-            ("tag_id", "in", tags.ids), ("state", "=", "active"),
-        ], order="assigned_at desc, id desc") if tags else self.env["nsp.rfid.tag.assignment"].browse()
-        assignment_by_tag = {}
-        for assignment in assignments:
-            assignment_by_tag.setdefault(assignment.tag_id.id, assignment)
-        items = [
-            self._rfid_tag_sync_payload(tag, assignment_by_tag.get(tag.id))
-            for tag in tags
-        ]
-        employee_count = sum(
-            1 for item in items if (item.get("assignment") or {}).get("target") == "user"
+            ("state", "=", "active"),
+            "|",
+            ("user_id", "!=", False),
+            ("vehicle_id", "!=", False),
+        ], order="tid asc, assigned_at desc, id desc").filtered(
+            lambda assignment: bool(assignment.user_id) != bool(assignment.vehicle_id)
         )
-        vehicle_count = sum(
-            1 for item in items if (item.get("assignment") or {}).get("target") == "vehicle"
-        )
+        items = [self._rfid_assignment_sync_payload(assignment) for assignment in assignments]
+        employee_count = len(assignments.filtered("user_id"))
+        vehicle_count = len(assignments.filtered("vehicle_id"))
         return self._ok({
             "items": items,
             "summary": {
-                "whitelisted_tags": len(items),
+                "active_assignments": len(items),
                 "employee_assignments": employee_count,
                 "vehicle_assignments": vehicle_count,
-                "unassigned_tags": len(items) - employee_count - vehicle_count,
             },
-            **self._snapshot_meta(edge_server, "rfid_assignments"),
-        }, message="RFID assignments snapshot loaded.")
+            **self._snapshot_meta(edge_server, "rfid_runtime_assignments"),
+        }, message="RFID runtime assignments snapshot loaded.")
 
     @endpoint("NSP Edge Users Snapshot", route_path="edge/users/snapshot", methods="POST", code="nsp_edge_users_snapshot")
     def api_users_snapshot(self):

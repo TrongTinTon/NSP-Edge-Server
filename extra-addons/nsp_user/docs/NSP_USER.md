@@ -1,25 +1,20 @@
 # NSP User
 
-`nsp.user` is the NSP business profile used by Parking, RFID assignment, Friends, Vehicle Borrow and Notifications.
+`nsp.user` is the master business identity used by Parking, Friends, Vehicle Borrow, Notifications and Mobile business functions.
 
-## Odoo User linkage
+## Odoo Web access
 
-- Mobile authentication uses the internal Odoo User (`res.users`) login and password.
-- Every internal Odoo User has exactly one `nsp.user` business profile.
-- Every `nsp.user` must reference exactly one internal `res.users` account.
-- The link is mandatory, immutable from the NSP User form and protected by a unique database constraint.
-- Creating an internal Odoo User automatically creates its NSP User profile in the same transaction.
-- Existing internal Odoo Users are backfilled when `nsp_user` is installed.
-- Portal/public accounts are not Mobile identities and are excluded from this pairing rule.
-- Passwords, activation, Groups, ACLs and Record Rules remain managed through standard Odoo user administration.
-- `user_code` remains a hidden immutable technical identifier for Cloud/Edge synchronization.
+- `res.users` is an optional Web access account.
+- An `nsp.user` can exist without an Odoo login.
+- Create or link `res.users` only when the business identity needs Web access, Groups or ACLs.
+- One Odoo User can be linked to at most one NSP User.
+- An existing link cannot be reassigned directly to another Odoo User, but it can be cleared.
+- Portal and public accounts cannot be linked.
+- Passwords, Groups, ACLs and Record Rules remain owned by standard Odoo user administration.
+- `user_code` is the stable identity used for Cloud and Edge synchronization.
 
-## RFID and vehicles
+## Module ownership
 
-RFID and vehicle functions are added by `nsp_vehicle`:
-
-- Every User may have one active Employee RFID Tag assignment.
-- Every Vehicle belongs to one User and may have one active RFID Tag assignment.
-- Employee RFID assignment and revoke actions are written to the User chatter; Odoo records the operator and timestamp.
-- Friends remain the selection boundary for Vehicle Borrow. Being a Friend alone does not authorize vehicle check-out.
-- Vehicle Borrow must be active at the parking event time.
+- `nsp_vehicle` adds Vehicle ownership and borrowing relations.
+- `nsp_rfid` on Cloud owns RFID Tag master data, whitelist, assignment, revoke and audit.
+- Edge Gatekeeper owns only the runtime TID assignment projection required for Parking processing.

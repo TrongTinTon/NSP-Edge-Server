@@ -25,10 +25,7 @@
         <field name="model">nsp.parking.area</field>
         <field name="arch" type="xml">
             <list string="Parking Layout" create="0" edit="0" delete="0">
-                <field name="state" widget="badge"
-                       decoration-success="state == 'operational'"
-                       decoration-warning="state in ('draft','maintenance')"
-                       decoration-danger="state == 'blocked'"/>
+                <field name="state" widget="badge" decoration-success="state == 'operational'" decoration-warning="state in ('draft','maintenance')" decoration-danger="state == 'blocked'"/>
                 <field name="name" string="Layout" decoration-bf="1"/>
                 <field name="branch_id" string="Branch"/>
                 <field name="lane_count" string="Lanes"/>
@@ -46,9 +43,7 @@
                 </header>
                 <sheet>
                     <div class="oe_button_box" name="button_box">
-                        <button name="action_open_live_monitor" type="object" class="oe_stat_button"
-                                icon="fa-desktop" help="Open the live parking monitor."
-                                groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking,base.group_system">
+                        <button name="action_open_live_monitor" type="object" class="oe_stat_button" icon="fa-desktop" help="Open the live parking monitor." groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking,base.group_system">
                             <span class="o_stat_text">Monitor</span>
                         </button>
                     </div>
@@ -109,8 +104,6 @@
                         <h1><field name="name"/></h1>
                     </div>
                     <group>
-                        <group>
-                        </group>
                         <group string="Devices">
                             <field name="controller_id" string="Controller" readonly="1"/>
                             <field name="timeline_point_count" string="Points" readonly="1"/>
@@ -121,7 +114,6 @@
                             <field name="timeline_line_ids" readonly="1" nolabel="1">
                                 <list create="0" edit="0" delete="0">
                                     <field name="sequence" string="#"/>
-                                    <field name="antenna_id" string="Antenna"/>
                                     <field name="reader_id" string="Reader"/>
                                     <field name="port_no" string="Port"/>
                                     <field name="duration_from_previous" string="Interval (s)"/>
@@ -135,7 +127,8 @@
                                     <field name="checkin_sequence_ids" readonly="1" nolabel="1">
                                         <list create="0" edit="0" delete="0">
                                             <field name="sequence" string="#"/>
-                                            <field name="antenna_id" string="Antenna"/>
+                                            <field name="reader_id" string="Reader"/>
+                                            <field name="port_no" string="Port"/>
                                         </list>
                                     </field>
                                 </group>
@@ -143,7 +136,8 @@
                                     <field name="checkout_sequence_ids" readonly="1" nolabel="1">
                                         <list create="0" edit="0" delete="0">
                                             <field name="sequence" string="#"/>
-                                            <field name="antenna_id" string="Antenna"/>
+                                            <field name="reader_id" string="Reader"/>
+                                            <field name="port_no" string="Port"/>
                                         </list>
                                     </field>
                                 </group>

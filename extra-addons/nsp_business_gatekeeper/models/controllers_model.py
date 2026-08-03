@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
-from odoo import api, fields, models, _
-from odoo.exceptions import UserError
+from odoo import api, fields, models
 from odoo.addons.nsp_core.utils import new_management_code
 
 NODE_STATUS=[("online","Online"),("offline","Offline"),("block","Blocked"),("revoked","Revoked"),("error","Error")]
@@ -66,16 +65,13 @@ class NspController(models.Model):
     status=fields.Selection(NODE_STATUS,default="offline",required=True,index=True,tracking=True)
     device_ids=fields.One2many("nsp.device","controller_id",string="Readers")
     reader_count=fields.Integer(compute="_compute_reader_counts")
-    antenna_count=fields.Integer(compute="_compute_reader_counts")
     _sql_constraints=[("controller_id_unique","unique(controller_id)","Controller Code must be unique.")]
-    @api.depends("device_ids","device_ids.antennas_ids")
+    @api.depends("device_ids")
     def _compute_reader_counts(self):
         for rec in self:
-            rec.reader_count=len(rec.device_ids); rec.antenna_count=len(rec.device_ids.mapped("antennas_ids"))
+            rec.reader_count = len(rec.device_ids)
     def action_open_readers(self):
         self.ensure_one(); action=self.env.ref("nsp_business_gatekeeper.nsp_device_action").sudo().read()[0]; action.update({"domain":[("controller_id","=",self.id)],"context":{"default_controller_id":self.id}}); return action
-    def action_open_antennas(self):
-        self.ensure_one(); action=self.env.ref("nsp_business_gatekeeper.action_nsp_device_antenna").sudo().read()[0]; action.update({"domain":[("controller_id","=",self.id)]}); return action
     @api.model_create_multi
     def create(self,vals_list):
         prepared=[]

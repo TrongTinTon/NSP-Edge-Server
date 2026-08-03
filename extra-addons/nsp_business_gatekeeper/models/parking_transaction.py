@@ -55,21 +55,16 @@ class ParkingTransaction(models.Model):
         "nsp.parking.area", string="Parking Area",
         related="lane_id.parking_area_id", readonly=True,
     )
-    antenna_id = fields.Many2one(
-        "nsp.device.antenna", string="Primary Antenna", required=True,
+    reader_id = fields.Many2one(
+        "nsp.device", string="Reader", required=True,
         ondelete="restrict", index=True,
-    )
-    device_id = fields.Many2one(
-        "nsp.device", string="Reader",
-        related="antenna_id.device_id", readonly=True,
     )
     serial_number = fields.Char(
         string="Reader Serial Number",
-        related="antenna_id.device_id.serial_number", readonly=True,
+        related="reader_id.serial_number", readonly=True,
     )
-    antenna_no = fields.Integer(
-        string="Antenna No",
-        related="antenna_id.antenna_no", readonly=True,
+    port_no = fields.Integer(
+        string="Port", required=True, readonly=True, index=True,
     )
     primary_detection_id = fields.Many2one(
         "nsp.parking.detection.event",
@@ -128,7 +123,26 @@ class ParkingTransaction(models.Model):
 
     _sql_constraints = [
         ("transaction_uid_unique", "unique(transaction_uid)", "Transaction UID must be unique."),
+        (
+            "parking_transaction_port_range",
+            "CHECK(port_no >= 1 AND port_no <= 16)",
+            "Reader Port must be between 1 and 16.",
+        ),
     ]
+
+    @api.constrains("controller_id", "lane_id", "reader_id", "port_no")
+    def _check_reader_port_scope(self):
+        for record in self:
+            if record.lane_id.controller_id != record.controller_id:
+                raise ValidationError(_("Transaction Controller must match the Lane Controller."))
+            if record.reader_id.controller_id != record.controller_id:
+                raise ValidationError(_("Transaction Reader must belong to the Transaction Controller."))
+            allowed = {
+                (line.reader_id.id, int(line.port_no or 0))
+                for line in record.lane_id.timeline_line_ids
+            }
+            if (record.reader_id.id, int(record.port_no or 0)) not in allowed:
+                raise ValidationError(_("Transaction Reader Port must exist in the Lane Timeline."))
 
     def init(self):
         self.env.cr.execute(
@@ -224,13 +238,6 @@ class ParkingTransaction(models.Model):
         )
         return primary, " ".join(messages) or False
 
-    def _resolve_vehicle_by_tid(self, vehicle_tid):
-        assignment = self.env["nsp.rfid.tag.assignment"].sudo().active_for_tid(vehicle_tid)
-        return assignment.vehicle_id if assignment and assignment.vehicle_id.active else self.env["nsp.vehicle"].browse()
-
-    def _resolve_user_by_tid(self, user_tid):
-        assignment = self.env["nsp.rfid.tag.assignment"].sudo().active_for_tid(user_tid)
-        return assignment.user_id if assignment and assignment.user_id.active else self.env["nsp.user"].browse()
 
     @api.model
     def _validate_vehicle_borrow_access(self, vehicle, user, event_time):
@@ -284,7 +291,8 @@ class ParkingTransaction(models.Model):
         return {
             "controller_id": int(value("controller_id") or 0),
             "lane_id": int(value("lane_id") or 0),
-            "antenna_id": int(value("antenna_id") or 0),
+            "reader_id": int(value("reader_id") or 0),
+            "port_no": int(value("port_no") or 0),
             "event_time": event_time or "",
             "event_type": value("event_type") or "",
             "status": value("status") or "",
@@ -436,12 +444,10 @@ class ParkingTransaction(models.Model):
             return existing, True
 
     @api.model
-    def create_from_detection_group(
-        self, detections, resolved_event_type=False, vehicle_by_tag=None, user_by_tag=None
-    ):
+    def create_from_detection_group(self, detections, resolved_event_type=False):
         """Create one vehicle-centric Parking Transaction.
 
-        Event Type is resolved directly by the configured directed Antenna Transition.
+        Event Type is resolved directly by the configured directed Reader Port transition.
         Check-in never uses User RFID. Check-out requires exactly one User RFID
         detection selected by the detection processor inside the configured event-sequence Duration.
         """
@@ -469,11 +475,8 @@ class ParkingTransaction(models.Model):
         ordered_vehicle = vehicle_events.sorted(key=lambda rec: (rec.detected_at, rec.id))
         vehicle_event = ordered_vehicle[-1]
         event_time = vehicle_event.detected_at
-        vehicle_tid = vehicle_event.tag_id.tid
-        if vehicle_by_tag is None:
-            vehicle = self._resolve_vehicle_by_tid(vehicle_tid)
-        else:
-            vehicle = vehicle_by_tag.get(vehicle_event.tag_id.id) or vehicle_event.vehicle_id
+        vehicle_tid = vehicle_event.tid
+        vehicle = vehicle_event.vehicle_id
 
         # Entry is intentionally vehicle-only. Even if User reads exist in the
         # same RF field, they are not part of Check-in business validation.
@@ -486,11 +489,8 @@ class ParkingTransaction(models.Model):
             )
             user_event = user_events[:1]
             if user_event:
-                user_tid = user_event.tag_id.tid
-                if user_by_tag is None:
-                    user = self._resolve_user_by_tid(user_tid)
-                else:
-                    user = user_by_tag.get(user_event.tag_id.id) or user_event.user_id
+                user_tid = user_event.tid
+                user = user_event.user_id
 
         errors = []
         if lane.parking_area_id.state != "operational":
@@ -527,7 +527,8 @@ class ParkingTransaction(models.Model):
             "event_type": event_type,
             "controller_id": controller.id,
             "lane_id": lane.id,
-            "antenna_id": vehicle_event.antenna_id.id,
+            "reader_id": vehicle_event.reader_id.id,
+            "port_no": int(vehicle_event.port_no or 0),
             "primary_detection_id": vehicle_event.id,
             "status": "denied" if errors else "allowed",
             "error_code": reason_code or False,

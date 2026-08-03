@@ -45,7 +45,7 @@ ACTION_KINDS = {
     "edge/users/snapshot": "user",
     "edge/vehicle-reference/snapshot": "vehicle_config",
     "edge/vehicles/snapshot": "vehicle",
-    "edge/rfid-assignments/snapshot": "rfid_tag",
+    "edge/rfid-assignments/snapshot": "rfid_assignment",
     "edge/vehicle-borrows/snapshot": "vehicle_borrow",
     "edge/lane-calibrations/snapshot": "lane_calibration",
     "edge/lane-calibrations/events": "lane_calibration_event",
@@ -452,10 +452,7 @@ class NspSyncJob(models.Model):
                 status = str(device.status or "offline").lower()
                 item = {
                     "serial_number": device.serial_number or "",
-                    "antennas": sorted(
-                        int(number)
-                        for number in device.antennas_ids.filtered("active").mapped("antenna_no")
-                    ),
+                    "ports": device._reported_port_numbers(),
                     "device_status": (
                         status if status in ("online", "offline", "degraded") else "offline"
                     ),
@@ -492,8 +489,7 @@ class NspSyncJob(models.Model):
     @api.model
     def _serialize_parking_transaction(self, record):
         decision = record.status if record.status in ("allowed", "denied") else "denied"
-        antenna = record.antenna_id
-        device = antenna.device_id if antenna else self.env["nsp.device"].browse()
+        reader = record.reader_id
         parking_area = record.lane_id.parking_area_id if record.lane_id else self.env["nsp.parking.area"].browse()
         payload = {
             "record_key": record.transaction_uid,
@@ -501,8 +497,8 @@ class NspSyncJob(models.Model):
             "controller_code": record.controller_id.controller_id if record.controller_id else "",
             "parking_area_code": parking_area.code if parking_area else "",
             "lane_code": record.lane_id.code if record.lane_id else "",
-            "serial_number": device.serial_number if device else "",
-            "antenna_no": int(antenna.antenna_no) if antenna else 0,
+            "serial_number": reader.serial_number if reader else "",
+            "port_no": int(record.port_no or 0),
             "event_type": record.event_type,
             "event_time": self._dt(record.event_time),
             "vehicle_tid": record.vehicle_tid or "",
@@ -699,7 +695,7 @@ class NspSyncJob(models.Model):
 
         type_code = str(item.get("device_type_code") or "").strip().upper()
         type_name = str(item.get("device_type_name") or type_code).strip()
-        if type_code not in {"SERVER", "CONTROLLER", "RFID_READER", "ANTENNA"}:
+        if type_code not in {"SERVER", "CONTROLLER", "RFID_READER"}:
             raise UserError(_("Unsupported Device Type Code: %s") % type_code)
 
         cache = cache or self._prepare_apply_cache("device_whitelist", [item])
@@ -745,13 +741,25 @@ class NspSyncJob(models.Model):
 
     @api.model
     def _apply_user(self, item, cache=None):
+        if not isinstance(item, dict):
+            raise UserError(_("User snapshot item must be an object."))
+        unsupported = set(item) - {"user_code", "name", "active"}
+        if unsupported:
+            raise UserError(
+                _("Unsupported User snapshot field(s): %s")
+                % ", ".join(sorted(unsupported))
+            )
         code = str(item.get("user_code") or "").strip().upper()
         if not code:
             raise UserError(_("User Code is required."))
         cache = cache or self._prepare_apply_cache("user", [item])
         User = self.env["nsp.user"].sudo().with_context(active_test=False)
         user = cache.get("records", {}).get(code)
-        vals = {"user_code": code, "name": item.get("name") or code, "active": bool(item.get("active", True))}
+        vals = {
+            "user_code": code,
+            "name": str(item.get("name") or code).strip() or code,
+            "active": bool(item.get("active", True)),
+        }
         if user:
             self._write_changed(user, vals)
             return user
@@ -949,183 +957,16 @@ class NspSyncJob(models.Model):
         return vehicle
 
     @api.model
-    def _normalize_rfid_tag_snapshot_item(self, item):
-        if not isinstance(item, dict):
-            raise UserError(_("RFID Tag snapshot items must be objects."))
-        unsupported = sorted(set(item) - {"tid", "assignment"})
-        if unsupported:
-            raise UserError(_("Unsupported RFID Tag field(s): %s") % ", ".join(unsupported))
-        tid = self.env["nsp.rfid.tag"]._normalize_tid(item.get("tid"))
-        if not tid:
-            raise UserError(_("RFID Tag TID is required."))
+    def _normalize_rfid_tid(self, value):
+        tid = "".join(str(value or "").split()).upper()
+        return tid[2:] if tid.startswith("0X") else tid
 
-        assignment = item.get("assignment") or False
-        target = "unassigned"
-        code = ""
-        assigned_at = False
-        if assignment:
-            if not isinstance(assignment, dict):
-                raise UserError(_("RFID Tag assignment must be an object."))
-            unsupported_assignment = sorted(set(assignment) - {"target", "code", "assigned_at"})
-            if unsupported_assignment:
-                raise UserError(
-                    _("Unsupported RFID Tag assignment field(s): %s")
-                    % ", ".join(unsupported_assignment)
-                )
-            target = str(assignment.get("target") or "").strip().lower()
-            code = str(assignment.get("code") or "").strip().upper()
-            assigned_at = (
-                self._remote_datetime(assignment.get("assigned_at"))
-                if assignment.get("assigned_at") else False
-            )
-            if target not in ("user", "vehicle"):
-                raise UserError(_("RFID Tag assignment target must be user or vehicle."))
-            if not code:
-                raise UserError(_("Assigned RFID Tag requires assignment.code."))
-        return {
-            "tid": tid,
-            "target": target,
-            "code": code,
-            "assigned_at": assigned_at,
-            "source": item,
-        }
+    def _runtime_vehicle_assignment_map(self, tids):
+        raise UserError(_("RFID runtime assignment adapter is not installed."))
 
-    def _apply_rfid_tag_snapshot(self, data, request_payload=False):
-        """Apply the complete Cloud RFID whitelist and active assignment snapshot."""
-        self.ensure_one()
-        items = self._items_from_response(data)
-        if not isinstance(items, list):
-            raise UserError(_("RFID Tag snapshot must contain an items array."))
+    def _apply_rfid_assignment_snapshot(self, data, request_payload=False):
+        raise UserError(_("RFID runtime assignment adapter is not installed."))
 
-        normalized = []
-        seen = set()
-        for item in items:
-            info = self._normalize_rfid_tag_snapshot_item(item)
-            if info["tid"] in seen:
-                raise UserError(_("Duplicate RFID TID in snapshot: %s") % info["tid"])
-            seen.add(info["tid"])
-            normalized.append(info)
-
-        Tag = self.env["nsp.rfid.tag"].sudo()
-        Assignment = self.env["nsp.rfid.tag.assignment"].sudo()
-        User = self.env["nsp.user"].sudo().with_context(active_test=False)
-        Vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False)
-
-        user_codes = {info["code"] for info in normalized if info["target"] == "user"}
-        vehicle_codes = {info["code"] for info in normalized if info["target"] == "vehicle"}
-        users = User.search([("user_code", "in", list(user_codes))]) if user_codes else User.browse()
-        vehicles = Vehicle.search([("vehicle_code", "in", list(vehicle_codes))]) if vehicle_codes else Vehicle.browse()
-        user_by_code = {user.user_code: user for user in users}
-        vehicle_by_code = {vehicle.vehicle_code: vehicle for vehicle in vehicles}
-        for info in normalized:
-            if info["target"] == "user" and info["code"] not in user_by_code:
-                raise UserError(
-                    _("RFID Tag %(tid)s User %(code)s was not found. Run edge/users/snapshot first.")
-                    % info
-                )
-            if info["target"] == "vehicle" and info["code"] not in vehicle_by_code:
-                raise UserError(
-                    _("RFID Tag %(tid)s Vehicle %(code)s was not found. Run edge/vehicles/snapshot first.")
-                    % info
-                )
-
-        tids = [info["tid"] for info in normalized]
-        existing_tags = Tag.search([("tid", "in", tids)]) if tids else Tag.browse()
-        tag_by_tid = {tag.tid: tag for tag in existing_tags}
-        missing = [info for info in normalized if info["tid"] not in tag_by_tid]
-        if missing:
-            created = Tag.create([{"tid": info["tid"]} for info in missing])
-            tag_by_tid.update({tag.tid: tag for tag in created})
-
-        all_snapshot_tags = Tag.browse([tag_by_tid[info["tid"]].id for info in normalized])
-        active_assignments = Assignment.search([
-            ("tag_id", "in", all_snapshot_tags.ids), ("state", "=", "active"),
-        ]) if all_snapshot_tags else Assignment.browse()
-        active_by_tag = {assignment.tag_id.id: assignment for assignment in active_assignments}
-
-        counts = {
-            "whitelisted_tags": len(normalized),
-            "employee_assignments": 0,
-            "vehicle_assignments": 0,
-            "unassigned_tags": 0,
-        }
-        synced_records = {}
-        for info in normalized:
-            tag = tag_by_tid[info["tid"]]
-            current = active_by_tag.get(tag.id, Assignment.browse())
-            target = info["target"]
-            desired_user = user_by_code.get(info["code"]) if target == "user" else User.browse()
-            desired_vehicle = vehicle_by_code.get(info["code"]) if target == "vehicle" else Vehicle.browse()
-
-            same = bool(
-                current
-                and current.user_id == desired_user
-                and current.vehicle_id == desired_vehicle
-                and target != "unassigned"
-            )
-            if current and not same:
-                current.action_revoke()
-                current = Assignment.browse()
-
-            if target == "unassigned":
-                counts["unassigned_tags"] += 1
-                synced_records[tag.id] = tag
-                continue
-
-            if target == "user":
-                counts["employee_assignments"] += 1
-            else:
-                counts["vehicle_assignments"] += 1
-
-            if not current:
-                # Reconcile stale target ownership before creating the desired assignment.
-                stale_target = Assignment.search([
-                    ("state", "=", "active"),
-                    ("user_id" if target == "user" else "vehicle_id", "=",
-                     desired_user.id if target == "user" else desired_vehicle.id),
-                ], limit=1)
-                if stale_target:
-                    stale_target.action_revoke()
-                vals = {
-                    "tag_id": tag.id,
-                    "user_id": desired_user.id if desired_user else False,
-                    "vehicle_id": desired_vehicle.id if desired_vehicle else False,
-                }
-                if info["assigned_at"]:
-                    vals["assigned_at"] = info["assigned_at"]
-                current = Assignment.with_context(rfid_assignment_sync=True).create(vals)
-            synced_records[tag.id] = current
-
-        # Whitelist TIDs are audit identities and are never deleted. If a TID is
-        # absent from the authoritative snapshot, revoke only its active local
-        # assignment. Cloud normally keeps every historical TID, so this branch
-        # is a defensive reconciliation path.
-        stale_tags = Tag.search([("tid", "not in", tids)]) if tids else Tag.search([])
-        stale_active = Assignment.search([
-            ("tag_id", "in", stale_tags.ids),
-            ("state", "=", "active"),
-        ]) if stale_tags else Assignment.browse()
-        stale_assignment_count = len(stale_active)
-        if stale_active:
-            stale_active.with_context(rfid_assignment_sync=True).action_revoke()
-
-        Record = self.env["nsp.sync.record"].sudo()
-        for info in normalized:
-            tag = tag_by_tid[info["tid"]]
-            Record.mark_result(
-                sync_job=self,
-                action_code=self.sync_action_code,
-                action_name=self.sync_action_name,
-                route_suffix=self.route_suffix,
-                record=synced_records.get(tag.id, tag),
-                record_key=tag.tid,
-                status="synced",
-                message="RFID Tag whitelist and active assignment synchronized.",
-                payload=request_payload,
-                response=info["source"],
-                operation="pull",
-            )
-        return counts, stale_assignment_count
 
     @api.model
     def _apply_vehicle_borrow(self, item, cache=None):
@@ -1174,13 +1015,11 @@ class NspSyncJob(models.Model):
         return borrow
 
     def _apply_lane_calibration(self, item):
-        """Apply one released Lane Calibration assembly from Cloud."""
         self.ensure_one()
         if not isinstance(item, dict):
             raise UserError(_("Lane Calibration item must be an object."))
         unsupported_outer = set(item) - {
-            "measurement_code", "status", "desired_state", "revision",
-            "vehicles", "readers",
+            "measurement_code", "status", "desired_state", "revision", "vehicles", "readers",
         }
         if unsupported_outer:
             raise UserError(
@@ -1206,9 +1045,6 @@ class NspSyncJob(models.Model):
         except (TypeError, ValueError) as exc:
             raise UserError(_("Invalid Lane Calibration revision.")) from exc
 
-        # Vehicles and RFID assignments are authoritative master snapshots applied
-        # by their dedicated sync jobs before this configuration is activated.
-        Tag = self.env["nsp.rfid.tag"].sudo()
         normalized_vehicles = []
         all_tids = set()
         vehicle_codes = set()
@@ -1223,18 +1059,14 @@ class NspSyncJob(models.Model):
                     _("Unsupported Lane Calibration Vehicle field(s): %s")
                     % ", ".join(sorted(unsupported))
                 )
-            tid = Tag._normalize_tid(payload.get("vehicle_tid"))
+            tid = self._normalize_rfid_tid(payload.get("vehicle_tid"))
             vehicle_code = str(payload.get("vehicle_code") or "").strip().upper()
             plate = str(payload.get("license_plate") or "").strip().upper()
             owner_code = str(payload.get("owner_user_code") or "").strip().upper()
             if not tid or not vehicle_code or not plate:
-                raise UserError(_(
-                    "Each Lane Calibration Vehicle requires RFID Tag, Vehicle Code and License Plate."
-                ))
-            if tid in all_tids:
-                raise UserError(_("Duplicate Vehicle RFID Tag: %s") % tid)
-            if vehicle_code in vehicle_codes:
-                raise UserError(_("Duplicate Vehicle: %s") % vehicle_code)
+                raise UserError(_("Each Lane Calibration Vehicle requires RFID TID, Vehicle Code and License Plate."))
+            if tid in all_tids or vehicle_code in vehicle_codes:
+                raise UserError(_("Lane Calibration Vehicle or RFID TID is duplicated."))
             all_tids.add(tid)
             vehicle_codes.add(vehicle_code)
             normalized_vehicles.append({
@@ -1244,14 +1076,11 @@ class NspSyncJob(models.Model):
                 "owner_user_code": owner_code,
             })
 
-        assignments = self.env["nsp.rfid.tag.assignment"].sudo().search([
-            ("tid", "in", list(all_tids)), ("state", "=", "active"),
-        ])
-        assignment_by_tid = {assignment.tid: assignment for assignment in assignments}
+        assignment_by_tid = self._runtime_vehicle_assignment_map(all_tids)
         missing_tids = sorted(all_tids - set(assignment_by_tid))
         if missing_tids:
             raise UserError(
-                _("Vehicle RFID assignment(s) are not synchronized: %s")
+                _("Vehicle RFID runtime assignment(s) are not synchronized: %s")
                 % ", ".join(missing_tids[:20])
             )
 
@@ -1270,38 +1099,42 @@ class NspSyncJob(models.Model):
         for payload in normalized_vehicles:
             assignment = assignment_by_tid[payload["vehicle_tid"]]
             vehicle = vehicle_by_code[payload["vehicle_code"]]
-            if assignment.vehicle_id != vehicle:
-                raise UserError(_(
-                    "RFID Tag %(tid)s is not assigned to Vehicle %(vehicle)s."
-                ) % {"tid": payload["vehicle_tid"], "vehicle": payload["vehicle_code"]})
-            actual_plate = str(vehicle.license_plate or "").strip().upper()
-            if actual_plate != payload["license_plate"]:
-                raise UserError(_(
-                    "Vehicle %(vehicle)s License Plate does not match the released calibration."
-                ) % {"vehicle": payload["vehicle_code"]})
+            if assignment.vehicle_id != vehicle or not vehicle.active:
+                raise UserError(
+                    _("RFID TID %(tid)s is not assigned to active Vehicle %(vehicle)s.")
+                    % {"tid": payload["vehicle_tid"], "vehicle": payload["vehicle_code"]}
+                )
+            if str(vehicle.license_plate or "").strip().upper() != payload["license_plate"]:
+                raise UserError(_("Vehicle %s License Plate does not match the released calibration.") % payload["vehicle_code"])
             actual_owner = str(vehicle.owner_id.user_code or "").strip().upper() if vehicle.owner_id else ""
             if actual_owner != payload["owner_user_code"]:
-                raise UserError(_(
-                    "Vehicle %(vehicle)s Owner does not match the released calibration."
-                ) % {"vehicle": payload["vehicle_code"]})
-            values = Target._prepare_scanned_values({
-                "tag_id": assignment.tag_id.id,
+                raise UserError(_("Vehicle %s Owner does not match the released calibration.") % payload["vehicle_code"])
+            target_commands.append((0, 0, {
+                "vehicle_tid": payload["vehicle_tid"],
                 "vehicle_id": vehicle.id,
-            })
-            target_commands.append((0, 0, values))
+            }))
 
-        # Parse and apply only identities referenced by this released calibration.
         normalized_readers = []
         identity_rows = {}
-        seen_readers = set()
-        used_antennas = set()
+
+        def register_identity(values):
+            identity_code = values["technical_code"]
+            previous = identity_rows.get(identity_code)
+            if previous and (
+                previous["device_type_code"] != values["device_type_code"]
+                or (previous.get("serial_number") or False) != (values.get("serial_number") or False)
+            ):
+                raise UserError(_("Device identity %s is used with conflicting roles or serials.") % identity_code)
+            identity_rows[identity_code] = values
+
+        seen_reader_codes = set()
+        seen_serials = set()
         for payload in reader_payloads:
             if not isinstance(payload, dict):
                 raise UserError(_("Reader assembly must be an object."))
             unsupported = set(payload) - {
-                "server_code", "controller_code", "controller_name",
-                "technical_code", "serial_number", "reader_name",
-                "physical_connection", "reader_parameters", "antennas",
+                "server_code", "controller_code", "controller_name", "technical_code",
+                "serial_number", "reader_name", "physical_connection", "reader_parameters", "ports",
             }
             if unsupported:
                 raise UserError(
@@ -1313,12 +1146,12 @@ class NspSyncJob(models.Model):
             reader_code = str(payload.get("technical_code") or "").strip().upper()
             serial = str(payload.get("serial_number") or "").strip().upper()
             if not server_code or not controller_code or not reader_code or not serial:
-                raise UserError(_(
-                    "Every Reader assembly requires Server, Controller, Reader Management Code and Reader Serial Number."
-                ))
-            if reader_code in seen_readers or serial in {row["serial_number"] for row in normalized_readers}:
+                raise UserError(_("Every Reader assembly requires Server, Controller, Reader Code and Serial Number."))
+            if reader_code in seen_reader_codes or serial in seen_serials:
                 raise UserError(_("RFID Reader is duplicated in Lane Calibration."))
-            seen_readers.add(reader_code)
+            seen_reader_codes.add(reader_code)
+            seen_serials.add(serial)
+
             parameters = payload.get("reader_parameters") or {}
             if not isinstance(parameters, dict) or set(parameters) - {
                 "power_dbm", "read_interval_ms", "tid_start_address", "tid_length",
@@ -1334,60 +1167,47 @@ class NspSyncJob(models.Model):
             if power < 0 or power > 40 or interval <= 0 or interval > 60000 or tid_addr < 0 or tid_len <= 0:
                 raise UserError(_("Reader Parameters are outside the supported range."))
 
-            antennas = payload.get("antennas") or []
-            if not isinstance(antennas, list) or not antennas:
-                raise UserError(_("RFID Reader %s has no Antenna Port Mapping.") % serial)
-            antenna_rows = []
-            used_ports = set()
-            for antenna in antennas:
-                if not isinstance(antenna, dict) or set(antenna) - {
-                    "antenna_no", "technical_code", "serial_number", "name",
-                }:
-                    raise UserError(_("Invalid Antenna Port Mapping payload."))
+            ports = payload.get("ports") or []
+            if not isinstance(ports, list) or not ports:
+                raise UserError(_("RFID Reader %s must contain at least one Reader Port.") % serial)
+            port_numbers = []
+            seen_ports = set()
+            for port in ports:
+                if not isinstance(port, dict) or set(port) - {"port_no"}:
+                    raise UserError(_("Reader Port payload contains unsupported fields."))
                 try:
-                    port_no = int(antenna.get("antenna_no") or 0)
+                    port_no = int(port.get("port_no") or 0)
                 except (TypeError, ValueError) as exc:
-                    raise UserError(_("Antenna Port No. must be an integer.")) from exc
-                antenna_code = str(antenna.get("technical_code") or "").strip().upper()
-                if port_no <= 0 or port_no in used_ports or not antenna_code:
-                    raise UserError(_("Antenna Port Mapping is missing or duplicated."))
-                if antenna_code in used_antennas:
-                    raise UserError(_("An Antenna can be assembled only once in one Lane Calibration."))
-                used_ports.add(port_no)
-                used_antennas.add(antenna_code)
-                antenna_serial = str(antenna.get("serial_number") or "").strip().upper() or False
-                antenna_name = str(antenna.get("name") or antenna_code).strip()
-                antenna_rows.append({
-                    "port_no": port_no,
-                    "technical_code": antenna_code,
-                    "serial_number": antenna_serial,
-                    "name": antenna_name,
-                })
-                identity_rows[antenna_code] = {
-                    "technical_code": antenna_code,
-                    "name": antenna_name,
-                    "device_type_code": "ANTENNA",
-                    "device_type_name": "Antenna",
-                    "serial_number": antenna_serial,
-                    "active": True,
-                }
-            identity_rows[server_code] = {
-                "technical_code": server_code, "name": server_code,
-                "device_type_code": "SERVER", "device_type_name": "Server",
-                "serial_number": False, "active": True,
-            }
-            identity_rows[controller_code] = {
+                    raise UserError(_("Reader Port No. must be an integer.")) from exc
+                if port_no < 1 or port_no > 16 or port_no in seen_ports:
+                    raise UserError(_("Reader Port must be unique and between 1 and 16."))
+                seen_ports.add(port_no)
+                port_numbers.append(port_no)
+
+            register_identity({
+                "technical_code": server_code,
+                "name": server_code,
+                "device_type_code": "SERVER",
+                "device_type_name": "Server",
+                "serial_number": False,
+                "active": True,
+            })
+            register_identity({
                 "technical_code": controller_code,
                 "name": str(payload.get("controller_name") or controller_code).strip(),
-                "device_type_code": "CONTROLLER", "device_type_name": "Controller",
-                "serial_number": False, "active": True,
-            }
-            identity_rows[reader_code] = {
+                "device_type_code": "CONTROLLER",
+                "device_type_name": "Controller",
+                "serial_number": False,
+                "active": True,
+            })
+            register_identity({
                 "technical_code": reader_code,
                 "name": str(payload.get("reader_name") or serial).strip(),
-                "device_type_code": "RFID_READER", "device_type_name": "RFID Reader",
-                "serial_number": serial, "active": True,
-            }
+                "device_type_code": "RFID_READER",
+                "device_type_name": "RFID Reader",
+                "serial_number": serial,
+                "active": True,
+            })
             normalized_readers.append({
                 "server_code": server_code,
                 "controller_code": controller_code,
@@ -1400,7 +1220,7 @@ class NspSyncJob(models.Model):
                 "read_interval_ms": interval,
                 "tid_start_address": tid_addr,
                 "tid_length": tid_len,
-                "antennas": antenna_rows,
+                "ports": sorted(port_numbers),
             })
 
         identity_list = list(identity_rows.values())
@@ -1417,19 +1237,28 @@ class NspSyncJob(models.Model):
         Edge = self.env["nsp.edge.server"].sudo().with_context(active_test=False)
         Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
         Device = self.env["nsp.device"].sudo().with_context(active_test=False)
-        Antenna = self.env["nsp.device.antenna"].sudo().with_context(active_test=False)
         edge_by_code = {row.edge_server_code: row for row in Edge.search([])}
         controller_by_code = {row.controller_id: row for row in Controller.search([])}
         reader_by_code = {row.device_code: row for row in Device.search([])}
-        antenna_by_code = {row.technical_code: row for row in Antenna.search([]) if row.technical_code}
+        reader_by_serial = {row.serial_number: row for row in Device.search([])}
 
         line_commands = []
         for row in normalized_readers:
+            server_identity = whitelist_by_code.get(row["server_code"])
+            controller_identity = whitelist_by_code.get(row["controller_code"])
+            reader_identity = whitelist_by_code.get(row["reader_code"])
+            if not server_identity or server_identity.device_type_code != "SERVER":
+                raise UserError(_("Lane Calibration Server identity is missing or invalid."))
+            if not controller_identity or controller_identity.device_type_code != "CONTROLLER":
+                raise UserError(_("Lane Calibration Controller identity is missing or invalid."))
+            if not reader_identity or reader_identity.device_type_code != "RFID_READER":
+                raise UserError(_("Lane Calibration Reader identity is missing or invalid."))
             edge = edge_by_code.get(row["server_code"])
             edge_vals = {
-                "name": whitelist_by_code[row["server_code"]].name or row["server_code"],
-                "whitelist_id": whitelist_by_code[row["server_code"]].id,
-                "active": True, "cloud_removed": False,
+                "name": server_identity.name or row["server_code"],
+                "whitelist_id": server_identity.id,
+                "active": True,
+                "cloud_removed": False,
             }
             if edge:
                 self._write_changed(edge, edge_vals)
@@ -1441,20 +1270,23 @@ class NspSyncJob(models.Model):
             controller_vals = {
                 "controller_name": row["controller_name"],
                 "edge_server_id": edge.id,
-                "whitelist_id": whitelist_by_code[row["controller_code"]].id,
-                "active": True, "cloud_removed": False,
+                "whitelist_id": controller_identity.id,
+                "active": True,
+                "cloud_removed": False,
             }
             if controller:
                 self._write_changed(controller, controller_vals)
             else:
-                controller = Controller.create({
-                    "controller_id": row["controller_code"], **controller_vals,
-                })
+                controller = Controller.create({"controller_id": row["controller_code"], **controller_vals})
                 controller_by_code[row["controller_code"]] = controller
 
-            reader = reader_by_code.get(row["reader_code"])
-            if not reader:
-                reader = Device.search([("serial_number", "=", row["serial_number"])], limit=1)
+            reader_by_code_match = reader_by_code.get(row["reader_code"])
+            reader_by_serial_match = reader_by_serial.get(row["serial_number"])
+            if reader_by_code_match and reader_by_code_match.serial_number != row["serial_number"]:
+                raise UserError(_("Lane Calibration Reader Code conflicts with another Serial Number."))
+            if reader_by_serial_match and reader_by_serial_match.device_code != row["reader_code"]:
+                raise UserError(_("Lane Calibration Reader Serial conflicts with another Reader Code."))
+            reader = reader_by_code_match or reader_by_serial_match
             reader_vals = {
                 "name": row["reader_name"],
                 "serial_number": row["serial_number"],
@@ -1465,51 +1297,16 @@ class NspSyncJob(models.Model):
                 "read_interval_ms": row["read_interval_ms"],
                 "tid_addr": row["tid_start_address"],
                 "tid_len": row["tid_length"],
-                "whitelist_id": whitelist_by_code[row["reader_code"]].id,
-                "active": True, "cloud_removed": False,
+                "whitelist_id": reader_identity.id,
+                "active": True,
+                "cloud_removed": False,
             }
             if reader:
                 self._write_changed(reader, reader_vals)
             else:
                 reader = Device.create(reader_vals)
             reader_by_code[row["reader_code"]] = reader
-
-            port_commands = []
-            for antenna_row in row["antennas"]:
-                identity = whitelist_by_code[antenna_row["technical_code"]]
-                antenna = Antenna.search([
-                    ("device_id", "=", reader.id),
-                    ("antenna_no", "=", antenna_row["port_no"]),
-                ], limit=1)
-                if antenna and antenna.whitelist_id != identity:
-                    raise UserError(_(
-                        "Reader %(reader)s port %(port)s is already mapped to another Antenna in the active runtime assembly."
-                    ) % {
-                        "reader": row["serial_number"],
-                        "port": antenna_row["port_no"],
-                    })
-                antenna_vals = {
-                    "serial_number": antenna_row["serial_number"],
-                    "device_id": reader.id,
-                    "antenna_no": antenna_row["port_no"],
-                    "whitelist_id": identity.id,
-                    "active": True,
-                    "cloud_removed": False,
-                }
-                if antenna:
-                    # Keep the existing technical code when this endpoint is also
-                    # used by Parking. The whitelist relation is the identity source.
-                    self._write_changed(antenna, antenna_vals)
-                else:
-                    # A calibration mapping is contextual. Do not move another
-                    # runtime row that may belong to a published Parking assembly.
-                    # PostgreSQL unique constraints permit multiple NULL technical
-                    # codes while whitelist_id preserves the physical identity.
-                    antenna = Antenna.create({"technical_code": False, **antenna_vals})
-                port_commands.append((0, 0, {
-                    "port_no": antenna_row["port_no"],
-                    "antenna_id": antenna.id,
-                }))
+            reader_by_serial[row["serial_number"]] = reader
 
             line_commands.append((0, 0, {
                 "edge_server_id": edge.id,
@@ -1517,12 +1314,12 @@ class NspSyncJob(models.Model):
                 "reader_id": reader.id,
                 "reader_power_dbm": row["power_dbm"],
                 "read_interval_ms": row["read_interval_ms"],
-                "antenna_port_ids": port_commands,
+                "reader_port_ids": [(0, 0, {"port_no": port_no}) for port_no in row["ports"]],
             }))
 
         Session = self.env["nsp.measurement.session"].sudo().with_context(measurement_sync=True)
         session = Session.search([("measurement_code", "=", code)], limit=1)
-        vals = {
+        values = {
             "measurement_code": code,
             "revision": revision,
             "status": status,
@@ -1530,17 +1327,19 @@ class NspSyncJob(models.Model):
             "reader_line_ids": [(5, 0, 0)] + line_commands,
         }
         if session:
-            session.write(vals)
+            session.write(values)
         else:
-            session = Session.create(vals)
+            session = Session.create(values)
         return session
 
     def _apply_parking_runtime_snapshot(self, data, request_payload=False):
-        """Apply only the device projection referenced by published Parking Layouts."""
         self.ensure_one()
         if not isinstance(data, dict):
             raise UserError(_("Parking Runtime response must be an object."))
-        revision = int(data.get("revision") or 0)
+        try:
+            revision = int(data.get("revision") or 0)
+        except (TypeError, ValueError) as exc:
+            raise UserError(_("Parking Runtime revision must be an integer.")) from exc
         if revision <= 0:
             raise UserError(_("Parking Runtime revision is required."))
         if revision < int(self.snapshot_revision or 0):
@@ -1564,8 +1363,10 @@ class NspSyncJob(models.Model):
             existing_branches = {record.code: record for record in Branch.search([])}
             incoming_branch_codes = set()
             for item in branches:
-                if not isinstance(item, dict):
-                    raise UserError(_("Branch payload must contain objects."))
+                if not isinstance(item, dict) or set(item) - {
+                    "branch_code", "branch_name", "timezone", "active",
+                }:
+                    raise UserError(_("Invalid Branch payload."))
                 code = str(item.get("branch_code") or "").strip().upper()
                 if not code:
                     raise UserError(_("Branch Code is required."))
@@ -1587,9 +1388,6 @@ class NspSyncJob(models.Model):
             if stale_branches:
                 stale_branches.write({"status": "inactive"})
 
-            # Upsert only identities referenced by this published projection.
-            # Do not globally reconcile the identity cache here because active
-            # Lane Calibration snapshots may reference additional identities.
             identity_cache = self._prepare_apply_cache("device_whitelist", whitelist)
             for item in whitelist:
                 self._apply_device_whitelist(item, cache=identity_cache)
@@ -1607,9 +1405,13 @@ class NspSyncJob(models.Model):
                     continue
                 code = str(identity.get("technical_code") or "").strip().upper()
                 whitelist_record = whitelist_by_code.get(code)
+                if not code or not whitelist_record:
+                    raise UserError(_("Published Server identity is invalid."))
+                if whitelist_record.device_type_code != "SERVER":
+                    raise UserError(_("Published Server identity has an invalid Device Type."))
                 values = {
                     "name": str(identity.get("name") or code).strip(),
-                    "whitelist_id": whitelist_record.id if whitelist_record else False,
+                    "whitelist_id": whitelist_record.id,
                     "active": bool(identity.get("active", True)),
                     "cloud_removed": False,
                 }
@@ -1622,15 +1424,12 @@ class NspSyncJob(models.Model):
 
             Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
             Device = self.env["nsp.device"].sudo().with_context(active_test=False)
-            Antenna = self.env["nsp.device.antenna"].sudo().with_context(active_test=False)
             controller_by_code = {record.controller_id: record for record in Controller.search([])}
+            reader_by_code = {record.device_code: record for record in Device.search([])}
             reader_by_serial = {record.serial_number: record for record in Device.search([])}
-            antenna_by_code = {
-                record.technical_code: record
-                for record in Antenna.search([("technical_code", "!=", False)])
-                if record.technical_code
-            }
-            incoming_parking_antenna_codes = set()
+            seen_controller_codes = set()
+            reader_owner = {}
+            declared_ports_by_reader = {}
 
             for controller_item in controllers:
                 if not isinstance(controller_item, dict):
@@ -1647,12 +1446,15 @@ class NspSyncJob(models.Model):
                 server_code = str(controller_item.get("server_code") or "").strip().upper()
                 if not controller_code or not server_code:
                     raise UserError(_("Controller Code and Server Code are required."))
+                if controller_code in seen_controller_codes:
+                    raise UserError(_("Controller %s is duplicated in Parking Runtime.") % controller_code)
+                seen_controller_codes.add(controller_code)
                 edge = edge_by_code.get(server_code)
-                if not edge:
-                    raise UserError(_("Published Server %s is missing from the identity projection.") % server_code)
                 controller_whitelist = whitelist_by_code.get(controller_code)
-                if not controller_whitelist:
-                    raise UserError(_("Published Controller %s is missing from the identity projection.") % controller_code)
+                if not edge or not controller_whitelist:
+                    raise UserError(_("Published Controller assembly is missing from the identity projection."))
+                if controller_whitelist.device_type_code != "CONTROLLER":
+                    raise UserError(_("Published Controller identity has an invalid Device Type."))
                 controller_values = {
                     "controller_name": controller_item.get("controller_name") or controller_code,
                     "edge_server_id": edge.id,
@@ -1664,10 +1466,7 @@ class NspSyncJob(models.Model):
                 if controller:
                     self._write_changed(controller, controller_values)
                 else:
-                    controller = Controller.create({
-                        "controller_id": controller_code,
-                        **controller_values,
-                    })
+                    controller = Controller.create({"controller_id": controller_code, **controller_values})
                     controller_by_code[controller_code] = controller
 
                 devices = controller_item.get("devices") or []
@@ -1678,7 +1477,7 @@ class NspSyncJob(models.Model):
                         raise UserError(_("RFID Reader payload must contain objects."))
                     unsupported_reader = set(reader_item) - {
                         "technical_code", "serial_number", "reader_name",
-                        "physical_connection", "reader_parameters", "antennas",
+                        "physical_connection", "reader_parameters", "ports",
                     }
                     if unsupported_reader:
                         raise UserError(
@@ -1688,99 +1487,86 @@ class NspSyncJob(models.Model):
                     serial = str(reader_item.get("serial_number") or "").strip().upper()
                     reader_code = str(reader_item.get("technical_code") or "").strip().upper()
                     if not serial or not reader_code:
-                        raise UserError(_("RFID Reader Management Code and Serial Number are required."))
+                        raise UserError(_("RFID Reader Code and Serial Number are required."))
+                    previous_owner = reader_owner.get(reader_code)
+                    if previous_owner and previous_owner != controller_code:
+                        raise UserError(_("RFID Reader %s is published under multiple Controllers.") % reader_code)
+                    reader_owner[reader_code] = controller_code
+                    existing_by_code = reader_by_code.get(reader_code)
+                    existing_by_serial = reader_by_serial.get(serial)
+                    if existing_by_code and existing_by_code.serial_number != serial:
+                        raise UserError(_("RFID Reader Code %s conflicts with another Serial Number.") % reader_code)
+                    if existing_by_serial and existing_by_serial.device_code != reader_code:
+                        raise UserError(_("RFID Reader Serial %s conflicts with another Reader Code.") % serial)
                     reader_whitelist = whitelist_by_code.get(reader_code)
                     if not reader_whitelist:
                         raise UserError(_("Published RFID Reader %s is missing from the identity projection.") % reader_code)
+                    if reader_whitelist.device_type_code != "RFID_READER":
+                        raise UserError(_("Published RFID Reader identity has an invalid Device Type."))
                     parameters = reader_item.get("reader_parameters") or {}
+                    if not isinstance(parameters, dict) or set(parameters) - {
+                        "power_dbm", "read_interval_ms", "tid_start_address", "tid_length",
+                    }:
+                        raise UserError(_("Invalid Reader Parameters payload."))
+                    try:
+                        power = int(parameters.get("power_dbm") if parameters.get("power_dbm") is not None else 30)
+                        interval = int(parameters.get("read_interval_ms") or 200)
+                        tid_addr = int(parameters.get("tid_start_address") or 0)
+                        tid_len = int(parameters.get("tid_length") or 4)
+                    except (TypeError, ValueError) as exc:
+                        raise UserError(_("Invalid Reader Parameters.")) from exc
+                    if power < 0 or power > 40 or interval <= 0 or interval > 60000 or tid_addr < 0 or tid_len <= 0:
+                        raise UserError(_("Reader Parameters are outside the supported range."))
+
+                    ports = reader_item.get("ports") or []
+                    if not isinstance(ports, list) or not ports:
+                        raise UserError(_("Published RFID Reader %s has no Reader Ports.") % serial)
+                    port_numbers = set()
+                    for port in ports:
+                        if not isinstance(port, dict) or set(port) - {"port_no"}:
+                            raise UserError(_("Reader Port payload contains unsupported fields."))
+                        try:
+                            port_no = int(port.get("port_no") or 0)
+                        except (TypeError, ValueError) as exc:
+                            raise UserError(_("Reader Port No. must be an integer.")) from exc
+                        if port_no < 1 or port_no > 16 or port_no in port_numbers:
+                            raise UserError(_("Reader Port must be unique and between 1 and 16."))
+                        port_numbers.add(port_no)
+                    previous_ports = declared_ports_by_reader.get(reader_code)
+                    if previous_ports is not None and previous_ports != port_numbers:
+                        raise UserError(_("RFID Reader %s has conflicting Reader Port declarations.") % reader_code)
+                    declared_ports_by_reader[reader_code] = set(port_numbers)
+
                     reader_values = {
                         "name": reader_item.get("reader_name") or serial,
+                        "serial_number": serial,
                         "controller_id": controller.id,
                         "connection_type": reader_item.get("physical_connection") or False,
-                        "power_dbm": int(parameters.get("power_dbm") if parameters.get("power_dbm") is not None else 30),
-                        "read_interval_ms": int(parameters.get("read_interval_ms") or 200),
-                        "tid_addr": int(parameters.get("tid_start_address") or 0),
-                        "tid_len": int(parameters.get("tid_length") or 4),
+                        "power_dbm": power,
+                        "read_interval_ms": interval,
+                        "tid_addr": tid_addr,
+                        "tid_len": tid_len,
                         "device_code": reader_code,
                         "whitelist_id": reader_whitelist.id,
                         "active": True,
                         "cloud_removed": False,
                     }
-                    reader = reader_by_serial.get(serial)
+                    reader = reader_by_code.get(reader_code) or reader_by_serial.get(serial)
                     if reader:
                         self._write_changed(reader, reader_values)
                     else:
-                        reader = Device.create({"serial_number": serial, **reader_values})
-                        reader_by_serial[serial] = reader
+                        reader = Device.create(reader_values)
+                    reader_by_code[reader_code] = reader
+                    reader_by_serial[serial] = reader
 
-                    antenna_items = reader_item.get("antennas") or []
-                    if not isinstance(antenna_items, list) or not antenna_items:
-                        raise UserError(_("Published RFID Reader %s has no Antenna Port Mapping.") % serial)
-                    desired_codes = []
-                    desired_ports = []
-                    normalized_antennas = []
-                    for antenna_item in antenna_items:
-                        if not isinstance(antenna_item, dict) or set(antenna_item) - {
-                            "antenna_no", "technical_code", "serial_number", "name",
-                        }:
-                            raise UserError(_("Reader Antenna payload contains unsupported fields."))
-                        port_no = int(antenna_item.get("antenna_no") or 0)
-                        antenna_code = str(antenna_item.get("technical_code") or "").strip().upper()
-                        if port_no <= 0 or not antenna_code:
-                            raise UserError(_("Antenna Port No. and Management Code are required."))
-                        if port_no in desired_ports or antenna_code in desired_codes:
-                            raise UserError(_("Antenna Port Mapping is duplicated for Reader %s.") % serial)
-                        desired_ports.append(port_no)
-                        desired_codes.append(antenna_code)
-                        normalized_antennas.append((antenna_item, port_no, antenna_code))
-
-                    # Move canonical Parking rows to temporary positive ports so
-                    # Reader-port swaps can be applied without violating SQL uniqueness.
-                    movable = Antenna.search([
-                        "|",
-                        ("technical_code", "in", desired_codes),
-                        "&", ("device_id", "=", reader.id), ("antenna_no", "in", desired_ports),
-                    ])
-                    for antenna in movable:
-                        temporary_port = 1000000 + antenna.id
-                        if antenna.antenna_no != temporary_port:
-                            antenna.write({"antenna_no": temporary_port})
-
-                    for antenna_item, port_no, antenna_code in normalized_antennas:
-                        antenna_whitelist = whitelist_by_code.get(antenna_code)
-                        if not antenna_whitelist:
-                            raise UserError(_("Published Antenna %s is missing from the identity projection.") % antenna_code)
-                        incoming_parking_antenna_codes.add(antenna_code)
-                        antenna_values = {
-                            "technical_code": antenna_code,
-                            "serial_number": str(antenna_item.get("serial_number") or "").strip().upper() or False,
-                            "device_id": reader.id,
-                            "antenna_no": port_no,
-                            "whitelist_id": antenna_whitelist.id,
-                            "active": True,
-                            "cloud_removed": False,
-                        }
-                        antenna = antenna_by_code.get(antenna_code)
-                        if antenna:
-                            self._write_changed(antenna, antenna_values)
-                        else:
-                            antenna = Antenna.create(antenna_values)
-                            antenna_by_code[antenna_code] = antenna
-
-            # Only canonical Parking port rows carry technical_code. Contextual
-            # calibration rows use NULL technical_code and are not archived here.
-            stale_parking_antennas = Antenna.search([
-                ("technical_code", "!=", False),
-                ("technical_code", "not in", list(incoming_parking_antenna_codes)),
-                ("active", "=", True),
-            ]) if incoming_parking_antenna_codes else Antenna.search([
-                ("technical_code", "!=", False), ("active", "=", True),
-            ])
-            if stale_parking_antennas:
-                stale_parking_antennas.write({"active": False, "cloud_removed": True})
-
+            parking_sync = self.with_context(
+                nsp_declared_reader_ports={
+                    code: sorted(ports)
+                    for code, ports in declared_ports_by_reader.items()
+                }
+            )
             for area in areas:
-                self._apply_parking_config(area)
+                parking_sync._apply_parking_config(area)
             removed_area = self._reconcile_parking_config_snapshot(areas)
             self._validate_operational_parking_topology()
             self.write({
@@ -1791,7 +1577,7 @@ class NspSyncJob(models.Model):
 
         return {
             "applied": len(controllers) + len(areas) + len(whitelist),
-            "removed": len(stale_parking_antennas) + removed_area,
+            "removed": removed_area,
             "revision": revision,
             "stale": False,
         }
@@ -1907,7 +1693,7 @@ class NspSyncJob(models.Model):
         self.ensure_one()
         # Full snapshots do not use incremental cursors. This guarantees that
         # deletions, revocations and assignment changes are reflected on Edge.
-        if self._action_kind() in ("parking_runtime", "vehicle_config", "rfid_tag", "user", "vehicle", "vehicle_borrow", "lane_calibration"):
+        if self._action_kind() in ("parking_runtime", "vehicle_config", "rfid_assignment", "user", "vehicle", "vehicle_borrow", "lane_calibration"):
             return {"edge_server_code": self.edge_server_code}
         payload = {"edge_server_code": self.edge_server_code, "limit": self.batch_size}
         if self.sync_cursor:
@@ -1946,7 +1732,7 @@ class NspSyncJob(models.Model):
             "event_uid": event.event_uid,
             "revision": int(event.revision or 1),
             "serial_number": event.serial_number,
-            "antenna_no": int(event.antenna_no),
+            "port_no": int(event.port_no),
             "tid": event.tid,
             "read_at": read_at,
             "power_dbm": int(
@@ -2351,21 +2137,21 @@ class NspSyncJob(models.Model):
                 },
             }
 
-        if kind == "rfid_tag":
-            counts, stale_assignment_count = self._apply_rfid_tag_snapshot(data, request_payload=request_payload)
+        if kind == "rfid_assignment":
+            counts, stale_assignment_count = self._apply_rfid_assignment_snapshot(data, request_payload=request_payload)
             self.write({"last_pull_at": fields.Datetime.now(), "sync_cursor": False})
             return {
-                "pulled": counts["whitelisted_tags"],
+                "pulled": counts["active_assignments"],
                 "failed": 0,
                 "has_more": False,
                 "message": (
-                    "RFID Tag Whitelist applied: %(tags)s tag(s), %(employees)s employee assignment(s), "
-                    "%(vehicles)s vehicle assignment(s), %(unassigned)s unassigned; revoked %(stale)s stale local assignment(s)."
+                    "RFID runtime assignments applied: %(total)s active assignment(s), "
+                    "%(employees)s user assignment(s), %(vehicles)s vehicle assignment(s); "
+                    "revoked %(stale)s stale local assignment(s)."
                 ) % {
-                    "tags": counts["whitelisted_tags"],
+                    "total": counts["active_assignments"],
                     "employees": counts["employee_assignments"],
                     "vehicles": counts["vehicle_assignments"],
-                    "unassigned": counts["unassigned_tags"],
                     "stale": stale_assignment_count,
                 },
             }

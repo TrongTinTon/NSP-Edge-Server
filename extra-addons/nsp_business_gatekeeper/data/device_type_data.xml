@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='UTF-8'?>
 <odoo noupdate="1">
     <record id="device_type_server" model="nsp.device.type">
         <field name="name">Server</field>
@@ -12,8 +12,4 @@
         <field name="name">RFID Reader</field>
         <field name="code">RFID_READER</field>
     </record>
-    <record id="device_type_antenna" model="nsp.device.type">
-        <field name="name">Antenna</field>
-        <field name="code">ANTENNA</field>
-    </record>
-</odoo>
+    </odoo>

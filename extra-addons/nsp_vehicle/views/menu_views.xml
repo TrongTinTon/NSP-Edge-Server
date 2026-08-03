@@ -1,4 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<odoo>
-    <!-- Vehicle Types and Colors have no standalone menu. They remain available through Quick Create and Create/Edit from Vehicle fields. -->
-</odoo>

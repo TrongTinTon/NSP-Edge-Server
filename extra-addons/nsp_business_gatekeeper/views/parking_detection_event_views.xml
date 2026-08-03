@@ -6,11 +6,12 @@
         <field name="arch" type="xml">
             <search>
                 <field name="event_uid"/>
-                <field name="tag_id"/>
+                <field name="tid"/>
                 <field name="user_id"/>
                 <field name="vehicle_id"/>
                 <field name="lane_id"/>
-                <field name="antenna_id"/>
+                <field name="reader_id"/>
+                <field name="port_no"/>
                 <field name="state"/>
                 <field name="transaction_id"/>
                 <filter string="Pending" name="pending" domain="[('state','=','pending')]"/>
@@ -32,8 +33,9 @@
             <list string="Parking Detection Events" create="0" edit="0" delete="0">
                 <field name="detected_at"/>
                 <field name="lane_id"/>
-                <field name="antenna_id" optional="hide"/>
-                <field name="tag_id"/>
+                <field name="reader_id" optional="hide"/>
+                <field name="port_no" optional="hide"/>
+                <field name="tid"/>
                 <field name="vehicle_id" optional="show"/>
                 <field name="user_id" optional="show"/>
                 <field name="state" widget="badge"

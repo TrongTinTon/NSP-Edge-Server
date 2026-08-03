@@ -50,7 +50,7 @@
     <field name="http_methods">POST</field>
   </record>
   <record id="api_master_rfid_tags" model="ir.actions.core_api">
-    <field name="name">RFID Assignments Snapshot</field>
+    <field name="name">RFID Runtime Assignments Snapshot</field>
     <field name="model_id" ref="model_nsp_master_gatekeeper_sync_api_service"/>
     <field name="code">model.api_rfid_assignments_snapshot()</field>
     <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_master_gatekeeper_sync"/>

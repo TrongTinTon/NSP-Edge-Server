@@ -4,8 +4,6 @@ from odoo.exceptions import UserError
 
 
 class NspSyncJobParkingLayout(models.Model):
-    """Apply the published Cloud Parking Layout runtime snapshot on Edge."""
-
     _inherit = "nsp.sync.job"
 
     def _apply_parking_config(self, item):
@@ -13,12 +11,8 @@ class NspSyncJobParkingLayout(models.Model):
         if not isinstance(item, dict):
             raise UserError(_("Parking Layout item must be an object."))
         unsupported = set(item) - {
-            "parking_area_code",
-            "parking_area_name",
-            "branch_code",
-            "state",
-            "published_revision",
-            "lanes",
+            "parking_area_code", "parking_area_name", "branch_code", "state",
+            "published_revision", "lanes",
         }
         if unsupported:
             raise UserError(
@@ -64,19 +58,17 @@ class NspSyncJobParkingLayout(models.Model):
 
         controllers = self.env["nsp.controller"].sudo().with_context(active_test=False).search([])
         controller_by_code = {
-            self._normalize_sync_code(record.controller_id): record for record in controllers
+            self._normalize_sync_code(record.controller_id): record
+            for record in controllers
         }
-        antennas = self.env["nsp.device.antenna"].sudo().with_context(active_test=False).search([])
-        antenna_by_key = {
-            (
-                self._normalize_sync_code(record.device_id.serial_number),
-                int(record.antenna_no or 0),
-            ): record
-            for record in antennas
+        readers = self.env["nsp.device"].sudo().with_context(active_test=False).search([])
+        reader_by_code = {
+            self._normalize_sync_code(record.device_code): record
+            for record in readers if record.device_code
         }
-        antenna_by_code = {
-            self._normalize_sync_code(record.technical_code): record
-            for record in antennas if record.technical_code
+        declared_ports_by_reader = {
+            self._normalize_sync_code(code): {int(port) for port in ports}
+            for code, ports in (self.env.context.get("nsp_declared_reader_ports") or {}).items()
         }
 
         lanes_data = item.get("lanes") or []
@@ -89,16 +81,10 @@ class NspSyncJobParkingLayout(models.Model):
         for lane_item in lanes_data:
             if not isinstance(lane_item, dict):
                 raise UserError(_("Parking Lanes must contain objects."))
-            supported = {
-                "lane_code",
-                "lane_name",
-                "server_code",
-                "controller_code",
-                "antenna_timeline",
-                "event_sequences",
-                "timing_tolerance",
+            unsupported_lane = set(lane_item) - {
+                "lane_code", "lane_name", "server_code", "controller_code",
+                "reader_port_timeline", "event_sequences", "timing_tolerance",
             }
-            unsupported_lane = set(lane_item) - supported
             if unsupported_lane:
                 raise UserError(
                     _("Unsupported Parking Lane field(s): %s")
@@ -151,72 +137,65 @@ class NspSyncJobParkingLayout(models.Model):
                 "active": True,
             }
 
-            timeline = lane_item.get("antenna_timeline") or []
+            timeline = lane_item.get("reader_port_timeline") or []
             if not isinstance(timeline, list):
-                raise UserError(_("Antenna Timeline must be an array."))
+                raise UserError(_("Reader Port Timeline must be an array."))
             if state == "operational" and len(timeline) < 2:
                 raise UserError(
-                    _("Operational Lane %s requires at least two Antenna Timeline points.")
+                    _("Operational Lane %s requires at least two Reader Port Timeline points.")
                     % lane_code
                 )
             seen_orders = set()
-            seen_antenna_ids = set()
-            timeline_position_by_antenna = {}
+            seen_refs = set()
+            timeline_position = {}
             for row in timeline:
                 if not isinstance(row, dict):
-                    raise UserError(_("Antenna Timeline rows must contain objects."))
-                supported_timeline = {
-                    "sequence",
-                    "antenna_code",
-                    "antenna_name",
-                    "reader_code",
-                    "reader_serial_number",
-                    "port_no",
-                    "duration_from_previous_seconds",
-                    "cumulative_time_seconds",
+                    raise UserError(_("Reader Port Timeline rows must contain objects."))
+                unsupported_timeline = set(row) - {
+                    "sequence", "reader_code", "port_no",
+                    "duration_from_previous_seconds", "cumulative_time_seconds",
                 }
-                unsupported_timeline = set(row) - supported_timeline
                 if unsupported_timeline:
                     raise UserError(
-                        _("Unsupported Antenna Timeline field(s): %s")
+                        _("Unsupported Reader Port Timeline field(s): %s")
                         % ", ".join(sorted(unsupported_timeline))
                     )
+                reader_code = self._normalize_sync_code(row.get("reader_code"))
                 try:
                     sequence = int(row.get("sequence") or 0)
                     port_no = int(row.get("port_no") or 0)
                     duration = float(row.get("duration_from_previous_seconds") or 0.0)
                     cumulative = float(row.get("cumulative_time_seconds") or 0.0)
                 except (TypeError, ValueError) as exc:
-                    raise UserError(_("Invalid Antenna Timeline number or Duration.")) from exc
-                serial = self._normalize_sync_code(row.get("reader_serial_number"))
-                antenna_code = self._normalize_sync_code(row.get("antenna_code"))
-                antenna = antenna_by_key.get((serial, port_no)) or antenna_by_code.get(antenna_code)
-                if sequence <= 0 or port_no <= 0 or not antenna:
-                    raise UserError(_("Antenna Timeline references an invalid Reader port or Antenna."))
-                if sequence in seen_orders or antenna.id in seen_antenna_ids:
-                    raise UserError(_("Timeline Order and Antenna must be unique per Lane."))
-                if antenna_code and self._normalize_sync_code(antenna.technical_code) != antenna_code:
-                    raise UserError(_("Antenna Code does not match the Reader port mapping."))
-                if antenna.device_id.controller_id != controller:
-                    raise UserError(_("Every Timeline Reader must belong to the Lane Controller."))
+                    raise UserError(_("Invalid Reader Port Timeline value.")) from exc
+                reader = reader_by_code.get(reader_code)
+                ref = (reader.id, port_no) if reader else False
+                if sequence <= 0 or port_no < 1 or port_no > 16 or not reader:
+                    raise UserError(_("Reader Port Timeline references an invalid Reader or Port."))
+                if reader.controller_id != controller or not reader.active or reader.cloud_removed:
+                    raise UserError(_("Every Timeline Reader must be active and belong to the Lane Controller."))
+                declared_ports = declared_ports_by_reader.get(reader_code)
+                if declared_ports is not None and port_no not in declared_ports:
+                    raise UserError(_("Timeline Port is not declared by the published Reader assembly."))
+                if sequence in seen_orders or ref in seen_refs:
+                    raise UserError(_("Timeline Order and Reader Port must be unique per Lane."))
                 if sequence == 1 and duration != 0.0:
                     raise UserError(_("The first Timeline point must have zero Duration from previous."))
                 if sequence > 1 and duration <= 0.0:
                     raise UserError(_("Every Timeline point after the first requires a positive Duration."))
                 seen_orders.add(sequence)
-                seen_antenna_ids.add(antenna.id)
-                timeline_position_by_antenna[antenna.id] = sequence
+                seen_refs.add(ref)
+                timeline_position[ref] = sequence
                 timeline_specs.append({
                     "lane_code": lane_code,
                     "sequence": sequence,
-                    "antenna_id": antenna.id,
-                    "reader_id": antenna.device_id.id,
+                    "reader_id": reader.id,
                     "port_no": port_no,
                     "duration_from_previous": duration,
                     "cumulative_time": max(0.0, cumulative),
                 })
             if seen_orders and seen_orders != set(range(1, len(seen_orders) + 1)):
-                raise UserError(_("Antenna Timeline Order must be contiguous and start at 1."))
+                raise UserError(_("Reader Port Timeline Order must be contiguous and start at 1."))
 
             event_sequences = lane_item.get("event_sequences") or {}
             if not isinstance(event_sequences, dict):
@@ -234,40 +213,43 @@ class NspSyncJobParkingLayout(models.Model):
                 if not isinstance(values, list):
                     raise UserError(_("Each Event Sequence must be an array."))
                 if values and len(values) < 2:
-                    raise UserError(_("Each configured Event Sequence requires at least two Antennas."))
-                seen_sequence_antennas = set()
-                sequence_positions = []
-                for order, raw_code in enumerate(values, start=1):
-                    antenna_code = self._normalize_sync_code(raw_code)
-                    antenna = antenna_by_code.get(antenna_code)
-                    if not antenna or antenna.id not in seen_antenna_ids:
-                        raise UserError(_("Event Sequence Antenna must exist in the Lane Timeline."))
-                    if antenna.id in seen_sequence_antennas:
-                        raise UserError(_("An Antenna can appear only once in one Event Sequence."))
-                    seen_sequence_antennas.add(antenna.id)
-                    sequence_positions.append(timeline_position_by_antenna[antenna.id])
+                    raise UserError(_("Each configured Event Sequence requires at least two Reader Ports."))
+                seen_sequence_refs = set()
+                positions = []
+                for order, step in enumerate(values, start=1):
+                    if not isinstance(step, dict) or set(step) - {"reader_code", "port_no"}:
+                        raise UserError(_("Event Sequence steps must contain Reader Code and Port No."))
+                    reader_code = self._normalize_sync_code(step.get("reader_code"))
+                    try:
+                        port_no = int(step.get("port_no") or 0)
+                    except (TypeError, ValueError) as exc:
+                        raise UserError(_("Event Sequence Port No. must be an integer.")) from exc
+                    reader = reader_by_code.get(reader_code)
+                    ref = (reader.id, port_no) if reader else False
+                    if not reader or ref not in seen_refs:
+                        raise UserError(_("Event Sequence Reader Port must exist in the Lane Timeline."))
+                    if ref in seen_sequence_refs:
+                        raise UserError(_("A Reader Port can appear only once in one Event Sequence."))
+                    seen_sequence_refs.add(ref)
+                    positions.append(timeline_position[ref])
                     sequence_specs.append({
                         "lane_code": lane_code,
                         "sequence_type": sequence_type,
                         "sequence": order,
-                        "antenna_id": antenna.id,
+                        "reader_id": reader.id,
+                        "port_no": port_no,
                     })
-                for previous, current in zip(sequence_positions, sequence_positions[1:]):
-                    if abs(current - previous) != 1:
-                        raise UserError(_("Event Sequence must follow adjacent points in the Antenna Timeline."))
-                if len(sequence_positions) >= 2:
-                    orientation_by_type[sequence_type] = (
-                        1 if sequence_positions[1] > sequence_positions[0] else -1
-                    )
+                if any(abs(current - previous) != 1 for previous, current in zip(positions, positions[1:])):
+                    raise UserError(_("Event Sequence must follow adjacent points in the Reader Port Timeline."))
+                if len(positions) >= 2:
+                    orientation_by_type[sequence_type] = 1 if positions[1] > positions[0] else -1
                 configured_count += bool(values)
             if (
                 orientation_by_type.get("check_in")
                 and orientation_by_type.get("check_out")
                 and orientation_by_type["check_in"] == orientation_by_type["check_out"]
             ):
-                raise UserError(
-                    _("Check-in and Check-out Sequences must follow opposite Timeline directions.")
-                )
+                raise UserError(_("Check-in and Check-out Sequences must follow opposite Timeline directions."))
             if state == "operational" and not configured_count:
                 raise UserError(
                     _("Operational Lane %s requires at least one Check-in or Check-out Sequence.")
@@ -288,19 +270,8 @@ class NspSyncJobParkingLayout(models.Model):
         area_lanes = Lane.search([("parking_area_id", "=", parking.id)])
         Timeline = self.env["nsp.parking.lane.timeline"].sudo()
         Sequence = self.env["nsp.parking.lane.event.sequence"].sudo()
-
-        # A Parking Runtime response is a complete immutable snapshot. Replace
-        # child topology atomically instead of patching rows by Order. This
-        # avoids transient SQL conflicts when two Antennas exchange positions
-        # or an Event Sequence is reversed between published revisions.
-        existing_timeline = (
-            Timeline.search([("lane_id", "in", area_lanes.ids)])
-            if area_lanes else Timeline.browse()
-        )
-        existing_sequences = (
-            Sequence.search([("lane_id", "in", area_lanes.ids)])
-            if area_lanes else Sequence.browse()
-        )
+        existing_sequences = Sequence.search([("lane_id", "in", area_lanes.ids)]) if area_lanes else Sequence.browse()
+        existing_timeline = Timeline.search([("lane_id", "in", area_lanes.ids)]) if area_lanes else Timeline.browse()
         if existing_sequences:
             existing_sequences.unlink()
         if existing_timeline:
@@ -338,29 +309,30 @@ class NspSyncJobParkingLayout(models.Model):
         return parking
 
     def _validate_operational_parking_topology(self):
-        """Every active Antenna may belong to only one operational Lane."""
         self.ensure_one()
         rows = self.env["nsp.parking.lane.timeline"].sudo().search([
             ("lane_id.active", "=", True),
             ("lane_id.parking_area_id.state", "=", "operational"),
         ])
-        lane_by_antenna = {}
+        lane_by_ref = {}
         conflicts = []
         for row in rows:
-            previous = lane_by_antenna.get(row.antenna_id.id)
+            ref = (row.reader_id.id, int(row.port_no or 0))
+            previous = lane_by_ref.get(ref)
             if previous and previous != row.lane_id:
                 conflicts.append(
-                    "%s: %s / %s" % (
-                        row.antenna_id.display_name,
+                    "%s / Port %s: %s / %s" % (
+                        row.reader_id.display_name,
+                        row.port_no,
                         previous.display_name,
                         row.lane_id.display_name,
                     )
                 )
             else:
-                lane_by_antenna[row.antenna_id.id] = row.lane_id
+                lane_by_ref[ref] = row.lane_id
         if conflicts:
             raise UserError(
-                _("Operational Parking topology contains duplicated Antenna assignments: %s")
+                _("Operational Parking topology contains duplicated Reader Port assignments: %s")
                 % "; ".join(sorted(set(conflicts)))
             )
         return True

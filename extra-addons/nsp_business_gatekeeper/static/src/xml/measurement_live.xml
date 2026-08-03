@@ -92,9 +92,9 @@
                                     <small>ms</small>
                                 </div>
                             </label>
-                            <div class="nsp-ml-reader-card__antennas" t-att-title="antennaList(reader)">
-                                <span t-foreach="reader.antennas" t-as="antenna" t-key="antenna" class="nsp-ml__antenna-chip">A<t t-esc="antenna"/></span>
-                                <span t-if="!reader.antennas.length" class="nsp-ml__muted">No antenna</span>
+                            <div class="nsp-ml-reader-card__ports" t-att-title="portList(reader)">
+                                <span t-foreach="reader.ports" t-as="port" t-key="port" class="nsp-ml__port-chip">P<t t-esc="port"/></span>
+                                <span t-if="!reader.ports.length" class="nsp-ml__muted">No ports</span>
                             </div>
                             <button class="btn btn-primary btn-sm nsp-ml-reader-card__apply"
                                     t-on-click="applyReaderSettings"
@@ -131,7 +131,7 @@
                         <header class="nsp-ml-panel__header">
                             <div>
                                 <h3>Detection Timeline</h3>
-                                <span class="nsp-ml__hint">Chronological antenna path for every selected RFID Tag.</span>
+                                <span class="nsp-ml__hint">Chronological Reader Port path for every selected RFID Tag.</span>
                             </div>
                             <span class="nsp-ml__scope-pill"><t t-esc="state.detectionCount"/> steps</span>
                         </header>
@@ -144,14 +144,14 @@
                                         <th>RFID Tag</th>
                                         <th>Controller</th>
                                         <th>Reader</th>
-                                        <th>Antenna</th>
+                                        <th>Port</th>
                                         <th class="text-end">Reads</th>
                                         <th>Last Detected</th>
                                         <th>Duration</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <tr t-foreach="state.steps" t-as="step" t-key="step.sequence_no + '-' + step.tid + '-' + step.serial_number + '-' + step.antenna_no">
+                                    <tr t-foreach="state.steps" t-as="step" t-key="step.sequence_no + '-' + step.tid + '-' + step.serial_number + '-' + step.port_no">
                                         <td><span class="nsp-ml__sequence" t-esc="step.sequence_no"/></td>
                                         <td class="nsp-ml__mono" t-esc="formatTime(step.first_seen_at)"/>
                                         <td>
@@ -163,7 +163,7 @@
                                             <strong t-esc="step.reader_name || step.serial_number"/>
                                             <small class="d-block nsp-ml__mono nsp-ml__muted" t-esc="step.serial_number"/>
                                         </td>
-                                        <td><span class="nsp-ml__antenna-chip">ANT<t t-esc="step.antenna_no"/></span></td>
+                                        <td><span class="nsp-ml__port-chip">P<t t-esc="step.port_no"/></span></td>
                                         <td class="text-end" t-esc="step.read_count"/>
                                         <td class="nsp-ml__mono" t-esc="formatTime(step.last_seen_at)"/>
                                         <td t-esc="stepDuration(step)"/>
@@ -233,7 +233,7 @@
                                         <th>Controller</th>
                                         <th>Reader</th>
                                         <th>Status</th>
-                                        <th>Antennas</th>
+                                        <th>Ports</th>
                                         <th>Reader Power</th>
                                         <th>Read Interval</th>
                                         <th>Runtime Power</th>
@@ -248,7 +248,7 @@
                                             <small class="d-block nsp-ml__mono nsp-ml__muted" t-esc="reader.serial_number"/>
                                         </td>
                                         <td t-esc="reader.status || '-'"/>
-                                        <td t-esc="antennaList(reader)"/>
+                                        <td t-esc="portList(reader)"/>
                                         <td><t t-esc="reader.serverReaderPower"/> dBm</td>
                                         <td><t t-esc="reader.serverReadInterval"/> ms</td>
                                         <td><t t-esc="reader.runtime_power_dbm || '-'"/><t t-if="reader.runtime_power_dbm"> dBm</t></td>
@@ -281,7 +281,7 @@
                         <div class="nsp-ml__metric"><span>Detected vehicles</span><strong><t t-esc="state.detectedVehicleCount"/> / <t t-esc="state.vehicleCount"/></strong></div>
                         <div class="nsp-ml__metric"><span>Controllers detected</span><strong><t t-esc="state.uniqueControllers"/> / <t t-esc="state.controllerCount"/></strong></div>
                         <div class="nsp-ml__metric"><span>Readers detected</span><strong><t t-esc="state.uniqueReaders"/> / <t t-esc="state.readerCount"/></strong></div>
-                        <div class="nsp-ml__metric"><span>Antennas detected</span><strong t-esc="state.uniqueAntennas"/></div>
+                        <div class="nsp-ml__metric"><span>Reader Ports detected</span><strong t-esc="state.uniqueReaderPorts"/></div>
                         <div class="nsp-ml__metric"><span>Raw reads</span><strong t-esc="state.rawEventCount"/></div>
                     </section>
 
@@ -294,7 +294,7 @@
                             <span>→</span>
                             <span t-esc="firstStep().reader_name || firstStep().serial_number"/>
                             <span>→</span>
-                            <span>ANT<t t-esc="firstStep().antenna_no"/></span>
+                            <span>P<t t-esc="firstStep().port_no"/></span>
                         </div>
                     </section>
 
@@ -307,7 +307,7 @@
                             <span>→</span>
                             <span t-esc="lastStep().reader_name || lastStep().serial_number"/>
                             <span>→</span>
-                            <span>ANT<t t-esc="lastStep().antenna_no"/></span>
+                            <span>P<t t-esc="lastStep().port_no"/></span>
                         </div>
                     </section>
 

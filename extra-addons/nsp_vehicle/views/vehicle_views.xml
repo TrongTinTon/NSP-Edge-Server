@@ -7,7 +7,6 @@
             <search>
                 <field name="license_plate" string="Plate"/>
                 <field name="owner_id" string="Owner"/>
-                <field name="tid" string="Tag"/>
                 <field name="vehicle_type_id" string="Type"/>
                 <field name="brand_id"/>
                 <field name="model_id"/>
@@ -33,7 +32,6 @@
                 <field name="brand_id" optional="show"/>
                 <field name="model_id" optional="show"/>
                 <field name="color_id" optional="hide"/>
-                <field name="tid" string="Tag"/>
                 <field name="active" widget="boolean_toggle" optional="hide"/>
             </list>
         </field>
@@ -90,16 +88,9 @@
                                 </list>
                             </field>
                         </page>
-                        <page string="Settings" name="nsp_vehicle_settings"
-                              groups="nsp_core.group_nsp_it_parking,base.group_system">
+                        <page string="System" name="nsp_vehicle_system" groups="base.group_system">
                             <group>
-                                <group string="Tag">
-                                    <field name="rfid_tid_input" string="TID" placeholder="Scan or enter TID"/>
-                                    <button name="action_revoke_rfid_tag" type="object" string="Revoke" icon="fa-unlink"
-                                            help="Revoke RFID tag" invisible="not active_tag_assignment_id"
-                                            class="btn-secondary"/>
-                                    <field name="active_tag_assignment_id" invisible="1"/>
-                                </group>
+                                <field name="vehicle_code" readonly="1" widget="CopyClipboardChar"/>
                             </group>
                         </page>
                     </notebook>

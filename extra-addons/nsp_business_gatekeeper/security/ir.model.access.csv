@@ -7,8 +7,6 @@ access_nsp_parking_lane_it,nsp.parking.lane IT,nsp_business_gatekeeper.model_nsp
 access_nsp_parking_lane_operator,nsp.parking.lane Operator,nsp_business_gatekeeper.model_nsp_parking_lane,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_device_it,nsp.device IT,nsp_business_gatekeeper.model_nsp_device,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_device_operator,nsp.device Operator,nsp_business_gatekeeper.model_nsp_device,nsp_core.group_nsp_operator,1,0,0,0
-access_nsp_device_antenna_it,nsp.device.antenna IT,nsp_business_gatekeeper.model_nsp_device_antenna,nsp_core.group_nsp_it_parking,1,1,1,1
-access_nsp_device_antenna_operator,nsp.device.antenna Operator,nsp_business_gatekeeper.model_nsp_device_antenna,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_parking_transaction_it,nsp.parking.transaction IT,nsp_business_gatekeeper.model_nsp_parking_transaction,nsp_core.group_nsp_it_parking,1,0,0,0
 access_nsp_parking_transaction_operator,nsp.parking.transaction Operator,nsp_business_gatekeeper.model_nsp_parking_transaction,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_parking_detection_event_it,nsp.parking.detection.event IT,nsp_business_gatekeeper.model_nsp_parking_detection_event,nsp_core.group_nsp_it_parking,1,0,0,0
@@ -27,8 +25,8 @@ access_nsp_measurement_target_line_it,nsp.measurement.target.line IT,nsp_busines
 access_nsp_measurement_target_line_operator,nsp.measurement.target.line Operator,nsp_business_gatekeeper.model_nsp_measurement_target_line,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_device_type_it,nsp.device.type IT,nsp_business_gatekeeper.model_nsp_device_type,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_device_type_operator,nsp.device.type Operator,nsp_business_gatekeeper.model_nsp_device_type,nsp_core.group_nsp_operator,1,0,0,0
-access_nsp_measurement_antenna_port_it,nsp.measurement.antenna.port IT,nsp_business_gatekeeper.model_nsp_measurement_antenna_port,nsp_core.group_nsp_it_parking,1,1,1,1
-access_nsp_measurement_antenna_port_operator,nsp.measurement.antenna.port Operator,nsp_business_gatekeeper.model_nsp_measurement_antenna_port,nsp_core.group_nsp_operator,1,0,0,0
+access_nsp_measurement_reader_port_it,nsp.measurement.reader.port IT,nsp_business_gatekeeper.model_nsp_measurement_reader_port,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_measurement_reader_port_operator,nsp.measurement.reader.port Operator,nsp_business_gatekeeper.model_nsp_measurement_reader_port,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_edge_server_it,nsp.edge.server IT,nsp_business_gatekeeper.model_nsp_edge_server,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_edge_server_operator,nsp.edge.server Operator,nsp_business_gatekeeper.model_nsp_edge_server,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_parking_lane_timeline_it,nsp.parking.lane.timeline IT,nsp_business_gatekeeper.model_nsp_parking_lane_timeline,nsp_core.group_nsp_it_parking,1,1,1,1

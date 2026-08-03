@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+import json
+
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
 from odoo.addons.nsp_core.utils import new_management_code
@@ -57,6 +59,12 @@ class Device(models.Model):
         copy=False,
         help="Actual read interval reported by the Controller for the running Reader instance.",
     )
+    runtime_ports_json = fields.Text(
+        string="Runtime Ports",
+        readonly=True,
+        copy=False,
+        help="Last Reader Port list reported by the Controller.",
+    )
     active = fields.Boolean(default=True, index=True)
     cloud_removed = fields.Boolean(default=False, readonly=True, index=True, copy=False)
 
@@ -78,18 +86,12 @@ class Device(models.Model):
         string="Power (dBm)",
         required=True,
         default=30,
-        help="Transmit power applied uniformly to all antenna ports of this Reader.",
+        help="Transmit power applied uniformly to all configured Reader ports.",
     )
     read_interval_ms = fields.Integer(string="Read Interval ms", default=200)
     tid_addr = fields.Integer(string="TID Start Address (Words)", default=2, help="Start offset in 16-bit WORD units.")
     tid_len = fields.Integer(string="TID Length (Words)", default=4, help="Read length in 16-bit WORD units; 1 WORD equals 2 bytes.")
 
-    antennas = fields.Integer(string="Antennas", compute="_compute_antenna_count")
-    antennas_ids = fields.One2many(
-        "nsp.device.antenna",
-        "device_id",
-        string="Antennas",
-    )
 
     _sql_constraints = [
         ("serial_number_unique", "unique(serial_number)", "Reader Serial must be unique."),
@@ -186,36 +188,53 @@ class Device(models.Model):
             if not self._normalize_code(reader.device_code):
                 raise ValidationError(_("Device Code is required."))
 
-    @api.depends("antennas_ids")
-    def _compute_antenna_count(self):
-        for record in self:
-            record.antennas = len(record.antennas_ids.filtered("active"))
 
-    def _antenna_config_payload(self, include_identity=False):
+    def _runtime_port_numbers(self):
         self.ensure_one()
-        antennas = self.antennas_ids
-        if "active" in antennas._fields:
-            antennas = antennas.filtered("active")
-        if "cloud_removed" in antennas._fields:
-            antennas = antennas.filtered(lambda antenna: not antenna.cloud_removed)
-        if "whitelist_id" in antennas._fields:
-            antennas = antennas.filtered(
-                lambda antenna: antenna.whitelist_id and antenna.whitelist_id.active
+        port_numbers = set()
+        Timeline = self.env["nsp.parking.lane.timeline"].sudo()
+        if "reader_id" in Timeline._fields:
+            rows = Timeline.search([
+                ("reader_id", "=", self.id),
+                ("lane_id.active", "=", True),
+                ("lane_id.parking_area_id.state", "in", ["operational", "maintenance"]),
+            ])
+            port_numbers.update(int(value) for value in rows.mapped("port_no") if int(value or 0) > 0)
+        ReaderLine = self.env["nsp.measurement.reader.line"].sudo()
+        if "reader_port_ids" in ReaderLine._fields:
+            lines = ReaderLine.search([
+                ("reader_id", "=", self.id),
+                ("session_id.status", "in", ["ready", "running"]),
+            ])
+            port_numbers.update(
+                int(value)
+                for value in lines.mapped("reader_port_ids.port_no")
+                if int(value or 0) > 0
             )
-        result = []
-        for antenna in antennas.sorted(key=lambda item: (item.antenna_no, item.id)):
-            item = {"antenna_no": int(antenna.antenna_no)}
-            if include_identity:
-                item.update({
-                    "technical_code": antenna.technical_code or "",
-                    "serial_number": antenna.serial_number or False,
-                    "name": antenna.whitelist_id.name if antenna.whitelist_id else antenna.display_name,
-                })
-            result.append(item)
-        return result
+        return sorted(port_numbers)
+
+    def _reported_port_numbers(self):
+        self.ensure_one()
+        if self.runtime_ports_json not in (False, None, ""):
+            try:
+                values = json.loads(self.runtime_ports_json)
+            except (TypeError, ValueError):
+                values = None
+            if isinstance(values, list):
+                normalized = set()
+                for value in values:
+                    if isinstance(value, bool):
+                        continue
+                    try:
+                        port_no = int(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if 1 <= port_no <= 16:
+                        normalized.add(port_no)
+                return sorted(normalized)
+        return self._runtime_port_numbers()
 
     def _build_config_payload(self):
-        """Return technical Reader configuration for the Controller."""
         self.ensure_one()
         return {
             "serial_number": self.serial_number or "",
@@ -225,18 +244,19 @@ class Device(models.Model):
                 "tid_start_address": int(self.tid_addr or 0),
                 "tid_length": int(self.tid_len or 0),
             },
-            "antennas": self._antenna_config_payload(include_identity=False),
+            "ports": [
+                {"port_no": port_no}
+                for port_no in self._runtime_port_numbers()
+            ],
         }
 
     def _build_edge_config_payload(self):
-        """Return Cloud-to-Edge Reader declaration and technical settings."""
         self.ensure_one()
         payload = self._build_config_payload()
         payload.update({
             "technical_code": self.device_code or "",
             "reader_name": self.name or self.serial_number or "RFID Reader",
             "physical_connection": self.connection_type or False,
-            "antennas": self._antenna_config_payload(include_identity=True),
         })
         return payload
 

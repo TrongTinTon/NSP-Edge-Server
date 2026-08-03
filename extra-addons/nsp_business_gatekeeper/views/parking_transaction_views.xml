@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='UTF-8'?>
 <odoo>
     <record id="view_nsp_parking_transaction_search" model="ir.ui.view">
         <field name="name">view.nsp.parking.transaction.search</field>
@@ -9,9 +9,8 @@
                 <field name="controller_id"/>
                 <field name="parking_area_id"/>
                 <field name="lane_id"/>
-                <field name="device_id"/>
-                <field name="antenna_id"/>
-                <field name="vehicle_id"/>
+                <field name="reader_id"/>
+                                <field name="vehicle_id"/>
                 <field name="license_plate"/>
                 <field name="vehicle_tid"/>
                 <field name="user_id"/>
@@ -25,8 +24,7 @@
                 <filter string="Allowed" name="allowed" domain="[('status','=','allowed')]"/>
                 <filter string="Denied" name="denied" domain="[('status','=','denied')]"/>
                 <filter string="Missing Employee Tag" name="missing_employee_tid" domain="[('error_code','=','missing_employee_tid')]"/>
-                <filter string="Authentication Errors" name="auth_errors"
-                        domain="[('error_code','in',['vehicle_not_found','employee_tag_not_assigned','unauthorized_vehicle_user'])]"/>
+                <filter string="Authentication Errors" name="auth_errors" domain="[('error_code','in',['vehicle_not_found','employee_tag_not_assigned','unauthorized_vehicle_user'])]"/>
                 <separator/>
                 <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
                 <filter string="Lane" name="group_lane" context="{'group_by':'lane_id'}"/>
@@ -48,17 +46,13 @@
                 <field name="lane_display" string="Lane"/>
                 <field name="vehicle_display" string="Vehicle"/>
                 <field name="user_id" optional="show"/>
-                <field name="event_type" widget="badge"
-                       decoration-success="event_type == 'check_in'"
-                       decoration-info="event_type == 'check_out'"/>
-                <field name="status" string="Decision" widget="badge"
-                       decoration-success="status == 'allowed'"
-                       decoration-danger="status == 'denied'"/>
+                <field name="event_type" widget="badge" decoration-success="event_type == 'check_in'" decoration-info="event_type == 'check_out'"/>
+                <field name="status" string="Decision" widget="badge" decoration-success="status == 'allowed'" decoration-danger="status == 'denied'"/>
                 <field name="error_code" string="Reason" widget="badge" optional="show"/>
                 <field name="detection_count" optional="show"/>
                 <field name="controller_id" optional="hide"/>
-                <field name="device_id" optional="hide"/>
-                <field name="antenna_no" optional="hide"/>
+                <field name="reader_id" optional="hide"/>
+                <field name="port_no" optional="hide"/>
                 <field name="vehicle_tid" optional="hide"/>
                 <field name="user_tid" optional="hide"/>
                 <field name="transaction_uid" optional="hide"/>
@@ -86,10 +80,9 @@
                             <field name="controller_id"/>
                             <field name="parking_area_id"/>
                             <field name="lane_id"/>
-                            <field name="device_id"/>
-                            <field name="antenna_id"/>
-                            <field name="serial_number"/>
-                            <field name="antenna_no"/>
+                            <field name="reader_id"/>
+                                                        <field name="serial_number"/>
+                            <field name="port_no"/>
                         </group>
                     </group>
                     <group>
@@ -109,9 +102,8 @@
                             <field name="detection_event_ids" readonly="1">
                                 <list create="0" edit="0" delete="0">
                                     <field name="detected_at"/>
-                                    <field name="tag_id"/>
-                                    <field name="antenna_id"/>
-                                </list>
+                                    <field name="reader_id"/><field name="port_no"/><field name="tid"/>
+                                                                    </list>
                             </field>
                         </page>
                     </notebook>

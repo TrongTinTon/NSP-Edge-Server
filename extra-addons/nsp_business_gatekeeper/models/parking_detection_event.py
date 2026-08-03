@@ -15,9 +15,9 @@ _logger = logging.getLogger(__name__)
 class ParkingDetectionEvent(models.Model):
     """Short-lived Edge RFID read used to build final parking transactions.
 
-    Controller reports physical reads only. Edge resolves each Reader/Antenna
-    against the published Lane Antenna Timeline, collapses repeated reads, and
-    matches the resulting timeline against explicit Check-in/Check-out antenna
+    Controller reports physical reads only. Edge resolves each Reader Port
+    against the published Lane Reader Port Timeline, collapses repeated reads,
+    and matches the resulting timeline against explicit Check-in/Check-out
     sequences. Raw detections remain on Edge and never synchronize to Cloud.
     """
 
@@ -39,13 +39,15 @@ class ParkingDetectionEvent(models.Model):
         "nsp.parking.lane", string="Lane", required=True,
         ondelete="restrict", readonly=True, index=True,
     )
-    antenna_id = fields.Many2one(
-        "nsp.device.antenna", string="Antenna", required=True,
+    reader_id = fields.Many2one(
+        "nsp.device", string="Reader", required=True,
         ondelete="restrict", readonly=True, index=True,
     )
-    tag_id = fields.Many2one(
-        "nsp.rfid.tag", string="RFID Tag", required=True,
-        ondelete="restrict", readonly=True, index=True,
+    port_no = fields.Integer(
+        string="Port", required=True, readonly=True, index=True,
+    )
+    tid = fields.Char(
+        string="RFID TID", required=True, readonly=True, index=True,
     )
     user_id = fields.Many2one(
         "nsp.user", string="Resolved User", ondelete="restrict",
@@ -70,6 +72,11 @@ class ParkingDetectionEvent(models.Model):
 
     _sql_constraints = [
         ("event_uid_unique", "unique(event_uid)", "Detection UID must be unique."),
+        (
+            "parking_detection_port_range",
+            "CHECK(port_no >= 1 AND port_no <= 16)",
+            "Reader Port must be between 1 and 16.",
+        ),
     ]
 
     def init(self):
@@ -84,7 +91,7 @@ class ParkingDetectionEvent(models.Model):
             """
             CREATE INDEX IF NOT EXISTS nsp_parking_detection_sequence_idx
                 ON nsp_parking_detection_event
-                   (lane_id, tag_id, antenna_id, detected_at, id)
+                   (lane_id, tid, reader_id, port_no, detected_at, id)
              WHERE state = 'pending' AND transaction_id IS NULL
             """
         )
@@ -126,8 +133,9 @@ class ParkingDetectionEvent(models.Model):
         return {
             "detected_at": detected_at or "",
             "lane_id": int(value("lane_id") or 0),
-            "antenna_id": int(value("antenna_id") or 0),
-            "tag_id": int(value("tag_id") or 0),
+            "reader_id": int(value("reader_id") or 0),
+            "port_no": int(value("port_no") or 0),
+            "tid": str(value("tid") or "").strip(),
             "user_id": int(value("user_id") or 0),
             "vehicle_id": int(value("vehicle_id") or 0),
         }
@@ -160,11 +168,10 @@ class ParkingDetectionEvent(models.Model):
 
     @api.model
     def _resolve_topology_batch(self, controller, detections):
-        """Resolve each Reader port to exactly one active Lane Timeline."""
         keys = {
             (
                 str(payload.get("serial_number") or "").strip().upper(),
-                int(payload.get("antenna_no") or 0),
+                int(payload.get("port_no") or 0),
             )
             for payload, _assignment in detections
         }
@@ -183,55 +190,42 @@ class ParkingDetectionEvent(models.Model):
             str(device.serial_number or "").strip().upper(): device
             for device in devices
         }
-        ports = {port for _serial, port in keys}
-        antennas = self.env["nsp.device.antenna"].sudo().search([
-            ("device_id", "in", devices.ids),
-            ("antenna_no", "in", list(ports)),
-            ("active", "=", True),
-            ("cloud_removed", "=", False),
-        ]) if devices and ports else self.env["nsp.device.antenna"].browse()
-        antenna_by_key = {
-            (
-                str(antenna.device_id.serial_number or "").strip().upper(),
-                int(antenna.antenna_no or 0),
-            ): antenna
-            for antenna in antennas
-        }
-
         timeline_rows = self.env["nsp.parking.lane.timeline"].sudo().search([
             ("lane_id.active", "=", True),
             ("lane_id.parking_area_id.state", "=", "operational"),
-            ("antenna_id", "in", antennas.ids),
-        ]) if antennas else self.env["nsp.parking.lane.timeline"].browse()
-        lane_ids_by_antenna = {}
+            ("reader_id", "in", devices.ids),
+            ("port_no", "in", list({port for _serial, port in keys})),
+        ]) if devices else self.env["nsp.parking.lane.timeline"].browse()
+
+        lanes_by_key = {}
         for row in timeline_rows:
-            lane_ids_by_antenna.setdefault(row.antenna_id.id, set()).add(row.lane_id.id)
+            key = (
+                str(row.reader_id.serial_number or "").strip().upper(),
+                int(row.port_no or 0),
+            )
+            lanes_by_key.setdefault(key, set()).add(row.lane_id.id)
 
         resolved = {}
         errors = {}
         Lane = self.env["nsp.parking.lane"].sudo()
         for key in keys:
-            serial, _port = key
+            serial, port_no = key
             device = device_by_serial.get(serial)
             if not device:
                 errors[key] = "device_not_found"
                 continue
-            antenna = antenna_by_key.get(key)
-            if not antenna:
-                errors[key] = "antenna_not_found"
-                continue
-            lane_ids = lane_ids_by_antenna.get(antenna.id, set())
+            lane_ids = lanes_by_key.get(key, set())
             if not lane_ids:
-                errors[key] = "no_antenna_timeline"
+                errors[key] = "no_reader_port_timeline"
                 continue
             if len(lane_ids) != 1:
-                errors[key] = "ambiguous_antenna_lane"
+                errors[key] = "ambiguous_reader_port_lane"
                 continue
             lane = Lane.browse(next(iter(lane_ids))).exists()
             if not lane or lane.controller_id != controller:
                 errors[key] = "controller_not_in_scope"
                 continue
-            resolved[key] = (antenna, lane)
+            resolved[key] = (device, lane, port_no)
         return resolved, errors
 
     @api.model
@@ -241,11 +235,11 @@ class ParkingDetectionEvent(models.Model):
 
         event_uid = str(payload.get("event_uid") or "").strip()
         serial_number = str(payload.get("serial_number") or "").strip().upper()
-        tid = self.env["nsp.rfid.tag"]._normalize_tid(payload.get("tid"))
+        tid = self.env["nsp.rfid.runtime.assignment"]._normalize_tid(payload.get("tid"))
         try:
-            antenna_no = int(payload.get("antenna_no") or 0)
+            port_no = int(payload.get("port_no") or 0)
         except Exception as exc:
-            raise ValidationError(_("invalid_payload: antenna_no")) from exc
+            raise ValidationError(_("invalid_payload: port_no")) from exc
         try:
             detected_at = fields.Datetime.to_string(
                 fields.Datetime.to_datetime(payload.get("detected_at"))
@@ -257,28 +251,32 @@ class ParkingDetectionEvent(models.Model):
             raise ValidationError(_("missing_event_uid"))
         if not serial_number:
             raise ValidationError(_("serial_number is required"))
-        if antenna_no <= 0:
-            raise ValidationError(_("antenna_no is required"))
+        if port_no < 1 or port_no > 16:
+            raise ValidationError(_("port_no must be between 1 and 16"))
         if not detected_at:
             raise ValidationError(_("detected_at is required"))
         if not tid:
             raise ValidationError(_("tid is required"))
-        if not assignment or assignment.state != "active" or assignment.tid != tid:
+        if not assignment or assignment.tid != tid:
             raise ValidationError(_("rfid_tag_not_actively_assigned"))
         if bool(assignment.user_id) == bool(assignment.vehicle_id):
             raise ValidationError(_("invalid_rfid_assignment"))
+        target = assignment.user_id or assignment.vehicle_id
+        if not target.active:
+            raise ValidationError(_("rfid_assignment_target_inactive"))
 
-        topology = topology_cache.get((serial_number, antenna_no))
+        topology = topology_cache.get((serial_number, port_no))
         if topology is None:
-            raise ValidationError(_("no_antenna_timeline"))
-        antenna, lane = topology
+            raise ValidationError(_("no_reader_port_timeline"))
+        reader, lane, port_no = topology
 
         vals = {
             "event_uid": event_uid,
             "detected_at": detected_at,
             "lane_id": lane.id,
-            "antenna_id": antenna.id,
-            "tag_id": assignment.tag_id.id,
+            "reader_id": reader.id,
+            "port_no": port_no,
+            "tid": tid,
             "user_id": assignment.user_id.id if assignment.user_id else False,
             "vehicle_id": assignment.vehicle_id.id if assignment.vehicle_id else False,
             "state": "pending",
@@ -297,17 +295,17 @@ class ParkingDetectionEvent(models.Model):
         touched_lanes = self.env["nsp.parking.lane"].browse()
         for payload, assignment in detections:
             try:
-                antenna_no = int(payload.get("antenna_no") or 0)
+                port_no = int(payload.get("port_no") or 0)
             except Exception:
-                antenna_no = 0
+                port_no = 0
             topology_key = (
                 str(payload.get("serial_number") or "").strip().upper(),
-                antenna_no,
+                port_no,
             )
             topology_error = topology_errors.get(topology_key)
             if topology_error:
                 _logger.warning(
-                    "Parking detection ignored: controller=%s serial=%s antenna=%s tid=%s reason=%s",
+                    "Parking detection ignored: controller=%s serial=%s port=%s tid=%s reason=%s",
                     controller.controller_id, topology_key[0], topology_key[1],
                     payload.get("tid"), topology_error,
                 )
@@ -322,11 +320,11 @@ class ParkingDetectionEvent(models.Model):
             except ValidationError as exc:
                 _logger.warning(
                     "Parking detection rejected at Edge: controller=%s event_uid=%s "
-                    "serial=%s antenna=%s tid=%s reason=%s",
+                    "serial=%s port=%s tid=%s reason=%s",
                     controller.controller_id,
                     payload.get("event_uid"),
                     payload.get("serial_number"),
-                    payload.get("antenna_no"),
+                    payload.get("port_no"),
                     payload.get("tid"),
                     exc,
                 )
@@ -425,16 +423,9 @@ class ParkingDetectionEvent(models.Model):
         if stale:
             stale.write({"state": "error"})
 
-    @api.model
-    def _assignment_maps(self, events):
-        return (
-            {event.tag_id.id: event.vehicle_id for event in events if event.vehicle_id},
-            {event.tag_id.id: event.user_id for event in events if event.user_id},
-        )
 
     @api.model
     def _build_vehicle_sequence_matches(self, lane):
-        """Match pending Vehicle reads against configured event sequences."""
         if not lane.event_sequence_ids or not lane.timeline_line_ids:
             return []
         vehicle_events = self.search([
@@ -442,15 +433,19 @@ class ParkingDetectionEvent(models.Model):
             ("state", "=", "pending"),
             ("transaction_id", "=", False),
             ("vehicle_id", "!=", False),
-        ], order="tag_id asc, detected_at asc, id asc")
+        ], order="tid asc, detected_at asc, id asc")
         if not vehicle_events:
             return []
 
         timeline = lane.timeline_line_ids.sorted("sequence")
         allowed_by_pair = {}
+        timeline_keys = [
+            (row.reader_id.id, int(row.port_no or 0))
+            for row in timeline
+        ]
         for index in range(1, len(timeline)):
-            source = timeline[index - 1].antenna_id.id
-            target = timeline[index].antenna_id.id
+            source = timeline_keys[index - 1]
+            target = timeline_keys[index]
             allowed_by_pair[frozenset((source, target))] = max(
                 0.001, lane.allowed_duration_for_step(timeline[index].sequence)
             )
@@ -461,33 +456,53 @@ class ParkingDetectionEvent(models.Model):
                 lambda row: row.sequence_type == event_type
             ).sorted("sequence")
             if rows:
-                sequence_specs.append((event_type, rows.mapped("antenna_id").ids))
+                sequence_specs.append((
+                    event_type,
+                    [
+                        (row.reader_id.id, int(row.port_no or 0))
+                        for row in rows
+                    ],
+                ))
 
-        events_by_tag = {}
+        events_by_tid = {}
         for event in vehicle_events:
-            events_by_tag.setdefault(event.tag_id.id, []).append(event)
+            events_by_tid.setdefault(event.tid, []).append(event)
 
         matches = []
-        for tag_id, raw_events in events_by_tag.items():
+        for tid, raw_events in events_by_tid.items():
             collapsed = []
             for event in raw_events:
-                if collapsed and collapsed[-1].antenna_id == event.antenna_id:
-                    continue
+                key = (event.reader_id.id, int(event.port_no or 0))
+                if collapsed:
+                    previous = (
+                        collapsed[-1].reader_id.id,
+                        int(collapsed[-1].port_no or 0),
+                    )
+                    if previous == key:
+                        continue
                 collapsed.append(event)
-            for event_type, expected_ids in sequence_specs:
-                length = len(expected_ids)
+            for event_type, expected_keys in sequence_specs:
+                length = len(expected_keys)
                 if length < 2 or len(collapsed) < length:
                     continue
                 for offset in range(0, len(collapsed) - length + 1):
                     window = collapsed[offset:offset + length]
-                    actual_ids = [event.antenna_id.id for event in window]
-                    if actual_ids != expected_ids:
+                    actual_keys = [
+                        (event.reader_id.id, int(event.port_no or 0))
+                        for event in window
+                    ]
+                    if actual_keys != expected_keys:
                         continue
                     total_allowed = 0.0
                     valid = True
                     for index in range(1, length):
-                        allowed = allowed_by_pair.get(frozenset((actual_ids[index - 1], actual_ids[index])))
-                        gap = (window[index].detected_at - window[index - 1].detected_at).total_seconds()
+                        allowed = allowed_by_pair.get(
+                            frozenset((actual_keys[index - 1], actual_keys[index]))
+                        )
+                        gap = (
+                            window[index].detected_at
+                            - window[index - 1].detected_at
+                        ).total_seconds()
                         if allowed is None or gap < 0 or gap > allowed:
                             valid = False
                             break
@@ -495,14 +510,16 @@ class ParkingDetectionEvent(models.Model):
                     if not valid:
                         continue
                     matches.append({
-                        "tag_id": tag_id,
+                        "tid": tid,
                         "event_type": event_type,
                         "duration_seconds": max(0.001, total_allowed),
                         "start_at": window[0].detected_at,
                         "end_at": window[-1].detected_at,
                         "events": self.browse([event.id for event in window]),
                     })
-        matches.sort(key=lambda item: (item["end_at"], item["start_at"], item["tag_id"]))
+        matches.sort(
+            key=lambda item: (item["end_at"], item["start_at"], item["tid"])
+        )
         return matches
 
     @api.model
@@ -518,19 +535,11 @@ class ParkingDetectionEvent(models.Model):
         if stale:
             stale.write({"state": "error"})
 
-    @api.model
-    def _create_transaction_for_vehicle(
-        self, vehicle_events, event_type, user_event=False,
-        vehicle_by_tag=None, user_by_tag=None,
-    ):
-        group = vehicle_events
-        if event_type == "check_out" and user_event:
-            group |= user_event
+    def _create_transaction_for_vehicle(self, vehicle_events, event_type, user_event=False):
+        group = vehicle_events | user_event if event_type == "check_out" and user_event else vehicle_events
         transaction = self.env["nsp.parking.transaction"].sudo().create_from_detection_group(
             group,
             resolved_event_type=event_type,
-            vehicle_by_tag=vehicle_by_tag,
-            user_by_tag=user_by_tag,
         )
         group.write({"state": "processed", "transaction_id": transaction.id})
         return transaction
@@ -551,19 +560,18 @@ class ParkingDetectionEvent(models.Model):
             for match in matches
             for event in match["events"]
         ])
-        vehicle_by_tag, user_by_tag = self._assignment_maps(vehicle_events | user_events)
         consumed_user_ids = set()
-        blocked_tag_ids = set()
+        blocked_tids = set()
 
         for match in matches:
-            tag_id = match["tag_id"]
+            tid = match["tid"]
             movement_events = match["events"].filtered(
                 lambda rec: rec.state == "pending" and not rec.transaction_id
             )
             if (
                 not movement_events
                 or len(movement_events) != len(match["events"])
-                or tag_id in blocked_tag_ids
+                or tid in blocked_tids
             ):
                 continue
 
@@ -576,7 +584,7 @@ class ParkingDetectionEvent(models.Model):
             vehicle_event = movement_events.filtered(
                 lambda rec: bool(rec.vehicle_id)
             ).sorted(key=lambda rec: (rec.detected_at, rec.id))[-1:]
-            vehicle_tid = vehicle_event.tag_id.tid if vehicle_event else False
+            vehicle_tid = vehicle_event.tid if vehicle_event else False
             recent = self.env["nsp.parking.transaction"].sudo().search([
                 ("lane_id", "=", lane.id),
                 ("event_type", "=", event_type),
@@ -609,7 +617,7 @@ class ParkingDetectionEvent(models.Model):
                     # Keep the vehicle sequence pending until the configured
                     # Duration expires so an owner/active borrower read that
                     # arrives after the vehicle can still authorize Check-out.
-                    blocked_tag_ids.add(tag_id)
+                    blocked_tids.add(tid)
                     continue
 
             try:
@@ -618,8 +626,6 @@ class ParkingDetectionEvent(models.Model):
                         movement_events,
                         event_type,
                         user_event=user_event,
-                        vehicle_by_tag=vehicle_by_tag,
-                        user_by_tag=user_by_tag,
                     )
                     transactions |= transaction
                     if user_event:
