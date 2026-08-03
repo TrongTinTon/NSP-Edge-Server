@@ -76,8 +76,8 @@
     &__legend .is-missing { background: #dc3545; }
     &__legend .is-wrong { background: #7c3aed; }
 
-    &__antenna-bars { display: grid; gap: 13px; }
-    &__antenna-bar > div:last-child { display: flex; justify-content: space-between; margin-top: 5px; font-size: 11px; }
+    &__port-bars { display: grid; gap: 13px; }
+    &__port-bar > div:last-child { display: flex; justify-content: space-between; margin-top: 5px; font-size: 11px; }
     &__bar-track { height: 11px; background: #e9eef4; border-radius: 999px; overflow: hidden; }
     &__bar-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #29a85a, #63c47f); }
 

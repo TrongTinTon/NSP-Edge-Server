@@ -107,19 +107,19 @@ class NspMeasurementSessionValidation(models.Model):
             })
         return rows
 
-    def _port_mapping_for_event(self, event):
+    def _reader_port_for_event(self, event):
         self.ensure_one()
         serial = str(event.serial_number or "").strip().upper()
-        port_no = int(event.antenna_no or 0)
+        port_no = int(event.port_no or 0)
         for reader_line in self.reader_line_ids:
             if str(reader_line.reader_id.serial_number or "").strip().upper() != serial:
                 continue
-            mapping = reader_line.antenna_port_ids.filtered(
-                lambda row: int(row.port_no or 0) == port_no and row.antenna_id
+            reader_port = reader_line.reader_port_ids.filtered(
+                lambda row: int(row.port_no or 0) == port_no
             )[:1]
-            if mapping:
-                return mapping
-        return self.env["nsp.measurement.antenna.port"]
+            if reader_port:
+                return reader_port
+        return self.env["nsp.measurement.reader.port"]
 
     def _collapse_events_to_steps(self, events):
         """Return stable consecutive detection points from raw reads."""
@@ -127,24 +127,29 @@ class NspMeasurementSessionValidation(models.Model):
         result = []
         current = None
         for event in events.sorted(key=lambda item: (_event_seconds(item), item.id)):
-            mapping = self._port_mapping_for_event(event)
-            if not mapping:
+            reader_port = self._reader_port_for_event(event)
+            if not reader_port:
                 continue
-            key = mapping.id
-            if current and current["mapping_id"] == key:
+            key = reader_port.id
+            if current and current["reader_port_id"] == key:
                 current["last_seconds"] = _event_seconds(event)
                 current["last_read_at"] = event.read_at
                 current["last_read_at_ms"] = int(event.read_at_ms or 0)
                 current["read_count"] += 1
                 continue
             current = {
-                "mapping_id": mapping.id,
-                "reader_line_id": mapping.reader_line_id.id,
-                "antenna_id": mapping.antenna_id.id,
-                "antenna_code": mapping.antenna_id.technical_code or mapping.antenna_management_code or "",
-                "reader_id": mapping.reader_line_id.reader_id.id,
-                "reader_serial_number": mapping.reader_line_id.reader_id.serial_number or "",
-                "port_no": int(mapping.port_no or 0),
+                "reader_port_id": reader_port.id,
+                "reader_line_id": reader_port.reader_line_id.id,
+                "reader_id": reader_port.reader_line_id.reader_id.id,
+                "reader_serial_number": reader_port.reader_line_id.reader_id.serial_number or "",
+                "reader_code": reader_port.reader_line_id.reader_id.device_code or "",
+                "port_no": int(reader_port.port_no or 0),
+                "point_key": "%s:%s" % (
+                    reader_port.reader_line_id.reader_id.device_code
+                    or reader_port.reader_line_id.reader_id.serial_number
+                    or reader_port.reader_line_id.reader_id.id,
+                    int(reader_port.port_no or 0),
+                ),
                 "first_seconds": _event_seconds(event),
                 "last_seconds": _event_seconds(event),
                 "first_read_at": event.read_at,
@@ -208,21 +213,21 @@ class NspMeasurementSessionValidation(models.Model):
         ).sorted(key=lambda item: (item.pass_no, item.id))
         if not accepted:
             raise ValidationError(_("Accept at least one complete Run first."))
-        expected_path = accepted[0].step_ids.sorted("sequence").mapped("antenna_port_id").ids
+        expected_path = accepted[0].step_ids.sorted("sequence").mapped("reader_port_id").ids
         if len(expected_path) < 2:
             raise ValidationError(_("An accepted Run must contain at least two detection points."))
         for item in accepted[1:]:
-            actual = item.step_ids.sorted("sequence").mapped("antenna_port_id").ids
+            actual = item.step_ids.sorted("sequence").mapped("reader_port_id").ids
             if actual != expected_path:
                 raise ValidationError(_(
-                    "All accepted Runs must have the same Antenna sequence. "
+                    "All accepted Runs must have the same Reader Port sequence. "
                     "Reject inconsistent Passes or measure again."
                 ))
         values = []
         total_samples = len(accepted)
         cumulative = 0.0
         for position, mapping_id in enumerate(expected_path, start=1):
-            mapping = self.env["nsp.measurement.antenna.port"].browse(mapping_id)
+            mapping = self.env["nsp.measurement.reader.port"].browse(mapping_id)
             durations = []
             read_counts = []
             for item in accepted:
@@ -233,7 +238,7 @@ class NspMeasurementSessionValidation(models.Model):
             cumulative += standard
             values.append((0, 0, {
                 "sequence": position,
-                "antenna_port_id": mapping.id,
+                "reader_port_id": mapping.id,
                 "duration_standard": standard,
                 "duration_min": min(durations) if durations else 0.0,
                 "duration_average": sum(durations) / len(durations) if durations else 0.0,
@@ -383,7 +388,7 @@ class NspMeasurementPass(models.Model):
             for row in steps:
                 commands.append((0, 0, {
                     "sequence": row["sequence"],
-                    "antenna_port_id": row["mapping_id"],
+                    "reader_port_id": row["reader_port_id"],
                     "first_read_at": row["first_read_at"],
                     "first_read_at_ms": row["first_read_at_ms"],
                     "last_read_at": row["last_read_at"],
@@ -391,7 +396,7 @@ class NspMeasurementPass(models.Model):
                     "read_count": row["read_count"],
                     "duration_from_previous": row["duration_from_previous"],
                 }))
-            sequence = " → ".join(row["antenna_code"] or ("Port %s" % row["port_no"]) for row in steps)
+            sequence = " → ".join(row["point_key"] for row in steps)
             record.write({
                 "ended_at": ended_at,
                 "state": "completed",
@@ -439,10 +444,9 @@ class NspMeasurementPassStep(models.Model):
 
     pass_id = fields.Many2one("nsp.measurement.pass", required=True, ondelete="cascade", index=True)
     sequence = fields.Integer(required=True)
-    antenna_port_id = fields.Many2one("nsp.measurement.antenna.port", required=True, ondelete="restrict")
-    antenna_id = fields.Many2one(related="antenna_port_id.antenna_id", store=True, readonly=True)
-    reader_id = fields.Many2one(related="antenna_port_id.reader_line_id.reader_id", store=True, readonly=True)
-    port_no = fields.Integer(related="antenna_port_id.port_no", store=True, readonly=True)
+    reader_port_id = fields.Many2one("nsp.measurement.reader.port", required=True, ondelete="restrict")
+    reader_id = fields.Many2one(related="reader_port_id.reader_line_id.reader_id", store=True, readonly=True)
+    port_no = fields.Integer(related="reader_port_id.port_no", store=True, readonly=True)
     first_read_at = fields.Datetime(required=True)
     first_read_at_ms = fields.Integer(default=0)
     last_read_at = fields.Datetime(required=True)
@@ -454,7 +458,7 @@ class NspMeasurementPassStep(models.Model):
         self.ensure_one()
         return {
             "sequence": self.sequence,
-            "antenna_code": self.antenna_id.technical_code or self.antenna_port_id.antenna_management_code or "",
+            "reader_code": self.reader_id.device_code or "",
             "reader": self.reader_id.serial_number or self.reader_id.display_name or "",
             "port_no": self.port_no,
             "duration_from_previous": round(float(self.duration_from_previous or 0.0), 3),
@@ -493,13 +497,16 @@ class NspMeasurementResult(models.Model):
     total_duration = fields.Float(compute="_compute_total_duration", digits=(8, 3))
     path_display = fields.Char(compute="_compute_total_duration")
 
-    @api.depends("line_ids.duration_standard", "line_ids.antenna_id")
+    @api.depends("line_ids.duration_standard", "line_ids.reader_id", "line_ids.port_no")
     def _compute_total_duration(self):
         for record in self:
             lines = record.line_ids.sorted("sequence")
             record.total_duration = sum(lines.mapped("duration_standard"))
             record.path_display = " → ".join(
-                line.antenna_id.technical_code or line.antenna_port_id.antenna_management_code or "Antenna"
+                "%s:%s" % (
+                    line.reader_id.device_code or line.reader_id.serial_number or line.reader_id.id,
+                    line.port_no,
+                )
                 for line in lines
             )
 
@@ -571,10 +578,9 @@ class NspMeasurementResultLine(models.Model):
 
     result_id = fields.Many2one("nsp.measurement.result", required=True, ondelete="cascade", index=True)
     sequence = fields.Integer(required=True)
-    antenna_port_id = fields.Many2one("nsp.measurement.antenna.port", required=True, ondelete="restrict")
-    antenna_id = fields.Many2one(related="antenna_port_id.antenna_id", store=True, readonly=True)
-    reader_id = fields.Many2one(related="antenna_port_id.reader_line_id.reader_id", store=True, readonly=True)
-    port_no = fields.Integer(related="antenna_port_id.port_no", store=True, readonly=True)
+    reader_port_id = fields.Many2one("nsp.measurement.reader.port", required=True, ondelete="restrict")
+    reader_id = fields.Many2one(related="reader_port_id.reader_line_id.reader_id", store=True, readonly=True)
+    port_no = fields.Integer(related="reader_port_id.port_no", store=True, readonly=True)
     duration_standard = fields.Float(digits=(8, 3), default=0.0)
     duration_min = fields.Float(digits=(8, 3))
     duration_average = fields.Float(digits=(8, 3))
@@ -588,7 +594,7 @@ class NspMeasurementResultLine(models.Model):
         self.ensure_one()
         return {
             "sequence": self.sequence,
-            "antenna_code": self.antenna_id.technical_code or self.antenna_port_id.antenna_management_code or "",
+            "reader_code": self.reader_id.device_code or "",
             "reader": self.reader_id.serial_number or self.reader_id.display_name or "",
             "port_no": self.port_no,
             "duration_standard": round(float(self.duration_standard or 0.0), 3),
@@ -623,10 +629,10 @@ class NspMeasurementValidationRun(models.Model):
     ended_at = fields.Datetime(readonly=True)
     planned_vehicle_count = fields.Integer(string="Vehicles", default=100, required=True)
     minimum_complete_rate = fields.Float(default=98.0, required=True)
-    minimum_antenna_rate = fields.Float(default=98.0, required=True)
+    minimum_port_rate = fields.Float(default=98.0, required=True)
     maximum_wrong_order_rate = fields.Float(default=1.0, required=True)
     vehicle_line_ids = fields.One2many("nsp.measurement.validation.vehicle", "run_id", string="Vehicles")
-    antenna_stat_ids = fields.One2many("nsp.measurement.validation.antenna.stat", "run_id", readonly=True)
+    port_stat_ids = fields.One2many("nsp.measurement.validation.port.stat", "run_id", readonly=True)
     transition_stat_ids = fields.One2many("nsp.measurement.validation.transition.stat", "run_id", readonly=True)
     expected_count = fields.Integer(compute="_compute_counts", store=True)
     complete_count = fields.Integer(compute="_compute_counts", store=True)
@@ -638,15 +644,15 @@ class NspMeasurementValidationRun(models.Model):
     wrong_order_rate = fields.Float(compute="_compute_counts", store=True, digits=(6, 2))
     recommendation = fields.Text(readonly=True)
 
-    @api.constrains("planned_vehicle_count", "minimum_complete_rate", "minimum_antenna_rate", "maximum_wrong_order_rate")
+    @api.constrains("planned_vehicle_count", "minimum_complete_rate", "minimum_port_rate", "maximum_wrong_order_rate")
     def _check_validation_limits(self):
         for run in self:
             if run.planned_vehicle_count <= 0 or run.planned_vehicle_count > 5000:
                 raise ValidationError(_("Vehicles must be between 1 and 5000."))
             if not (0.0 <= run.minimum_complete_rate <= 100.0):
                 raise ValidationError(_("Minimum Complete Rate must be between 0 and 100."))
-            if not (0.0 <= run.minimum_antenna_rate <= 100.0):
-                raise ValidationError(_("Minimum Antenna Rate must be between 0 and 100."))
+            if not (0.0 <= run.minimum_port_rate <= 100.0):
+                raise ValidationError(_("Minimum Reader Port Rate must be between 0 and 100."))
             if not (0.0 <= run.maximum_wrong_order_rate <= 100.0):
                 raise ValidationError(_("Maximum Wrong Order Rate must be between 0 and 100."))
 
@@ -730,17 +736,17 @@ class NspMeasurementValidationRun(models.Model):
             ended_at = fields.Datetime.now()
             run._analyse(ended_at)
             run.write({"ended_at": ended_at})
-            minimum_antenna = min(run.antenna_stat_ids.mapped("detection_rate") or [100.0])
+            minimum_port = min(run.port_stat_ids.mapped("detection_rate") or [100.0])
             passed = (
                 run.complete_rate >= run.minimum_complete_rate
-                and minimum_antenna >= run.minimum_antenna_rate
+                and minimum_port >= run.minimum_port_rate
                 and run.wrong_order_rate <= run.maximum_wrong_order_rate
             )
             recommendations = []
-            for stat in run.antenna_stat_ids.filtered(lambda row: row.detection_rate < run.minimum_antenna_rate):
+            for stat in run.port_stat_ids.filtered(lambda row: row.detection_rate < run.minimum_port_rate):
                 recommendations.append(_(
-                    "%(antenna)s detection rate is %(rate).1f%%. Review Reader power, antenna position, or cable/port mapping."
-                ) % {"antenna": stat.antenna_id.technical_code or stat.antenna_id.display_name, "rate": stat.detection_rate})
+                    "%(port)s detection rate is %(rate).1f%%. Review Reader power, Reader position, or port configuration."
+                ) % {"port": stat.display_name, "rate": stat.detection_rate})
             if run.not_detected_count:
                 recommendations.append(_("Re-test %(count)s Vehicles with no RFID detection.") % {"count": run.not_detected_count})
             if run.incomplete_count:
@@ -764,12 +770,19 @@ class NspMeasurementValidationRun(models.Model):
     def _analyse(self, ended_at):
         self.ensure_one()
         result_lines = self.result_id.line_ids.sorted("sequence")
-        expected_codes = [line.antenna_id.technical_code or "" for line in result_lines]
-        expected_set = set(expected_codes)
+        expected_ids = result_lines.mapped("reader_port_id").ids
+        expected_set = set(expected_ids)
+        labels = {
+            line.reader_port_id.id: "%s:%s" % (
+                line.reader_id.device_code or line.reader_id.serial_number or line.reader_id.id,
+                line.port_no,
+            )
+            for line in result_lines
+        }
         tolerance = float(self.result_id.tolerance_percent or 0.0) / 100.0
         transition_samples = {index: [] for index in range(1, len(result_lines))}
         transition_timeout = {index: 0 for index in range(1, len(result_lines))}
-        antenna_detected = {code: 0 for code in expected_codes}
+        port_detected = {reader_port_id: 0 for reader_port_id in expected_ids}
 
         for vehicle_line in self.vehicle_line_ids:
             events = self.env["nsp.measurement.event"].sudo().search([
@@ -780,15 +793,15 @@ class NspMeasurementValidationRun(models.Model):
                 ("read_at", "<=", ended_at),
             ], order="read_at asc, read_at_ms asc, id asc")
             steps = self.session_id._collapse_events_to_steps(events)
-            actual_codes = [row["antenna_code"] for row in steps]
-            for code in expected_set.intersection(actual_codes):
-                antenna_detected[code] += 1
+            actual_ids = [row["reader_port_id"] for row in steps]
+            for reader_port_id in expected_set.intersection(actual_ids):
+                port_detected[reader_port_id] += 1
             result = "complete"
             error = ""
-            if not actual_codes:
+            if not actual_ids:
                 result = "not_detected"
                 error = _("No Read")
-            elif actual_codes == expected_codes:
+            elif actual_ids == expected_ids:
                 timed_out = False
                 for index in range(1, len(result_lines)):
                     actual_duration = float(steps[index]["duration_from_previous"] or 0.0)
@@ -801,45 +814,52 @@ class NspMeasurementValidationRun(models.Model):
                 if timed_out:
                     result = "transition_timeout"
                     error = _("Transition exceeded calibrated time tolerance")
-            elif set(actual_codes) == expected_set:
+            elif set(actual_ids) == expected_set:
                 result = "wrong_order"
                 error = _("Sequence Mismatch")
             else:
                 result = "incomplete"
-                missing = [code for code in expected_codes if code not in actual_codes]
+                missing = [labels[item] for item in expected_ids if item not in actual_ids]
                 error = _("Missing: %s") % ", ".join(missing)
             total_duration = sum(float(row["duration_from_previous"] or 0.0) for row in steps)
+            actual_labels = {
+                row["reader_port_id"]: row["point_key"]
+                for row in steps
+            }
             vehicle_line.write({
                 "result": result,
-                "detected_sequence": " → ".join(actual_codes),
+                "detected_sequence": " → ".join(
+                    labels.get(item) or actual_labels.get(item) or str(item)
+                    for item in actual_ids
+                ),
                 "missing_or_error": error,
                 "total_duration": total_duration,
                 "detected_at": steps[0]["first_read_at"] if steps else False,
                 "actual_timeline_json": json.dumps(steps, default=str, ensure_ascii=False),
             })
 
-        self.antenna_stat_ids.unlink()
+        self.port_stat_ids.unlink()
         expected_count = len(self.vehicle_line_ids)
-        antenna_commands = []
+        port_commands = []
         for result_line in result_lines:
-            code = result_line.antenna_id.technical_code or ""
-            detected = int(antenna_detected.get(code, 0))
-            antenna_commands.append((0, 0, {
-                "antenna_id": result_line.antenna_id.id,
+            reader_port_id = result_line.reader_port_id.id
+            detected = int(port_detected.get(reader_port_id, 0))
+            port_commands.append((0, 0, {
+                "reader_port_id": reader_port_id,
                 "expected_count": expected_count,
                 "detected_count": detected,
                 "missed_count": max(0, expected_count - detected),
                 "detection_rate": (detected * 100.0 / expected_count) if expected_count else 0.0,
             }))
-        self.write({"antenna_stat_ids": antenna_commands})
+        self.write({"port_stat_ids": port_commands})
 
         self.transition_stat_ids.unlink()
         transition_commands = []
         for index in range(1, len(result_lines)):
             values = transition_samples[index]
             transition_commands.append((0, 0, {
-                "from_antenna_id": result_lines[index - 1].antenna_id.id,
-                "to_antenna_id": result_lines[index].antenna_id.id,
+                "from_reader_port_id": result_lines[index - 1].reader_port_id.id,
+                "to_reader_port_id": result_lines[index].reader_port_id.id,
                 "sample_count": len(values),
                 "duration_min": min(values) if values else 0.0,
                 "duration_median": median(values) if values else 0.0,
@@ -875,7 +895,7 @@ class NspMeasurementValidationRun(models.Model):
             "name": new_management_code("VAL"),
             "test_mode": self.test_mode,
             "minimum_complete_rate": self.minimum_complete_rate,
-            "minimum_antenna_rate": self.minimum_antenna_rate,
+            "minimum_port_rate": self.minimum_port_rate,
             "maximum_wrong_order_rate": self.maximum_wrong_order_rate,
             "planned_vehicle_count": len(lines),
             "vehicle_line_ids": [(0, 0, {
@@ -919,13 +939,13 @@ class NspMeasurementValidationRun(models.Model):
             "timeout_count": self.timeout_count,
             "wrong_order_rate": round(self.wrong_order_rate, 2),
             "minimum_complete_rate": self.minimum_complete_rate,
-            "minimum_antenna_rate": self.minimum_antenna_rate,
+            "minimum_port_rate": self.minimum_port_rate,
             "maximum_wrong_order_rate": self.maximum_wrong_order_rate,
             "recommendation": self.recommendation or "",
             "vehicles": [line._workspace_payload() for line in self.vehicle_line_ids.sorted(
                 key=lambda row: (row.license_plate or "", row.id)
             )],
-            "antenna_stats": [line._workspace_payload() for line in self.antenna_stat_ids],
+            "port_stats": [line._workspace_payload() for line in self.port_stat_ids],
             "transition_stats": [line._workspace_payload() for line in self.transition_stat_ids],
         }
 
@@ -994,22 +1014,36 @@ class NspMeasurementValidationVehicle(models.Model):
         }
 
 
-class NspMeasurementValidationAntennaStat(models.Model):
-    _name = "nsp.measurement.validation.antenna.stat"
-    _description = "NSP Validation Antenna Statistics"
+class NspMeasurementValidationPortStat(models.Model):
+    _name = "nsp.measurement.validation.port.stat"
+    _description = "NSP Validation Reader Port Statistics"
     _order = "run_id, id"
+    _rec_name = "display_name"
 
     run_id = fields.Many2one("nsp.measurement.validation.run", required=True, ondelete="cascade", index=True)
-    antenna_id = fields.Many2one("nsp.device.antenna", required=True, ondelete="restrict")
+    reader_port_id = fields.Many2one("nsp.measurement.reader.port", required=True, ondelete="restrict")
+    reader_id = fields.Many2one(related="reader_port_id.reader_line_id.reader_id", store=True, readonly=True)
+    port_no = fields.Integer(related="reader_port_id.port_no", store=True, readonly=True)
+    display_name = fields.Char(compute="_compute_display_name")
     expected_count = fields.Integer()
     detected_count = fields.Integer()
     missed_count = fields.Integer()
     detection_rate = fields.Float(digits=(6, 2))
 
+    @api.depends("reader_id", "port_no")
+    def _compute_display_name(self):
+        for record in self:
+            record.display_name = "%s:%s" % (
+                record.reader_id.device_code or record.reader_id.serial_number or record.reader_id.id,
+                record.port_no,
+            )
+
     def _workspace_payload(self):
         self.ensure_one()
         return {
-            "antenna_code": self.antenna_id.technical_code or self.antenna_id.display_name or "",
+            "reader_code": self.reader_id.device_code or "",
+            "reader_serial_number": self.reader_id.serial_number or "",
+            "port_no": self.port_no,
             "expected_count": self.expected_count,
             "detected_count": self.detected_count,
             "missed_count": self.missed_count,
@@ -1023,8 +1057,8 @@ class NspMeasurementValidationTransitionStat(models.Model):
     _order = "run_id, id"
 
     run_id = fields.Many2one("nsp.measurement.validation.run", required=True, ondelete="cascade", index=True)
-    from_antenna_id = fields.Many2one("nsp.device.antenna", required=True, ondelete="restrict")
-    to_antenna_id = fields.Many2one("nsp.device.antenna", required=True, ondelete="restrict")
+    from_reader_port_id = fields.Many2one("nsp.measurement.reader.port", required=True, ondelete="restrict")
+    to_reader_port_id = fields.Many2one("nsp.measurement.reader.port", required=True, ondelete="restrict")
     sample_count = fields.Integer()
     duration_min = fields.Float(digits=(8, 3))
     duration_median = fields.Float(digits=(8, 3))
@@ -1035,10 +1069,14 @@ class NspMeasurementValidationTransitionStat(models.Model):
 
     def _workspace_payload(self):
         self.ensure_one()
+        source_reader = self.from_reader_port_id.reader_line_id.reader_id
+        target_reader = self.to_reader_port_id.reader_line_id.reader_id
         return {
-            "transition": "%s → %s" % (
-                self.from_antenna_id.technical_code or self.from_antenna_id.display_name,
-                self.to_antenna_id.technical_code or self.to_antenna_id.display_name,
+            "transition": "%s:%s → %s:%s" % (
+                source_reader.device_code or source_reader.serial_number or source_reader.id,
+                self.from_reader_port_id.port_no,
+                target_reader.device_code or target_reader.serial_number or target_reader.id,
+                self.to_reader_port_id.port_no,
             ),
             "sample_count": self.sample_count,
             "duration_min": round(float(self.duration_min or 0.0), 3),

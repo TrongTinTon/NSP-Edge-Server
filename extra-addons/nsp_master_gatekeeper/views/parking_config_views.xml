@@ -166,7 +166,6 @@
                             <field name="timeline_line_ids" readonly="1" nolabel="1">
                                 <list create="0" edit="0" delete="0">
                                     <field name="sequence" string="#"/>
-                                    <field name="antenna_id" string="Antenna"/>
                                     <field name="reader_id" string="Reader"/>
                                     <field name="port_no" string="Port"/>
                                     <field name="duration_from_previous" string="Interval (s)"/>
@@ -183,11 +182,11 @@
                                             <control><create string="Add"/></control>
                                             <field name="sequence" string="#"/>
                                             <field name="sequence_type" column_invisible="1"/>
-                                            <field name="available_antenna_ids" column_invisible="1"/>
-                                            <field name="antenna_id" string="Antenna"
-                                                   domain="[('id','in',available_antenna_ids)]"
-                                                   context="{'list_view_ref': 'nsp_master_gatekeeper.view_nsp_device_antenna_identity_list', 'search_view_ref': 'nsp_master_gatekeeper.view_nsp_device_antenna_identity_search'}"
+                                            <field name="available_reader_ids" column_invisible="1"/>
+                                            <field name="reader_id" string="Reader"
+                                                   domain="[('id','in',available_reader_ids)]"
                                                    options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                                            <field name="port_no" string="Port"/>
                                         </list>
                                     </field>
                                 </group>
@@ -198,11 +197,11 @@
                                             <control><create string="Add"/></control>
                                             <field name="sequence" string="#"/>
                                             <field name="sequence_type" column_invisible="1"/>
-                                            <field name="available_antenna_ids" column_invisible="1"/>
-                                            <field name="antenna_id" string="Antenna"
-                                                   domain="[('id','in',available_antenna_ids)]"
-                                                   context="{'list_view_ref': 'nsp_master_gatekeeper.view_nsp_device_antenna_identity_list', 'search_view_ref': 'nsp_master_gatekeeper.view_nsp_device_antenna_identity_search'}"
+                                            <field name="available_reader_ids" column_invisible="1"/>
+                                            <field name="reader_id" string="Reader"
+                                                   domain="[('id','in',available_reader_ids)]"
                                                    options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                                            <field name="port_no" string="Port"/>
                                         </list>
                                     </field>
                                 </group>

@@ -36,7 +36,7 @@ export class NspMeasurementLive extends Component {
             steps: [],
             rawEventCount: 0,
             detectionCount: 0,
-            uniqueAntennas: 0,
+            uniqueReaderPorts: 0,
             uniqueReaders: 0,
             uniqueControllers: 0,
             serverTime: null,
@@ -138,7 +138,7 @@ export class NspMeasurementLive extends Component {
             this.state.steps = data.steps || [];
             this.state.rawEventCount = Number(data.raw_event_count || 0);
             this.state.detectionCount = Number(data.detection_count || 0);
-            this.state.uniqueAntennas = Number(data.unique_antennas || 0);
+            this.state.uniqueReaderPorts = Number(data.unique_reader_ports || 0);
             this.state.uniqueReaders = Number(data.unique_readers || 0);
             this.state.uniqueControllers = Number(data.unique_controllers || 0);
             this.state.serverTime = data.server_time || null;
@@ -266,9 +266,9 @@ export class NspMeasurementLive extends Component {
         return this.state.steps.length ? this.state.steps[this.state.steps.length - 1] : null;
     }
 
-    antennaList(reader) {
-        const values = reader?.antennas || [];
-        return values.length ? values.map((value) => `ANT${value}`).join(", ") : "-";
+    portList(reader) {
+        const values = reader?.ports || [];
+        return values.length ? values.map((value) => `P${value}`).join(", ") : "-";
     }
 
     controllerCodes() {
@@ -366,7 +366,7 @@ export class NspMeasurementLive extends Component {
     exportCsv() {
         const rows = [[
             "#", "First Detected", "RFID Tag", "Assigned To", "Controller",
-            "Reader", "Antenna", "Reads", "Last Detected", "Duration ms",
+            "Reader", "Port", "Reads", "Last Detected", "Duration ms",
         ]];
         for (const step of this.state.steps) {
             const first = this.parseDate(step.first_seen_at);
@@ -378,7 +378,7 @@ export class NspMeasurementLive extends Component {
                 step.assigned_to || "",
                 step.controller_code || "",
                 step.reader_name || step.serial_number || "",
-                step.antenna_no,
+                step.port_no,
                 step.read_count,
                 step.last_seen_at || "",
                 first && last ? Math.max(0, last.getTime() - first.getTime()) : "",

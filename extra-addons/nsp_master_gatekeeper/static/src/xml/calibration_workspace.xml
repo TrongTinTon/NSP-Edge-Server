@@ -86,13 +86,13 @@
                             </div>
                         </div>
                         <div class="nsp-cw-card nsp-cw-card--wide">
-                            <h4>Antennas</h4>
-                            <div class="nsp-cw__antenna-bars">
-                                <div t-foreach="activeRun().antenna_stats || []" t-as="stat" t-key="stat.antenna_code" class="nsp-cw__antenna-bar">
-                                    <div class="nsp-cw__bar-track"><span t-att-style="'width:' + antennaWidth(stat)"/></div>
-                                    <div><strong t-esc="stat.antenna_code"/><span><t t-esc="formatNumber(stat.detection_rate, 1)"/>%</span></div>
+                            <h4>Reader Ports</h4>
+                            <div class="nsp-cw__port-bars">
+                                <div t-foreach="activeRun().port_stats || []" t-as="stat" t-key="(stat.reader_code || stat.reader_serial_number) + '-' + stat.port_no" class="nsp-cw__port-bar">
+                                    <div class="nsp-cw__bar-track"><span t-att-style="'width:' + portWidth(stat)"/></div>
+                                    <div><strong><t t-esc="stat.reader_code || stat.reader_serial_number"/>:<t t-esc="stat.port_no"/></strong><span><t t-esc="formatNumber(stat.detection_rate, 1)"/>%</span></div>
                                 </div>
-                                <div t-if="!activeRun().antenna_stats?.length" class="nsp-cw__empty">Complete validation to calculate antenna statistics.</div>
+                                <div t-if="!activeRun().port_stats?.length" class="nsp-cw__empty">Complete validation to calculate Reader Port statistics.</div>
                             </div>
                         </div>
                     </div>
@@ -179,9 +179,9 @@
                     </div>
                     <div class="nsp-cw__table-wrap">
                         <table class="table nsp-cw__table">
-                            <thead><tr><th>Order</th><th>Antenna</th><th>Reader</th><th>Port</th><th>Duration</th><th>Samples</th><th>P95</th><th>Cumulative</th></tr></thead>
+                            <thead><tr><th>Order</th><th>Reader</th><th>Port</th><th>Duration</th><th>Samples</th><th>P95</th><th>Cumulative</th></tr></thead>
                             <tbody><tr t-foreach="currentResult().lines || []" t-as="line" t-key="line.sequence">
-                                <td><span class="nsp-cw__order" t-esc="line.sequence"/></td><td><strong t-esc="line.antenna_code"/></td>
+                                <td><span class="nsp-cw__order" t-esc="line.sequence"/></td>
                                 <td class="nsp-cw__mono" t-esc="line.reader"/><td t-esc="line.port_no"/>
                                 <td><t t-esc="formatNumber(line.duration_standard, 3)"/> s</td><td><t t-esc="line.sample_count"/> Runs</td>
                                 <td><t t-esc="formatNumber(line.duration_p95, 3)"/> s</td><td><t t-esc="formatNumber(line.cumulative_time, 3)"/> s</td>

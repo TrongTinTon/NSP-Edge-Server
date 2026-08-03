@@ -259,7 +259,7 @@ export class NspCalibrationWorkspace extends Component {
 
 
 
-    antennaWidth(stat) {
+    portWidth(stat) {
         return `${Math.max(0, Math.min(100, Number(stat?.detection_rate || 0)))}%`;
     }
 

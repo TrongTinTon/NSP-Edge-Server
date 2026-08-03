@@ -65,7 +65,7 @@
                                     <field name="edge_server_id" string="Server"/>
                                     <field name="controller_id" string="Controller"/>
                                     <field name="reader_id" string="Reader"/>
-                                    <field name="antenna_count" string="Antennas" readonly="1"/>
+                                    <field name="port_count" string="Ports" readonly="1"/>
                                     <field name="reader_power_dbm" string="Power"/>
                                     <field name="read_interval_ms" string="Interval"/>
                                     <field name="reader_status" string="State" readonly="1" widget="badge" optional="hide"/>
@@ -131,16 +131,12 @@
                             <field name="reader_tid_len" string="TID Length"/>
                         </group>
                     </group>
-                    <separator string="Antennas"/>
-                    <field name="antenna_port_ids" nolabel="1" context="{'default_reader_line_id': id}">
+                    <separator string="Reader Ports"/>
+                    <field name="reader_port_ids" nolabel="1" context="{'default_reader_line_id': id}">
                         <list editable="bottom" create="1" delete="1" open_form_view="0">
-                            <control><create string="Add Antenna"/></control>
+                            <control><create string="Add Port"/></control>
                             <field name="reader_line_id" column_invisible="1"/>
                             <field name="port_no" string="Port" decoration-bf="1"/>
-                            <field name="available_antenna_ids" column_invisible="1"/>
-                            <field name="antenna_id" string="Antenna" domain="[('id','in',available_antenna_ids)]"
-                                   context="{'list_view_ref': 'nsp_master_gatekeeper.view_nsp_device_antenna_identity_list', 'search_view_ref': 'nsp_master_gatekeeper.view_nsp_device_antenna_identity_search'}"
-                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                         </list>
                     </field>
                 </sheet>
@@ -157,13 +153,13 @@
                 <field name="session_id"/>
                 <field name="revision"/>
                 <field name="serial_number"/>
-                <field name="antenna_no"/>
+                <field name="port_no"/>
                 <field name="tid"/>
                 <filter string="Session" name="group_session" context="{'group_by':'session_id'}"/>
                 <filter string="Revision" name="group_revision" context="{'group_by':'revision'}"/>
                 <filter string="RFID Tag" name="group_tid" context="{'group_by':'tid'}"/>
                 <filter string="Reader" name="group_reader" context="{'group_by':'serial_number'}"/>
-                <filter string="Antenna" name="group_antenna" context="{'group_by':'antenna_no'}"/>
+                <filter string="Port" name="group_port" context="{'group_by':'port_no'}"/>
             </search>
         </field>
     </record>
@@ -178,7 +174,7 @@
                 <field name="revision"/>
                 <field name="tid"/>
                 <field name="serial_number"/>
-                <field name="antenna_no"/>
+                <field name="port_no"/>
                 <field name="power_dbm" optional="hide"/>
                 <field name="read_interval_ms" optional="hide"/>
                 <field name="rssi_dbm" optional="hide"/>
@@ -199,7 +195,7 @@
                         <field name="revision"/>
                         <field name="tid"/>
                         <field name="serial_number"/>
-                        <field name="antenna_no"/>
+                        <field name="port_no"/>
                         <field name="read_at"/>
                         <field name="power_dbm"/>
                         <field name="read_interval_ms"/>
@@ -257,7 +253,6 @@
                     <field name="line_ids" readonly="state != 'draft'">
                         <list editable="bottom" create="0" delete="0">
                             <field name="sequence"/>
-                            <field name="antenna_id"/>
                             <field name="reader_id"/>
                             <field name="port_no"/>
                             <field name="duration_standard"/>
@@ -302,7 +297,7 @@
                         </group>
                         <group string="Criteria">
                             <field name="minimum_complete_rate"/>
-                            <field name="minimum_antenna_rate"/>
+                            <field name="minimum_port_rate"/>
                             <field name="maximum_wrong_order_rate"/>
                             <field name="complete_rate" readonly="1"/>
                         </group>
@@ -324,10 +319,11 @@
                                 </list>
                             </field>
                         </page>
-                        <page string="Antennas">
-                            <field name="antenna_stat_ids" readonly="1">
+                        <page string="Reader Ports">
+                            <field name="port_stat_ids" readonly="1">
                                 <list create="0" delete="0">
-                                    <field name="antenna_id"/>
+                                    <field name="reader_id"/>
+                                    <field name="port_no"/>
                                     <field name="expected_count"/>
                                     <field name="detected_count"/>
                                     <field name="missed_count"/>
@@ -338,8 +334,8 @@
                         <page string="Durations">
                             <field name="transition_stat_ids" readonly="1">
                                 <list create="0" delete="0">
-                                    <field name="from_antenna_id"/>
-                                    <field name="to_antenna_id"/>
+                                    <field name="from_reader_port_id"/>
+                                    <field name="to_reader_port_id"/>
                                     <field name="sample_count"/>
                                     <field name="duration_min"/>
                                     <field name="duration_median"/>

@@ -291,14 +291,6 @@ class NspMeasurementSession(models.Model):
                 raise ValidationError(_(
                     "All Reader assemblies in one calibration must use the same Server."
                 ))
-            seen_antennas = set()
-            for reader_line in session.reader_line_ids:
-                for antenna in reader_line.antenna_port_ids.mapped("antenna_id"):
-                    if antenna.id in seen_antennas:
-                        raise ValidationError(_(
-                            "An Antenna can be assembled only once in the same Lane Calibration."
-                        ))
-                    seen_antennas.add(antenna.id)
         return True
 
     def _require_ready_configuration(self):
@@ -310,12 +302,10 @@ class NspMeasurementSession(models.Model):
             missing.append(_("Readers"))
         if missing:
             raise ValidationError(_("Missing Lane Calibration configuration: %s") % ", ".join(missing))
-        missing_antennas = self.reader_line_ids.filtered(
-            lambda line: not line.antenna_port_ids.filtered("antenna_id")
-        )
-        if missing_antennas:
-            names = ", ".join(missing_antennas.mapped("reader_id.display_name"))
-            raise ValidationError(_("Select at least one Antenna for each Measurement Reader. Missing: %s") % names)
+        missing_ports = self.reader_line_ids.filtered(lambda line: not line.reader_port_ids)
+        if missing_ports:
+            names = ", ".join(missing_ports.mapped("reader_id.display_name"))
+            raise ValidationError(_("Select at least one Reader Port for each RFID Reader. Missing: %s") % names)
         self._validate_measurement_scope()
 
     def _allowed_target_tids(self):
@@ -327,12 +317,12 @@ class NspMeasurementSession(models.Model):
             if tid
         }
 
-    def _allowed_antenna_pairs(self):
+    def _allowed_reader_port_pairs(self):
         self.ensure_one()
         return {
             ((line.reader_id.serial_number or "").strip().upper(), int(mapping.port_no or 0))
             for line in self.reader_line_ids
-            for mapping in line.antenna_port_ids.filtered("antenna_id")
+            for mapping in line.reader_port_ids
         }
 
     def _measurement_line_for_serial(self, serial_number):
@@ -670,7 +660,7 @@ class NspMeasurementSession(models.Model):
                 "reader_power_dbm": int(line.reader_power_dbm or 0),
                 "read_interval_ms": int(line.read_interval_ms or 0),
                 "firmware_version": reader.firmware_version or "",
-                "antennas": sorted(line.antenna_port_ids.mapped("port_no")),
+                "ports": sorted(line.reader_port_ids.mapped("port_no")),
             })
         return {
             "found": True,
@@ -694,7 +684,7 @@ class NspMeasurementSession(models.Model):
             "applied_at": fields.Datetime.to_string(session.applied_at) if session.applied_at else None,
             "raw_event_count": int(session.event_count or 0),
             "detection_count": len(steps),
-            "unique_antennas": len({(step["serial_number"], step["antenna_no"]) for step in steps}),
+            "unique_reader_ports": len({(step["serial_number"], step["port_no"]) for step in steps}),
             "unique_readers": len({step["serial_number"] for step in steps}),
             "unique_controllers": len({step["controller_code"] for step in steps}),
             "first_detection": steps[0] if steps else False,
@@ -712,7 +702,7 @@ class NspMeasurementSession(models.Model):
         return "%s.%03dZ" % (base, int(event.read_at_ms or 0))
 
     def _build_detection_steps(self, events):
-        """Collapse consecutive reads for the same target/Reader/Antenna."""
+        """Collapse consecutive reads for the same target and Reader Port."""
         self.ensure_one()
         lines = {
             (line.reader_id.serial_number or "").strip().upper(): line
@@ -731,7 +721,7 @@ class NspMeasurementSession(models.Model):
         steps = []
         current = None
         for event in events:
-            key = (event.tid, event.serial_number, int(event.antenna_no or 0))
+            key = (event.tid, event.serial_number, int(event.port_no or 0))
             if current and current["_key"] == key:
                 current["last_seen_at"] = self._event_timestamp(event)
                 current["read_count"] += 1
@@ -754,7 +744,7 @@ class NspMeasurementSession(models.Model):
                 "controller_code": controller.controller_id if controller else "",
                 "serial_number": event.serial_number,
                 "reader_name": line.reader_id.name if line else event.serial_number,
-                "antenna_no": int(event.antenna_no or 0),
+                "port_no": int(event.port_no or 0),
                 "read_count": 1,
             }
         if current:
@@ -764,24 +754,24 @@ class NspMeasurementSession(models.Model):
             step["sequence_no"] = index
         return steps
 
-    def _antenna_summary(self):
+    def _port_summary(self):
         self.ensure_one()
         rows = self.env["nsp.measurement.event"].sudo()._read_group(
             [("session_id", "=", self.id), ("revision", "=", self.revision)],
-            ["tid", "serial_number", "antenna_no"],
+            ["tid", "serial_number", "port_no"],
             ["__count", "read_at:min", "read_at:max"],
-            order="tid, serial_number, antenna_no",
+            order="tid, serial_number, port_no",
         )
         return [
             {
                 "tid": tid,
                 "serial_number": serial_number,
-                "antenna_no": int(antenna_no or 0),
+                "port_no": int(port_no or 0),
                 "read_count": int(count or 0),
                 "first_read_at": first_read,
                 "last_read_at": last_read,
             }
-            for tid, serial_number, antenna_no, count, first_read, last_read in rows
+            for tid, serial_number, port_no, count, first_read, last_read in rows
         ]
 
     @api.model
@@ -1089,9 +1079,7 @@ class NspMeasurementTargetLine(models.Model):
 class NspMeasurementReaderLine(models.Model):
     """Contextual hardware assembly for one Lane Calibration.
 
-    Server, Controller, RFID Reader and Antenna identities remain independent in
-    Device Whitelist. This line stores only how they are assembled for this
-    calibration session.
+    This line stores the Server, Controller, RFID Reader and Reader Ports used by the calibration session.
     """
 
     _name = "nsp.measurement.reader.line"
@@ -1136,15 +1124,11 @@ class NspMeasurementReaderLine(models.Model):
         string="Read Interval ms", default=200, required=True,
         help="Temporary inventory interval applied during this calibration.",
     )
-    antenna_port_ids = fields.One2many(
-        "nsp.measurement.antenna.port", "reader_line_id",
-        string="Antenna Port Mapping", copy=True,
+    reader_port_ids = fields.One2many(
+        "nsp.measurement.reader.port", "reader_line_id",
+        string="Reader Ports", copy=True,
     )
-    antenna_ids = fields.Many2many(
-        "nsp.device.antenna", string="Antennas",
-        compute="_compute_antenna_scope", readonly=True,
-    )
-    antenna_count = fields.Integer(compute="_compute_antenna_scope")
+    port_count = fields.Integer(compute="_compute_port_count")
 
     available_edge_server_ids = fields.Many2many(
         "nsp.edge.server", compute="_compute_available_devices", readonly=True,
@@ -1190,14 +1174,10 @@ class NspMeasurementReaderLine(models.Model):
             "Read Interval must be between 1 and 60000 ms.",
         ),
     ]
-
-    @api.depends("antenna_port_ids.antenna_id")
-    def _compute_antenna_scope(self):
-        Antenna = self.env["nsp.device.antenna"]
+    @api.depends("reader_port_ids")
+    def _compute_port_count(self):
         for line in self:
-            antennas = line.antenna_port_ids.mapped("antenna_id")
-            line.antenna_ids = antennas if antennas else Antenna.browse()
-            line.antenna_count = len(antennas)
+            line.port_count = len(line.reader_port_ids)
 
     @api.model
     def _active_whitelisted(self, model_name, type_code):
@@ -1248,11 +1228,10 @@ class NspMeasurementReaderLine(models.Model):
                 raise ValidationError(_("TID Start Address (Words) cannot be negative."))
             if line.reader_tid_len <= 0:
                 raise ValidationError(_("TID Length (Words) must be greater than zero."))
-            selected = line.antenna_port_ids.filtered("antenna_id")
-            if not selected:
-                raise ValidationError(_("Select at least one Antenna Port Mapping for every RFID Reader."))
-            for mapping in selected:
-                mapping._validate_mapping()
+            if not line.reader_port_ids:
+                raise ValidationError(_("Select at least one Reader Port for every RFID Reader."))
+            for port in line.reader_port_ids:
+                port._validate_port()
         return True
 
     @api.model_create_multi
@@ -1323,18 +1302,16 @@ class NspMeasurementReaderLine(models.Model):
             )
 
     @api.constrains(
-        "edge_server_id", "controller_id", "reader_id", "antenna_port_ids",
+        "edge_server_id", "controller_id", "reader_id", "reader_port_ids",
         "reader_power_dbm", "read_interval_ms", "session_id",
     )
     def _check_line_scope(self):
         self._validate_line_scope()
 
 
-class NspMeasurementAntennaPort(models.Model):
-    """One physical Reader port mapped to one independent Antenna identity."""
-
-    _name = "nsp.measurement.antenna.port"
-    _description = "NSP Measurement Antenna Port Mapping"
+class NspMeasurementReaderPort(models.Model):
+    _name = "nsp.measurement.reader.port"
+    _description = "NSP Measurement Reader Port"
     _order = "reader_line_id, port_no, id"
     _rec_name = "display_name"
 
@@ -1346,28 +1323,21 @@ class NspMeasurementAntennaPort(models.Model):
         related="reader_line_id.session_id", store=True, readonly=True, index=True,
     )
     port_no = fields.Integer(
-        string="No.", index=True,
-        help="Physical RFID Reader antenna port number. Allowed range: 1 to 16.",
-    )
-    antenna_id = fields.Many2one(
-        "nsp.device.antenna", string="Antenna",
-        ondelete="restrict", index=True,
-    )
-    available_antenna_ids = fields.Many2many(
-        "nsp.device.antenna", compute="_compute_available_antennas", readonly=True,
+        string="Port", required=True, index=True,
+        help="Physical RFID Reader port number. Allowed range: 1 to 16.",
     )
     display_name = fields.Char(compute="_compute_display_name")
-    antenna_management_code = fields.Char(
-        related="antenna_id.whitelist_id.technical_code",
-        string="Management Code", readonly=True,
-    )
-    antenna_serial_number = fields.Char(
-        related="antenna_id.whitelist_id.serial_number",
-        string="Serial Number", readonly=True,
-    )
-    antenna_photo = fields.Image(
-        related="antenna_id.whitelist_id.image_128", string="Photo", readonly=True,
-    )
+
+    _sql_constraints = [
+        (
+            "measurement_reader_port_unique", "unique(reader_line_id, port_no)",
+            "Reader Port must be unique per RFID Reader.",
+        ),
+        (
+            "measurement_reader_port_range", "CHECK(port_no >= 1 AND port_no <= 16)",
+            "Reader Port must be an integer from 1 to 16.",
+        ),
+    ]
 
     @api.model
     def default_get(self, fields_list):
@@ -1379,37 +1349,9 @@ class NspMeasurementAntennaPort(models.Model):
                     int(reader_line_id)
                 ).exists()
                 if reader_line:
-                    next_port = max(
-                        reader_line.antenna_port_ids.mapped("port_no") or [0]
-                    ) + 1
+                    next_port = max(reader_line.reader_port_ids.mapped("port_no") or [0]) + 1
                     values["port_no"] = next_port if next_port <= 16 else False
         return values
-
-    _sql_constraints = [
-        (
-            "measurement_port_unique", "unique(reader_line_id, port_no)",
-            "Antenna Port No. must be unique per RFID Reader assembly.",
-        ),
-        (
-            "measurement_antenna_unique", "unique(reader_line_id, antenna_id)",
-            "The same Antenna can be mapped only once per RFID Reader assembly.",
-        ),
-        (
-            "measurement_port_range", "CHECK(port_no >= 1 AND port_no <= 16)",
-            "Antenna Port No. must be an integer from 1 to 16.",
-        ),
-    ]
-
-    @api.onchange("antenna_id", "reader_line_id")
-    def _onchange_assign_next_port_no(self):
-        for record in self:
-            if record.port_no or not record.antenna_id:
-                continue
-            siblings = record.reader_line_id.antenna_port_ids.filtered(
-                lambda row: row != record and row.port_no
-            )
-            next_port = max(siblings.mapped("port_no") or [0]) + 1
-            record.port_no = next_port if next_port <= 16 else False
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -1417,9 +1359,8 @@ class NspMeasurementAntennaPort(models.Model):
         prepared = []
         for source in vals_list:
             values = dict(source)
-            reader_line_id = values.get("reader_line_id")
+            reader_line_id = int(values.get("reader_line_id") or 0)
             if reader_line_id and not values.get("port_no"):
-                reader_line_id = int(reader_line_id)
                 if reader_line_id not in next_by_reader:
                     existing = self.search([
                         ("reader_line_id", "=", reader_line_id),
@@ -1427,66 +1368,26 @@ class NspMeasurementAntennaPort(models.Model):
                     next_by_reader[reader_line_id] = max(existing or [0]) + 1
                 values["port_no"] = next_by_reader[reader_line_id]
                 next_by_reader[reader_line_id] += 1
-            port_no = int(values.get("port_no") or 0)
-            if port_no < 1 or port_no > 16:
-                raise ValidationError(_(
-                    "Antenna Port No. must be an integer from 1 to 16."
-                ))
             prepared.append(values)
         records = super().create(prepared)
-        records._validate_mapping()
+        records._validate_port()
         return records
 
-    def init(self):
-        # v18 created four empty fixed port rows for every Reader Assembly.
-        # Dynamic Add a line must retain only actual Antenna mappings.
-        self.env.cr.execute(
-            "DELETE FROM nsp_measurement_antenna_port WHERE antenna_id IS NULL"
-        )
-
-    @api.depends("port_no", "antenna_id.display_name")
+    @api.depends("port_no")
     def _compute_display_name(self):
         for record in self:
-            record.display_name = "No. %s · %s" % (
-                record.port_no or "-",
-                record.antenna_id.display_name or _("Not assigned"),
-            )
+            record.display_name = _("Port %s") % (record.port_no or "-")
 
-    @api.depends("reader_line_id.antenna_port_ids.antenna_id", "antenna_id")
-    def _compute_available_antennas(self):
-        Antenna = self.env["nsp.device.antenna"]
-        all_antennas = Antenna.search([
-            ("active", "=", True),
-            ("whitelist_id", "!=", False),
-            ("whitelist_id.active", "=", True),
-            ("whitelist_id.device_type_code", "=", "ANTENNA"),
-        ])
-        for record in self:
-            used = record.reader_line_id.antenna_port_ids.filtered(
-                lambda row: row != record and row.antenna_id
-            ).mapped("antenna_id")
-            record.available_antenna_ids = all_antennas - used
-
-    def _validate_mapping(self):
+    def _validate_port(self):
         for record in self:
             port_no = int(record.port_no or 0)
             if port_no < 1 or port_no > 16:
-                raise ValidationError(_("Antenna Port No. must be an integer from 1 to 16."))
-            if not record.antenna_id:
-                continue
-            antenna = record.antenna_id
-            if (
-                not antenna.active
-                or not antenna.whitelist_id
-                or not antenna.whitelist_id.active
-                or antenna.whitelist_id.device_type_code != "ANTENNA"
-            ):
-                raise ValidationError(_("Antenna must be active and selected from Device Whitelist."))
+                raise ValidationError(_("Reader Port must be an integer from 1 to 16."))
         return True
 
-    @api.constrains("port_no", "antenna_id", "reader_line_id")
-    def _check_mapping(self):
-        self._validate_mapping()
+    @api.constrains("port_no", "reader_line_id")
+    def _check_port(self):
+        self._validate_port()
 
 
 class NspMeasurementEvent(models.Model):
@@ -1504,7 +1405,7 @@ class NspMeasurementEvent(models.Model):
     )
     revision = fields.Integer(required=True, default=1, index=True)
     serial_number = fields.Char(required=True, index=True)
-    antenna_no = fields.Integer(required=True, index=True)
+    port_no = fields.Integer(required=True, index=True)
     tid = fields.Char(required=True, index=True)
     read_at = fields.Datetime(required=True, index=True)
     read_at_ms = fields.Integer(string="Millisecond", required=True, default=0)
@@ -1514,7 +1415,7 @@ class NspMeasurementEvent(models.Model):
 
     _sql_constraints = [
         ("measurement_event_uid_unique", "unique(event_uid)", "Measurement Event UID must be unique."),
-        ("measurement_event_antenna_positive", "CHECK(antenna_no > 0)", "Antenna number must be greater than zero."),
+        ("measurement_event_port_positive", "CHECK(port_no > 0)", "Reader Port must be greater than zero."),
         ("measurement_event_revision_positive", "CHECK(revision > 0)", "Measurement Revision must be greater than zero."),
         ("measurement_event_ms_range", "CHECK(read_at_ms >= 0 AND read_at_ms <= 999)", "Measurement millisecond must be between 0 and 999."),
         ("measurement_event_read_interval_range", "CHECK(read_interval_ms > 0 AND read_interval_ms <= 60000)", "Read Interval must be between 1 and 60000 ms."),
@@ -1548,12 +1449,12 @@ class NspMeasurementEvent(models.Model):
             """
         )
 
-    @api.constrains("session_id", "serial_number", "antenna_no", "tid")
+    @api.constrains("session_id", "serial_number", "port_no", "tid")
     def _check_event_scope(self):
         for event in self:
             session = event.session_id
-            key = (event.serial_number, int(event.antenna_no or 0))
-            if key not in session._allowed_antenna_pairs():
-                raise ValidationError(_("Measurement observation antenna is not part of the Lane Calibration."))
+            key = (event.serial_number, int(event.port_no or 0))
+            if key not in session._allowed_reader_port_pairs():
+                raise ValidationError(_("Measurement observation Reader Port is not part of the Lane Calibration."))
             if event.tid not in session._allowed_target_tids():
                 raise ValidationError(_("Only selected Vehicle RFID Tags may be stored in this Lane Calibration."))

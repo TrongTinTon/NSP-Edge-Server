@@ -113,33 +113,6 @@ class DeviceAntenna(models.Model):
         records = self.search(search_domain, limit=limit)
         return [(record.id, record.display_name) for record in records]
 
-    def init(self):
-        """Refresh stored labels created by older Reader-centric versions."""
-        self.env.cr.execute(
-            """
-            UPDATE nsp_device_antenna AS antenna
-               SET display_name = CASE
-                   WHEN COALESCE(NULLIF(TRIM(whitelist.technical_code), ''), '') <> ''
-                        AND COALESCE(NULLIF(TRIM(whitelist.serial_number), ''), '') <> ''
-                       THEN TRIM(whitelist.technical_code) || ' · SN ' || TRIM(whitelist.serial_number)
-                   WHEN COALESCE(NULLIF(TRIM(whitelist.technical_code), ''), '') <> ''
-                       THEN TRIM(whitelist.technical_code)
-                   WHEN COALESCE(NULLIF(TRIM(whitelist.serial_number), ''), '') <> ''
-                       THEN 'SN ' || TRIM(whitelist.serial_number)
-                   ELSE COALESCE(NULLIF(TRIM(antenna.technical_code), ''), 'Antenna')
-               END
-              FROM nsp_device_whitelist AS whitelist
-             WHERE antenna.whitelist_id = whitelist.id
-            """
-        )
-        self.env.cr.execute(
-            """
-            UPDATE nsp_device_antenna
-               SET display_name = COALESCE(NULLIF(TRIM(technical_code), ''), 'Antenna')
-             WHERE whitelist_id IS NULL
-            """
-        )
-
     @api.model
     def default_get(self, fields_list):
         values = super().default_get(fields_list)

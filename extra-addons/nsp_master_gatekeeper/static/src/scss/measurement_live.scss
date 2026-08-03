@@ -264,7 +264,7 @@
             padding: 12px 13px;
         }
         &__field,
-        &__antennas {
+        &__ports {
             min-width: 0;
             label {
                 display: block;
@@ -276,7 +276,7 @@
                 letter-spacing: .04em;
             }
         }
-        &__antennas { grid-column: 1 / -1; }
+        &__ports { grid-column: 1 / -1; }
         &__footer {
             display: flex;
             align-items: center;
@@ -339,14 +339,14 @@
         span { padding-right: 8px; color: #75849a; font-size: 10px; }
     }
 
-    &__antenna-chips {
+    &__port-chips {
         display: flex;
         min-height: 25px;
         flex-wrap: wrap;
         gap: 5px;
     }
 
-    &__antenna-chip {
+    &__port-chip {
         display: inline-flex;
         align-items: center;
         padding: 2px 7px;
@@ -734,7 +734,7 @@
     font-size: 8px;
 }
 
-.nsp-ml-reader-card__antennas {
+.nsp-ml-reader-card__ports {
     display: flex;
     max-width: 72px;
     min-height: 29px;
@@ -744,7 +744,7 @@
     overflow: hidden;
 }
 
-.nsp-ml-reader-card__antennas .nsp-ml__antenna-chip {
+.nsp-ml-reader-card__ports .nsp-ml__port-chip {
     padding: 1px 4px;
     font-size: 8px;
 }
@@ -776,7 +776,7 @@
     .nsp-ml-reader-card__controls {
         grid-template-columns: 1fr 1fr;
     }
-    .nsp-ml-reader-card__antennas {
+    .nsp-ml-reader-card__ports {
         max-width: none;
     }
 }
