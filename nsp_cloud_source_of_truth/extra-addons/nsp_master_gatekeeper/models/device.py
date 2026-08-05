@@ -68,6 +68,18 @@ class Device(models.Model):
         copy=False,
         help="Actual read interval reported by the Controller for the running Reader instance.",
     )
+    runtime_last_detection_at = fields.Datetime(
+        string="Last RFID Detection",
+        readonly=True,
+        copy=False,
+        index=True,
+        help="Latest physical RFID detection reported through Edge status.",
+    )
+    runtime_last_detection_port_no = fields.Integer(
+        string="Last Detection Port",
+        readonly=True,
+        copy=False,
+    )
 
     # Physical connection inventory. The Odoo field widget groups options as Wired / Wireless.
     connection_type = fields.Selection([

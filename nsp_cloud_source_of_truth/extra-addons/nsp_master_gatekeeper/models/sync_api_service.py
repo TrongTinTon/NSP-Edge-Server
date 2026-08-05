@@ -160,20 +160,21 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
 
     @api.model
     def _edge_runtime_status_scope(self, edge_server):
-        """Build status scope from stable runtime Reader Codes.
+        """Build status ownership from immutable runtime scope.
 
-        Parking Layout and Lane Calibration own the runtime scope. Reader Code is
-        the stable management identity. ``serial_number`` in ``edge/status`` is the
-        expected Cloud Serial echoed from the Edge runtime projection; raw SDK
-        observations stay on Edge and never establish Cloud runtime ownership.
+        Controller ownership for Lane Calibration is frozen on
+        ``nsp.measurement.reader.line.controller_id``.  It must not be rebuilt
+        from the mutable ``nsp.device.controller_id`` relation when processing
+        ``edge/status``.  Reader Code remains the stable management identity.
         """
         edge_code = str(edge_server.edge_server_code or "").strip().upper()
         Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
         Device = self.env["nsp.device"].sudo().with_context(active_test=False)
         controller_codes = set()
         reader_codes_by_controller_code = {}
+        direct_device_by_scope = {}
 
-        def register_reader(controller_code, reader_code):
+        def register_reader(controller_code, reader_code, device=False):
             normalized_controller = str(controller_code or "").strip().upper()
             normalized_reader = str(reader_code or "").strip().upper()
             if not normalized_controller or not normalized_reader:
@@ -182,6 +183,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             reader_codes_by_controller_code.setdefault(
                 normalized_controller, set()
             ).add(normalized_reader)
+            if device:
+                direct_device_by_scope[(normalized_controller, normalized_reader)] = device
 
         Area = self.env["nsp.parking.area"].sudo()
         areas = Area.search([
@@ -215,6 +218,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             register_reader(
                 line.controller_id.controller_id,
                 line.reader_id.device_code,
+                device=line.reader_id,
             )
 
         controllers = Controller.search([
@@ -224,25 +228,39 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             str(record.controller_id or "").strip().upper(): record
             for record in controllers
         }
-        devices = Device.search([
-            ("controller_id", "in", controllers.ids),
-        ]) if controllers else Device.browse()
+
+        scoped_reader_codes = sorted({
+            code
+            for codes in reader_codes_by_controller_code.values()
+            for code in codes
+        })
+        candidate_devices = Device.search([
+            ("device_code", "in", scoped_reader_codes),
+        ]) if scoped_reader_codes else Device.browse()
+        candidates_by_code = {}
+        for device in candidate_devices:
+            code = str(device.device_code or "").strip().upper()
+            candidates_by_code.setdefault(code, Device.browse())
+            candidates_by_code[code] |= device
+
         device_by_key = {}
         devices_by_controller = {}
-        for device in devices:
-            controller_code = str(
-                device.controller_id.controller_id or ""
-            ).strip().upper()
-            reader_code = str(device.device_code or "").strip().upper()
-            if reader_code not in reader_codes_by_controller_code.get(
-                controller_code, set()
-            ):
+        for controller_code, reader_codes in reader_codes_by_controller_code.items():
+            controller = controller_by_code.get(controller_code)
+            if not controller:
                 continue
-            device_by_key[(device.controller_id.id, reader_code)] = device
-            current = devices_by_controller.get(
-                device.controller_id.id, Device.browse()
-            )
-            devices_by_controller[device.controller_id.id] = current | device
+            for reader_code in sorted(reader_codes):
+                device = direct_device_by_scope.get((controller_code, reader_code))
+                if not device:
+                    candidates = candidates_by_code.get(reader_code, Device.browse())
+                    exact = candidates.filtered(lambda row: row.controller_id == controller)
+                    device = exact[:1] or (candidates[:1] if len(candidates) == 1 else Device.browse())
+                if not device:
+                    continue
+                device_by_key[(controller.id, reader_code)] = device
+                current = devices_by_controller.get(controller.id, Device.browse())
+                devices_by_controller[controller.id] = current | device
+
         return {
             "controller_by_code": controller_by_code,
             "device_by_key": device_by_key,
@@ -254,8 +272,9 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         if not isinstance(item, dict):
             raise ValueError("invalid_payload")
         allowed_fields = {
-            "reader_code", "serial_number", "status",
-            "last_seen_at", "firmware_version", "power_dbm", "read_interval_ms",
+            "reader_code", "serial_number", "detected_serial_number", "status",
+            "last_seen_at", "last_detection_at", "last_detection_port_no",
+            "firmware_version", "power_dbm", "read_interval_ms",
         }
         unsupported = sorted(set(item) - allowed_fields)
         if unsupported:
@@ -277,11 +296,34 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         if status not in ("online", "offline", "degraded"):
             raise ValueError("invalid_status")
         last_seen_at = self._safe_datetime_value(item.get("last_seen_at"), default_now=False)
+        last_detection_at = self._safe_datetime_value(
+            item.get("last_detection_at"), default_now=False
+        )
         values = {"status": status}
-        if last_seen_at:
-            values["last_seen"] = last_seen_at
+        seen_candidates = [
+            value for value in (last_seen_at, last_detection_at) if value
+        ]
+        if seen_candidates:
+            values["last_seen"] = max(
+                fields.Datetime.to_datetime(value) for value in seen_candidates
+            )
         elif status == "online":
             values["last_seen"] = fields.Datetime.now()
+
+        detected_serial = str(
+            item.get("detected_serial_number") or ""
+        ).strip().upper()
+        if not detected_serial and serial_number != str(device.serial_number or "").strip().upper():
+            detected_serial = serial_number
+        if detected_serial:
+            values["runtime_detected_serial_number"] = detected_serial
+        if last_detection_at:
+            values["runtime_last_detection_at"] = last_detection_at
+        if item.get("last_detection_port_no") not in (None, ""):
+            port_no = int(item.get("last_detection_port_no") or 0)
+            if port_no < 0 or port_no > 16:
+                raise ValueError("invalid_last_detection_port_no")
+            values["runtime_last_detection_port_no"] = port_no
         if item.get("firmware_version") not in (None, ""):
             values["firmware_version"] = str(item.get("firmware_version"))
         if item.get("power_dbm") not in (None, ""):
@@ -295,8 +337,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 raise ValueError("invalid_read_interval_ms")
             values["runtime_read_interval_ms"] = interval
 
-        # Cloud Reader Code is authoritative. serial_number is the expected
-        # master Serial echoed by Edge and is never treated as a raw SDK observation.
+        # Reader Code and the released runtime scope own the Cloud record.  The
+        # mutable Reader.controller_id relation and raw SDK serial do not.
         device.write(values)
         return device
 

@@ -287,6 +287,73 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             cache[serial_number] = observation
         return observation
 
+    @api.model
+    def _touch_reader_activity_from_detections(
+        self, controller, items, timestamp_field, power_field=False, interval_field=False,
+    ):
+        """Update physical Reader activity from raw data-plane evidence.
+
+        This function deliberately does not decide whether a tag, port, lane or
+        calibration event is valid.  It only records that a Controller reported a
+        physical detection from one SDK SerialNumber.
+        """
+        if not controller or not isinstance(items, list):
+            return 0
+        try:
+            freshness_sec = int(
+                self.env["ir.config_parameter"].sudo().get_param(
+                    "nsp_business_gatekeeper.reader_detection_freshness_sec",
+                    "300",
+                ) or "300"
+            )
+        except Exception:
+            freshness_sec = 300
+        freshness_sec = min(max(freshness_sec, 30), 3600)
+
+        latest_by_serial = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            serial = str(item.get("serial_number") or "").strip().upper()
+            if not serial:
+                continue
+            detected_at = self._safe_datetime_value(
+                item.get(timestamp_field), default_now=False
+            )
+            if not detected_at:
+                continue
+            try:
+                port_no = int(item.get("port_no") or 0)
+            except (TypeError, ValueError):
+                port_no = 0
+            if port_no < 1 or port_no > 16:
+                continue
+            parsed_at = fields.Datetime.to_datetime(detected_at)
+            previous = latest_by_serial.get(serial)
+            if previous and previous["detected_at"] > parsed_at:
+                continue
+            latest_by_serial[serial] = {
+                "detected_at": parsed_at,
+                "port_no": port_no,
+                "power_dbm": item.get(power_field) if power_field else None,
+                "read_interval_ms": item.get(interval_field) if interval_field else None,
+            }
+
+        Observation = self.env["nsp.reader.observation"].sudo()
+        touched = 0
+        for serial, values in latest_by_serial.items():
+            Observation.touch_detection(
+                controller,
+                serial,
+                detected_at=values["detected_at"],
+                port_no=values["port_no"],
+                power_dbm=values.get("power_dbm"),
+                read_interval_ms=values.get("read_interval_ms"),
+                freshness_sec=freshness_sec,
+            )
+            touched += 1
+        return touched
+
     @endpoint("NSP Gatekeeper Devices Report", route_path="devices/report", methods="POST", code="nsp_gatekeeper_devices_report")
     def api_devices_report(self):
         data = self._payload()
@@ -984,6 +1051,11 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             items = data.get("events")
             if not isinstance(items, list) or not items or len(items) > 100:
                 raise ValueError("invalid_payload")
+            activity_touched = self._touch_reader_activity_from_detections(
+                controller, items, "read_at",
+                power_field="power_dbm",
+                interval_field="read_interval_ms",
+            )
             result, records = self._measurement_process_event_batch(
                 session,
                 items,
@@ -1028,6 +1100,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                         "duplicates": int(result.get("duplicates", 0)),
                         "ignored": int(result.get("ignored", 0)),
                         "rejected": int(result.get("failed", 0)),
+                        "reader_activity_touched": int(activity_touched or 0),
                     }
                 },
                 message="Lane Calibration events received.",
@@ -1178,6 +1251,10 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             }
             normalized.append(payload)
             tids.add(tid)
+
+        self._touch_reader_activity_from_detections(
+            controller, normalized, "detected_at"
+        )
 
         assignments = RuntimeAssignment.search([
             ("tid", "in", list(tids)),

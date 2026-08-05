@@ -72,16 +72,9 @@ class NspSyncBusinessAdapter(models.Model):
         fresh_after = fields.Datetime.now() - timedelta(seconds=max(timeout_sec, 30))
 
         controller_ids = managed_controllers.ids
-        expected_serials = {
-            str(device.serial_number or "").strip().upper()
-            for devices in devices_by_controller.values()
-            for device in devices
-            if device.serial_number
-        }
         observations = self.env["nsp.reader.observation"].sudo().search([
             ("controller_id", "in", controller_ids),
-            ("serial_number", "in", list(expected_serials)),
-        ]) if controller_ids and expected_serials else self.env["nsp.reader.observation"].browse()
+        ]) if controller_ids else self.env["nsp.reader.observation"].browse()
         observation_by_key = {
             (record.controller_id.id, str(record.serial_number or "").strip().upper()): record
             for record in observations
@@ -98,23 +91,50 @@ class NspSyncBusinessAdapter(models.Model):
             ):
                 expected_serial = str(device.serial_number or "").strip().upper()
                 observation = observation_by_key.get((controller.id, expected_serial))
-                fresh = bool(
+                report_fresh = bool(
                     observation
                     and observation.last_reported_at
                     and observation.last_reported_at >= fresh_after
                 )
-                observed_status = str(observation.status or "offline").lower() if fresh else "offline"
+                detection_fresh = bool(
+                    observation
+                    and observation.last_detection_at
+                    and observation.last_detection_at >= fresh_after
+                )
+                if detection_fresh:
+                    # A fresh data-plane detection is stronger evidence than a stale
+                    # periodic status report.
+                    observed_status = "online"
+                elif report_fresh:
+                    observed_status = str(observation.status or "offline").lower()
+                else:
+                    observed_status = "offline"
                 if observed_status not in ("online", "offline", "degraded"):
                     observed_status = "offline"
+
+                last_seen_candidates = []
+                if observation and observation.last_seen_at:
+                    last_seen_candidates.append(observation.last_seen_at)
+                if observation and observation.last_detection_at:
+                    last_seen_candidates.append(observation.last_detection_at)
+                effective_last_seen = max(last_seen_candidates) if last_seen_candidates else False
 
                 item = {
                     "reader_code": device.device_code or "",
                     "serial_number": expected_serial,
-                    "status": observed_status,
-                    "last_seen_at": (
-                        self._dt(observation.last_seen_at)
-                        if observation and observation.last_seen_at else False
+                    "detected_serial_number": (
+                        observation.serial_number
+                        if observation and observation.serial_number != expected_serial else ""
                     ),
+                    "status": observed_status,
+                    "last_seen_at": self._dt(effective_last_seen) if effective_last_seen else False,
+                    "last_detection_at": (
+                        self._dt(observation.last_detection_at)
+                        if observation and observation.last_detection_at else False
+                    ),
+                    "last_detection_port_no": int(
+                        observation.last_detection_port_no or 0
+                    ) if observation else 0,
                     "firmware_version": (
                         observation.firmware_version if observation else ""
                     ) or "",

@@ -822,7 +822,20 @@ class NspMeasurementSession(models.Model):
                 port_no for event_serial, port_no in port_stats
                 if event_serial in serial_aliases
             })
-            all_ports = sorted(set(configured_ports) | set(observed_ports))
+            status_last_detection = reader.runtime_last_detection_at
+            if (
+                status_last_detection
+                and session.started_at
+                and status_last_detection < session.started_at
+            ):
+                # Do not reuse a detection from a previous runtime session.
+                status_last_detection = False
+            status_last_port = int(reader.runtime_last_detection_port_no or 0)
+            all_ports = sorted(
+                set(configured_ports)
+                | set(observed_ports)
+                | ({status_last_port} if status_last_port > 0 else set())
+            )
             ports = []
             reader_detection_count = 0
             reader_last_detection = None
@@ -838,6 +851,13 @@ class NspMeasurementSession(models.Model):
                 last_values = [item.get("last_detection") for item in matching_stats if item.get("last_detection")]
                 first_detection = min(first_values) if first_values else None
                 last_detection = max(last_values) if last_values else None
+                if (
+                    status_last_detection
+                    and status_last_port == port_no
+                    and (not last_detection or status_last_detection > last_detection)
+                ):
+                    # edge/status can arrive before the raw event forwarding retry.
+                    last_detection = status_last_detection
                 reader_detection_count += detection_count
                 if last_detection and (
                     not reader_last_detection or last_detection > reader_last_detection
@@ -845,7 +865,7 @@ class NspMeasurementSession(models.Model):
                     reader_last_detection = last_detection
                 configured = port_no in configured_ports
                 last_age = _seconds_since(last_detection)
-                if detection_count and (last_age is None or last_age <= silent_after_sec):
+                if last_detection and (last_age is None or last_age <= silent_after_sec):
                     activity = "active"
                 elif configured and active_runtime and reader.status in ("online", "degraded"):
                     activity = "silent"
@@ -874,12 +894,23 @@ class NspMeasurementSession(models.Model):
                         line.id,
                     )
 
+            if (
+                status_last_detection
+                and (not reader_last_detection or status_last_detection > reader_last_detection)
+            ):
+                reader_last_detection = status_last_detection
             last_detection_age = _seconds_since(reader_last_detection)
-            if reader.status == "offline":
+            if reader.status == "offline" and reader_last_detection and (
+                last_detection_age is None or last_detection_age <= silent_after_sec
+            ):
+                # A fresh data-plane detection is stronger evidence than a delayed
+                # status mirror.  edge/status will reconcile the persisted status.
+                activity_status = "active"
+            elif reader.status == "offline":
                 activity_status = "offline"
             elif reader.status == "degraded":
                 activity_status = "degraded"
-            elif reader.status == "online" and reader_detection_count and (
+            elif reader.status == "online" and reader_last_detection and (
                 last_detection_age is None or last_detection_age <= silent_after_sec
             ):
                 activity_status = "active"
@@ -890,13 +921,17 @@ class NspMeasurementSession(models.Model):
             else:
                 activity_status = "unknown"
 
+            effective_reader_status = reader.status or "offline"
+            if activity_status == "active" and effective_reader_status == "offline":
+                effective_reader_status = "online"
+
             reader_node = {
                 "reader_line_id": line.id,
                 "id": reader.id,
                 "name": reader.name or reader.serial_number or "RFID Reader",
                 "serial_number": reader.serial_number or "",
                 "detected_serial_number": reader.runtime_detected_serial_number or "",
-                "status": reader.status or "offline",
+                "status": effective_reader_status,
                 "activity_status": activity_status,
                 "last_seen": _dt(reader.last_seen),
                 "last_detection": _dt(reader_last_detection),
@@ -933,7 +968,7 @@ class NspMeasurementSession(models.Model):
                     },
                     controller.timestamp,
                 )
-            if reader.status == "offline":
+            if effective_reader_status == "offline":
                 _warning(
                     "danger",
                     "reader_offline",
@@ -941,7 +976,7 @@ class NspMeasurementSession(models.Model):
                     reader.last_seen,
                     line.id,
                 )
-            elif reader.status == "degraded":
+            elif effective_reader_status == "degraded":
                 _warning(
                     "warning",
                     "reader_degraded",
@@ -951,7 +986,7 @@ class NspMeasurementSession(models.Model):
                     reader.last_seen,
                     line.id,
                 )
-            if reader.status in ("online", "degraded") and not reader.firmware_version:
+            if effective_reader_status in ("online", "degraded") and not reader.firmware_version:
                 _warning(
                     "info",
                     "firmware_unknown",
@@ -961,7 +996,7 @@ class NspMeasurementSession(models.Model):
                     reader.last_seen,
                     line.id,
                 )
-            if active_runtime and reader.status in ("online", "degraded") and not reader_detection_count:
+            if active_runtime and effective_reader_status in ("online", "degraded") and not reader_last_detection:
                 _warning(
                     "warning",
                     "reader_no_detection",
@@ -971,7 +1006,7 @@ class NspMeasurementSession(models.Model):
                     reader.last_seen,
                     line.id,
                 )
-            elif active_runtime and reader.status in ("online", "degraded") and (
+            elif active_runtime and effective_reader_status in ("online", "degraded") and (
                 last_detection_age is not None and last_detection_age > silent_after_sec
             ):
                 _warning(

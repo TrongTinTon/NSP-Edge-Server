@@ -246,7 +246,9 @@ export class NspInfrastructureScopeDialog extends Component {
             return `Observed ${port.detection_count} events outside scope`;
         }
         if (port.activity === "active") {
-            return `Detected ${port.detection_count} events`;
+            return port.detection_count > 0
+                ? `Detected ${port.detection_count} events`
+                : "Detected recently";
         }
         if (port.activity === "historical") {
             return `${port.detection_count} historical events`;
