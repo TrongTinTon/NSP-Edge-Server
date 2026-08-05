@@ -468,6 +468,6 @@ class NspMeasurementApplyLaneWizardLine(models.TransientModel):
     port_no = fields.Integer(string="Port", required=True, readonly=True)
     observed_at = fields.Datetime(string="Detected", readonly=True)
     observed_at_ms = fields.Integer(string="ms", readonly=True)
-    duration_from_previous = fields.Float(string="Interval (s)", readonly=True, digits=(8, 3))
+    duration_from_previous = fields.Float(string="Duration from Previous (s)", readonly=True, digits=(8, 3))
     checkin_order = fields.Integer(string="Check-in #", readonly=True)
     checkout_order = fields.Integer(string="Check-out #", readonly=True)

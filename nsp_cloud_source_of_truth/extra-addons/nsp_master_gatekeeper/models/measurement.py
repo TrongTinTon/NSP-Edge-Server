@@ -696,6 +696,9 @@ class NspMeasurementSession(models.Model):
             "unique_controllers": len({step["controller_code"] for step in steps}),
             "first_detection": steps[0] if steps else False,
             "last_detection": steps[-1] if steps else False,
+            "timeline_total_duration": round(
+                float(steps[-1].get("elapsed_from_start") or 0.0), 3
+            ) if steps else 0.0,
             "steps": steps,
             "last_event_id": max(events.ids or [int(last_event_id or 0)]),
             "server_time": fields.Datetime.to_string(fields.Datetime.now()),
@@ -1158,13 +1161,17 @@ class NspMeasurementSession(models.Model):
             current.pop("_key", None)
             steps.append(current)
         previous_seconds = None
+        first_seconds = None
         for index, step in enumerate(steps, start=1):
             current_seconds = float(step.pop("_first_seconds", 0.0) or 0.0)
+            if first_seconds is None:
+                first_seconds = current_seconds
             step["sequence_no"] = index
             step["duration_from_previous"] = (
                 0.0 if previous_seconds is None
                 else max(current_seconds - previous_seconds, 0.0)
             )
+            step["elapsed_from_start"] = max(current_seconds - first_seconds, 0.0)
             previous_seconds = current_seconds
         return steps
 

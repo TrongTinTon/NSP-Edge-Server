@@ -51,6 +51,11 @@
                         <p>Select rows in the intended Check-in order. Check-out will be generated in reverse.</p>
                     </div>
                     <div class="nsp-lc__actions">
+                        <span class="nsp-lc__duration-summary">
+                            <i class="fa fa-clock-o me-1"/>
+                            Total Duration:
+                            <strong><t t-esc="formatNumber(state.data.timeline_total_duration, 3)"/> s</strong>
+                        </span>
                         <span class="nsp-lc__selected"><t t-esc="state.selectedStepIds.length"/> selected</span>
                         <button type="button" class="btn btn-outline-danger"
                                 t-att-disabled="!(state.data.raw_event_count &gt; 0)"
@@ -81,7 +86,7 @@
                                 <th>Controller</th>
                                 <th>Reader</th>
                                 <th>Port</th>
-                                <th>Interval</th>
+                                <th>Duration</th>
                                 <th>Reads</th>
                             </tr>
                         </thead>
@@ -110,7 +115,16 @@
                                     <small class="nsp-lc__tid" t-esc="step.serial_number"/>
                                 </td>
                                 <td><span class="nsp-lc__port">P<t t-esc="step.port_no"/></span></td>
-                                <td><t t-esc="formatNumber(step.duration_from_previous, 3)"/> s</td>
+                                <td class="nsp-lc__duration-cell">
+                                    <t t-if="step.sequence_no === 1">
+                                        <strong>Start</strong>
+                                        <small>0.000 s</small>
+                                    </t>
+                                    <t t-else="">
+                                        <strong><t t-esc="formatNumber(step.duration_from_previous, 3)"/> s</strong>
+                                        <small>from previous</small>
+                                    </t>
+                                </td>
                                 <td t-esc="step.read_count"/>
                             </tr>
                         </tbody>

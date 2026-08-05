@@ -276,7 +276,7 @@
                             <field name="serial_number" string="Serial" optional="hide"/>
                             <field name="port_no" string="Port"/>
                             <field name="observed_at" string="Detected"/>
-                            <field name="duration_from_previous" string="Interval (s)"/>
+                            <field name="duration_from_previous" string="Duration from Previous (s)"/>
                             <field name="checkin_order" string="Check-in #"/>
                             <field name="checkout_order" string="Check-out #"/>
                         </list>

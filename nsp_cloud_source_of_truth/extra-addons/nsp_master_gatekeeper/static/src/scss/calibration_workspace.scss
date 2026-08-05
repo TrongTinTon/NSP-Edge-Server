@@ -116,6 +116,19 @@
 
     &__actions { gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
     &__selected { color: var(--lc-muted); font-size: 11px; font-weight: 750; }
+    &__duration-summary {
+        display: inline-flex;
+        align-items: center;
+        padding: 5px 9px;
+        border: 1px solid #cfe0f5;
+        border-radius: 8px;
+        background: #f2f7fd;
+        color: #315b8d;
+        font-size: 11px;
+        font-weight: 700;
+
+        strong { margin-left: 4px; }
+    }
 
     &__notice {
         padding: 10px 16px;
@@ -155,6 +168,13 @@
     &__timeline-order { background: #e9eef5; color: #4c5c71; }
     &__tid { display: block; max-width: 190px; overflow: hidden; color: var(--lc-muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px; text-overflow: ellipsis; }
     &__port { display: inline-flex; padding: 4px 7px; border-radius: 7px; background: #edf4ff; color: #2458a8; font-weight: 800; }
+    &__duration-cell {
+        min-width: 112px;
+        white-space: nowrap;
+
+        strong { color: #26384f; font-variant-numeric: tabular-nums; }
+        small { display: block; color: var(--lc-muted); font-size: 9px; }
+    }
 
     &__empty {
         display: grid;
