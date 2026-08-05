@@ -367,11 +367,34 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         devices = devices.filtered(lambda rec: rec.active and not rec.cloud_removed).sorted(
             key=lambda rec: (rec.serial_number or "", rec.id)
         )
+
+        parking_layouts = []
+        for parking_area in lanes.mapped("parking_area_id").sorted(
+            key=lambda rec: ((rec.code or "").casefold(), rec.id)
+        ):
+            controller_lanes = lanes.filtered(
+                lambda lane: lane.parking_area_id == parking_area
+            ).sorted(key=lambda lane: ((lane.code or "").casefold(), lane.id))
+            parking_layouts.append({
+                "parking_area_code": parking_area.code or "",
+                "parking_area_name": parking_area.name or "",
+                "state": parking_area.state or "",
+                "published_revision": int(parking_area.published_revision or 0),
+                "lanes": [
+                    {
+                        "lane_code": lane.code or "",
+                        "lane_name": lane.name or "",
+                    }
+                    for lane in controller_lanes
+                ],
+            })
+
         return self._ok({
             "controller_code": controller.controller_id,
             "devices": [device._build_config_payload() for device in devices],
+            "parking_layouts": parking_layouts,
             "server_time": self._iso_datetime(fields.Datetime.now()),
-        }, message="Controller device configuration loaded.")
+        }, message="Controller runtime configuration loaded.")
 
     @api.model
     def _measurement_require_fields(self, data, required):
@@ -445,9 +468,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
     def _measurement_config_payload(self, session, controller=False):
         lines = session.reader_line_ids
         if controller:
-            lines = lines.filtered(
-                lambda line: line.reader_id.controller_id == controller
-            )
+            lines = lines.filtered(lambda line: line.controller_id == controller)
         readers = []
         for line in lines.sorted(
             key=lambda item: ((item.reader_id.serial_number or ""), item.id)
@@ -559,22 +580,35 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             current_code = str(
                 data.get("current_lane_calibration_code") or ""
             ).strip().upper()
-            session = self.env["nsp.measurement.session"].sudo().browse()
+            Session = self.env["nsp.measurement.session"].sudo()
+            session = Session.browse()
+
+            # The released Reader line is the authoritative runtime snapshot for
+            # Controller scope. Do not derive scope again from the mutable Reader
+            # ownership relation, which may temporarily lag behind sync/rebinding.
             if current_code:
-                current = self.env["nsp.measurement.session"].sudo().search([
+                session = Session.search([
                     ("measurement_code", "=", current_code),
-                    ("reader_line_ids.reader_id.controller_id", "=", controller.id),
-                ], limit=1)
-                if current and current.status in ("completed", "failed", "cancelled"):
-                    session = current
-            if not session:
-                session = self.env["nsp.measurement.session"].sudo().search([
-                    ("reader_line_ids.reader_id.controller_id", "=", controller.id),
+                    ("reader_line_ids.controller_id", "=", controller.id),
                     ("status", "in", ["ready", "running"]),
-                ], order="id asc", limit=1)
+                ], limit=1)
             if not session:
+                session = Session.search([
+                    ("reader_line_ids.controller_id", "=", controller.id),
+                    ("status", "in", ["ready", "running"]),
+                ], order="id desc", limit=1)
+            if not session:
+                _logger.info(
+                    "No active Lane Calibration for Controller: controller=%s current_code=%s",
+                    controller.controller_id,
+                    current_code or "<empty>",
+                )
                 return self._ok(
-                    {"data": {"lane_calibration_available": False}},
+                    {"data": {
+                        "lane_calibration_available": False,
+                        "controller_code": controller.controller_id,
+                        "reason": "no_active_session_for_controller",
+                    }},
                     message="No Lane Calibration is available.",
                 )
             return self._ok(
@@ -719,7 +753,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         """Store only selected RFID targets, idempotently, with bounded queries."""
         Event = self.env["nsp.measurement.event"].sudo()
         if controller:
-            lines = session.reader_line_ids.filtered(lambda line: line.reader_id.controller_id == controller)
+            lines = session.reader_line_ids.filtered(lambda line: line.controller_id == controller)
             allowed_reader_ports = {
                 ((line.reader_id.serial_number or "").strip().upper(), int(port.port_no or 0))
                 for line in lines
@@ -754,16 +788,12 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 )
                 if enforce_current_snapshot and (
                     int(values["revision"] or 1) != int(session.revision or 1)
-                    or int(values["power_dbm"] or 0)
-                    != int(session._reader_power_for_serial(values["serial_number"]) or 0)
-                    or int(values["read_interval_ms"] or 0)
-                    != int(session._reader_interval_for_serial(values["serial_number"]) or 0)
                 ):
                     results[index] = {
                         "index": index,
                         "record_key": key,
                         "status": "ignored",
-                        "message": "Stale Measurement revision/settings ignored",
+                        "message": "Stale Lane Calibration revision ignored",
                     }
                     continue
                 prepared.append((index, key, values))
@@ -893,12 +923,14 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                     }
 
         final_results = [row for row in results if row is not None]
-        failed = sum(1 for row in final_results if row["status"] == "rejected")
+        processed = sum(1 for row in final_results if row["status"] == "processed")
+        duplicates = sum(1 for row in final_results if row["status"] == "duplicate")
         ignored = sum(1 for row in final_results if row["status"] == "ignored")
-        processed = len(final_results) - failed - ignored
+        failed = sum(1 for row in final_results if row["status"] == "rejected")
         return {
             "received": len(items),
             "processed": processed,
+            "duplicates": duplicates,
             "ignored": ignored,
             "failed": failed,
             "results": final_results,
@@ -947,7 +979,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             )
             self._measurement_require_fields(data, ["lane_calibration_code", "events"])
             session = self._measurement_session(data.get("lane_calibration_code"))
-            if controller not in session.reader_line_ids.mapped("reader_id.controller_id"):
+            if controller not in session.reader_line_ids.mapped("controller_id"):
                 raise ValueError("controller_not_in_scope")
             items = data.get("events")
             if not isinstance(items, list) or not items or len(items) > 100:
@@ -963,17 +995,43 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 self._measurement_set_status(session, "running", fields.Datetime.now())
                 self._forward_measurement_status_now(session)
             self._forward_measurement_events_now(records)
-            if result.get("failed") or result.get("ignored"):
-                _logger.warning(
-                    "Lane Calibration raw batch accepted with Edge-side decisions: "
-                    "code=%s received=%s processed=%s ignored=%s failed=%s",
-                    session.measurement_code,
-                    result.get("received", 0),
-                    result.get("processed", 0),
-                    result.get("ignored", 0),
-                    result.get("failed", 0),
-                )
-            return self._ok(message="Lane Calibration events received.")
+            decision_rows = [
+                row for row in result.get("results", [])
+                if row.get("status") in ("ignored", "rejected")
+            ]
+            if decision_rows:
+                for row in decision_rows:
+                    _logger.warning(
+                        "Lane Calibration raw event decision: code=%s event_uid=%s "
+                        "status=%s reason=%s",
+                        session.measurement_code,
+                        row.get("record_key") or "<missing>",
+                        row.get("status") or "unknown",
+                        row.get("message") or row.get("error_code") or "unspecified",
+                    )
+            _logger.info(
+                "Lane Calibration raw batch processed: "
+                "code=%s received=%s stored=%s duplicates=%s ignored=%s rejected=%s",
+                session.measurement_code,
+                result.get("received", 0),
+                result.get("processed", 0),
+                result.get("duplicates", 0),
+                result.get("ignored", 0),
+                result.get("failed", 0),
+            )
+            return self._ok(
+                {
+                    "data": {
+                        "lane_calibration_code": session.measurement_code,
+                        "received": int(result.get("received", 0)),
+                        "stored": int(result.get("processed", 0)),
+                        "duplicates": int(result.get("duplicates", 0)),
+                        "ignored": int(result.get("ignored", 0)),
+                        "rejected": int(result.get("failed", 0)),
+                    }
+                },
+                message="Lane Calibration events received.",
+            )
         except Exception as exc:
             _logger.exception("Lane Calibration raw batch processing failed")
             return self._error(
@@ -1006,7 +1064,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 data, ["lane_calibration_code", "status", "occurred_at"]
             )
             session = self._measurement_session(data.get("lane_calibration_code"))
-            if controller not in session.reader_line_ids.mapped("reader_id.controller_id"):
+            if controller not in session.reader_line_ids.mapped("controller_id"):
                 raise ValueError("controller_not_in_scope")
             occurred_at = self._measurement_datetime(
                 data.get("occurred_at"), required=True

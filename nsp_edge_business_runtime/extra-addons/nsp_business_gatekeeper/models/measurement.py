@@ -301,20 +301,19 @@ class NspMeasurementSession(models.Model):
         self._validate_measurement_scope()
 
     def _allowed_target_tids(self):
+        """Return TIDs frozen in this released Lane Calibration snapshot.
+
+        The runtime assignment is validated when the Cloud snapshot is applied.
+        Re-reading the mutable runtime-assignment table for every event can make
+        an already released calibration silently stop accepting its own target
+        after an unrelated assignment refresh. Event validation must therefore
+        use the immutable session target lines.
+        """
         self.ensure_one()
-        RuntimeAssignment = self.env["nsp.rfid.runtime.assignment"].sudo()
-        target_by_tid = {
-            line.vehicle_tid: line.vehicle_id
-            for line in self.target_line_ids
-            if line.vehicle_tid and line.vehicle_id.active
-        }
-        assignments = RuntimeAssignment.search([
-            ("tid", "in", list(target_by_tid)),
-        ]) if target_by_tid else RuntimeAssignment.browse()
         return {
-            assignment.tid
-            for assignment in assignments
-            if assignment.vehicle_id == target_by_tid.get(assignment.tid)
+            self.env["nsp.rfid.runtime.assignment"].sudo()._normalize_tid(line.vehicle_tid)
+            for line in self.target_line_ids
+            if line.vehicle_tid and line.vehicle_id
         }
 
     def _allowed_reader_port_pairs(self):
