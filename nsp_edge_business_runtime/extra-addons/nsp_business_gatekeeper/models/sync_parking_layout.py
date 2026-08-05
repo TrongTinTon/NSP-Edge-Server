@@ -519,10 +519,18 @@ class NspSyncJobParkingLayout(models.Model):
                     reader_owner[reader_code] = controller_code
                     existing_by_code = reader_by_code.get(reader_code)
                     existing_by_serial = reader_by_serial.get(serial)
-                    if existing_by_code and existing_by_code.serial_number != serial:
-                        raise UserError(_("RFID Reader Code %s conflicts with another Serial Number.") % reader_code)
-                    if existing_by_serial and existing_by_serial.device_code != reader_code:
-                        raise UserError(_("RFID Reader Serial %s conflicts with another Reader Code.") % serial)
+                    if (
+                        existing_by_code
+                        and existing_by_serial
+                        and existing_by_code != existing_by_serial
+                    ):
+                        raise UserError(_(
+                            "RFID Reader identity is duplicated on Edge: "
+                            "Reader Code %(code)s and Serial %(serial)s belong to different records."
+                        ) % {
+                            "code": reader_code,
+                            "serial": serial,
+                        })
                     reader_whitelist = whitelist_by_code.get(reader_code)
                     if not reader_whitelist:
                         raise UserError(_("Published RFID Reader %s is missing from the identity projection.") % reader_code)
@@ -576,9 +584,17 @@ class NspSyncJobParkingLayout(models.Model):
                         "active": True,
                         "cloud_removed": False,
                     }
-                    reader = reader_by_code.get(reader_code) or reader_by_serial.get(serial)
+                    reader = existing_by_code or existing_by_serial
                     if reader:
+                        previous_code = reader.device_code
+                        previous_serial = reader.serial_number
                         self._write_changed(reader, reader_values)
+                        if previous_code and previous_code != reader_code:
+                            if reader_by_code.get(previous_code) == reader:
+                                reader_by_code.pop(previous_code, None)
+                        if previous_serial and previous_serial != serial:
+                            if reader_by_serial.get(previous_serial) == reader:
+                                reader_by_serial.pop(previous_serial, None)
                     else:
                         reader = Device.create(reader_values)
                     reader_by_code[reader_code] = reader

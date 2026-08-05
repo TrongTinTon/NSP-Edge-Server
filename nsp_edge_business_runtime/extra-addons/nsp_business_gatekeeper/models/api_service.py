@@ -155,7 +155,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             controller.invalidate_recordset(["timestamp"])
         return self._ok({
             "controller_code": controller.controller_id,
-            "current_status": "online",
+            "status": "online",
             "last_seen_at": self._iso_datetime(now),
             "reader_count": self._whitelisted_device_count(controller),
         }, message="Heartbeat accepted.")
@@ -196,99 +196,96 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         return devices.filtered(lambda reader: reader.serial_number in allowed)
 
     @api.model
-    def _device_status_cache(self, controllers, items):
-        serials = {
-            str(item.get("serial_number") or "").strip().upper()
-            for item in (items or []) if isinstance(item, dict)
-        }
-        serials.discard("")
-        controller_ids = controllers.ids if controllers else []
-        Device = self.env["nsp.device"].sudo()
-        devices = Device.search([
-            ("controller_id", "in", controller_ids),
-            ("serial_number", "in", list(serials)),
-        ]) if controller_ids and serials else Device.browse()
-        whitelist = self.env["nsp.device.whitelist"].sudo().search([
-            ("serial_number", "in", list(serials)),
-            ("active", "=", True),
-            ("device_type_code", "=", "RFID_READER"),
-        ]) if serials else self.env["nsp.device.whitelist"].browse()
-        return {
-            "device_by_key": {(device.controller_id.id, device.serial_number): device for device in devices},
-            "whitelist_serials": set(whitelist.mapped("serial_number")),
-        }
+    def _normalize_observation_ports(self, values):
+        if values is None:
+            return []
+        if not isinstance(values, list):
+            raise ValueError("ports must be an array")
+        result = []
+        seen = set()
+        for value in values:
+            if isinstance(value, bool):
+                raise ValueError("invalid_port_number")
+            try:
+                port_no = int(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("invalid_port_number") from exc
+            if port_no <= 0 or port_no > 16 or port_no in seen:
+                raise ValueError("invalid_port_number")
+            seen.add(port_no)
+            result.append(port_no)
+        return sorted(result)
 
     @api.model
-    def _apply_device_status(self, controller, item, cache=None):
+    def _apply_reader_observation(self, controller, item, cache=None):
+        """Cache a physical observation exactly as reported by Controller.
+
+        No whitelist, Parking Layout, Lane Calibration or assignment decision is
+        made here. Unknown SDK SerialNumbers are valid physical observations.
+        """
         if not isinstance(item, dict):
             raise ValueError("invalid_payload")
         allowed_fields = {
-            "serial_number", "ports", "device_status",
+            "serial_number", "endpoint", "ports", "status",
             "last_seen_at", "firmware_version", "power_dbm", "read_interval_ms",
         }
         unsupported = sorted(set(item) - allowed_fields)
         if unsupported:
             raise ValueError("unsupported_field:%s" % ",".join(unsupported))
+
         serial_number = str(item.get("serial_number") or "").strip().upper()
         if not serial_number:
             raise ValueError("serial_number is required")
-        cache = cache or self._device_status_cache(controller, [item])
-        if serial_number not in cache.get("whitelist_serials", set()):
-            raise ValueError("device_not_whitelisted")
-        device = cache.get("device_by_key", {}).get((controller.id, serial_number))
-        if not device:
-            raise ValueError("device_not_found")
-        status = str(item.get("device_status") or "online").strip().lower()
+        status = str(item.get("status") or "offline").strip().lower()
         if status not in ("online", "offline", "degraded"):
-            raise ValueError("invalid_payload")
+            raise ValueError("invalid_status")
 
-        reported_ports = item.get("ports")
-        normalized_ports = None
-        if reported_ports is not None:
-            if not isinstance(reported_ports, list):
-                raise ValueError("ports must be an array")
-            normalized_ports = []
-            seen_ports = set()
-            for value in reported_ports:
-                if isinstance(value, bool):
-                    raise ValueError("invalid_port_number")
-                try:
-                    port_no = int(value)
-                except (TypeError, ValueError) as exc:
-                    raise ValueError("invalid_port_number") from exc
-                if port_no < 1 or port_no > 16 or port_no in seen_ports:
-                    raise ValueError("invalid_port_number")
-                seen_ports.add(port_no)
-                normalized_ports.append(port_no)
-            normalized_ports.sort()
-
-        last_seen_at = self._safe_datetime_value(
-            item.get("last_seen_at"), default_now=False
-        )
-        vals = {"status": status}
+        ports = self._normalize_observation_ports(item.get("ports"))
+        last_seen_at = self._safe_datetime_value(item.get("last_seen_at"), default_now=False)
+        now = fields.Datetime.now()
+        values = {
+            "endpoint": str(item.get("endpoint") or "").strip().upper() or False,
+            "status": status,
+            "last_reported_at": now,
+            "ports_json": json.dumps(ports, separators=(",", ":")),
+        }
         if last_seen_at:
-            vals["last_seen"] = last_seen_at
+            values["last_seen_at"] = last_seen_at
         elif status == "online":
-            vals["last_seen"] = fields.Datetime.now()
-        if normalized_ports is not None:
-            vals["runtime_ports_json"] = json.dumps(
-                normalized_ports, separators=(",", ":")
-            )
+            values["last_seen_at"] = now
         if item.get("firmware_version") not in (None, ""):
-            vals["firmware_version"] = str(item.get("firmware_version"))
+            values["firmware_version"] = str(item.get("firmware_version"))
         if item.get("power_dbm") not in (None, ""):
             power = int(item.get("power_dbm"))
             if power < 0 or power > 40:
                 raise ValueError("invalid_power_dbm")
-            vals["runtime_power_dbm"] = power
+            values["power_dbm"] = power
         if item.get("read_interval_ms") not in (None, ""):
-            read_interval = int(item.get("read_interval_ms"))
-            if read_interval <= 0 or read_interval > 60000:
+            interval = int(item.get("read_interval_ms"))
+            if interval <= 0 or interval > 60000:
                 raise ValueError("invalid_read_interval_ms")
-            vals["runtime_read_interval_ms"] = read_interval
-        device.write(vals)
-        return device
+            values["read_interval_ms"] = interval
 
+        Observation = self.env["nsp.reader.observation"].sudo()
+        observation = None
+        if cache is not None:
+            observation = cache.get(serial_number)
+        if not observation:
+            observation = Observation.search([
+                ("controller_id", "=", controller.id),
+                ("serial_number", "=", serial_number),
+            ], limit=1)
+        if observation:
+            observation.write(values)
+        else:
+            values.update({
+                "controller_id": controller.id,
+                "serial_number": serial_number,
+            })
+            observation = Observation.create(values)
+        if cache is not None:
+            cache[serial_number] = observation
+        return observation
 
     @endpoint("NSP Gatekeeper Devices Report", route_path="devices/report", methods="POST", code="nsp_gatekeeper_devices_report")
     def api_devices_report(self):
@@ -301,19 +298,44 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             items = [items]
         if not isinstance(items, list):
             return self._error("devices must be an array", 400, error_code="invalid_payload", details={"field": "devices"})
+
+        serials = {
+            str(item.get("serial_number") or "").strip().upper()
+            for item in items if isinstance(item, dict) and item.get("serial_number")
+        }
+        observations = self.env["nsp.reader.observation"].sudo().search([
+            ("controller_id", "=", controller.id),
+            ("serial_number", "in", list(serials)),
+        ]) if serials else self.env["nsp.reader.observation"].browse()
+        cache = {record.serial_number: record for record in observations}
+
         results = []
         processed = failed = 0
-        device_cache = self._device_status_cache(controller, items)
         for index, item in enumerate(items):
-            key = str(item.get("serial_number") or "").strip() if isinstance(item, dict) else ""
+            key = str(item.get("serial_number") or "").strip().upper() if isinstance(item, dict) else ""
             try:
-                device = self._apply_device_status(controller, item, cache=device_cache)
+                observation = self._apply_reader_observation(controller, item, cache=cache)
                 processed += 1
-                results.append({"index": index, "record_key": device.serial_number, "status": "processed", "message": "Processed"})
+                results.append({
+                    "index": index,
+                    "record_key": observation.serial_number,
+                    "status": "processed",
+                    "message": "Observation cached",
+                })
             except Exception as exc:
                 failed += 1
-                results.append({"index": index, "record_key": key, "status": "rejected", "message": str(exc)})
-        return self._ok({"received": len(items), "processed": processed, "failed": failed, "results": results}, message="Device report processed.")
+                results.append({
+                    "index": index,
+                    "record_key": key,
+                    "status": "rejected",
+                    "message": str(exc),
+                })
+        return self._ok({
+            "received": len(items),
+            "processed": processed,
+            "failed": failed,
+            "results": results,
+        }, message="Physical Reader observations cached.")
 
     @endpoint("NSP Controller Device Configuration Pull", route_path="controller/device-config/pull", methods="POST", code="nsp_controller_device_config_pull")
     def api_controller_device_config_pull(self):
@@ -329,7 +351,20 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 error_code="invalid_payload",
                 details={"unsupported_fields": unsupported},
             )
-        devices = self._whitelisted_devices(controller.device_ids.filtered("active")).sorted(
+        Device = self.env["nsp.device"].sudo()
+        devices = Device.browse()
+        lanes = self.env["nsp.parking.lane"].sudo().search([
+            ("active", "=", True),
+            ("controller_id", "=", controller.id),
+            ("parking_area_id.state", "in", ["operational", "maintenance", "blocked"]),
+        ])
+        devices |= lanes.mapped("timeline_line_ids.reader_id")
+        calibration_lines = self.env["nsp.measurement.reader.line"].sudo().search([
+            ("controller_id", "=", controller.id),
+            ("session_id.status", "in", ["ready", "running"]),
+        ])
+        devices |= calibration_lines.mapped("reader_id")
+        devices = devices.filtered(lambda rec: rec.active and not rec.cloud_removed).sorted(
             key=lambda rec: (rec.serial_number or "", rec.id)
         )
         return self._ok({

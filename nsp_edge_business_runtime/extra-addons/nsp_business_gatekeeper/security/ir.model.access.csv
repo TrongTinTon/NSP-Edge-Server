@@ -35,3 +35,4 @@ access_nsp_parking_lane_event_sequence_it,nsp.parking.lane.event.sequence IT,nsp
 access_nsp_parking_lane_event_sequence_operator,nsp.parking.lane.event.sequence Operator,nsp_business_gatekeeper.model_nsp_parking_lane_event_sequence,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_rfid_runtime_assignment_it,nsp.rfid.runtime.assignment IT,nsp_business_gatekeeper.model_nsp_rfid_runtime_assignment,nsp_core.group_nsp_it_parking,1,0,0,0
 access_nsp_rfid_runtime_assignment_operator,nsp.rfid.runtime.assignment Operator,nsp_business_gatekeeper.model_nsp_rfid_runtime_assignment,nsp_core.group_nsp_operator,1,0,0,0
+access_nsp_reader_observation_system,nsp.reader.observation system,model_nsp_reader_observation,base.group_system,1,1,1,1

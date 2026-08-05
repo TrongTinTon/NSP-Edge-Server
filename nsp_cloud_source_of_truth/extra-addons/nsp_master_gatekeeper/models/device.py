@@ -24,6 +24,16 @@ class Device(models.Model):
         index=True,
         help="Physical Reader serial number. It must be globally unique across all Edge Servers and Controllers.",
     )
+    runtime_detected_serial_number = fields.Char(
+        string="Detected SDK Serial",
+        readonly=True,
+        copy=False,
+        index=True,
+        help=(
+            "Latest physical Reader serial reported by Edge from the Reader SDK. "
+            "This runtime observation does not change the Cloud master Serial."
+        ),
+    )
     device_code = fields.Char(
         string="Device Code", required=True, readonly=True, copy=False, index=True,
         default=lambda self: new_management_code("DEV"),

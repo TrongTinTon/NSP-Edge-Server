@@ -20,48 +20,133 @@ class NspSyncBusinessAdapter(models.Model):
         self.ensure_one()
         return False
 
+    def _managed_runtime_status_scope(self):
+        """Return the Controllers and Readers currently managed by this Edge runtime.
+
+        Runtime scope is the union of the applied Parking Layout and active Lane
+        Calibration projections. Local master/cache records that are not referenced
+        by either projection must not be reported through ``edge/status``.
+        """
+        self.ensure_one()
+        Controller = self.env["nsp.controller"].sudo()
+        Device = self.env["nsp.device"].sudo()
+        controllers = Controller.browse()
+        devices_by_controller = {}
+
+        def register(controller, devices):
+            nonlocal controllers
+            if not controller or not controller.active or controller.cloud_removed:
+                return
+            controllers |= controller
+            current = devices_by_controller.get(controller.id, Device.browse())
+            valid_devices = devices.filtered(
+                lambda record: record.active and not record.cloud_removed
+            )
+            devices_by_controller[controller.id] = current | valid_devices
+
+        Lane = self.env["nsp.parking.lane"].sudo()
+        lanes = Lane.search([
+            ("active", "=", True),
+            ("parking_area_id.state", "in", ["operational", "maintenance", "blocked"]),
+        ])
+        for lane in lanes:
+            register(lane.controller_id, lane.timeline_line_ids.mapped("reader_id"))
+
+        ReaderLine = self.env["nsp.measurement.reader.line"].sudo()
+        calibration_lines = ReaderLine.search([
+            ("session_id.status", "in", ["ready", "running"]),
+        ])
+        for line in calibration_lines:
+            register(line.controller_id, line.reader_id)
+
+        return controllers.sorted(
+            key=lambda record: (record.controller_id or "", record.id)
+        ), devices_by_controller
+
     def _serialize_edge_server_status(self):
         self.ensure_one()
-        controllers = []
-        Controller = self.env["nsp.controller"].sudo()
-        for controller in Controller.search([("active", "=", True)], order="controller_id,id"):
-            devices = []
-            for device in controller.device_ids.filtered("active").sorted(
-                key=lambda record: (record.serial_number or "", record.id)
-            ):
-                status = str(device.status or "offline").lower()
-                item = {
-                    "serial_number": device.serial_number or "",
-                    "ports": device._reported_port_numbers(),
-                    "device_status": (
-                        status if status in ("online", "offline", "degraded") else "offline"
-                    ),
-                    "last_seen_at": self._dt(device.last_seen) if device.last_seen else False,
-                }
-                if device.firmware_version:
-                    item["firmware_version"] = device.firmware_version
+        managed_controllers, devices_by_controller = self._managed_runtime_status_scope()
+        timeout_sec = int(self.env["ir.config_parameter"].sudo().get_param(
+            "nsp_business_gatekeeper.reader_observation_timeout_sec", "120"
+        ) or 120)
+        fresh_after = fields.Datetime.now() - timedelta(seconds=max(timeout_sec, 30))
 
-                # Runtime settings are unknown until the Controller reports them.
-                # Omit both fields rather than sending a synthetic zero interval
-                # that Cloud must reject as invalid.
-                runtime_interval = int(device.runtime_read_interval_ms or 0)
-                if runtime_interval > 0:
-                    item.update({
-                        "power_dbm": int(device.runtime_power_dbm or 0),
-                        "read_interval_ms": runtime_interval,
-                    })
+        controller_ids = managed_controllers.ids
+        expected_serials = {
+            str(device.serial_number or "").strip().upper()
+            for devices in devices_by_controller.values()
+            for device in devices
+            if device.serial_number
+        }
+        observations = self.env["nsp.reader.observation"].sudo().search([
+            ("controller_id", "in", controller_ids),
+            ("serial_number", "in", list(expected_serials)),
+        ]) if controller_ids and expected_serials else self.env["nsp.reader.observation"].browse()
+        observation_by_key = {
+            (record.controller_id.id, str(record.serial_number or "").strip().upper()): record
+            for record in observations
+        }
+
+        controllers = []
+        for controller in managed_controllers:
+            devices = []
+            managed_devices = devices_by_controller.get(
+                controller.id, self.env["nsp.device"].browse()
+            )
+            for device in managed_devices.sorted(
+                key=lambda record: (record.device_code or "", record.id)
+            ):
+                expected_serial = str(device.serial_number or "").strip().upper()
+                observation = observation_by_key.get((controller.id, expected_serial))
+                fresh = bool(
+                    observation
+                    and observation.last_reported_at
+                    and observation.last_reported_at >= fresh_after
+                )
+                observed_status = str(observation.status or "offline").lower() if fresh else "offline"
+                if observed_status not in ("online", "offline", "degraded"):
+                    observed_status = "offline"
+
+                item = {
+                    "reader_code": device.device_code or "",
+                    "serial_number": expected_serial,
+                    "status": observed_status,
+                    "last_seen_at": (
+                        self._dt(observation.last_seen_at)
+                        if observation and observation.last_seen_at else False
+                    ),
+                    "firmware_version": (
+                        observation.firmware_version if observation else ""
+                    ) or "",
+                    "power_dbm": int(
+                        (observation.power_dbm if observation and observation.power_dbm is not None else None)
+                        or device.runtime_power_dbm
+                        or device.power_dbm
+                        or 0
+                    ),
+                    "read_interval_ms": int(
+                        (observation.read_interval_ms if observation and observation.read_interval_ms else 0)
+                        or device.runtime_read_interval_ms
+                        or device.read_interval_ms
+                        or 200
+                    ),
+                }
                 devices.append(item)
 
+            controller_status = str(controller.status or "offline").lower()
+            if controller_status not in ("online", "offline", "error", "block", "revoked"):
+                controller_status = "offline"
             controllers.append({
                 "controller_code": controller.controller_id or "",
-                "current_status": str(controller.status or "offline").lower(),
+                "status": controller_status,
                 "last_seen_at": self._dt(controller.timestamp) if controller.timestamp else False,
                 "devices": devices,
             })
+
         return {
             "record_key": self.edge_server_code,
             "edge_server_code": self.edge_server_code,
-            "current_status": "online",
+            "status": "online",
             "last_seen_at": self._dt(fields.Datetime.now()),
             "controllers": controllers,
         }

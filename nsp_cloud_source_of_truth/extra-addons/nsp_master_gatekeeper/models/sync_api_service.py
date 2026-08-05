@@ -144,7 +144,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
     def _update_edge_server_status_from_payload(self, parent, data):
         if not parent:
             return parent
-        current_status = str(data.get("current_status") or "online").strip().lower()
+        current_status = str(data.get("status") or "online").strip().lower()
         if current_status not in ("online", "offline", "error", "block", "revoked"):
             raise ValueError("invalid_payload")
         last_seen_at = self._safe_datetime_value(data.get("last_seen_at"), default_now=False) or fields.Datetime.now()
@@ -159,89 +159,145 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         return parent
 
     @api.model
-    def _device_status_cache(self, controllers, items):
-        serials = {
-            str(item.get("serial_number") or "").strip().upper()
-            for item in (items or []) if isinstance(item, dict)
+    def _edge_runtime_status_scope(self, edge_server):
+        """Build status scope from stable runtime Reader Codes.
+
+        Parking Layout and Lane Calibration own the runtime scope. Reader Code is
+        the stable management identity. ``serial_number`` in ``edge/status`` is the
+        expected Cloud Serial echoed from the Edge runtime projection; raw SDK
+        observations stay on Edge and never establish Cloud runtime ownership.
+        """
+        edge_code = str(edge_server.edge_server_code or "").strip().upper()
+        Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
+        Device = self.env["nsp.device"].sudo().with_context(active_test=False)
+        controller_codes = set()
+        reader_codes_by_controller_code = {}
+
+        def register_reader(controller_code, reader_code):
+            normalized_controller = str(controller_code or "").strip().upper()
+            normalized_reader = str(reader_code or "").strip().upper()
+            if not normalized_controller or not normalized_reader:
+                return
+            controller_codes.add(normalized_controller)
+            reader_codes_by_controller_code.setdefault(
+                normalized_controller, set()
+            ).add(normalized_reader)
+
+        Area = self.env["nsp.parking.area"].sudo()
+        areas = Area.search([
+            ("published_payload_json", "!=", False),
+            ("published_edge_server_codes", "ilike", edge_code),
+        ], order="code,id").filtered(lambda area: area.is_published_for_edge(edge_code))
+        for area in areas:
+            payload = self._published_parking_payload_for_edge(area, edge_code)
+            if not payload:
+                continue
+            for lane in payload.get("lanes") or []:
+                controller_code = str(
+                    lane.get("controller_code") or ""
+                ).strip().upper()
+                if controller_code:
+                    controller_codes.add(controller_code)
+                for reader in lane.get("readers") or []:
+                    register_reader(
+                        controller_code,
+                        reader.get("technical_code") or reader.get("reader_code"),
+                    )
+                for step in lane.get("reader_port_timeline") or []:
+                    register_reader(controller_code, step.get("reader_code"))
+
+        ReaderLine = self.env["nsp.measurement.reader.line"].sudo()
+        calibration_lines = ReaderLine.search([
+            ("edge_server_id", "=", edge_server.id),
+            ("session_id.status", "in", ["ready", "running"]),
+        ])
+        for line in calibration_lines:
+            register_reader(
+                line.controller_id.controller_id,
+                line.reader_id.device_code,
+            )
+
+        controllers = Controller.search([
+            ("controller_id", "in", sorted(controller_codes)),
+        ]) if controller_codes else Controller.browse()
+        controller_by_code = {
+            str(record.controller_id or "").strip().upper(): record
+            for record in controllers
         }
-        serials.discard("")
-        controller_ids = controllers.ids if controllers else []
-        Device = self.env["nsp.device"].sudo()
         devices = Device.search([
-            ("controller_id", "in", controller_ids),
-            ("serial_number", "in", list(serials)),
-        ]) if controller_ids and serials else Device.browse()
-        whitelist = self.env["nsp.device.whitelist"].sudo().search([
-            ("serial_number", "in", list(serials)),
-            ("active", "=", True),
-            ("device_type_code", "=", "RFID_READER"),
-        ]) if serials else self.env["nsp.device.whitelist"].browse()
+            ("controller_id", "in", controllers.ids),
+        ]) if controllers else Device.browse()
+        device_by_key = {}
+        devices_by_controller = {}
+        for device in devices:
+            controller_code = str(
+                device.controller_id.controller_id or ""
+            ).strip().upper()
+            reader_code = str(device.device_code or "").strip().upper()
+            if reader_code not in reader_codes_by_controller_code.get(
+                controller_code, set()
+            ):
+                continue
+            device_by_key[(device.controller_id.id, reader_code)] = device
+            current = devices_by_controller.get(
+                device.controller_id.id, Device.browse()
+            )
+            devices_by_controller[device.controller_id.id] = current | device
         return {
-            "device_by_key": {(device.controller_id.id, device.serial_number): device for device in devices},
-            "whitelist_serials": set(whitelist.mapped("serial_number")),
+            "controller_by_code": controller_by_code,
+            "device_by_key": device_by_key,
+            "devices_by_controller": devices_by_controller,
         }
 
     @api.model
-    def _apply_device_status(self, controller, item, cache=None):
+    def _apply_device_status(self, controller, item, cache):
         if not isinstance(item, dict):
             raise ValueError("invalid_payload")
         allowed_fields = {
-            "serial_number", "ports", "device_status",
+            "reader_code", "serial_number", "status",
             "last_seen_at", "firmware_version", "power_dbm", "read_interval_ms",
         }
         unsupported = sorted(set(item) - allowed_fields)
         if unsupported:
             raise ValueError("unsupported_field:%s" % ",".join(unsupported))
+        reader_code = str(item.get("reader_code") or "").strip().upper()
+        if not reader_code:
+            raise ValueError("reader_code is required")
         serial_number = str(item.get("serial_number") or "").strip().upper()
         if not serial_number:
             raise ValueError("serial_number is required")
-        cache = cache or self._device_status_cache(controller, [item])
-        if serial_number not in cache.get("whitelist_serials", set()):
-            raise ValueError("device_not_whitelisted")
-        device = cache.get("device_by_key", {}).get((controller.id, serial_number))
+
+        device = cache.get("device_by_key", {}).get((controller.id, reader_code))
         if not device:
-            raise ValueError("device_not_found")
-        status = str(item.get("device_status") or "online").strip().lower()
+            raise ValueError("reader_not_managed_by_runtime")
+        if not device.active:
+            raise ValueError("device_inactive")
+
+        status = str(item.get("status") or "offline").strip().lower()
         if status not in ("online", "offline", "degraded"):
-            raise ValueError("invalid_payload")
-
-        reported_ports = item.get("ports")
-        if reported_ports is not None:
-            if not isinstance(reported_ports, list):
-                raise ValueError("ports must be an array")
-            port_numbers = []
-            for value in reported_ports:
-                if isinstance(value, bool):
-                    raise ValueError("invalid_port_number")
-                try:
-                    port_no = int(value)
-                except (TypeError, ValueError) as exc:
-                    raise ValueError("invalid_port_number") from exc
-                if port_no <= 0:
-                    raise ValueError("invalid_port_number")
-                port_numbers.append(port_no)
-            if len(port_numbers) != len(set(port_numbers)):
-                raise ValueError("duplicate_port_number")
-
+            raise ValueError("invalid_status")
         last_seen_at = self._safe_datetime_value(item.get("last_seen_at"), default_now=False)
-        vals = {"status": status}
+        values = {"status": status}
         if last_seen_at:
-            vals["last_seen"] = last_seen_at
+            values["last_seen"] = last_seen_at
         elif status == "online":
-            vals["last_seen"] = fields.Datetime.now()
+            values["last_seen"] = fields.Datetime.now()
         if item.get("firmware_version") not in (None, ""):
-            vals["firmware_version"] = str(item.get("firmware_version"))
+            values["firmware_version"] = str(item.get("firmware_version"))
         if item.get("power_dbm") not in (None, ""):
             power = int(item.get("power_dbm"))
             if power < 0 or power > 40:
                 raise ValueError("invalid_power_dbm")
-            vals["runtime_power_dbm"] = power
+            values["runtime_power_dbm"] = power
         if item.get("read_interval_ms") not in (None, ""):
-            read_interval = int(item.get("read_interval_ms"))
-            if read_interval <= 0 or read_interval > 60000:
+            interval = int(item.get("read_interval_ms"))
+            if interval <= 0 or interval > 60000:
                 raise ValueError("invalid_read_interval_ms")
-            vals["runtime_read_interval_ms"] = read_interval
-        device.write(vals)
+            values["runtime_read_interval_ms"] = interval
+
+        # Cloud Reader Code is authoritative. serial_number is the expected
+        # master Serial echoed by Edge and is never treated as a raw SDK observation.
+        device.write(values)
         return device
 
     @endpoint("NSP Edge Status", route_path="edge/status", methods="POST", code="nsp_edge_status")
@@ -252,7 +308,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             return error
         heartbeat_data = dict(data)
         heartbeat_data["_heartbeat_received"] = True
-        heartbeat_data.setdefault("current_status", "online")
+        heartbeat_data.setdefault("status", "online")
         self._update_edge_server_status_from_payload(edge_server, heartbeat_data)
 
         controller_items = data.get("controllers") or []
@@ -262,34 +318,12 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 details={"field": "controllers"},
             )
 
-        Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
-        controller_codes = {
-            str(item.get("controller_code") or "").strip().upper()
-            for item in controller_items if isinstance(item, dict)
-        }
-        controller_codes.discard("")
-        controller_candidates = Controller.search([
-            ("controller_id", "in", list(controller_codes)),
-        ]) if controller_codes else Controller.browse()
-        controller_by_code = {}
-        controller_error_by_code = {}
-        for record in controller_candidates:
-            if not record.active:
-                controller_error_by_code[record.controller_id] = "controller_inactive"
-            elif record.edge_server_id != edge_server:
-                controller_error_by_code[record.controller_id] = "controller_not_in_scope"
-            elif record.status in ("block", "revoked"):
-                controller_error_by_code[record.controller_id] = "controller_blocked"
-            else:
-                controller_by_code[record.controller_id] = record
-        controllers = Controller.browse([record.id for record in controller_by_code.values()])
-        reported_device_items = [
-            device_item
-            for controller_item in controller_items if isinstance(controller_item, dict)
-            for device_item in (controller_item.get("devices") or [])
-            if isinstance(device_item, dict)
-        ]
-        device_cache = self._device_status_cache(controllers, reported_device_items)
+        runtime_scope = self._edge_runtime_status_scope(edge_server)
+        controller_by_code = runtime_scope["controller_by_code"]
+        device_cache = runtime_scope
+        controllers = self.env["nsp.controller"].sudo().browse(
+            [record.id for record in controller_by_code.values()]
+        )
 
         results = []
         reported_controller_ids = set()
@@ -305,11 +339,13 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     raise ValueError("missing_controller_code")
                 controller = controller_by_code.get(controller_code)
                 if not controller:
-                    raise ValueError(
-                        controller_error_by_code.get(controller_code, "controller_not_found")
-                    )
+                    raise ValueError("controller_not_managed_by_runtime")
+                if not controller.active:
+                    raise ValueError("controller_inactive")
+                if controller.status in ("block", "revoked"):
+                    raise ValueError("controller_blocked")
 
-                controller_status = str(controller_item.get("current_status") or "online").strip().lower()
+                controller_status = str(controller_item.get("status") or "offline").strip().lower()
                 if controller_status not in ("online", "offline", "error", "block", "revoked"):
                     raise ValueError("invalid_controller_status")
                 controller_seen = self._safe_datetime_value(
@@ -327,14 +363,14 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 devices = controller_item.get("devices") or []
                 if not isinstance(devices, list):
                     raise ValueError("devices must be an array")
-                reported_serials = {
-                    str(item.get("serial_number") or "").strip().upper()
+                reported_reader_codes = {
+                    str(item.get("reader_code") or "").strip().upper()
                     for item in devices if isinstance(item, dict)
-                    and str(item.get("serial_number") or "").strip()
+                    and str(item.get("reader_code") or "").strip()
                 }
                 for device_index, device_item in enumerate(devices):
-                    serial_number = str(
-                        device_item.get("serial_number") or ""
+                    reader_code = str(
+                        device_item.get("reader_code") or ""
                     ).strip().upper() if isinstance(device_item, dict) else ""
                     try:
                         device = self._apply_device_status(controller, device_item, cache=device_cache)
@@ -343,7 +379,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                             "controller_index": controller_index,
                             "device_index": device_index,
                             "controller_code": controller_code,
-                            "record_key": device.serial_number,
+                            "record_key": device.device_code,
                             "status": "processed",
                             "message": "Processed",
                         })
@@ -353,13 +389,17 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                             "controller_index": controller_index,
                             "device_index": device_index,
                             "controller_code": controller_code,
-                            "record_key": serial_number,
+                            "record_key": reader_code,
                             "status": "rejected",
                             "message": str(exc),
                         })
 
-                missing_devices = controller.device_ids.filtered(
-                    lambda record: record.serial_number not in reported_serials
+                managed_devices = device_cache.get("devices_by_controller", {}).get(
+                    controller.id, self.env["nsp.device"].browse()
+                )
+                missing_devices = managed_devices.filtered(
+                    lambda record: str(record.device_code or "").strip().upper()
+                    not in reported_reader_codes
                     and record.status != "offline"
                 )
                 if missing_devices:
@@ -375,7 +415,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     "message": str(exc),
                 })
 
-        missing_controllers = edge_server.controller_ids.filtered(
+        missing_controllers = controllers.filtered(
             lambda record: record.active
             and record.id not in reported_controller_ids
             and record.status not in ("offline", "block", "revoked")
@@ -383,7 +423,12 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         if missing_controllers:
             controllers_marked_offline = len(missing_controllers)
             missing_controllers.write({"status": "offline"})
-            missing_devices = missing_controllers.mapped("device_ids").filtered(
+            missing_devices = self.env["nsp.device"].browse()
+            for controller in missing_controllers:
+                missing_devices |= device_cache.get(
+                    "devices_by_controller", {}
+                ).get(controller.id, self.env["nsp.device"].browse())
+            missing_devices = missing_devices.filtered(
                 lambda record: record.status != "offline"
             )
             if missing_devices:
@@ -392,7 +437,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
 
         return self._ok({
             "edge_server_code": edge_server.edge_server_code,
-            "current_status": edge_server.status,
+            "status": edge_server.status,
             "last_seen_at": self._iso_datetime(edge_server.timestamp),
             "controllers_processed": controller_count,
             "devices_processed": device_count,

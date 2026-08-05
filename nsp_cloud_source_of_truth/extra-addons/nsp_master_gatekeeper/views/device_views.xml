@@ -29,8 +29,9 @@
             <list string="Readers" create="0" edit="1" delete="0">
                 <field name="status" widget="badge" decoration-success="status == 'online'" decoration-danger="status == 'offline'" decoration-warning="status == 'degraded'"/>
                 <field name="name" string="Reader" decoration-bf="1"/>
-                <field name="serial_number" string="Serial" readonly="1"/>
-                <field name="device_code" string="Technical Code" optional="hide"/>
+                <field name="serial_number" string="Master Serial" readonly="1"/>
+                <field name="runtime_detected_serial_number" string="Detected SDK Serial" readonly="1" optional="show"/>
+                <field name="device_code" string="Reader Code" optional="hide"/>
                 <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                 <field name="connection_type" string="Physical Connection" optional="show"/>
                 <field name="last_seen" readonly="1" optional="show"/>
@@ -55,7 +56,8 @@
                     </div>
                     <group>
                         <group string="Device Declaration">
-                            <field name="serial_number" string="Serial" readonly="1"/>
+                            <field name="serial_number" string="Master Serial" readonly="1"/>
+                            <field name="runtime_detected_serial_number" string="Detected SDK Serial" readonly="1"/>
                             <field name="controller_id" readonly="context.get('default_controller_id')" domain="[('edge_server_id', '=', context.get('default_edge_server_id'))] if context.get('default_edge_server_id') else []" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_controllers_form', 'default_edge_server_id': context.get('default_edge_server_id')}"/>
                             <field name="connection_type" string="Physical Connection" widget="nsp_grouped_connection"/>
                             <field name="device_code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
@@ -111,7 +113,8 @@
             <list string="Reader Runtime Status" create="0" edit="1" delete="0">
                 <field name="status" widget="badge" decoration-success="status == 'online'" decoration-danger="status == 'offline'" decoration-warning="status == 'degraded'"/>
                 <field name="name" string="Reader"/>
-                <field name="serial_number"/>
+                <field name="serial_number" string="Master Serial"/>
+                <field name="runtime_detected_serial_number" string="Detected SDK Serial"/>
                 <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                 <field name="device_code" string="Technical Code" optional="hide"/>
                 <field name="last_seen"/>
