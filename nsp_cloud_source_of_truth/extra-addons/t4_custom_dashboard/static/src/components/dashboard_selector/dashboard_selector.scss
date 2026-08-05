@@ -1,0 +1,27 @@
+/* Tăng độ tương phản cho dashboard được chọn */
+
+
+.dashboard-item.bg-primary.bg-opacity-10 {
+    background-color: rgba(5, 134, 156, 0.2) !important;
+    border-color: #05869c !important;
+    border-width: 2px !important;
+}
+
+.dashboard-item.bg-primary.bg-opacity-10:hover {
+    background-color: rgba(5, 134, 156, 0.3) !important;
+}
+
+/* Icon check màu đậm hơn */
+.dashboard-item .text-primary {
+    color: #05869c !important;
+}
+
+/* Badge màu tương phản */
+.badge.bg-success {
+    background-color: #198754 !important;
+}
+
+.badge.bg-info {
+    background-color: #0dcaf0 !important;
+    color: #000 !important;
+}

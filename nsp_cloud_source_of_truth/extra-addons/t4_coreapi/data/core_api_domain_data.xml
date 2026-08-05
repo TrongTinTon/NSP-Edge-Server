@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+
+    <record id="core_api_domain_default" model="core.api.domain">
+        <field name="name">Default</field>
+        <field name="is_default" eval="True"/>
+        <field name="protocol">http</field>
+        <field name="sequence">10</field>
+        <field name="active" eval="True"/>
+        <field name="description">Fallback when the request host is not configured elsewhere (localhost, web.base.url, etc.).</field>
+    </record>
+
+</odoo>

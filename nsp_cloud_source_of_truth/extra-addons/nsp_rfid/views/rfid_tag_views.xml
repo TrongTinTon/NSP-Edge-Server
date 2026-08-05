@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <record id="view_nsp_rfid_tag_search" model="ir.ui.view">
+        <field name="name">nsp.rfid.tag.search</field>
+        <field name="model">nsp.rfid.tag</field>
+        <field name="arch" type="xml">
+            <search string="RFID Tag Whitelist">
+                <field name="tid"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_rfid_tag_list" model="ir.ui.view">
+        <field name="name">nsp.rfid.tag.list</field>
+        <field name="model">nsp.rfid.tag</field>
+        <field name="arch" type="xml">
+            <list string="RFID Tag Whitelist" create="1" edit="1" delete="0">
+                <field name="tid" decoration-bf="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_rfid_tag_form" model="ir.ui.view">
+        <field name="name">nsp.rfid.tag.form</field>
+        <field name="model">nsp.rfid.tag</field>
+        <field name="arch" type="xml">
+            <form string="RFID Tag Whitelist">
+                <sheet>
+                    <group>
+                        <field name="tid" placeholder="Scan or enter TID"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_nsp_rfid_tag" model="ir.actions.act_window">
+        <field name="name">RFID Tag Whitelist</field>
+        <field name="res_model">nsp.rfid.tag</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_nsp_rfid_tag_search"/>
+    </record>
+</odoo>

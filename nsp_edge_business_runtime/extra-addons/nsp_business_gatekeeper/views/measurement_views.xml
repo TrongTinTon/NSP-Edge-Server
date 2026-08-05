@@ -1,0 +1,200 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<odoo>
+    <record id="view_nsp_measurement_session_search" model="ir.ui.view">
+        <field name="name">nsp.measurement.session.search</field>
+        <field name="model">nsp.measurement.session</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="measurement_code" string="Calibration Code"/>
+                <filter string="Draft" name="draft" domain="[('status','=','draft')]"/>
+                <filter string="Ready" name="ready" domain="[('status','=','ready')]"/>
+                <filter string="Running" name="running" domain="[('status','=','running')]"/>
+                <filter string="Completed" name="completed" domain="[('status','=','completed')]"/>
+                <filter string="Applied" name="applied" domain="[('status','=','applied')]"/>
+                <filter string="Failed" name="failed" domain="[('status','=','failed')]"/>
+                <group>
+                    <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_measurement_session_list" model="ir.ui.view">
+        <field name="name">nsp.measurement.session.list</field>
+        <field name="model">nsp.measurement.session</field>
+        <field name="arch" type="xml">
+            <list string="Lane Calibration" decoration-info="status == 'running'" decoration-success="status in ('completed','applied')" decoration-danger="status == 'failed'">
+                <field name="measurement_code" readonly="1"/>
+                <field name="revision"/>
+                <field name="status" widget="badge"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_measurement_session_form" model="ir.ui.view">
+        <field name="name">nsp.measurement.session.form</field>
+        <field name="model">nsp.measurement.session</field>
+        <field name="arch" type="xml">
+            <form string="Lane Calibration" create="0" edit="0" delete="0">
+                <header>
+                    <button name="action_complete" type="object" string="Complete" icon="fa-check"
+                            help="Complete the current calibration." class="oe_highlight"
+                            invisible="status != 'running'"/>
+                    <button name="action_cancel" type="object" string="Cancel" icon="fa-times"
+                            help="Cancel the current calibration."
+                            invisible="status not in ('ready','running')"/>
+                    <field name="status" widget="statusbar" statusbar_visible="draft,ready,running,completed,applied,failed,cancelled"/>
+                </header>
+                <sheet>
+                    <field name="is_cloud_deployment" invisible="1"/>
+                    <div class="oe_title">
+                        <label for="measurement_code" string="Lane Calibration"/>
+                        <h1><field name="measurement_code" readonly="1" widget="CopyClipboardChar"/></h1>
+                        <div class="text-muted" title="Revision"><i class="fa fa-code-fork me-1"/>R<field name="revision" readonly="1" class="oe_inline"/></div>
+                    </div>
+                    <notebook>
+                        <page string="Live" name="live">
+                            <field name="live_dashboard" widget="nsp_business_measurement_live_dashboard" nolabel="1" readonly="1"/>
+                        </page>
+                        <page string="Devices" name="devices">
+                            <field name="reader_line_ids" mode="list,form" readonly="1"
+                                   context="{'form_view_ref': 'nsp_business_gatekeeper.view_nsp_measurement_reader_line_form'}">
+                                <list create="0" edit="0" delete="0">
+                                    <field name="edge_server_id" string="Server"/>
+                                    <field name="controller_id" string="Controller"/>
+                                    <field name="reader_id" string="Reader"/>
+                                    <field name="port_count" string="Ports" readonly="1"/>
+                                    <field name="reader_power_dbm" string="Power"/>
+                                    <field name="read_interval_ms" string="Interval"/>
+                                    <field name="reader_status" string="State" readonly="1" widget="badge" optional="hide"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Vehicles" name="vehicles">
+                            <field name="target_line_ids" readonly="1">
+                                <list create="0" edit="0" delete="0">
+                                    <field name="vehicle_tid" string="RFID Tag"/>
+                                    <field name="license_plate" string="Plate"/>
+                                    <field name="owner_id" string="Owner"/>
+                                    <field name="vehicle_detection_state" string="State" widget="badge"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+
+    <record id="view_nsp_measurement_reader_line_form" model="ir.ui.view">
+        <field name="name">nsp.measurement.reader.line.edge.form</field>
+        <field name="model">nsp.measurement.reader.line</field>
+        <field name="arch" type="xml">
+            <form string="Reader" create="0" edit="0" delete="0">
+                <sheet>
+                    <div class="oe_title"><h1><i class="fa fa-rss me-2"/>Reader</h1></div>
+                    <group>
+                        <group string="Device">
+                            <field name="edge_server_id" string="Server"/>
+                            <field name="controller_id" string="Controller"/>
+                            <field name="reader_id" string="Reader"/>
+                            <field name="serial_number" string="Serial"/>
+                            <field name="reader_status" string="State" widget="badge"/>
+                        </group>
+                        <group string="Settings">
+                            <field name="reader_power_dbm" string="Power (dBm)"/>
+                            <field name="read_interval_ms" string="Interval (ms)"/>
+                            <field name="reader_tid_addr" string="TID Start"/>
+                            <field name="reader_tid_len" string="TID Length"/>
+                        </group>
+                    </group>
+                    <separator string="Reader Ports"/>
+                    <field name="reader_port_ids" nolabel="1" readonly="1">
+                        <list create="0" edit="0" delete="0">
+                            <field name="port_no" string="Port"/>
+                        </list>
+                    </field>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+
+    <record id="view_nsp_measurement_event_search" model="ir.ui.view">
+        <field name="name">nsp.measurement.event.search</field>
+        <field name="model">nsp.measurement.event</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="event_uid"/>
+                <field name="session_id"/>
+                <field name="revision"/>
+                <field name="serial_number"/>
+                <field name="port_no"/>
+                <field name="tid"/>
+                <filter string="Session" name="group_session" context="{'group_by':'session_id'}"/>
+                <filter string="Revision" name="group_revision" context="{'group_by':'revision'}"/>
+                <filter string="RFID Tag" name="group_tid" context="{'group_by':'tid'}"/>
+                <filter string="Reader" name="group_reader" context="{'group_by':'serial_number'}"/>
+                <filter string="Reader Port" name="group_port" context="{'group_by':'port_no'}"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_measurement_event_list" model="ir.ui.view">
+        <field name="name">nsp.measurement.event.list</field>
+        <field name="model">nsp.measurement.event</field>
+        <field name="arch" type="xml">
+            <list string="Calibration Observations" create="0" edit="0" delete="0">
+                <field name="read_at"/>
+                <field name="session_id"/>
+                <field name="revision"/>
+                <field name="tid"/>
+                <field name="serial_number"/>
+                <field name="port_no"/>
+                <field name="power_dbm" optional="hide"/>
+                <field name="read_interval_ms" optional="hide"/>
+                <field name="rssi_dbm" optional="hide"/>
+                <field name="event_uid" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_measurement_event_form" model="ir.ui.view">
+        <field name="name">nsp.measurement.event.form</field>
+        <field name="model">nsp.measurement.event</field>
+        <field name="arch" type="xml">
+            <form string="Calibration Observation" create="0" edit="0" delete="0">
+                <sheet>
+                    <group>
+                        <field name="event_uid"/>
+                        <field name="session_id"/>
+                        <field name="revision"/>
+                        <field name="tid"/>
+                        <field name="serial_number"/>
+                        <field name="port_no"/>
+                        <field name="read_at"/>
+                        <field name="power_dbm"/>
+                        <field name="read_interval_ms"/>
+                        <field name="rssi_dbm"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_nsp_measurement_session" model="ir.actions.act_window">
+        <field name="name">Lane Calibration</field>
+        <field name="res_model">nsp.measurement.session</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_nsp_measurement_session_search"/>
+    </record>
+
+    <record id="action_nsp_measurement_event" model="ir.actions.act_window">
+        <field name="name">Calibration Observations</field>
+        <field name="res_model">nsp.measurement.event</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_nsp_measurement_event_search"/>
+    </record>
+</odoo>

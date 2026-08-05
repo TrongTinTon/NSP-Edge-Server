@@ -1,0 +1,89 @@
+.nsp-rfid-scan {
+    min-width: 16rem;
+
+    &__input {
+        font-family: var(--font-monospace, monospace);
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        border: 1px solid var(--border-color, #ced4da);
+        background: var(--o-input-background-color, var(--o-view-background-color, #fff));
+        transition: box-shadow 180ms ease, transform 180ms ease, background 180ms ease;
+    }
+
+    &__feedback {
+        margin-top: 0.3rem;
+        color: var(--danger, #dc3545);
+        font-size: 0.82rem;
+        font-weight: 600;
+        line-height: 1.35;
+    }
+
+    &--success .nsp-rfid-scan__input {
+        border: 2px solid transparent;
+        background:
+            linear-gradient(
+                var(--o-input-background-color, var(--o-view-background-color, #fff)),
+                var(--o-input-background-color, var(--o-view-background-color, #fff))
+            ) padding-box,
+            linear-gradient(120deg, #16a34a, #4ade80, #22c55e, #15803d) border-box;
+        background-size: 100% 100%, 220% 220%;
+        box-shadow:
+            0 0 0 0.18rem rgba(34, 197, 94, 0.14),
+            0 0.4rem 1rem rgba(22, 163, 74, 0.16);
+        animation: nsp-rfid-valid-border 900ms ease-out;
+    }
+
+    &--error .nsp-rfid-scan__input {
+        border: 2px solid transparent;
+        background:
+            linear-gradient(
+                var(--o-input-background-color, var(--o-view-background-color, #fff)),
+                var(--o-input-background-color, var(--o-view-background-color, #fff))
+            ) padding-box,
+            linear-gradient(120deg, #b91c1c, #fb7185, #ef4444, #991b1b) border-box;
+        background-size: 100% 100%, 220% 220%;
+        box-shadow:
+            0 0 0 0.18rem rgba(239, 68, 68, 0.13),
+            0 0.35rem 0.9rem rgba(220, 38, 38, 0.14);
+        animation: nsp-rfid-invalid-shake 340ms ease-in-out;
+    }
+}
+
+@keyframes nsp-rfid-valid-border {
+    0% {
+        background-position: 0 0, 0% 50%;
+        box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+    }
+    55% {
+        background-position: 0 0, 100% 50%;
+        box-shadow:
+            0 0 0 0.25rem rgba(34, 197, 94, 0.18),
+            0 0.5rem 1.15rem rgba(22, 163, 74, 0.18);
+    }
+    100% {
+        background-position: 0 0, 55% 50%;
+    }
+}
+
+@keyframes nsp-rfid-invalid-shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-0.22rem); }
+    40% { transform: translateX(0.18rem); }
+    60% { transform: translateX(-0.12rem); }
+    80% { transform: translateX(0.06rem); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .nsp-rfid-scan--success .nsp-rfid-scan__input,
+    .nsp-rfid-scan--error .nsp-rfid-scan__input {
+        animation: none;
+    }
+}
+
+.o_list_renderer .nsp-rfid-scan {
+    min-width: 18rem;
+
+    .nsp-rfid-scan__feedback {
+        white-space: normal;
+    }
+}

@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <t t-name="t4_custom_dashboard.DynamicFieldInput">
+        <div class="dynamic-field-input mb-2">
+
+            <!-- char -->
+            <t t-if="props.schema.type === 'char'">
+                <input
+                    type="text"
+                    class="form-control form-control-sm"
+                    t-att-value="props.value || ''"
+                    t-att-placeholder="props.schema.placeholder || ''"
+                    t-on-input="onCharInput"
+                />
+            </t>
+
+            <!-- bool -->
+            <t t-if="props.schema.type === 'bool'">
+                <div class="form-check">
+                    <input
+                        type="checkbox"
+                        class="form-check-input"
+                        t-att-checked="!!props.value"
+                        t-on-change="onBoolChange"
+                    />
+                    <label class="form-check-label text-muted small">
+                        <t t-esc="props.schema.label"/>
+                    </label>
+                </div>
+            </t>
+
+            <!-- json -->
+            <t t-if="props.schema.type === 'json'">
+                <textarea
+                    class="form-control form-control-sm font-monospace"
+                    rows="3"
+                    t-att-value="state.rawJson"
+                    t-on-input="onJsonInput"
+                    t-on-blur="onJsonBlur"
+                    t-att-placeholder="props.schema.placeholder || 'JSON value'"
+                />
+                <div t-if="state.jsonError" class="text-danger small mt-1">
+                    <t t-esc="state.jsonError"/>
+                </div>
+            </t>
+
+            <!-- widget_picker -->
+            <t t-if="props.schema.type === 'widget_picker'">
+                <div class="widget-picker-chips d-flex flex-wrap gap-1 mt-1">
+                    <!-- "Tất cả widget" chip -->
+                    <button
+                        type="button"
+                        class="btn btn-sm"
+                        t-att-class="isAllWidgets ? 'btn-primary' : 'btn-outline-secondary'"
+                        t-on-click="onSelectAllWidgets"
+                    >
+                        Tất cả widget
+                    </button>
+                    <!-- Per-widget chips -->
+                    <t t-foreach="widgetList" t-as="w" t-key="w.id">
+                        <button
+                            type="button"
+                            class="btn btn-sm"
+                            t-att-class="isWidgetSelected(w.id) ? 'btn-info' : 'btn-outline-secondary'"
+                            t-on-click="() => this.toggleWidgetChip(w.id)"
+                        >
+                            <t t-esc="w.data &amp;&amp; w.data.title ? w.data.title : w.id"/>
+                        </button>
+                    </t>
+                </div>
+                <div class="text-muted small mt-1">
+                    <t t-if="isAllWidgets">Áp dụng cho tất cả widget</t>
+                    <t t-else="">Đã chọn <t t-esc="selectedWidgetIds.length"/> widget</t>
+                </div>
+            </t>
+
+        </div>
+    </t>
+
+</templates>

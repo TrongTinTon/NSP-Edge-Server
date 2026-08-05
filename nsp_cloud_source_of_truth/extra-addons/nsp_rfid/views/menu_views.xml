@@ -1,0 +1,6 @@
+<odoo>
+    <menuitem id="menu_nsp_rfid_tags" name="RFID Tag Whitelist"
+              parent="nsp_core.menu_nsp_master_data" action="action_nsp_rfid_tag"
+              sequence="30"
+              groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking,nsp_core.group_nsp_operator"/>
+</odoo>

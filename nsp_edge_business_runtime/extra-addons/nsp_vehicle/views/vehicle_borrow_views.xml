@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <record id="view_nsp_vehicle_borrow_form" model="ir.ui.view">
+        <field name="name">nsp.vehicle.borrow.form</field>
+        <field name="model">nsp.vehicle.borrow</field>
+        <field name="arch" type="xml">
+            <form string="Vehicle Access">
+                <header>
+                    <button name="action_return_vehicle" type="object" string="End" icon="fa-check"
+                            help="End access" class="btn-primary" invisible="state != 'active'"/>
+                    <button name="action_cancel" type="object" string="Cancel" icon="fa-times"
+                            help="Cancel access" invisible="state != 'active'"/>
+                    <field name="state" widget="statusbar" statusbar_visible="active,returned,cancelled" readonly="1"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="name" readonly="1"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="vehicle_id" string="Vehicle" readonly="state != 'active'"/>
+                            <field name="owner_id" string="Owner" readonly="1"/>
+                            <field name="allowed_borrower_ids" invisible="1"/>
+                            <field name="borrower_id" string="User" domain="[('id','in',allowed_borrower_ids)]"
+                                   readonly="state != 'active'"/>
+                        </group>
+                        <group>
+                            <field name="valid_from" string="From" readonly="state != 'active'"/>
+                            <field name="valid_to" string="Until" readonly="state != 'active'"/>
+                            <field name="returned_at" string="Ended" readonly="1"/>
+                            <field name="active_now" string="Active" readonly="1"/>
+                        </group>
+                    </group>
+                    <group string="System" groups="nsp_core.group_nsp_it_parking,base.group_system">
+                        <field name="borrow_code" string="Code" readonly="1" widget="CopyClipboardChar"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+</odoo>

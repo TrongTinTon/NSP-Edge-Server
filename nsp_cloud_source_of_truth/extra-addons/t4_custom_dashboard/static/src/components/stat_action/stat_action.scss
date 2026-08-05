@@ -1,0 +1,42 @@
+// Chỉ define các hành vi RIÊNG cho stat-action (clickable variant).
+// Font/size/icon responsive đã được handle ở `.stat-card` base (custom_dashboard.scss).
+.stat-action-card {
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    position: relative;
+    overflow: hidden;
+
+    &:hover:not(.is-loading) {
+        transform: translateY(-3px);
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+
+        .stat-action-hint {
+            opacity: 1;
+            transform: translateX(0);
+        }
+    }
+
+    &:active:not(.is-loading) {
+        transform: translateY(-1px);
+    }
+
+    &.is-loading {
+        cursor: progress;
+        opacity: 0.85;
+    }
+
+    .stat-action-hint {
+        position: absolute;
+        bottom: 8px;
+        right: 12px;
+        font-size: clamp(10px, 2.5cqi, 13px);
+        opacity: 0;
+        transform: translateX(8px);
+        transition: opacity 0.2s ease, transform 0.2s ease;
+        pointer-events: none;
+    }
+
+    .stat-original-value {
+        font-size: clamp(10px, 2.8cqi, 13px);
+    }
+}

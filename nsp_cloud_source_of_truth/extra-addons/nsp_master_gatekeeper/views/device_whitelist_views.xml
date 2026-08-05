@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="nsp_device_whitelist_search_view" model="ir.ui.view">
+        <field name="name">nsp.device.whitelist.search</field>
+        <field name="model">nsp.device.whitelist</field>
+        <field name="arch" type="xml">
+            <search string="Device Whitelist">
+                <field name="technical_code" string="Management Code"/>
+                <field name="serial_number"/>
+                <field name="device_type_id"/>
+                <filter string="Active" name="active" domain="[('active','=',True)]"/>
+                <filter string="Archived" name="archived" domain="[('active','=',False)]"/>
+                <separator/>
+                <group>
+                    <filter string="Device Type" name="group_type" context="{'group_by':'device_type_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="nsp_device_whitelist_list_view" model="ir.ui.view">
+        <field name="name">nsp.device.whitelist.list</field>
+        <field name="model">nsp.device.whitelist</field>
+        <field name="arch" type="xml">
+            <list string="Device Whitelist">
+                <field name="image_128" string="Photo" widget="image" class="o_avatar" optional="show"/>
+                <field name="active" widget="boolean_toggle"/>
+                <field name="device_type_code" column_invisible="1"/>
+                <field name="device_type_badge" string="Device Type" widget="badge" readonly="1"
+                       decoration-info="device_type_badge == 'SERVER'"
+                       decoration-warning="device_type_badge == 'CONTROLLER'"
+                       decoration-success="device_type_badge == 'RFID_READER'"
+                       decoration-primary="device_type_badge == 'ANTENNA'"/>
+                <field name="technical_code" string="Management Code" decoration-bf="1"/>
+                <field name="serial_number" string="Serial Number"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="nsp_device_whitelist_form_view" model="ir.ui.view">
+        <field name="name">nsp.device.whitelist.form</field>
+        <field name="model">nsp.device.whitelist</field>
+        <field name="arch" type="xml">
+            <form string="Device Whitelist">
+                <sheet>
+                    <field name="image_1920" widget="image" class="oe_avatar"
+                           options="{'preview_image': 'image_128'}"/>
+                    <div class="oe_title">
+                        <label for="technical_code" string="Management Code"/>
+                        <h1>
+                            <field name="technical_code" readonly="1" widget="CopyClipboardChar"
+                                   placeholder="Generated automatically"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group string="Device Identity">
+                            <field name="device_type_code" invisible="1"/>
+                            <field name="device_type_id" string="Device Type"
+                                   readonly="id"
+                                   domain="[('active','=',True),('code','in',['SERVER','CONTROLLER','RFID_READER','ANTENNA'])]"
+                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"
+                                   placeholder="Select Server, Controller, RFID Reader or Antenna"/>
+                            <field name="device_type_badge" string="Device Type" widget="badge" readonly="1"
+                                   invisible="not device_type_id"
+                                   decoration-info="device_type_badge == 'SERVER'"
+                                   decoration-warning="device_type_badge == 'CONTROLLER'"
+                                   decoration-success="device_type_badge == 'RFID_READER'"
+                                   decoration-primary="device_type_badge == 'ANTENNA'"/>
+                            <field name="serial_number" string="Serial Number"
+                                   required="device_type_code == 'RFID_READER'"
+                                   placeholder="Required for RFID Reader; optional for other device types"/>
+                            <field name="active" widget="boolean_toggle"/>
+                        </group>
+                    </group>
+                    <field name="name" invisible="1"/>
+                    <field name="edge_server_id" invisible="1"/>
+                    <field name="controller_id" invisible="1"/>
+                    <field name="reader_id" invisible="1"/>
+                    <field name="antenna_id" invisible="1"/>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="nsp_device_whitelist_action" model="ir.actions.act_window">
+        <field name="name">Device Whitelist</field>
+        <field name="res_model">nsp.device.whitelist</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="nsp_device_whitelist_search_view"/>
+        <field name="context">{'search_default_active': 1}</field>
+    </record>
+</odoo>

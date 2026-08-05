@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <record id="view_nsp_vehicle_form_rfid_assignment" model="ir.ui.view">
+        <field name="name">nsp.vehicle.form.rfid.assignment</field>
+        <field name="model">nsp.vehicle</field>
+        <field name="inherit_id" ref="nsp_vehicle.view_nsp_vehicle_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//form/sheet/notebook" position="before">
+                <group string="RFID Tag">
+                    <field name="active_rfid_assignment_id" invisible="1"/>
+                    <field name="rfid_tag_id" invisible="1"/>
+                    <field name="rfid_tid" invisible="1"/>
+                    <field name="rfid_tid_input"
+                           widget="nsp_rfid_scan"
+                           placeholder="Scan or enter TID"
+                           readonly="not active"
+                           options="{'target_field': 'rfid_tag_id', 'resolved_value_field': 'rfid_tid', 'require_available': True, 'create_missing': True}"/>
+                    <button name="action_revoke_rfid_tag"
+                            type="object"
+                            string="Revoke Tag"
+                            icon="fa-unlink"
+                            class="btn-secondary"
+                            invisible="not active_rfid_assignment_id"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="view_nsp_vehicle_list_rfid_assignment" model="ir.ui.view">
+        <field name="name">nsp.vehicle.list.rfid.assignment</field>
+        <field name="model">nsp.vehicle</field>
+        <field name="inherit_id" ref="nsp_vehicle.view_nsp_vehicle_list"/>
+        <field name="arch" type="xml">
+            <field name="owner_id" position="after">
+                <field name="rfid_tid" string="RFID TID" optional="show"/>
+            </field>
+        </field>
+    </record>
+</odoo>

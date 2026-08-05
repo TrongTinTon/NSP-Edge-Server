@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <record id="view_nsp_user_form_rfid_runtime" model="ir.ui.view">
+        <field name="name">nsp.user.form.rfid.runtime</field>
+        <field name="model">nsp.user</field>
+        <field name="inherit_id" ref="nsp_user.view_nsp_user_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="before">
+                <group string="RFID Runtime">
+                    <field name="runtime_rfid_tid" readonly="1"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="view_nsp_user_list_rfid_runtime" model="ir.ui.view">
+        <field name="name">nsp.user.list.rfid.runtime</field>
+        <field name="model">nsp.user</field>
+        <field name="inherit_id" ref="nsp_user.view_nsp_user_list"/>
+        <field name="arch" type="xml">
+            <field name="email" position="after">
+                <field name="runtime_rfid_tid" string="RFID TID" optional="show"/>
+            </field>
+        </field>
+    </record>
+
+    <record id="view_nsp_vehicle_form_rfid_runtime" model="ir.ui.view">
+        <field name="name">nsp.vehicle.form.rfid.runtime</field>
+        <field name="model">nsp.vehicle</field>
+        <field name="inherit_id" ref="nsp_vehicle.view_nsp_vehicle_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="before">
+                <group string="RFID Runtime">
+                    <field name="runtime_rfid_tid" readonly="1"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="view_nsp_vehicle_list_rfid_runtime" model="ir.ui.view">
+        <field name="name">nsp.vehicle.list.rfid.runtime</field>
+        <field name="model">nsp.vehicle</field>
+        <field name="inherit_id" ref="nsp_vehicle.view_nsp_vehicle_list"/>
+        <field name="arch" type="xml">
+            <field name="owner_id" position="after">
+                <field name="runtime_rfid_tid" string="RFID TID" optional="show"/>
+            </field>
+        </field>
+    </record>
+</odoo>

@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Tree View -->
+    <record id="view_custom_dashboard_tree" model="ir.ui.view">
+        <field name="name">custom.dashboard.tree</field>
+        <field name="model">custom.dashboard</field>
+        <field name="arch" type="xml">
+            <list string="Dashboards">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="description"/>
+                <field name="user_id"/>
+                <field name="is_role_bound" column_invisible="True"/>
+                <field name="is_default" readonly="is_role_bound"/>
+                <field name="is_shared"/>
+                <field name="active"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Form View -->
+    <record id="view_custom_dashboard_form" model="ir.ui.view">
+        <field name="name">custom.dashboard.form</field>
+        <field name="model">custom.dashboard</field>
+        <field name="arch" type="xml">
+            <form string="Dashboard Configuration">
+                <header>
+                    <button name="action_set_as_default" string="Set as Default"
+                            type="object" class="oe_highlight"
+                            invisible="is_default"/>
+                    <button name="action_duplicate" string="Duplicate" type="object"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="name"/>
+                            <field name="description"/>
+                            <field name="user_id"/>
+                        </group>
+                        <group>
+                            <field name="is_default"/>
+                            <field name="is_shared"/>
+                            <field name="sequence"/>
+                            <field name="active"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Widget Configuration">
+                            <field name="widget_config" widget="ace" options="{'mode': 'javascript'}"/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Action -->
+    <record id="action_custom_dashboard_config" model="ir.actions.act_window">
+        <field name="name">Dashboard Configurations</field>
+        <field name="res_model">custom.dashboard</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Create your first dashboard configuration
+            </p>
+        </field>
+    </record>
+
+    <!-- Menu -->
+    <menuitem id="menu_custom_dashboard_config"
+              name="Dashboard Configurations"
+              parent="menu_custom_dashboard_root"
+              action="action_custom_dashboard_config"
+              sequence="20"
+              groups="t4_custom_dashboard.group_dashboard_manager,base.group_system"/>
+</odoo>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- NSP IT role receives access to the generic dashboard runtime. -->
+    <record id="nsp_core.group_nsp_it_parking" model="res.groups">
+        <field name="implied_ids" eval="[(4, ref('t4_custom_dashboard.group_dashboard_user'))]"/>
+    </record>
+</odoo>

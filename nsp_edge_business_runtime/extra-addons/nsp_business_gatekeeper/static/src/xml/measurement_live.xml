@@ -1,0 +1,323 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="nsp_business_gatekeeper.MeasurementLive">
+        <div class="nsp-ml">
+
+            <div t-if="state.error" class="alert alert-danger nsp-ml__alert" role="alert" t-esc="state.error"/>
+
+            <div class="nsp-ml__toolbar">
+                <div class="nsp-ml__toolbar-meta">
+                    <span class="nsp-ml__revision">Revision <t t-esc="state.revision"/></span>
+                    <span><t t-esc="measurementDuration()"/> duration</span>
+                    <span>Updated <t t-esc="formatTime(state.serverTime)"/></span>
+                </div>
+                <div class="nsp-ml__toolbar-actions">
+                    <button class="btn btn-secondary btn-sm" t-on-click="exportCsv" t-att-disabled="!state.steps.length">Export CSV</button>
+                    <button class="btn btn-primary btn-sm" t-on-click="refresh" t-att-disabled="loading">Refresh</button>
+                </div>
+            </div>
+
+            <section class="nsp-ml__summary-grid">
+                <article class="nsp-ml-summary-card">
+                    <span class="nsp-ml-summary-card__label">Vehicles</span>
+                    <strong class="nsp-ml-summary-card__value" t-esc="state.vehicleCount"/>
+                    <span class="nsp-ml-summary-card__meta">
+                        <t t-esc="state.vehicleTagCount"/> Vehicle RFID tags
+                    </span>
+                </article>
+                <article class="nsp-ml-summary-card nsp-ml-summary-card--coverage">
+                    <span class="nsp-ml-summary-card__label">RFID Coverage</span>
+                    <div class="nsp-ml-summary-card__coverage-row">
+                        <strong class="nsp-ml-summary-card__value">
+                            <t t-esc="state.detectedVehicleCount"/> / <t t-esc="state.vehicleCount"/>
+                        </strong>
+                        <span class="nsp-ml-summary-card__percent"><t t-esc="state.coveragePercent"/>%</span>
+                    </div>
+                    <div class="nsp-ml__progress" aria-label="RFID detection coverage">
+                        <span t-att-style="'width:' + coverageWidth()"/>
+                    </div>
+                </article>
+                <article class="nsp-ml-summary-card">
+                    <span class="nsp-ml-summary-card__label">Infrastructure Scope</span>
+                    <strong class="nsp-ml-summary-card__value">
+                        <t t-esc="state.controllerCount"/> Controller<t t-if="state.controllerCount !== 1">s</t>
+                        <span class="nsp-ml-summary-card__separator">·</span>
+                        <t t-esc="state.readerCount"/> Reader<t t-if="state.readerCount !== 1">s</t>
+                    </strong>
+                    <span class="nsp-ml-summary-card__meta nsp-ml__mono" t-esc="controllerCodes()"/>
+                </article>
+            </section>
+
+            <section class="nsp-ml__reader-section">
+                <div class="nsp-ml__reader-heading">
+                    <div>
+                        <strong>Reader Configuration</strong>
+                        <span><t t-esc="state.readerCount"/> Readers · Apply changes per Reader</span>
+                    </div>
+                    <button type="button" class="btn btn-link btn-sm" t-on-click="toggleReaderConfiguration">
+                        <t t-if="state.readerConfigCollapsed">Show</t>
+                        <t t-else="">Collapse</t>
+                    </button>
+                </div>
+                <div t-if="!state.readerConfigCollapsed" class="nsp-ml__reader-grid">
+                    <article class="nsp-ml-reader-card" t-foreach="state.readers" t-as="reader" t-key="reader.reader_line_id">
+                        <header class="nsp-ml-reader-card__header">
+                            <div class="nsp-ml-reader-card__identity">
+                                <strong t-esc="reader.name || reader.serial_number"/>
+                                <span><t t-esc="reader.controller_code || '-'"/> · <span class="nsp-ml__mono" t-esc="reader.serial_number"/></span>
+                            </div>
+                            <span t-att-class="'nsp-ml-reader-card__status nsp-ml-reader-card__status--' + (reader.status || 'unknown')"
+                                  t-esc="reader.status || 'unknown'"/>
+                        </header>
+                        <div class="nsp-ml-reader-card__controls">
+                            <label>
+                                <span>Power</span>
+                                <div class="nsp-ml__compact-input">
+                                    <input type="number" min="0" max="40" step="1"
+                                           t-att-value="reader.powerDraft"
+                                           t-on-change="updateReaderPower"
+                                           t-att-data-reader-line-id="reader.reader_line_id"
+                                           t-att-disabled="!canEditReaderSettings()"/>
+                                    <small>dBm</small>
+                                </div>
+                            </label>
+                            <label>
+                                <span>Interval</span>
+                                <div class="nsp-ml__compact-input">
+                                    <input type="number" min="1" max="60000" step="1"
+                                           t-att-value="reader.intervalDraft"
+                                           t-on-change="updateReadInterval"
+                                           t-att-data-reader-line-id="reader.reader_line_id"
+                                           t-att-disabled="!canEditReaderSettings()"/>
+                                    <small>ms</small>
+                                </div>
+                            </label>
+                            <div class="nsp-ml-reader-card__ports" t-att-title="portList(reader)">
+                                <span t-foreach="reader.ports" t-as="port" t-key="port" class="nsp-ml__port-chip">P<t t-esc="port"/></span>
+                                <span t-if="!reader.ports.length" class="nsp-ml__muted">No ports</span>
+                            </div>
+                            <button class="btn btn-primary btn-sm nsp-ml-reader-card__apply"
+                                    t-on-click="applyReaderSettings"
+                                    t-att-data-reader-line-id="reader.reader_line_id"
+                                    t-att-disabled="readerApplyDisabled(reader)">
+                                <t t-if="reader.applying">Applying…</t>
+                                <t t-else="">Apply</t>
+                            </button>
+                        </div>
+                        <div class="nsp-ml-reader-card__meta">
+                            <span><strong t-esc="readerDetectionCount(reader)"/> reads</span>
+                            <span t-if="readerSettingsMatch(reader)">Applied</span>
+                            <span t-else="" class="text-warning">Not applied</span>
+                        </div>
+                    </article>
+                    <div t-if="!state.readers.length" class="nsp-ml__empty nsp-ml__empty--card">
+                        No Readers are configured for this calibration.
+                    </div>
+                </div>
+            </section>
+
+            <div class="nsp-ml__layout">
+                <main class="nsp-ml__main">
+                    <nav class="nsp-ml__tabs" aria-label="Reader calibration data views">
+                        <button t-att-class="tabClass('timeline')" t-on-click="setTimelineTab">Detection Timeline</button>
+                        <button t-att-class="tabClass('coverage')" t-on-click="setCoverageTab">
+                            RFID Coverage <span class="nsp-ml__tab-count" t-esc="state.vehicleCount"/>
+                        </button>
+                        <button t-att-class="tabClass('reader')" t-on-click="setReaderTab">Reader Status</button>
+                        <button t-att-class="tabClass('session')" t-on-click="setSessionTab">Session</button>
+                    </nav>
+
+                    <section t-if="state.activeTab === 'timeline'" class="nsp-ml-panel">
+                        <header class="nsp-ml-panel__header">
+                            <div>
+                                <h3>Detection Timeline</h3>
+                                <span class="nsp-ml__hint">Chronological Reader Port path for every selected RFID Tag.</span>
+                            </div>
+                            <span class="nsp-ml__scope-pill"><t t-esc="state.detectionCount"/> steps</span>
+                        </header>
+                        <div class="nsp-ml__table-wrap">
+                            <table class="table nsp-ml__table">
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>First Detected</th>
+                                        <th>RFID Tag</th>
+                                        <th>Controller</th>
+                                        <th>Reader</th>
+                                        <th>Port</th>
+                                        <th class="text-end">Reads</th>
+                                        <th>Last Detected</th>
+                                        <th>Duration</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr t-foreach="state.steps" t-as="step" t-key="step.sequence_no + '-' + step.tid + '-' + step.serial_number + '-' + step.port_no">
+                                        <td><span class="nsp-ml__sequence" t-esc="step.sequence_no"/></td>
+                                        <td class="nsp-ml__mono" t-esc="formatTime(step.first_seen_at)"/>
+                                        <td>
+                                            <strong class="nsp-ml__mono" t-esc="step.tid"/>
+                                            <small t-if="step.assigned_to" class="d-block nsp-ml__muted" t-esc="step.assigned_to"/>
+                                        </td>
+                                        <td class="nsp-ml__mono" t-esc="step.controller_code || '-'"/>
+                                        <td>
+                                            <strong t-esc="step.reader_name || step.serial_number"/>
+                                            <small class="d-block nsp-ml__mono nsp-ml__muted" t-esc="step.serial_number"/>
+                                        </td>
+                                        <td><span class="nsp-ml__port-chip">P<t t-esc="step.port_no"/></span></td>
+                                        <td class="text-end" t-esc="step.read_count"/>
+                                        <td class="nsp-ml__mono" t-esc="formatTime(step.last_seen_at)"/>
+                                        <td t-esc="stepDuration(step)"/>
+                                    </tr>
+                                    <tr t-if="!state.steps.length">
+                                        <td colspan="9"><div class="nsp-ml__empty">No detections have been received for this revision.</div></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <footer class="nsp-ml-panel__footer">
+                            <span><t t-esc="state.rawEventCount"/> raw reads</span>
+                            <span>Session duration <strong t-esc="measurementDuration()"/></span>
+                        </footer>
+                    </section>
+
+                    <section t-if="state.activeTab === 'coverage'" class="nsp-ml-panel">
+                        <header class="nsp-ml-panel__header">
+                            <div>
+                                <h3>Vehicle RFID Coverage</h3>
+                                <span class="nsp-ml__hint">Each Vehicle is detected when its selected RFID Tag is read by the calibration assembly.</span>
+                            </div>
+                            <span class="nsp-ml__coverage-total"><t t-esc="state.detectedVehicleCount"/> / <t t-esc="state.vehicleCount"/> detected</span>
+                        </header>
+                        <div class="nsp-ml__table-wrap">
+                            <table class="table nsp-ml__table">
+                                <thead>
+                                    <tr>
+                                        <th>License Plate</th>
+                                        <th>Owner</th>
+                                        <th>RFID Tag</th>
+                                        <th>Status</th>
+                                        <th class="text-end">Reads</th>
+                                        <th>First Detected</th>
+                                        <th>Last Detected</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr t-foreach="state.vehicles" t-as="vehicle" t-key="vehicle.id">
+                                        <td><strong t-esc="vehicle.license_plate || '-'"/></td>
+                                        <td t-esc="vehicle.owner_name || 'No owner'"/>
+                                        <td class="nsp-ml__mono" t-esc="vehicle.vehicle_tid"/>
+                                        <td><span t-att-class="detectionStatusClass(vehicle.detected)" t-esc="vehicleStatusLabel(vehicle)"/></td>
+                                        <td class="text-end" t-esc="vehicle.read_count"/>
+                                        <td class="nsp-ml__mono" t-esc="formatTime(vehicle.first_read_at)"/>
+                                        <td class="nsp-ml__mono" t-esc="formatTime(vehicle.last_read_at)"/>
+                                    </tr>
+                                    <tr t-if="!state.vehicles.length">
+                                        <td colspan="7"><div class="nsp-ml__empty">No Vehicles are configured.</div></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+
+                    <section t-if="state.activeTab === 'reader'" class="nsp-ml-panel">
+                        <header class="nsp-ml-panel__header">
+                            <div>
+                                <h3>Reader Status</h3>
+                                <span class="nsp-ml__hint">Configured calibration settings compared with Controller runtime status.</span>
+                            </div>
+                        </header>
+                        <div class="nsp-ml__table-wrap">
+                            <table class="table nsp-ml__table">
+                                <thead>
+                                    <tr>
+                                        <th>Controller</th>
+                                        <th>Reader</th>
+                                        <th>Status</th>
+                                        <th>Ports</th>
+                                        <th>Reader Power</th>
+                                        <th>Read Interval</th>
+                                        <th>Runtime Power</th>
+                                        <th>Runtime Interval</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr t-foreach="state.readers" t-as="reader" t-key="reader.reader_line_id">
+                                        <td class="nsp-ml__mono" t-esc="reader.controller_code || '-'"/>
+                                        <td>
+                                            <strong t-esc="reader.name || reader.serial_number"/>
+                                            <small class="d-block nsp-ml__mono nsp-ml__muted" t-esc="reader.serial_number"/>
+                                        </td>
+                                        <td t-esc="reader.status || '-'"/>
+                                        <td t-esc="portList(reader)"/>
+                                        <td><t t-esc="reader.serverReaderPower"/> dBm</td>
+                                        <td><t t-esc="reader.serverReadInterval"/> ms</td>
+                                        <td><t t-esc="reader.runtime_power_dbm || '-'"/><t t-if="reader.runtime_power_dbm"> dBm</t></td>
+                                        <td><t t-esc="reader.runtime_read_interval_ms || '-'"/><t t-if="reader.runtime_read_interval_ms"> ms</t></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+
+                    <section t-if="state.activeTab === 'session'" class="nsp-ml-panel">
+                        <header class="nsp-ml-panel__header"><h3>Session Information</h3></header>
+                        <div class="nsp-ml__details-grid">
+                            <div><span>Revision</span><strong t-esc="state.revision"/></div>
+                            <div><span>Status</span><strong t-esc="statusLabel()"/></div>
+                            <div><span>Controllers</span><strong class="nsp-ml__mono" t-esc="controllerCodes()"/></div>
+                            <div><span>Edge Servers</span><strong class="nsp-ml__mono" t-esc="edgeServerCodes()"/></div>
+                            <div><span>Vehicles</span><strong t-esc="state.vehicleCount"/></div>
+                            <div><span>Vehicle RFID Tags</span><strong t-esc="state.vehicleTagCount"/></div>
+                            <div><span>Started At</span><strong t-esc="formatDateTime(state.startedAt)"/></div>
+                            <div><span>Ended At</span><strong t-esc="formatDateTime(state.endedAt)"/></div>
+                        </div>
+                    </section>
+
+                </main>
+
+                <aside class="nsp-ml__sidebar">
+                    <section class="nsp-ml-side-card">
+                        <h3>Current Revision</h3>
+                        <div class="nsp-ml__metric"><span>Detected vehicles</span><strong><t t-esc="state.detectedVehicleCount"/> / <t t-esc="state.vehicleCount"/></strong></div>
+                        <div class="nsp-ml__metric"><span>Controllers detected</span><strong><t t-esc="state.uniqueControllers"/> / <t t-esc="state.controllerCount"/></strong></div>
+                        <div class="nsp-ml__metric"><span>Readers detected</span><strong><t t-esc="state.uniqueReaders"/> / <t t-esc="state.readerCount"/></strong></div>
+                        <div class="nsp-ml__metric"><span>Reader Ports detected</span><strong t-esc="state.uniqueReaderPorts"/></div>
+                        <div class="nsp-ml__metric"><span>Raw reads</span><strong t-esc="state.rawEventCount"/></div>
+                    </section>
+
+                    <section class="nsp-ml-side-card" t-if="firstStep()">
+                        <h3>First Detection</h3>
+                        <strong class="nsp-ml__detection-time" t-esc="formatTime(firstStep().first_seen_at)"/>
+                        <div class="nsp-ml__detection-tag nsp-ml__mono" t-esc="firstStep().tid"/>
+                        <div class="nsp-ml__detection-route">
+                            <span t-esc="firstStep().controller_code || '-'"/>
+                            <span>→</span>
+                            <span t-esc="firstStep().reader_name || firstStep().serial_number"/>
+                            <span>→</span>
+                            <span>P<t t-esc="firstStep().port_no"/></span>
+                        </div>
+                    </section>
+
+                    <section class="nsp-ml-side-card" t-if="lastStep()">
+                        <h3>Last Detection</h3>
+                        <strong class="nsp-ml__detection-time" t-esc="formatTime(lastStep().last_seen_at)"/>
+                        <div class="nsp-ml__detection-tag nsp-ml__mono" t-esc="lastStep().tid"/>
+                        <div class="nsp-ml__detection-route">
+                            <span t-esc="lastStep().controller_code || '-'"/>
+                            <span>→</span>
+                            <span t-esc="lastStep().reader_name || lastStep().serial_number"/>
+                            <span>→</span>
+                            <span>P<t t-esc="lastStep().port_no"/></span>
+                        </div>
+                    </section>
+
+                </aside>
+            </div>
+
+            <footer class="nsp-ml__footer">
+                <span>Server time: <strong t-esc="formatDateTime(state.serverTime)"/></span>
+                <span>Live data refreshes every second.</span>
+            </footer>
+        </div>
+    </t>
+</templates>

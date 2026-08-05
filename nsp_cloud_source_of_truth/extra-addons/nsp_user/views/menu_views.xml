@@ -1,0 +1,10 @@
+<odoo>
+    <menuitem
+        id="menu_nsp_users"
+        name="Users"
+        parent="nsp_core.menu_nsp_master_data"
+        action="action_nsp_user"
+        sequence="10"
+        groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking"
+    />
+</odoo>

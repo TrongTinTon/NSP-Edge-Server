@@ -1,0 +1,16 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<odoo>
+  <record id="view_nsp_controller_search" model="ir.ui.view">
+    <field name="name">nsp.controller.search</field><field name="model">nsp.controller</field>
+    <field name="arch" type="xml"><search><field name="controller_name"/><field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/><field name="status"/><filter string="Active" name="active" domain="[('active','=',True)]"/><filter string="Offline" name="offline" domain="[('status','=','offline')]"/><filter string="Status" name="group_status" context="{'group_by':'status'}"/></search></field>
+  </record>
+  <record id="view_nsp_controller_list" model="ir.ui.view">
+    <field name="name">nsp.controller.list</field><field name="model">nsp.controller</field>
+    <field name="arch" type="xml"><list string="Controllers" create="0" edit="0" delete="0"><field name="controller_name"/><field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/><field name="status" widget="badge" decoration-success="status == 'online'" decoration-danger="status in ('offline','error','revoked')"/><field name="reader_count"/><field name="timestamp"/><field name="active" optional="hide"/><field name="cloud_removed" optional="hide"/></list></field>
+  </record>
+  <record id="view_nsp_controller_form" model="ir.ui.view">
+    <field name="name">nsp.controller.form</field><field name="model">nsp.controller</field>
+    <field name="arch" type="xml"><form string="Controller" create="0" edit="0" delete="0"><sheet><div class="oe_button_box" name="button_box"><button name="action_open_readers" type="object" class="oe_stat_button" icon="fa-server"><field name="reader_count" widget="statinfo" string="Readers"/></button></div><group><group><field name="controller_name"/><field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/></group><group><field name="status" widget="badge"/><field name="timestamp"/><field name="active"/><field name="cloud_removed"/></group></group></sheet></form></field>
+  </record>
+  <record id="action_nsp_controllers" model="ir.actions.act_window"><field name="name">Controllers</field><field name="res_model">nsp.controller</field><field name="view_mode">list,form</field><field name="search_view_id" ref="view_nsp_controller_search"/></record>
+</odoo>

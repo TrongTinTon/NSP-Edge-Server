@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <record id="view_nsp_vehicle_search" model="ir.ui.view">
+        <field name="name">nsp.vehicle.search</field>
+        <field name="model">nsp.vehicle</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="license_plate" string="Plate"/>
+                <field name="owner_id" string="Owner"/>
+                <field name="vehicle_type_id" string="Type"/>
+                <field name="brand_id"/>
+                <field name="model_id"/>
+                <field name="color_id"/>
+                <filter string="Active" name="active" domain="[('active','=',True)]"/>
+                <filter string="Archived" name="archived" domain="[('active','=',False)]"/>
+                <separator/>
+                <filter string="Type" name="groupby_type" context="{'group_by':'vehicle_type_id'}"/>
+                <filter string="Owner" name="groupby_owner" context="{'group_by':'owner_id'}"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_nsp_vehicle_list" model="ir.ui.view">
+        <field name="name">nsp.vehicle.list</field>
+        <field name="model">nsp.vehicle</field>
+        <field name="arch" type="xml">
+            <list string="Vehicles" decoration-muted="not active">
+                <field name="image_128" string="" widget="image" class="o_avatar" optional="show"/>
+                <field name="license_plate" string="Plate" decoration-bf="1"/>
+                <field name="owner_id" string="Owner"/>
+                <field name="vehicle_type_id" string="Type"/>
+                <field name="brand_id" optional="show"/>
+                <field name="model_id" optional="show"/>
+                <field name="color_id" optional="hide"/>
+                <field name="active" widget="boolean_toggle" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_vehicle_form" model="ir.ui.view">
+        <field name="name">nsp.vehicle.form</field>
+        <field name="model">nsp.vehicle</field>
+        <field name="arch" type="xml">
+            <form string="Vehicle">
+                <header>
+                    <button name="action_archive" type="object" string="Archive" icon="fa-archive"
+                            help="Archive vehicle" invisible="not active" class="btn-secondary"/>
+                    <button name="action_unarchive" type="object" string="Restore" icon="fa-undo"
+                            help="Restore vehicle" invisible="active" class="btn-primary"/>
+                    <field name="active" invisible="1"/>
+                </header>
+                <sheet>
+                    <field name="image_1920" widget="image" class="oe_avatar"
+                           options="{'preview_image': 'image_128'}"/>
+                    <div class="oe_title">
+                        <h1><field name="license_plate" placeholder="Plate"/></h1>
+                    </div>
+                    <group string="Details">
+                        <field name="owner_id" string="Owner"/>
+                        <field name="vehicle_type_id" string="Type"
+                               options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                               context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_type_form'}"/>
+                        <field name="brand_id"
+                               options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                               context="{'form_view_ref': 'nsp_core.view_nsp_reference_brand_form'}"/>
+                        <field name="model_id" domain="[('brand_id', '=', brand_id)]"
+                               options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                               context="{'form_view_ref': 'nsp_core.view_nsp_reference_model_form', 'default_brand_id': brand_id}"/>
+                        <field name="color_id"
+                               options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                               context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_color_form'}"/>
+                    </group>
+                    <notebook>
+                        <page string="Access" name="nsp_vehicle_access">
+                            <field name="borrow_ids" nolabel="1" context="{'default_vehicle_id': id}">
+                                <list editable="bottom" decoration-success="active_now"
+                                      decoration-muted="state in ('returned','cancelled')">
+                                    <field name="allowed_borrower_ids" column_invisible="1"/>
+                                    <field name="borrower_id" string="User" domain="[('id','in',allowed_borrower_ids)]"/>
+                                    <field name="valid_from" string="From"/>
+                                    <field name="valid_to" string="Until"/>
+                                    <field name="state" string="Status" widget="badge" readonly="1"/>
+                                    <field name="active_now" string="Now" widget="boolean" readonly="1" optional="hide"/>
+                                    <button name="action_return_vehicle" type="object" string="End" icon="fa-check"
+                                            help="End access" invisible="state != 'active'"/>
+                                    <button name="action_cancel" type="object" string="Cancel" icon="fa-times"
+                                            help="Cancel access" invisible="state != 'active'"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="System" name="nsp_vehicle_system" groups="base.group_system">
+                            <group>
+                                <field name="vehicle_code" readonly="1" widget="CopyClipboardChar"/>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+</odoo>

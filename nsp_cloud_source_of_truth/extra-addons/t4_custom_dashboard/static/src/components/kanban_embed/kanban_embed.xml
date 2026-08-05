@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="t4_custom_dashboard.KanbanEmbed">
+    <div class="kanban-embed-widget" t-att-class="{ 'kanban-embed-no-search': !props.embed.show_search }">
+      <div class="kanban-embed-header" t-if="props.title">
+        <h5 class="mb-2" t-esc="props.title"/>
+      </div>
+
+      <t t-if="state.error">
+        <div class="widget-error">
+          <i class="fa fa-exclamation-triangle"/>
+          <p t-esc="state.error"/>
+        </div>
+      </t>
+
+      <t t-elif="!state.ready">
+        <div class="kanban-embed-loading">
+          <i class="fa fa-spinner fa-spin"/>
+          <span class="ms-2">Đang tải...</span>
+        </div>
+      </t>
+
+      <t t-else="">
+        <div class="kanban-embed-body">
+          <View t-props="viewProps"/>
+        </div>
+      </t>
+    </div>
+  </t>
+</templates>
