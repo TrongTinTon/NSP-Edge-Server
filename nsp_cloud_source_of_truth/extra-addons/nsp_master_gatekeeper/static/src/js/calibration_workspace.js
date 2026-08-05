@@ -16,10 +16,10 @@ export class NspCalibrationWorkspace extends Component {
         this.sessionId = this.resolveSessionId();
         this.timer = null;
         this.loading = false;
+        this.refreshPending = false;
         this.state = useState({
-            activeTab: "reference",
-            selectedRunId: false,
-            data: { found: false, passes: [], validation_runs: [] },
+            data: { found: false, steps: [], vehicles: [], readers: [] },
+            selectedStepIds: [],
             error: "",
         });
         onMounted(() => {
@@ -48,38 +48,51 @@ export class NspCalibrationWorkspace extends Component {
         return null;
     }
 
-    async refresh() {
-        if (!this.sessionId || this.loading) {
+    async refresh({ force = false } = {}) {
+        if (!this.sessionId) {
+            return;
+        }
+        if (this.loading) {
+            if (force) {
+                this.refreshPending = true;
+            }
             return;
         }
         this.loading = true;
         try {
             const data = await this.orm.call(
                 "nsp.measurement.session",
-                "get_calibration_workspace",
-                [this.sessionId, this.state.selectedRunId || false]
+                "get_live_snapshot",
+                [this.sessionId, 0, 5000]
             );
             if (!data?.found) {
                 this.state.error = "Lane Calibration was not found.";
                 return;
             }
             this.state.data = data;
-            if (!this.state.selectedRunId && data.active_validation_run?.id) {
-                this.state.selectedRunId = data.active_validation_run.id;
-            }
+            const available = new Set(
+                (data.steps || []).map((step) => Number(step.first_event_id || 0))
+            );
+            this.state.selectedStepIds = this.state.selectedStepIds.filter((id) => available.has(id));
             this.state.error = "";
         } catch (error) {
             this.state.error = error?.data?.message || error?.message || "Unable to load Lane Calibration.";
         } finally {
             this.loading = false;
+            if (this.refreshPending) {
+                this.refreshPending = false;
+                window.setTimeout(() => this.refresh(), 0);
+            }
         }
     }
 
-    async callModel(model, method, ids = [], args = []) {
+    async callSession(method, args = []) {
         try {
-            const result = await this.orm.call(model, method, [ids, ...args]);
-            await this.refresh();
-            return result;
+            return await this.orm.call(
+                "nsp.measurement.session",
+                method,
+                [[this.sessionId], ...args]
+            );
         } catch (error) {
             this.notification.add(
                 error?.data?.message || error?.message || "The operation could not be completed.",
@@ -89,119 +102,115 @@ export class NspCalibrationWorkspace extends Component {
         }
     }
 
-    async callSession(method, args = []) {
-        return this.callModel("nsp.measurement.session", method, [this.sessionId], args);
-    }
-
-    async startReferencePass() {
-        await this.callSession("action_start_reference_pass");
-    }
-
-    async stopReferencePass() {
-        await this.callSession("action_stop_reference_pass");
-    }
-
-    async acceptPass(passId) {
-        await this.callModel("nsp.measurement.pass", "action_accept", [passId]);
-    }
-
-    async rejectPass(passId) {
-        await this.callModel("nsp.measurement.pass", "action_reject", [passId]);
-    }
-
-    async buildResult() {
-        const action = await this.callSession("action_build_calibration_result");
+    async openCard(kind) {
+        const methods = {
+            vehicles: "action_open_vehicles_card",
+            coverage: "action_open_rfid_coverage_card",
+            infrastructure: "action_open_infrastructure_card",
+        };
+        const method = methods[kind];
+        if (!method) {
+            return;
+        }
+        const action = await this.callSession(method);
         if (action?.type) {
-            await this.action.doAction(action);
+            const refreshWorkspace = async () => {
+                await this.refresh({ force: true });
+            };
+            await this.action.doAction(action, { onClose: refreshWorkspace });
+            // Some action targets resolve before the dialog close callback.
+            // Refresh here as a harmless fallback, while onClose remains the
+            // authoritative refresh after inline saves or record creation.
+            await this.refresh({ force: true });
         }
     }
 
-    async submitResultValidation(resultId) {
-        await this.callModel("nsp.measurement.result", "action_submit_validation", [resultId]);
-    }
-
-    async publishResult(resultId) {
-        await this.callModel("nsp.measurement.result", "action_accept", [resultId]);
-    }
-
-    async newValidationRun() {
-        const action = await this.callSession("action_new_validation_run");
-        if (action?.type) {
-            await this.action.doAction(action);
+    toggleStep(step, ev) {
+        const id = Number(step.first_event_id || 0);
+        if (!id) {
+            return;
+        }
+        const index = this.state.selectedStepIds.indexOf(id);
+        if (ev.target.checked && index < 0) {
+            this.state.selectedStepIds.push(id);
+        } else if (!ev.target.checked && index >= 0) {
+            this.state.selectedStepIds.splice(index, 1);
         }
     }
 
-    async openValidationRun(runId) {
-        const action = await this.callModel("nsp.measurement.validation.run", "action_open_form", [runId]);
-        if (action?.type) {
-            await this.action.doAction(action);
+    isSelected(step) {
+        return this.state.selectedStepIds.includes(Number(step.first_event_id || 0));
+    }
+
+    selectionOrder(step) {
+        const index = this.state.selectedStepIds.indexOf(Number(step.first_event_id || 0));
+        return index >= 0 ? index + 1 : "";
+    }
+
+    canApply() {
+        return ["ready", "running", "completed"].includes(this.state.data.status)
+            && this.state.selectedStepIds.length >= 2;
+    }
+
+    async applyConfiguration() {
+        if (this.state.selectedStepIds.length < 2) {
+            this.notification.add("Select at least two Detection Timeline rows.", { type: "warning" });
+            return;
         }
-    }
-
-    async startValidation(runId) {
-        await this.callModel("nsp.measurement.validation.run", "action_start", [runId]);
-    }
-
-    async stopValidation(runId) {
-        await this.callModel("nsp.measurement.validation.run", "action_stop_and_analyse", [runId]);
-    }
-
-    async retestFailed(runId) {
-        const action = await this.callModel("nsp.measurement.validation.run", "action_retest_failed", [runId]);
-        if (action?.type) {
-            await this.action.doAction(action);
-        }
-    }
-
-    async retestSelected(runId) {
-        const action = await this.callModel("nsp.measurement.validation.run", "action_retest_selected", [runId]);
-        if (action?.type) {
-            await this.action.doAction(action);
-        }
-    }
-
-    async toggleRetestVehicle(vehicleId, ev) {
-        await this.orm.write(
-            "nsp.measurement.validation.vehicle",
-            [vehicleId],
-            { retry_selected: Boolean(ev.target.checked) }
+        const action = await this.callSession(
+            "action_open_apply_configuration",
+            [Array.from(this.state.selectedStepIds)]
         );
-        await this.refresh();
-    }
-
-    async newRunAll(runId) {
-        const action = await this.callModel("nsp.measurement.validation.run", "action_new_run_all", [runId]);
         if (action?.type) {
-            await this.action.doAction(action);
+            const refreshAfterSave = async (closeInfo = {}) => {
+                // Odoo 19 forwards ir.actions.act_window_close.infos to onClose.
+                // Refresh only after the wizard confirmed a successful Save;
+                // Cancel closes with { special: true } and must not alter selection.
+                if (!closeInfo?.refresh_lane_calibration) {
+                    return;
+                }
+                this.state.selectedStepIds.splice(0, this.state.selectedStepIds.length);
+                await this.refresh({ force: true });
+                if (typeof this.props.record?.load === "function") {
+                    await this.props.record.load();
+                }
+                const laneName = closeInfo.lane_name || "Lane";
+                this.notification.add(`${laneName} configuration saved.`, { type: "success" });
+            };
+            await this.action.doAction(action, { onClose: refreshAfterSave });
         }
     }
 
-    async selectRun(ev) {
-        const id = Number(ev.target.value || 0);
-        this.state.selectedRunId = Number.isInteger(id) && id > 0 ? id : false;
-        await this.refresh();
-    }
-
-    setTab(tab) {
-        this.state.activeTab = tab;
-    }
-
-    tabClass(tab) {
-        return this.state.activeTab === tab ? "nsp-cw__tab nsp-cw__tab--active" : "nsp-cw__tab";
+    async clearTimeline() {
+        if (!window.confirm("Clear all detections in the current Detection Timeline?")) {
+            return;
+        }
+        const result = await this.callSession("action_clear_detection_timeline");
+        if (result !== false) {
+            this.state.selectedStepIds.splice(0, this.state.selectedStepIds.length);
+            this.notification.add("Detection Timeline cleared.", { type: "success" });
+            await this.refresh();
+        }
     }
 
     formatDateTime(value) {
         if (!value) {
             return "—";
         }
-        const normalized = String(value).includes("T") ? String(value) : `${String(value).replace(" ", "T")}Z`;
+        const normalized = String(value).includes("T")
+            ? String(value)
+            : `${String(value).replace(" ", "T")}Z`;
         const date = new Date(normalized);
         if (Number.isNaN(date.getTime())) {
             return String(value);
         }
         return new Intl.DateTimeFormat(undefined, {
-            day: "2-digit", month: "2-digit", year: "numeric",
-            hour: "2-digit", minute: "2-digit", second: "2-digit",
+            day: "2-digit",
+            month: "2-digit",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
         }).format(date);
     }
 
@@ -210,80 +219,31 @@ export class NspCalibrationWorkspace extends Component {
         return Number.isFinite(number) ? number.toFixed(digits) : "0";
     }
 
-    resultLabel(value) {
-        const labels = {
-            pending: "Pending",
-            complete: "Complete",
-            incomplete: "Incomplete",
-            not_detected: "Not Detected",
-            wrong_order: "Wrong Order",
-            transition_timeout: "Transition Timeout",
-            insufficient: "Insufficient",
-        };
-        return labels[value] || value || "—";
-    }
-
-    resultClass(value) {
-        if (value === "complete" || value === "accepted" || value === "passed") {
-            return "nsp-cw__badge nsp-cw__badge--success";
-        }
-        if (["incomplete", "transition_timeout", "completed"].includes(value)) {
-            return "nsp-cw__badge nsp-cw__badge--warning";
-        }
-        if (["not_detected", "wrong_order", "rejected", "failed"].includes(value)) {
-            return "nsp-cw__badge nsp-cw__badge--danger";
-        }
-        if (value === "running") {
-            return "nsp-cw__badge nsp-cw__badge--info";
-        }
-        return "nsp-cw__badge";
-    }
-
     statusLabel(value) {
         const labels = {
-            draft: "Draft", ready: "Ready", running: "Running", completed: "Completed",
-            applied: "Applied", failed: "Failed", cancelled: "Cancelled",
-            validation: "Ready for Validation", accepted: "Accepted", superseded: "Superseded",
-            passed: "Passed", pending: "Pending",
+            draft: "Draft",
+            ready: "Ready",
+            running: "Running",
+            completed: "Completed",
+            applied: "Applied",
+            cancelled: "Cancelled",
+            failed: "Failed",
         };
         return labels[value] || value || "—";
     }
 
-    activeRun() {
-        return this.state.data.active_validation_run || null;
-    }
-
-    currentResult() {
-        return this.state.data.current_result || this.state.data.accepted_result || this.state.data.draft_result || null;
-    }
-
-
-
-    portWidth(stat) {
-        return `${Math.max(0, Math.min(100, Number(stat?.detection_rate || 0)))}%`;
-    }
-
-    distributionStyle() {
-        const run = this.activeRun();
-        if (!run?.expected_count) {
-            return "background: conic-gradient(#d9e2ef 0 100%)";
+    statusClass(value) {
+        if (value === "applied") {
+            return "nsp-lc__status nsp-lc__status--success";
         }
-        const total = Number(run.expected_count || 1);
-        const complete = Number(run.complete_count || 0) * 100 / total;
-        const incomplete = Number(run.incomplete_count || 0) * 100 / total;
-        const missing = Number(run.not_detected_count || 0) * 100 / total;
-        const wrong = Number(run.wrong_order_count || 0) * 100 / total;
-        const a = complete;
-        const b = a + incomplete;
-        const c = b + missing;
-        const d = Math.min(100, c + wrong);
-        return `background: conic-gradient(#22a35a 0 ${a}%, #f59e0b ${a}% ${b}%, #dc3545 ${b}% ${c}%, #7c3aed ${c}% ${d}%, #d9e2ef ${d}% 100%)`;
+        if (value === "running") {
+            return "nsp-lc__status nsp-lc__status--live";
+        }
+        if (["cancelled", "failed"].includes(value)) {
+            return "nsp-lc__status nsp-lc__status--danger";
+        }
+        return "nsp-lc__status";
     }
-
-    passSequence(pass) {
-        return pass?.detected_sequence || "No detection sequence";
-    }
-
 }
 
 registry.category("fields").add("nsp_calibration_workspace", {

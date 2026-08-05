@@ -62,14 +62,10 @@ class NspMeasurementSessionValidation(models.Model):
             session.calibration_workspace = True
 
     def _validate_measurement_scope(self):
-        result = super()._validate_measurement_scope()
-        for session in self:
-            if len(session.target_line_ids) > 1:
-                raise ValidationError(_(
-                    "Lane Calibration uses exactly one Vehicle. "
-                    "Use Validation for multi-vehicle testing."
-                ))
-        return result
+        # Lane Calibration may observe one or more configured Vehicles. The
+        # operational Lane is built directly from selected Detection Timeline
+        # rows; repeated reference runs are no longer required by the UI.
+        return super()._validate_measurement_scope()
 
     def _allowed_target_tids(self):
         self.ensure_one()

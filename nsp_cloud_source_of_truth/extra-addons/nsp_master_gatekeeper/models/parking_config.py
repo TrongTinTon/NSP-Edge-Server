@@ -498,14 +498,6 @@ class NspParkingLane(models.Model):
     )
     active = fields.Boolean(default=True, index=True)
     timeline_point_count = fields.Integer(string="Timeline Points", compute="_compute_timeline_point_count")
-    calibration_source_id = fields.Many2one(
-        "nsp.measurement.session", string="Calibration Source",
-        ondelete="set null",
-    )
-    calibration_result_id = fields.Many2one(
-        "nsp.measurement.result", string="Calibration",
-        ondelete="set null", domain=[("state", "=", "accepted")],
-    )
     timeline_line_ids = fields.One2many(
         "nsp.parking.lane.timeline", "lane_id", string="Reader Port Timeline",
     )
@@ -536,6 +528,30 @@ class NspParkingLane(models.Model):
             "Timing Tolerance cannot be negative.",
         ),
     ]
+
+    @api.model
+    def name_create(self, name):
+        lane_name = str(name or "").strip()
+        if not lane_name:
+            raise UserError(_("Lane Name is required."))
+        context = self.env.context
+        try:
+            parking_area_id = int(context.get("default_parking_area_id") or 0)
+            edge_server_id = int(context.get("default_edge_server_id") or 0)
+            controller_id = int(context.get("default_controller_id") or 0)
+        except Exception as exc:
+            raise UserError(_("Invalid quick-create Lane context.")) from exc
+        if not parking_area_id or not edge_server_id or not controller_id:
+            raise UserError(_(
+                "Select a Parking Layout first. Server and Controller are taken from the selected Detection Timeline."
+            ))
+        record = self.create({
+            "name": lane_name,
+            "parking_area_id": parking_area_id,
+            "edge_server_id": edge_server_id,
+            "controller_id": controller_id,
+        })
+        return record.id, record.display_name
 
     @api.depends("name", "parking_area_id.name")
     def _compute_display_name(self):
@@ -610,8 +626,20 @@ class NspParkingLane(models.Model):
             if len(timeline_keys) != len(set(timeline_keys)):
                 raise ValidationError(_("A Reader Port can appear only once in the Lane Timeline."))
             for index, line in enumerate(timeline):
-                if line.reader_id.controller_id != lane.controller_id:
-                    raise ValidationError(_("Every Timeline Reader must belong to the Lane Controller."))
+                # Lane ownership is defined by lane.controller_id.  The Reader's
+                # inventory controller is an independently synchronized runtime
+                # relation and is not authoritative for a saved Lane topology.
+                # The Apply Configuration wizard validates the selected Reader
+                # and Port against the Calibration Infrastructure Scope before
+                # persisting this independent Lane snapshot.
+                if not line.reader_id.active:
+                    raise ValidationError(_("Every Timeline Reader must be active."))
+                if (
+                    not line.reader_id.whitelist_id
+                    or not line.reader_id.whitelist_id.active
+                    or line.reader_id.whitelist_id.device_type_code != "RFID_READER"
+                ):
+                    raise ValidationError(_("Every Timeline Reader must be an active RFID Reader from Device Whitelist."))
                 if int(line.port_no or 0) < 1 or int(line.port_no or 0) > 16:
                     raise ValidationError(_("Timeline Reader Port must be an integer from 1 to 16."))
                 if index == 0 and float(line.duration_from_previous or 0.0) != 0.0:
@@ -662,42 +690,6 @@ class NspParkingLane(models.Model):
     def _check_timeline_and_sequences(self):
         self._validate_timeline_and_sequences()
 
-    def action_import_calibration_result(self):
-        for lane in self:
-            result = lane.calibration_result_id
-            if not result or result.state != "accepted":
-                raise ValidationError(_("Select an accepted Calibration first."))
-            result_lines = result.line_ids.sorted("sequence")
-            if len(result_lines) < 2:
-                raise ValidationError(_("Accepted Calibration requires at least two Reader Port points."))
-            if result_lines.mapped("sequence") != list(range(1, len(result_lines) + 1)):
-                raise ValidationError(_("Calibration sequence must be contiguous and start at 1."))
-            result_keys = [(line.reader_id.id, int(line.port_no or 0)) for line in result_lines]
-            if len(result_keys) != len(set(result_keys)):
-                raise ValidationError(_("An accepted Calibration cannot repeat a Reader Port."))
-            if any(line.reader_id.controller_id != lane.controller_id for line in result_lines):
-                raise ValidationError(_("Calibration Readers must belong to the Lane Controller."))
-            if any(float(line.duration_standard or 0.0) <= 0.0 for line in result_lines[1:]):
-                raise ValidationError(_("Every Calibration interval after the first must be greater than zero."))
-
-            timeline_commands = [
-                (0, 0, {
-                    "sequence": line.sequence,
-                    "reader_id": line.reader_id.id,
-                    "port_no": line.port_no,
-                    "duration_from_previous": 0.0 if index == 0 else line.duration_standard,
-                })
-                for index, line in enumerate(result_lines)
-            ]
-            lane.write({
-                "calibration_source_id": result.session_id.id,
-                "timeline_line_ids": [(5, 0, 0)] + timeline_commands,
-                "checkin_sequence_ids": [(5, 0, 0)],
-                "checkout_sequence_ids": [(5, 0, 0)],
-                "tolerance_type": "percent",
-                "tolerance_value": result.tolerance_percent,
-            })
-        return True
 
 
 class NspParkingLaneTimeline(models.Model):
@@ -742,8 +734,9 @@ class NspParkingLaneTimeline(models.Model):
                 ("whitelist_id.active", "=", True),
                 ("whitelist_id.device_type_code", "=", "RFID_READER"),
             ]
-            if record.lane_id.controller_id:
-                domain.append(("controller_id", "=", record.lane_id.controller_id.id))
+            # Do not filter by nsp.device.controller_id.  A Lane owns its
+            # Controller explicitly and the Reader inventory relation may be
+            # empty or updated independently by runtime synchronization.
             record.available_reader_ids = Reader.search(domain)
 
     @api.model_create_multi
@@ -773,8 +766,14 @@ class NspParkingLaneTimeline(models.Model):
                 raise ValidationError(_("Timeline order must be greater than zero."))
             if record.port_no < 1 or record.port_no > 16:
                 raise ValidationError(_("Reader Port must be between 1 and 16."))
-            if record.lane_id.controller_id and record.reader_id.controller_id != record.lane_id.controller_id:
-                raise ValidationError(_("Timeline Reader must belong to the Lane Controller."))
+            if not record.reader_id.active:
+                raise ValidationError(_("Timeline Reader must be active."))
+            if (
+                not record.reader_id.whitelist_id
+                or not record.reader_id.whitelist_id.active
+                or record.reader_id.whitelist_id.device_type_code != "RFID_READER"
+            ):
+                raise ValidationError(_("Timeline Reader must be an active RFID Reader from Device Whitelist."))
 
 
 class NspParkingLaneEventSequence(models.Model):

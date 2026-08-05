@@ -1,234 +1,190 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='UTF-8'?>
 <odoo>
-    <record id="view_nsp_parking_area_search" model="ir.ui.view">
-        <field name="name">nsp.parking.operation.search</field>
-        <field name="model">nsp.parking.area</field>
-        <field name="arch" type="xml">
-            <search string="Parking Layout">
-                <field name="name"/>
-                <field name="branch_id"/>
-                <filter string="Draft" name="draft" domain="[('state','=','draft')]"/>
-                <filter string="Operational" name="operational" domain="[('state','=','operational')]"/>
-                <filter string="Maintenance" name="maintenance" domain="[('state','=','maintenance')]"/>
-                <filter string="Blocked" name="blocked" domain="[('state','=','blocked')]"/>
-                <filter string="Published" name="published" domain="[('published_payload_json','!=',False)]"/>
-                <separator/>
-                <group>
-                    <filter string="Branch" name="group_branch" context="{'group_by':'branch_id'}"/>
-                    <filter string="State" name="group_state" context="{'group_by':'state'}"/>
+  <record id="view_nsp_parking_area_search" model="ir.ui.view">
+    <field name="name">nsp.parking.operation.search</field>
+    <field name="model">nsp.parking.area</field>
+    <field name="arch" type="xml">
+      <search string="Parking Layout">
+        <field name="name"/>
+        <field name="branch_id"/>
+        <filter string="Draft" name="draft" domain="[('state','=','draft')]"/>
+        <filter string="Operational" name="operational" domain="[('state','=','operational')]"/>
+        <filter string="Maintenance" name="maintenance" domain="[('state','=','maintenance')]"/>
+        <filter string="Blocked" name="blocked" domain="[('state','=','blocked')]"/>
+        <filter string="Published" name="published" domain="[('published_payload_json','!=',False)]"/>
+        <separator/>
+        <group>
+          <filter string="Branch" name="group_branch" context="{'group_by':'branch_id'}"/>
+          <filter string="State" name="group_state" context="{'group_by':'state'}"/>
+        </group>
+      </search>
+    </field>
+  </record>
+  <record id="view_nsp_parking_area_list" model="ir.ui.view">
+    <field name="name">nsp.parking.operation.list</field>
+    <field name="model">nsp.parking.area</field>
+    <field name="arch" type="xml">
+      <list string="Parking Layout">
+        <field name="state" widget="badge" decoration-success="state == 'operational'" decoration-warning="state in ('draft','maintenance')" decoration-danger="state == 'blocked'"/>
+        <field name="name" string="Layout" decoration-bf="1"/>
+        <field name="branch_id" string="Branch"/>
+        <field name="lane_count" string="Lanes"/>
+        <field name="published_revision" string="Rev."/>
+        <field name="published_at" string="Published" optional="hide"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_nsp_parking_area_form" model="ir.ui.view">
+    <field name="name">nsp.parking.operation.form</field>
+    <field name="model">nsp.parking.area</field>
+    <field name="arch" type="xml">
+      <form string="Parking Layout">
+        <header>
+          <button name="action_set_operational" type="object" string="Publish" icon="fa-cloud-upload" class="oe_highlight" help="Publish this layout to Edge." invisible="state == 'operational'"/>
+          <button name="action_set_maintenance" type="object" string="Maintain" icon="fa-wrench" help="Publish Maintenance state." invisible="not is_published or state == 'maintenance'"/>
+          <button name="action_set_blocked" type="object" string="Block" icon="fa-ban" help="Publish Blocked state." invisible="not is_published or state == 'blocked'"/>
+          <button name="action_reset_to_draft" type="object" string="Revise" icon="fa-pencil" help="Create an editable draft while keeping the last published revision active." invisible="state == 'draft'"/>
+          <field name="state" widget="statusbar" statusbar_visible="draft,operational,maintenance,blocked"/>
+        </header>
+        <sheet>
+          <field name="is_published" invisible="1"/>
+          <div class="oe_button_box" name="button_box">
+            <button name="action_open_live_monitor" type="object" class="oe_stat_button" icon="fa-desktop" help="Open the live parking monitor." groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking,base.group_system">
+              <span class="o_stat_text">Monitor</span>
+            </button>
+          </div>
+          <div class="oe_title">
+            <h1>
+              <field name="name" placeholder="Parking Area"/>
+            </h1>
+          </div>
+          <group>
+            <group>
+              <field name="branch_id" string="Branch" context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_branch_form'}"/>
+            </group>
+            <group string="Published">
+              <field name="published_revision" string="Revision" readonly="1"/>
+              <field name="published_at" string="Date" readonly="1"/>
+              <field name="published_edge_server_codes" string="Servers" readonly="1"/>
+            </group>
+          </group>
+          <separator string="Lanes"/>
+          <field name="lane_ids" mode="list,form" context="{'default_parking_area_id': id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_parking_lane_form'}">
+            <list create="1" edit="1" delete="1">
+              <control>
+                <create string="Add Lane"/>
+              </control>
+              <field name="name" string="Lane" decoration-bf="1"/>
+              <field name="available_edge_server_ids" column_invisible="1"/>
+              <field name="edge_server_id" string="Server" domain="[('id','in',available_edge_server_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" optional="hide"/>
+              <field name="available_controller_ids" column_invisible="1"/>
+              <field name="controller_id" string="Controller" domain="[('id','in',available_controller_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+              <field name="timeline_point_count" string="Points" readonly="1"/>
+              <field name="active" widget="boolean_toggle"/>
+            </list>
+          </field>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="action_nsp_parking_area" model="ir.actions.act_window">
+    <field name="name">Parking Layout</field>
+    <field name="res_model">nsp.parking.area</field>
+    <field name="view_mode">list,form</field>
+    <field name="search_view_id" ref="view_nsp_parking_area_search"/>
+  </record>
+  <record id="view_nsp_parking_lane_list" model="ir.ui.view">
+    <field name="name">nsp.parking.lane.list</field>
+    <field name="model">nsp.parking.lane</field>
+    <field name="arch" type="xml">
+      <list string="Lanes">
+        <field name="parking_area_id" string="Layout"/>
+        <field name="name" string="Lane" decoration-bf="1"/>
+        <field name="controller_id" string="Controller"/>
+        <field name="timeline_point_count" string="Points" readonly="1"/>
+        <field name="active" widget="boolean_toggle"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_nsp_parking_lane_form" model="ir.ui.view">
+    <field name="name">nsp.parking.lane.form</field>
+    <field name="model">nsp.parking.lane</field>
+    <field name="arch" type="xml">
+      <form string="Lane">
+        <sheet>
+          <field name="available_controller_ids" invisible="1"/>
+          <field name="available_edge_server_ids" invisible="1"/>
+          <div class="oe_title">
+            <h1>
+              <field name="name" placeholder="Lane"/>
+            </h1>
+          </div>
+          <group>
+            <group string="Devices">
+              <field name="edge_server_id" string="Server" domain="[('id','in',available_edge_server_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+              <field name="controller_id" string="Controller" domain="[('id','in',available_controller_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+            </group>
+          </group>
+          <notebook>
+            <page string="Timeline" name="timeline">
+              <field name="timeline_line_ids" readonly="1" nolabel="1">
+                <list create="0" edit="0" delete="0">
+                  <field name="sequence" string="#"/>
+                  <field name="reader_id" string="Reader"/>
+                  <field name="port_no" string="Port"/>
+                  <field name="duration_from_previous" string="Interval (s)"/>
+                  <field name="cumulative_time" string="Elapsed (s)"/>
+                </list>
+              </field>
+            </page>
+            <page string="Sequences" name="sequences">
+              <group col="2">
+                <group string="Check-in">
+                  <field name="checkin_sequence_ids" nolabel="1" context="{'default_lane_id': id, 'default_sequence_type': 'check_in'}">
+                    <list editable="bottom" create="1" delete="1">
+                      <control>
+                        <create string="Add"/>
+                      </control>
+                      <field name="sequence" string="#"/>
+                      <field name="sequence_type" column_invisible="1"/>
+                      <field name="available_reader_ids" column_invisible="1"/>
+                      <field name="reader_id" string="Reader" domain="[('id','in',available_reader_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                      <field name="port_no" string="Port"/>
+                    </list>
+                  </field>
                 </group>
-            </search>
-        </field>
-    </record>
-
-    <record id="view_nsp_parking_area_list" model="ir.ui.view">
-        <field name="name">nsp.parking.operation.list</field>
-        <field name="model">nsp.parking.area</field>
-        <field name="arch" type="xml">
-            <list string="Parking Layout">
-                <field name="state" widget="badge"
-                       decoration-success="state == 'operational'"
-                       decoration-warning="state in ('draft','maintenance')"
-                       decoration-danger="state == 'blocked'"/>
-                <field name="name" string="Layout" decoration-bf="1"/>
-                <field name="branch_id" string="Branch"/>
-                <field name="lane_count" string="Lanes"/>
-                <field name="published_revision" string="Rev."/>
-                <field name="published_at" string="Published" optional="hide"/>
-            </list>
-        </field>
-    </record>
-
-    <record id="view_nsp_parking_area_form" model="ir.ui.view">
-        <field name="name">nsp.parking.operation.form</field>
-        <field name="model">nsp.parking.area</field>
-        <field name="arch" type="xml">
-            <form string="Parking Layout">
-                <header>
-                    <button name="action_set_operational" type="object" string="Publish"
-                            icon="fa-cloud-upload" class="oe_highlight"
-                            help="Publish this layout to Edge."
-                            invisible="state == 'operational'"/>
-                    <button name="action_set_maintenance" type="object" string="Maintain"
-                            icon="fa-wrench" help="Publish Maintenance state."
-                            invisible="not is_published or state == 'maintenance'"/>
-                    <button name="action_set_blocked" type="object" string="Block"
-                            icon="fa-ban" help="Publish Blocked state."
-                            invisible="not is_published or state == 'blocked'"/>
-                    <button name="action_reset_to_draft" type="object" string="Revise"
-                            icon="fa-pencil" help="Create an editable draft while keeping the last published revision active."
-                            invisible="state == 'draft'"/>
-                    <field name="state" widget="statusbar" statusbar_visible="draft,operational,maintenance,blocked"/>
-                </header>
-                <sheet>
-                    <field name="is_published" invisible="1"/>
-                    <div class="oe_button_box" name="button_box">
-                        <button name="action_open_live_monitor" type="object" class="oe_stat_button"
-                                icon="fa-desktop" help="Open the live parking monitor."
-                                groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking,base.group_system">
-                            <span class="o_stat_text">Monitor</span>
-                        </button>
-                    </div>
-                    <div class="oe_title">
-                        <h1><field name="name" placeholder="Parking Area"/></h1>
-                    </div>
-                    <group>
-                        <group>
-                            <field name="branch_id" string="Branch"
-                                   context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_branch_form'}"/>
-                        </group>
-                        <group string="Published">
-                            <field name="published_revision" string="Revision" readonly="1"/>
-                            <field name="published_at" string="Date" readonly="1"/>
-                            <field name="published_edge_server_codes" string="Servers" readonly="1"/>
-                        </group>
-                    </group>
-                    <separator string="Lanes"/>
-                    <field name="lane_ids" mode="list,form"
-                           context="{'default_parking_area_id': id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_parking_lane_form'}">
-                        <list create="1" edit="1" delete="1">
-                            <control><create string="Add Lane"/></control>
-                            <field name="name" string="Lane" decoration-bf="1"/>
-                            <field name="available_edge_server_ids" column_invisible="1"/>
-                            <field name="edge_server_id" string="Server"
-                                   domain="[('id','in',available_edge_server_ids)]"
-                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"
-                                   optional="hide"/>
-                            <field name="available_controller_ids" column_invisible="1"/>
-                            <field name="controller_id" string="Controller"
-                                   domain="[('id','in',available_controller_ids)]"
-                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                            <field name="calibration_result_id" string="Calibration"
-                                   domain="[('state','=','accepted')]"
-                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': False}"/>
-                            <field name="timeline_point_count" string="Points" readonly="1"/>
-                            <field name="active" widget="boolean_toggle"/>
-                        </list>
-                    </field>
-                </sheet>
-            </form>
-        </field>
-    </record>
-
-    <record id="action_nsp_parking_area" model="ir.actions.act_window">
-        <field name="name">Parking Layout</field>
-        <field name="res_model">nsp.parking.area</field>
-        <field name="view_mode">list,form</field>
-        <field name="search_view_id" ref="view_nsp_parking_area_search"/>
-    </record>
-
-    <record id="view_nsp_parking_lane_list" model="ir.ui.view">
-        <field name="name">nsp.parking.lane.list</field>
-        <field name="model">nsp.parking.lane</field>
-        <field name="arch" type="xml">
-            <list string="Lanes">
-                <field name="parking_area_id" string="Layout"/>
-                <field name="name" string="Lane" decoration-bf="1"/>
-                <field name="controller_id" string="Controller"/>
-                <field name="calibration_result_id" string="Calibration"/>
-                <field name="timeline_point_count" string="Points" readonly="1"/>
-                <field name="active" widget="boolean_toggle"/>
-            </list>
-        </field>
-    </record>
-
-    <record id="view_nsp_parking_lane_form" model="ir.ui.view">
-        <field name="name">nsp.parking.lane.form</field>
-        <field name="model">nsp.parking.lane</field>
-        <field name="arch" type="xml">
-            <form string="Lane">
-                <header>
-                    <button name="action_import_calibration_result" type="object" string="Import Timeline"
-                            icon="fa-download" class="oe_highlight"
-                            help="Import the accepted Lane Calibration timeline and clear existing event sequences."
-                            invisible="not calibration_result_id"/>
-                </header>
-                <sheet>
-                    <field name="available_controller_ids" invisible="1"/>
-                    <field name="available_edge_server_ids" invisible="1"/>
-                    <div class="oe_title">
-                        <h1><field name="name" placeholder="Lane"/></h1>
-                    </div>
-                    <group>
-                        <group>
-                        </group>
-                        <group string="Devices">
-                            <field name="edge_server_id" string="Server"
-                                   domain="[('id','in',available_edge_server_ids)]"
-                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                            <field name="controller_id" string="Controller"
-                                   domain="[('id','in',available_controller_ids)]"
-                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                        </group>
-                    </group>
-                    <notebook>
-                        <page string="Timeline" name="timeline">
-                            <field name="timeline_line_ids" readonly="1" nolabel="1">
-                                <list create="0" edit="0" delete="0">
-                                    <field name="sequence" string="#"/>
-                                    <field name="reader_id" string="Reader"/>
-                                    <field name="port_no" string="Port"/>
-                                    <field name="duration_from_previous" string="Interval (s)"/>
-                                    <field name="cumulative_time" string="Elapsed (s)"/>
-                                </list>
-                            </field>
-                        </page>
-                        <page string="Sequences" name="sequences">
-                            <group col="2">
-                                <group string="Check-in">
-                                    <field name="checkin_sequence_ids" nolabel="1"
-                                           context="{'default_lane_id': id, 'default_sequence_type': 'check_in'}">
-                                        <list editable="bottom" create="1" delete="1">
-                                            <control><create string="Add"/></control>
-                                            <field name="sequence" string="#"/>
-                                            <field name="sequence_type" column_invisible="1"/>
-                                            <field name="available_reader_ids" column_invisible="1"/>
-                                            <field name="reader_id" string="Reader"
-                                                   domain="[('id','in',available_reader_ids)]"
-                                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                                            <field name="port_no" string="Port"/>
-                                        </list>
-                                    </field>
-                                </group>
-                                <group string="Check-out">
-                                    <field name="checkout_sequence_ids" nolabel="1"
-                                           context="{'default_lane_id': id, 'default_sequence_type': 'check_out'}">
-                                        <list editable="bottom" create="1" delete="1">
-                                            <control><create string="Add"/></control>
-                                            <field name="sequence" string="#"/>
-                                            <field name="sequence_type" column_invisible="1"/>
-                                            <field name="available_reader_ids" column_invisible="1"/>
-                                            <field name="reader_id" string="Reader"
-                                                   domain="[('id','in',available_reader_ids)]"
-                                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                                            <field name="port_no" string="Port"/>
-                                        </list>
-                                    </field>
-                                </group>
-                            </group>
-                        </page>
-                        <page string="Settings" name="settings">
-                            <group>
-                                <group string="Tolerance">
-                                    <field name="tolerance_type" string="Unit"/>
-                                    <field name="tolerance_value" string="Value"/>
-                                </group>
-                                <group string="Calibration">
-                                    <field name="calibration_result_id" string="Calibration"
-                                           domain="[('state','=','accepted')]"
-                                           options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': False}"/>
-                                </group>
-                            </group>
-                        </page>
-                    </notebook>
-                </sheet>
-            </form>
-        </field>
-    </record>
-
-    <record id="action_nsp_parking_lane" model="ir.actions.act_window">
-        <field name="name">Lanes</field>
-        <field name="res_model">nsp.parking.lane</field>
-        <field name="view_mode">list,form</field>
-    </record>
+                <group string="Check-out">
+                  <field name="checkout_sequence_ids" nolabel="1" context="{'default_lane_id': id, 'default_sequence_type': 'check_out'}">
+                    <list editable="bottom" create="1" delete="1">
+                      <control>
+                        <create string="Add"/>
+                      </control>
+                      <field name="sequence" string="#"/>
+                      <field name="sequence_type" column_invisible="1"/>
+                      <field name="available_reader_ids" column_invisible="1"/>
+                      <field name="reader_id" string="Reader" domain="[('id','in',available_reader_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                      <field name="port_no" string="Port"/>
+                    </list>
+                  </field>
+                </group>
+              </group>
+            </page>
+            <page string="Settings" name="settings">
+              <group>
+                <group string="Tolerance">
+                  <field name="tolerance_type" string="Unit"/>
+                  <field name="tolerance_value" string="Value"/>
+                </group>
+              </group>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="action_nsp_parking_lane" model="ir.actions.act_window">
+    <field name="name">Lanes</field>
+    <field name="res_model">nsp.parking.lane</field>
+    <field name="view_mode">list,form</field>
+  </record>
 </odoo>

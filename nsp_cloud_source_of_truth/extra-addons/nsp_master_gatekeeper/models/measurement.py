@@ -679,6 +679,11 @@ class NspMeasurementSession(models.Model):
             "coverage_percent": round((detected_vehicle_count * 100.0 / len(vehicles)), 1) if vehicles else 0.0,
             "readers": readers,
             "reader_count": len(readers),
+            "configured_reader_port_count": len({
+                (reader["serial_number"], int(port_no or 0))
+                for reader in readers
+                for port_no in reader.get("ports", [])
+            }),
             "started_at": fields.Datetime.to_string(session.started_at) if session.started_at else None,
             "ended_at": fields.Datetime.to_string(session.ended_at) if session.ended_at else None,
             "applied_at": fields.Datetime.to_string(session.applied_at) if session.applied_at else None,
@@ -734,6 +739,9 @@ class NspMeasurementSession(models.Model):
             controller = line.controller_id if line else self.env["nsp.controller"]
             current = {
                 "_key": key,
+                "_first_seconds": fields.Datetime.to_datetime(event.read_at).timestamp()
+                + (int(event.read_at_ms or 0) / 1000.0),
+                "first_event_id": event.id,
                 "sequence_no": len(steps) + 1,
                 "first_seen_at": self._event_timestamp(event),
                 "last_seen_at": self._event_timestamp(event),
@@ -750,8 +758,15 @@ class NspMeasurementSession(models.Model):
         if current:
             current.pop("_key", None)
             steps.append(current)
+        previous_seconds = None
         for index, step in enumerate(steps, start=1):
+            current_seconds = float(step.pop("_first_seconds", 0.0) or 0.0)
             step["sequence_no"] = index
+            step["duration_from_previous"] = (
+                0.0 if previous_seconds is None
+                else max(current_seconds - previous_seconds, 0.0)
+            )
+            previous_seconds = current_seconds
         return steps
 
     def _port_summary(self):
@@ -1149,7 +1164,39 @@ class NspMeasurementReaderLine(models.Model):
                 session_id = self.env.context.get("active_id")
             if session_id:
                 values["session_id"] = int(session_id)
+        # A new Reader Assembly should be immediately saveable from the
+        # Infrastructure Scope popup. Seed Port 1 unless the caller supplied
+        # an explicit port collection.
+        if "reader_port_ids" in fields_list and not values.get("reader_port_ids"):
+            values["reader_port_ids"] = [(0, 0, {"port_no": 1})]
         return values
+
+    def action_open_scope_create(self):
+        session_id = self._session_id_from_context()
+        session = self.env["nsp.measurement.session"].browse(session_id).exists()
+        if not session:
+            raise UserError(_("Lane Calibration was not found."))
+        if session.status != "draft":
+            raise ValidationError(_("Infrastructure Scope can be edited only while Lane Calibration is Draft."))
+        form_view = self.env.ref(
+            "nsp_master_gatekeeper.view_nsp_measurement_reader_line_form"
+        )
+        return {
+            "type": "ir.actions.act_window",
+            "name": _("New Reader Assembly"),
+            "res_model": self._name,
+            "view_mode": "form",
+            "views": [(form_view.id, "form")],
+            "target": "new",
+            "context": {
+                **dict(self.env.context),
+                "active_model": "nsp.measurement.session",
+                "active_id": session.id,
+                "active_ids": session.ids,
+                "default_session_id": session.id,
+                "default_reader_port_ids": [(0, 0, {"port_no": 1})],
+            },
+        }
 
     @api.model
     def _session_id_from_context(self):

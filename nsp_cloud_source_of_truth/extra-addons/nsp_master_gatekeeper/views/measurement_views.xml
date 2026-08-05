@@ -38,69 +38,30 @@
             <form string="Lane Calibration">
                 <header>
                     <button name="action_ready" type="object" string="Release" icon="fa-cloud-upload"
-                            help="Release this revision to Controllers." class="oe_highlight"
+                            help="Release this Lane Calibration to the assigned Controller." class="oe_highlight"
                             invisible="status != 'draft'"/>
-                    <button name="action_prepare_device_reconfiguration" type="object" string="Revise" icon="fa-pencil"
-                            help="Create a new editable revision and measure again."
-                            invisible="status not in ('completed','failed','applied')"/>
                     <button name="action_cancel" type="object" string="Cancel" icon="fa-times"
-                            help="Cancel the current calibration."
-                            invisible="status in ('completed','applied','failed','cancelled')"/>
-                    <field name="status" widget="statusbar" statusbar_visible="draft,ready,running,completed,applied,failed,cancelled"/>
+                            help="Cancel the current Lane Calibration."
+                            invisible="status not in ('draft','ready','running')"/>
+                    <field name="status" widget="statusbar"
+                           statusbar_visible="draft,ready,running,completed,applied,cancelled"/>
                 </header>
                 <sheet>
                     <field name="is_cloud_deployment" invisible="1"/>
                     <div class="oe_title">
                         <label for="measurement_code" string="Lane Calibration"/>
                         <h1><field name="measurement_code" readonly="1" widget="CopyClipboardChar"/></h1>
-                        <div class="text-muted" title="Revision"><i class="fa fa-code-fork me-1"/>R<field name="revision" readonly="1" class="oe_inline"/></div>
+                        <div class="text-muted" title="Revision">
+                            <i class="fa fa-code-fork me-1"/>R<field name="revision" readonly="1" class="oe_inline"/>
+                        </div>
                     </div>
-
-                    <notebook>
-                        <page string="Devices" name="devices">
-                            <field name="reader_line_ids" mode="list,form" readonly="status != 'draft'"
-                                   context="{'default_session_id': id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_measurement_reader_line_form'}">
-                                <list create="1" edit="1" delete="1">
-                                    <control><create string="Add Reader"/></control>
-                                    <field name="edge_server_id" string="Server"/>
-                                    <field name="controller_id" string="Controller"/>
-                                    <field name="reader_id" string="Reader"/>
-                                    <field name="port_count" string="Ports" readonly="1"/>
-                                    <field name="reader_power_dbm" string="Power"/>
-                                    <field name="read_interval_ms" string="Interval"/>
-                                    <field name="reader_status" string="State" readonly="1" widget="badge" optional="hide"/>
-                                </list>
-                            </field>
-                        </page>
-                        <page string="Vehicles" name="vehicles">
-                            <field name="target_line_ids" readonly="status != 'draft'">
-                                <list editable="bottom" create="1" delete="1">
-                                    <control><create string="Add Vehicle"/></control>
-                                    <field name="vehicle_scan_tid" string="RFID Tag" widget="nsp_rfid_scan"
-                                           options="{'target_field': 'tag_id', 'resolved_value_field': 'vehicle_tid', 'expected_target': 'vehicle_or_available', 'require_available': False, 'require_active_assignment': False, 'skip_duplicates': True}"
-                                           placeholder="Scan RFID TID"/>
-                                    <field name="tag_id" column_invisible="True"/>
-                                    <field name="vehicle_tid" column_invisible="True"/>
-                                    <field name="vehicle_id" string="Plate" domain="[('active', '=', True)]"
-                                           options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
-                                           context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_form'}"/>
-                                    <field name="owner_locked" column_invisible="True"/>
-                                    <field name="owner_id" string="Owner" readonly="owner_locked" domain="[('active', '=', True)]"
-                                           options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
-                                           context="{'form_view_ref': 'nsp_user.view_nsp_user_form'}"/>
-                                    <field name="vehicle_detection_state" string="State" widget="badge" readonly="1" optional="hide"/>
-                                </list>
-                            </field>
-                        </page>
-                    </notebook>
-
-                    <field name="calibration_workspace" widget="nsp_calibration_workspace" nolabel="1" readonly="1" invisible="status == 'draft'"/>
+                    <field name="calibration_workspace" widget="nsp_calibration_workspace"
+                           nolabel="1" readonly="1"/>
                 </sheet>
                 <chatter/>
             </form>
         </field>
     </record>
-
 
     <record id="view_nsp_measurement_reader_line_form" model="ir.ui.view">
         <field name="name">nsp.measurement.reader.line.form</field>
@@ -132,7 +93,7 @@
                         </group>
                     </group>
                     <separator string="Reader Ports"/>
-                    <field name="reader_port_ids" nolabel="1" context="{'default_reader_line_id': id}">
+                    <field name="reader_port_ids" nolabel="1">
                         <list editable="bottom" create="1" delete="1" open_form_view="0">
                             <control><create string="Add Port"/></control>
                             <field name="reader_line_id" column_invisible="1"/>
@@ -140,6 +101,184 @@
                         </list>
                     </field>
                 </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_nsp_measurement_session_vehicles_popup_form" model="ir.ui.view">
+        <field name="name">nsp.measurement.session.vehicles.popup.form</field>
+        <field name="model">nsp.measurement.session</field>
+        <field name="arch" type="xml">
+            <form string="Vehicles">
+                <sheet>
+                    <field name="status" invisible="1"/>
+                    <field name="target_line_ids" nolabel="1" readonly="status != 'draft'"
+                           context="{'default_session_id': id}">
+                        <list editable="bottom" create="1" edit="1" delete="1" open_form_view="0">
+                            <control>
+                                <create string="Add Vehicle"/>
+                            </control>
+                            <field name="session_id" column_invisible="1"/>
+                            <field name="vehicle_scan_tid" string="RFID Tag" widget="nsp_rfid_scan"
+                                   options="{'target_field': 'tag_id', 'resolved_value_field': 'vehicle_tid', 'expected_target': 'vehicle_or_available', 'require_available': False, 'require_active_assignment': False, 'skip_duplicates': True}"
+                                   placeholder="Scan RFID TID"/>
+                            <field name="tag_id" column_invisible="1"/>
+                            <field name="vehicle_tid" column_invisible="1"/>
+                            <field name="vehicle_id" string="Plate" domain="[('active', '=', True)]"
+                                   options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                   context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_form'}"/>
+                            <field name="owner_locked" column_invisible="1"/>
+                            <field name="owner_id" string="Owner" readonly="owner_locked"
+                                   domain="[('active', '=', True)]"
+                                   options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                   context="{'form_view_ref': 'nsp_user.view_nsp_user_form'}"/>
+                            <field name="vehicle_detection_state" string="State" widget="badge" readonly="1"/>
+                        </list>
+                    </field>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_nsp_measurement_target_line_scope_edit_list" model="ir.ui.view">
+        <field name="name">nsp.measurement.target.line.scope.edit.list</field>
+        <field name="model">nsp.measurement.target.line</field>
+        <field name="arch" type="xml">
+            <list string="Vehicles" editable="bottom" create="1" edit="1" delete="1">
+                <field name="session_id" column_invisible="1"/>
+                <field name="vehicle_scan_tid" string="RFID Tag" widget="nsp_rfid_scan"
+                       options="{'target_field': 'tag_id', 'resolved_value_field': 'vehicle_tid', 'expected_target': 'vehicle_or_available', 'require_available': False, 'require_active_assignment': False, 'skip_duplicates': True}"
+                       placeholder="Scan RFID TID"/>
+                <field name="tag_id" column_invisible="1"/>
+                <field name="vehicle_tid" column_invisible="1"/>
+                <field name="vehicle_id" string="Plate" domain="[('active', '=', True)]"
+                       options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                       context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_form'}"/>
+                <field name="owner_locked" column_invisible="1"/>
+                <field name="owner_id" string="Owner" readonly="owner_locked" domain="[('active', '=', True)]"
+                       options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                       context="{'form_view_ref': 'nsp_user.view_nsp_user_form'}"/>
+                <field name="vehicle_detection_state" string="State" widget="badge" readonly="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_measurement_target_line_scope_list" model="ir.ui.view">
+        <field name="name">nsp.measurement.target.line.scope.list</field>
+        <field name="model">nsp.measurement.target.line</field>
+        <field name="arch" type="xml">
+            <list string="Vehicles" create="0" edit="0" delete="0">
+                <field name="vehicle_id" string="Plate"/>
+                <field name="owner_id" string="Owner"/>
+                <field name="vehicle_tid" string="RFID TID"/>
+                <field name="vehicle_detection_state" string="State" widget="badge"/>
+                <field name="vehicle_detection_count" string="Detections"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_measurement_target_line_coverage_list" model="ir.ui.view">
+        <field name="name">nsp.measurement.target.line.coverage.list</field>
+        <field name="model">nsp.measurement.target.line</field>
+        <field name="arch" type="xml">
+            <list string="RFID Coverage" create="0" edit="0" delete="0"
+                  decoration-success="vehicle_detection_count &gt; 0"
+                  decoration-muted="vehicle_detection_count == 0">
+                <field name="vehicle_id" string="Vehicle"/>
+                <field name="vehicle_tid" string="RFID TID"/>
+                <field name="vehicle_detection_state" string="Coverage" widget="badge"/>
+                <field name="vehicle_detection_count" string="Reads"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_measurement_reader_line_scope_edit_list" model="ir.ui.view">
+        <field name="name">nsp.measurement.reader.line.scope.edit.list</field>
+        <field name="model">nsp.measurement.reader.line</field>
+        <field name="arch" type="xml">
+            <list string="Infrastructure Scope" create="0" edit="1" delete="1">
+                <header>
+                    <button name="action_open_scope_create" type="object" string="New"
+                            class="btn-primary" icon="fa-plus" display="always"/>
+                </header>
+                <field name="session_id" column_invisible="1"/>
+                <field name="edge_server_id" string="Server"/>
+                <field name="controller_id" string="Controller"/>
+                <field name="reader_id" string="Reader"/>
+                <field name="serial_number" string="Serial"/>
+                <field name="port_count" string="Ports"/>
+                <field name="reader_power_dbm" string="Power (dBm)"/>
+                <field name="read_interval_ms" string="Interval (ms)"/>
+                <field name="reader_status" string="State" widget="badge"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_measurement_reader_line_scope_list" model="ir.ui.view">
+        <field name="name">nsp.measurement.reader.line.scope.list</field>
+        <field name="model">nsp.measurement.reader.line</field>
+        <field name="arch" type="xml">
+            <list string="Infrastructure Scope" create="0" edit="0" delete="0">
+                <field name="edge_server_id" string="Server"/>
+                <field name="controller_id" string="Controller"/>
+                <field name="reader_id" string="Reader"/>
+                <field name="serial_number" string="Serial"/>
+                <field name="port_count" string="Ports"/>
+                <field name="reader_status" string="State" widget="badge"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_nsp_measurement_apply_lane_wizard_form" model="ir.ui.view">
+        <field name="name">nsp.measurement.apply.lane.wizard.form</field>
+        <field name="model">nsp.measurement.apply.lane.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Apply Lane Configuration">
+                <sheet>
+                    <div class="oe_title">
+                        <h1>Apply Lane Configuration</h1>
+                        <p class="text-muted">
+                            Check-in follows the selected row order. Check-out is generated in reverse order.
+                        </p>
+                    </div>
+                    <field name="session_id" invisible="1"/>
+                    <group>
+                        <group string="Destination">
+                            <field name="parking_area_id" string="Parking Layout" required="1"
+                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': False}"/>
+                            <field name="edge_server_id" string="Server" readonly="1"/>
+                            <field name="controller_id" string="Controller" readonly="1"/>
+                            <field name="lane_id" string="Lane" required="1" readonly="not parking_area_id"
+                                   domain="[('parking_area_id', '=', parking_area_id), ('edge_server_id', '=', edge_server_id), ('controller_id', '=', controller_id)]"
+                                   context="{'default_parking_area_id': parking_area_id, 'default_edge_server_id': edge_server_id, 'default_controller_id': controller_id}"
+                                   options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
+                                   placeholder="Select or type a new Lane name"/>
+                        </group>
+                        <group string="Generated Sequences">
+                            <field name="selected_count" string="Timeline Points" readonly="1"/>
+                            <field name="checkin_overview" string="Check-in" readonly="1"/>
+                            <field name="checkout_overview" string="Check-out" readonly="1"/>
+                        </group>
+                    </group>
+                    <separator string="Selected Detection Timeline"/>
+                    <field name="line_ids" nolabel="1" readonly="1">
+                        <list create="0" edit="0" delete="0">
+                            <field name="selection_order" string="#"/>
+                            <field name="reader_id" string="Reader"/>
+                            <field name="serial_number" string="Serial" optional="hide"/>
+                            <field name="port_no" string="Port"/>
+                            <field name="observed_at" string="Detected"/>
+                            <field name="duration_from_previous" string="Interval (s)"/>
+                            <field name="checkin_order" string="Check-in #"/>
+                            <field name="checkout_order" string="Check-out #"/>
+                        </list>
+                    </field>
+                </sheet>
+                <footer>
+                    <button name="action_save_configuration" type="object" string="Save"
+                            class="btn-primary" icon="fa-save"/>
+                    <button string="Cancel" special="cancel" class="btn-secondary"/>
+                </footer>
             </form>
         </field>
     </record>
