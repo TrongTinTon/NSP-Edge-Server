@@ -4,6 +4,7 @@ import { Component, onMounted, onWillUnmount, useState } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { useService } from "@web/core/utils/hooks";
 import { standardFieldProps } from "@web/views/fields/standard_field_props";
+import { NspInfrastructureScopeDialog } from "./infrastructure_scope_dialog";
 
 export class NspCalibrationWorkspace extends Component {
     static template = "nsp_master_gatekeeper.CalibrationWorkspace";
@@ -13,6 +14,7 @@ export class NspCalibrationWorkspace extends Component {
         this.orm = useService("orm");
         this.action = useService("action");
         this.notification = useService("notification");
+        this.dialog = useService("dialog");
         this.sessionId = this.resolveSessionId();
         this.timer = null;
         this.loading = false;
@@ -103,10 +105,21 @@ export class NspCalibrationWorkspace extends Component {
     }
 
     async openCard(kind) {
+        if (kind === "infrastructure") {
+            this.dialog.add(NspInfrastructureScopeDialog, {
+                sessionId: this.sessionId,
+                onChanged: async () => {
+                    await this.refresh({ force: true });
+                    if (typeof this.props.record?.load === "function") {
+                        await this.props.record.load();
+                    }
+                },
+            });
+            return;
+        }
         const methods = {
             vehicles: "action_open_vehicles_card",
             coverage: "action_open_rfid_coverage_card",
-            infrastructure: "action_open_infrastructure_card",
         };
         const method = methods[kind];
         if (!method) {
@@ -116,12 +129,11 @@ export class NspCalibrationWorkspace extends Component {
         if (action?.type) {
             const refreshWorkspace = async () => {
                 await this.refresh({ force: true });
+                if (typeof this.props.record?.load === "function") {
+                    await this.props.record.load();
+                }
             };
             await this.action.doAction(action, { onClose: refreshWorkspace });
-            // Some action targets resolve before the dialog close callback.
-            // Refresh here as a harmless fallback, while onClose remains the
-            // authoritative refresh after inline saves or record creation.
-            await this.refresh({ force: true });
         }
     }
 

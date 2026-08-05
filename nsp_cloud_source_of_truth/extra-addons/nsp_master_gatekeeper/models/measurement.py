@@ -679,6 +679,8 @@ class NspMeasurementSession(models.Model):
             "coverage_percent": round((detected_vehicle_count * 100.0 / len(vehicles)), 1) if vehicles else 0.0,
             "readers": readers,
             "reader_count": len(readers),
+            "reader_online_count": sum(1 for reader in readers if reader.get("status") in ("online", "degraded")),
+            "reader_offline_count": sum(1 for reader in readers if reader.get("status") == "offline"),
             "configured_reader_port_count": len({
                 (reader["serial_number"], int(port_no or 0))
                 for reader in readers
@@ -697,6 +699,368 @@ class NspMeasurementSession(models.Model):
             "steps": steps,
             "last_event_id": max(events.ids or [int(last_event_id or 0)]),
             "server_time": fields.Datetime.to_string(fields.Datetime.now()),
+        }
+
+
+    @api.model
+    def get_infrastructure_scope_snapshot(self, session_id):
+        """Return the Lane Calibration infrastructure topology and live health.
+
+        Configuration ownership comes from ``nsp.measurement.reader.line``.
+        Runtime health comes from the Edge Server, Controller and Reader
+        heartbeat mirrors.  RFID activity is derived only from raw calibration
+        observations for the current revision; it is not an Antenna health
+        assertion.
+        """
+        session = self.sudo().browse(int(session_id or 0)).exists()
+        if not session:
+            return {"found": False}
+
+        now = fields.Datetime.now()
+        try:
+            silent_after_sec = int(
+                self.env["ir.config_parameter"].sudo().get_param(
+                    "nsp_master_gatekeeper.lane_calibration_reader_silent_after_sec",
+                    "60",
+                ) or "60"
+            )
+        except Exception:
+            silent_after_sec = 60
+        silent_after_sec = min(max(silent_after_sec, 15), 3600)
+
+        lines = session.reader_line_ids.sorted(
+            key=lambda line: (
+                line.edge_server_id.edge_server_code or "",
+                line.controller_id.controller_id or "",
+                line.reader_id.name or "",
+                line.reader_id.serial_number or "",
+                line.id,
+            )
+        )
+        # The dialog polls every two seconds. Aggregate in PostgreSQL instead
+        # of materializing every raw observation into the ORM cache.
+        self.env.cr.execute(
+            """
+            SELECT UPPER(BTRIM(serial_number)) AS serial_number,
+                   port_no,
+                   COUNT(*) AS detection_count,
+                   MIN(read_at) AS first_detection,
+                   MAX(read_at) AS last_detection
+              FROM nsp_measurement_event
+             WHERE session_id = %s
+               AND revision = %s
+             GROUP BY UPPER(BTRIM(serial_number)), port_no
+            """,
+            (session.id, int(session.revision or 1)),
+        )
+        port_stats = {
+            (str(serial or "").strip().upper(), int(port_no or 0)): {
+                "count": int(detection_count or 0),
+                "first_detection": first_detection,
+                "last_detection": last_detection,
+            }
+            for serial, port_no, detection_count, first_detection, last_detection
+            in self.env.cr.fetchall()
+            if serial and int(port_no or 0) > 0
+        }
+
+        connection_labels = dict(
+            self.env["nsp.device"]._fields["connection_type"].selection
+        )
+        edge_map = {}
+        warnings = []
+        readers_flat = []
+        active_runtime = session.status in ("ready", "running")
+
+        def _dt(value):
+            return fields.Datetime.to_string(value) if value else None
+
+        def _seconds_since(value):
+            if not value:
+                return None
+            parsed = fields.Datetime.to_datetime(value)
+            return max(0, int((now - parsed).total_seconds())) if parsed else None
+
+        def _warning(severity, code, message, happened_at=None, reader_line_id=False):
+            warnings.append({
+                "severity": severity,
+                "code": code,
+                "message": message,
+                "happened_at": _dt(happened_at) if happened_at else None,
+                "reader_line_id": int(reader_line_id or 0),
+            })
+
+        for line in lines:
+            edge = line.edge_server_id
+            controller = line.controller_id
+            reader = line.reader_id
+            edge_node = edge_map.setdefault(edge.id, {
+                "id": edge.id,
+                "code": edge.edge_server_code or "",
+                "name": edge.name or edge.edge_server_code or "Edge Server",
+                "status": edge.status or "offline",
+                "last_heartbeat": _dt(edge.timestamp),
+                "controllers": {},
+            })
+            controller_node = edge_node["controllers"].setdefault(controller.id, {
+                "id": controller.id,
+                "code": controller.controller_id or "",
+                "name": controller.controller_name or controller.controller_id or "Controller",
+                "status": controller.status or "offline",
+                "last_heartbeat": _dt(controller.timestamp),
+                "runtime_mode": "Lane Calibration" if active_runtime else "Inactive",
+                "readers": [],
+            })
+
+            serial_aliases = {
+                str(value or "").strip().upper()
+                for value in (reader.serial_number, reader.runtime_detected_serial_number)
+                if str(value or "").strip()
+            }
+            configured_ports = sorted(set(line.reader_port_ids.mapped("port_no")))
+            observed_ports = sorted({
+                port_no for event_serial, port_no in port_stats
+                if event_serial in serial_aliases
+            })
+            all_ports = sorted(set(configured_ports) | set(observed_ports))
+            ports = []
+            reader_detection_count = 0
+            reader_last_detection = None
+            silent_port_count = 0
+            for port_no in all_ports:
+                matching_stats = [
+                    port_stats.get((serial_alias, port_no), {})
+                    for serial_alias in serial_aliases
+                    if port_stats.get((serial_alias, port_no))
+                ]
+                detection_count = sum(int(item.get("count") or 0) for item in matching_stats)
+                first_values = [item.get("first_detection") for item in matching_stats if item.get("first_detection")]
+                last_values = [item.get("last_detection") for item in matching_stats if item.get("last_detection")]
+                first_detection = min(first_values) if first_values else None
+                last_detection = max(last_values) if last_values else None
+                reader_detection_count += detection_count
+                if last_detection and (
+                    not reader_last_detection or last_detection > reader_last_detection
+                ):
+                    reader_last_detection = last_detection
+                configured = port_no in configured_ports
+                last_age = _seconds_since(last_detection)
+                if detection_count and (last_age is None or last_age <= silent_after_sec):
+                    activity = "active"
+                elif configured and active_runtime and reader.status in ("online", "degraded"):
+                    activity = "silent"
+                    silent_port_count += 1
+                elif detection_count:
+                    activity = "historical"
+                else:
+                    activity = "unknown"
+                ports.append({
+                    "port_no": port_no,
+                    "configured": configured,
+                    "activity": activity,
+                    "detection_count": detection_count,
+                    "first_detection": _dt(first_detection),
+                    "last_detection": _dt(last_detection),
+                })
+                if not configured and detection_count:
+                    _warning(
+                        "warning",
+                        "port_outside_scope",
+                        _("Reader %(reader)s reported Port %(port)s outside the configured Infrastructure Scope.") % {
+                            "reader": reader.display_name,
+                            "port": port_no,
+                        },
+                        last_detection,
+                        line.id,
+                    )
+
+            last_detection_age = _seconds_since(reader_last_detection)
+            if reader.status == "offline":
+                activity_status = "offline"
+            elif reader.status == "degraded":
+                activity_status = "degraded"
+            elif reader.status == "online" and reader_detection_count and (
+                last_detection_age is None or last_detection_age <= silent_after_sec
+            ):
+                activity_status = "active"
+            elif reader.status == "online" and active_runtime:
+                activity_status = "silent"
+            elif reader.status == "online":
+                activity_status = "connected"
+            else:
+                activity_status = "unknown"
+
+            reader_node = {
+                "reader_line_id": line.id,
+                "id": reader.id,
+                "name": reader.name or reader.serial_number or "RFID Reader",
+                "serial_number": reader.serial_number or "",
+                "detected_serial_number": reader.runtime_detected_serial_number or "",
+                "status": reader.status or "offline",
+                "activity_status": activity_status,
+                "last_seen": _dt(reader.last_seen),
+                "last_detection": _dt(reader_last_detection),
+                "detection_count": reader_detection_count,
+                "firmware_version": reader.firmware_version or "",
+                "connection_type": reader.connection_type or "",
+                "connection_label": connection_labels.get(reader.connection_type, "") if reader.connection_type else "",
+                "runtime_power_dbm": int(reader.runtime_power_dbm or 0),
+                "runtime_read_interval_ms": int(reader.runtime_read_interval_ms or 0),
+                "configured_power_dbm": int(line.reader_power_dbm or 0),
+                "configured_read_interval_ms": int(line.read_interval_ms or 0),
+                "ports": ports,
+            }
+            controller_node["readers"].append(reader_node)
+            readers_flat.append(reader_node)
+
+            if edge.status != "online":
+                _warning(
+                    "danger" if edge.status in ("error", "revoked", "block") else "warning",
+                    "edge_not_online",
+                    _("Edge Server %(edge)s is %(status)s.") % {
+                        "edge": edge.display_name,
+                        "status": edge.status or "offline",
+                    },
+                    edge.timestamp,
+                )
+            if controller.status != "online":
+                _warning(
+                    "danger" if controller.status in ("error", "revoked", "block") else "warning",
+                    "controller_not_online",
+                    _("Controller %(controller)s is %(status)s.") % {
+                        "controller": controller.display_name,
+                        "status": controller.status or "offline",
+                    },
+                    controller.timestamp,
+                )
+            if reader.status == "offline":
+                _warning(
+                    "danger",
+                    "reader_offline",
+                    _("Reader %(reader)s is offline.") % {"reader": reader.display_name},
+                    reader.last_seen,
+                    line.id,
+                )
+            elif reader.status == "degraded":
+                _warning(
+                    "warning",
+                    "reader_degraded",
+                    _("Reader %(reader)s reported a degraded runtime state.") % {
+                        "reader": reader.display_name,
+                    },
+                    reader.last_seen,
+                    line.id,
+                )
+            if reader.status in ("online", "degraded") and not reader.firmware_version:
+                _warning(
+                    "info",
+                    "firmware_unknown",
+                    _("Reader %(reader)s is connected but firmware information is unavailable.") % {
+                        "reader": reader.display_name,
+                    },
+                    reader.last_seen,
+                    line.id,
+                )
+            if active_runtime and reader.status in ("online", "degraded") and not reader_detection_count:
+                _warning(
+                    "warning",
+                    "reader_no_detection",
+                    _("Reader %(reader)s is connected but has not produced a detection in this calibration.") % {
+                        "reader": reader.display_name,
+                    },
+                    reader.last_seen,
+                    line.id,
+                )
+            elif active_runtime and reader.status in ("online", "degraded") and (
+                last_detection_age is not None and last_detection_age > silent_after_sec
+            ):
+                _warning(
+                    "warning",
+                    "reader_silent",
+                    _("Reader %(reader)s has not produced a detection in the last %(seconds)s seconds.") % {
+                        "reader": reader.display_name,
+                        "seconds": silent_after_sec,
+                    },
+                    reader_last_detection,
+                    line.id,
+                )
+            if silent_port_count:
+                for port in ports:
+                    if port["activity"] == "silent":
+                        _warning(
+                            "warning",
+                            "port_silent",
+                            _("Reader %(reader)s Port %(port)s has not produced a recent detection.") % {
+                                "reader": reader.display_name,
+                                "port": port["port_no"],
+                            },
+                            fields.Datetime.to_datetime(port["last_detection"]) if port["last_detection"] else reader.last_seen,
+                            line.id,
+                        )
+
+        edges = []
+        for edge in sorted(edge_map.values(), key=lambda item: (item["code"], item["id"])):
+            controllers = list(edge.pop("controllers").values())
+            controllers.sort(key=lambda item: (item["code"], item["id"]))
+            for controller in controllers:
+                controller["readers"].sort(
+                    key=lambda item: (item["name"], item["serial_number"], item["reader_line_id"])
+                )
+            edge["controllers"] = controllers
+            edges.append(edge)
+
+        # The same Edge/Controller warning can occur once per Reader line.
+        unique_warnings = []
+        seen_warning_keys = set()
+        for warning in warnings:
+            key = (
+                warning["severity"], warning["code"], warning["message"],
+                warning.get("reader_line_id") or 0,
+            )
+            if key in seen_warning_keys:
+                continue
+            seen_warning_keys.add(key)
+            unique_warnings.append(warning)
+
+        edge_nodes = [edge for edge in edges]
+        controller_nodes = [
+            controller for edge in edges for controller in edge["controllers"]
+        ]
+        reader_total = len(readers_flat)
+        active_count = sum(1 for item in readers_flat if item["activity_status"] == "active")
+        silent_count = sum(1 for item in readers_flat if item["activity_status"] == "silent")
+        offline_count = sum(1 for item in readers_flat if item["activity_status"] == "offline")
+        degraded_count = sum(1 for item in readers_flat if item["activity_status"] == "degraded")
+        connected_count = sum(
+            1 for item in readers_flat
+            if item["status"] in ("online", "degraded")
+        )
+
+        return {
+            "found": True,
+            "session_id": session.id,
+            "measurement_code": session.measurement_code or "",
+            "revision": int(session.revision or 1),
+            "status": session.status,
+            "editable": session.status == "draft",
+            "runtime_active": active_runtime,
+            "silent_after_sec": silent_after_sec,
+            "server_time": fields.Datetime.to_string(now),
+            "summary": {
+                "edge_total": len(edge_nodes),
+                "edge_online": sum(1 for item in edge_nodes if item["status"] == "online"),
+                "controller_total": len(controller_nodes),
+                "controller_online": sum(1 for item in controller_nodes if item["status"] == "online"),
+                "reader_total": reader_total,
+                "reader_connected": connected_count,
+                "reader_active": active_count,
+                "reader_silent": silent_count,
+                "reader_offline": offline_count,
+                "reader_degraded": degraded_count,
+            },
+            "edges": edges,
+            "readers": readers_flat,
+            "warnings": unique_warnings,
         }
 
     def _event_timestamp(self, event):
@@ -1067,6 +1431,24 @@ class NspMeasurementTargetLine(models.Model):
                 if active.user_id:
                     raise ValidationError(_("The selected RFID Tag is assigned to a User."))
                 raise ValidationError(_("The selected RFID Tag is assigned to another Vehicle."))
+
+    @api.onchange("tag_id")
+    def _onchange_tag_id(self):
+        """Resolve a persisted RFID Tag selection inside the Odoo 19 One2many editor.
+
+        The Vehicles popup stores ``tag_id`` directly.  Keeping this onchange on
+        the persistent field makes the row complete before the parent form Save
+        is executed and avoids relying on the non-stored scanner helper field.
+        """
+        for line in self:
+            if not line.tag_id:
+                line.vehicle_scan_tid = False
+                continue
+            result = line._resolve_vehicle_scan(tag_id=line.tag_id.id)
+            line.vehicle_scan_tid = result.get("tid")
+            resolved_vehicle_id = int(result.get("vehicle_id") or 0)
+            if resolved_vehicle_id:
+                line.vehicle_id = self.env["nsp.vehicle"].browse(resolved_vehicle_id)
 
     @api.onchange("vehicle_scan_tid")
     def _onchange_vehicle_scan_tid(self):

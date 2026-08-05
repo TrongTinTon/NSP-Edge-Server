@@ -37,8 +37,8 @@
                     <div class="nsp-lc-card__icon"><i class="fa fa-sitemap"/></div>
                     <div class="nsp-lc-card__body">
                         <span>Infrastructure Scope</span>
-                        <strong t-esc="state.data.reader_count || 0"/>
-                        <small><t t-esc="state.data.controller_count || 0"/> Controllers · <t t-esc="state.data.configured_reader_port_count || 0"/> Reader Ports</small>
+                        <strong><t t-esc="state.data.reader_online_count || 0"/> / <t t-esc="state.data.reader_count || 0"/></strong>
+                        <small><t t-esc="state.data.reader_online_count || 0"/> Connected · <t t-esc="state.data.reader_offline_count || 0"/> Offline · <t t-esc="state.data.configured_reader_port_count || 0"/> Ports</small>
                     </div>
                     <i class="fa fa-external-link nsp-lc-card__open"/>
                 </button>

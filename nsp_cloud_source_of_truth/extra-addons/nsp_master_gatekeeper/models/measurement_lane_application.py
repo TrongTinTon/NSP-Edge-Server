@@ -101,6 +101,62 @@ class NspMeasurementSessionLaneApplication(models.Model):
             },
         )
 
+
+    def action_open_infrastructure_reader(self, reader_line_id=False):
+        """Open one Infrastructure Scope Reader Assembly in an Odoo 19 dialog."""
+        self.ensure_one()
+        try:
+            line_id = int(reader_line_id or 0)
+        except Exception as exc:
+            raise ValidationError(_("Invalid Reader Assembly.")) from exc
+        line = self.env["nsp.measurement.reader.line"]
+        if line_id:
+            line = line.browse(line_id).exists()
+            if not line or line.session_id != self:
+                raise ValidationError(_("Reader Assembly does not belong to this Lane Calibration."))
+        if self.status != "draft" and not line:
+            raise ValidationError(_("Infrastructure Scope can be changed only while Lane Calibration is Draft."))
+
+        form_view = self.env.ref(
+            "nsp_master_gatekeeper.view_nsp_measurement_reader_line_form"
+        )
+        return {
+            "type": "ir.actions.act_window",
+            "name": _("Reader Assembly") if line else _("New Reader Assembly"),
+            "res_model": "nsp.measurement.reader.line",
+            "res_id": line.id if line else False,
+            "view_mode": "form",
+            "views": [(form_view.id, "form")],
+            "target": "new",
+            "context": {
+                **dict(self.env.context),
+                "active_model": self._name,
+                "active_id": self.id,
+                "active_ids": self.ids,
+                "default_session_id": self.id,
+                "default_reader_port_ids": [(0, 0, {"port_no": 1})],
+                "form_view_initial_mode": "edit" if self.status == "draft" else "readonly",
+                "create": self.status == "draft",
+                "edit": self.status == "draft",
+                "delete": self.status == "draft",
+            },
+        }
+
+    def action_remove_infrastructure_reader(self, reader_line_id):
+        """Remove one scoped Reader Assembly after ownership and state checks."""
+        self.ensure_one()
+        if self.status != "draft":
+            raise ValidationError(_("Infrastructure Scope can be changed only while Lane Calibration is Draft."))
+        try:
+            line_id = int(reader_line_id or 0)
+        except Exception as exc:
+            raise ValidationError(_("Invalid Reader Assembly.")) from exc
+        line = self.env["nsp.measurement.reader.line"].browse(line_id).exists()
+        if not line or line.session_id != self:
+            raise ValidationError(_("Reader Assembly does not belong to this Lane Calibration."))
+        line.unlink()
+        return True
+
     def action_clear_detection_timeline(self):
         for session in self:
             events = session.event_ids.filtered(lambda row: row.revision == session.revision)

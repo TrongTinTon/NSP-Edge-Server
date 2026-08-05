@@ -109,22 +109,22 @@
         <field name="name">nsp.measurement.session.vehicles.popup.form</field>
         <field name="model">nsp.measurement.session</field>
         <field name="arch" type="xml">
-            <form string="Vehicles">
+            <form string="Vehicles" create="0" delete="0" edit="1">
                 <sheet>
                     <field name="status" invisible="1"/>
-                    <field name="target_line_ids" nolabel="1" readonly="status != 'draft'"
-                           context="{'default_session_id': id}">
+                    <div class="alert alert-info mb-3" role="alert" invisible="status != 'draft'">
+                        Select an existing RFID Tag and Vehicle. Changes are committed only when Save is pressed.
+                    </div>
+                    <field name="target_line_ids" nolabel="1" readonly="status != 'draft'">
                         <list editable="bottom" create="1" edit="1" delete="1" open_form_view="0">
                             <control>
                                 <create string="Add Vehicle"/>
                             </control>
                             <field name="session_id" column_invisible="1"/>
-                            <field name="vehicle_scan_tid" string="RFID Tag" widget="nsp_rfid_scan"
-                                   options="{'target_field': 'tag_id', 'resolved_value_field': 'vehicle_tid', 'expected_target': 'vehicle_or_available', 'require_available': False, 'require_active_assignment': False, 'skip_duplicates': True}"
-                                   placeholder="Scan RFID TID"/>
-                            <field name="tag_id" column_invisible="1"/>
-                            <field name="vehicle_tid" column_invisible="1"/>
-                            <field name="vehicle_id" string="Plate" domain="[('active', '=', True)]"
+                            <field name="tag_id" string="RFID Tag" required="1"
+                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                            <field name="vehicle_tid" string="TID" readonly="1" optional="hide"/>
+                            <field name="vehicle_id" string="Plate" required="1" domain="[('active', '=', True)]"
                                    options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
                                    context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_form'}"/>
                             <field name="owner_locked" column_invisible="1"/>
@@ -136,6 +136,14 @@
                         </list>
                     </field>
                 </sheet>
+                <footer>
+                    <button string="Save" special="save" class="btn-primary" data-hotkey="s"
+                            invisible="status != 'draft'"/>
+                    <button string="Cancel" special="cancel" class="btn-secondary"
+                            invisible="status != 'draft'"/>
+                    <button string="Close" special="cancel" class="btn-secondary"
+                            invisible="status == 'draft'"/>
+                </footer>
             </form>
         </field>
     </record>
