@@ -71,7 +71,7 @@ class NspMeasurementSession(models.Model):
             ("ready", "Ready"),
             ("running", "Running"),
             ("completed", "Completed"),
-            ("applied", "Applied to Operation"),
+            ("applied", "Configured"),
             ("failed", "Failed"),
             ("cancelled", "Cancelled"),
         ],
@@ -482,9 +482,9 @@ class NspMeasurementSession(models.Model):
     def action_apply_to_operation(self):
         self.ensure_one()
         if self._deployment_role() != "cloud":
-            raise UserError(_("Apply to Operation is owned by the Cloud Master."))
+            raise UserError(_("Applying calibration results is owned by the Cloud Master."))
         if self.status != "completed":
-            raise ValidationError(_("Complete the Measurement before applying it to operation."))
+            raise ValidationError(_("Complete the Lane Calibration before applying its result to a Lane configuration."))
         self._require_ready_configuration()
         for line in self.reader_line_ids:
             line.reader_id.sudo().write({
@@ -1355,9 +1355,11 @@ class NspMeasurementTargetLine(models.Model):
     @api.model
     def _prepare_scanned_values(self, vals):
         values = dict(vals)
-        scan_requested = bool(
-            values.get("tag_id") or self._normalize_tid(values.get("vehicle_scan_tid"))
-        )
+        if "vehicle_scan_tid" in values:
+            values["vehicle_scan_tid"] = (
+                self._normalize_tid(values.get("vehicle_scan_tid")) or False
+            )
+        scan_requested = bool(values.get("tag_id") or values.get("vehicle_scan_tid"))
         if scan_requested:
             result = self._resolve_vehicle_scan(
                 values.get("tag_id"), values.get("vehicle_scan_tid")
@@ -1375,7 +1377,7 @@ class NspMeasurementTargetLine(models.Model):
 
         vehicle_id = self._many2one_id(values.get("vehicle_id"))
         if vehicle_id and not self._many2one_id(values.get("tag_id")):
-            assignment = self.env["nsp.rfid.tag.assignment"].sudo().active_for_vehicle(
+            assignment = self.env["nsp.rfid.tag.assignment"].sudo().active_for_target(
                 self.env["nsp.vehicle"].sudo().browse(vehicle_id)
             )
             if assignment:
@@ -1495,10 +1497,12 @@ class NspMeasurementTargetLine(models.Model):
     @api.onchange("vehicle_scan_tid")
     def _onchange_vehicle_scan_tid(self):
         for line in self:
-            if not line._normalize_tid(line.vehicle_scan_tid):
+            canonical_tid = line._normalize_tid(line.vehicle_scan_tid)
+            line.vehicle_scan_tid = canonical_tid or False
+            if not canonical_tid:
                 line.tag_id = False
                 continue
-            result = line._resolve_vehicle_scan(scan_tid=line.vehicle_scan_tid)
+            result = line._resolve_vehicle_scan(scan_tid=canonical_tid)
             line.tag_id = self.env["nsp.rfid.tag"].browse(int(result["tag_id"]))
             line.vehicle_scan_tid = result.get("tid")
             if result.get("vehicle_id"):
@@ -1509,7 +1513,7 @@ class NspMeasurementTargetLine(models.Model):
         for line in self:
             if not line.vehicle_id:
                 continue
-            assignment = self.env["nsp.rfid.tag.assignment"].sudo().active_for_vehicle(line.vehicle_id)
+            assignment = self.env["nsp.rfid.tag.assignment"].sudo().active_for_target(line.vehicle_id)
             if assignment and not line.tag_id:
                 line.tag_id = assignment.tag_id
                 line.vehicle_scan_tid = assignment.tid

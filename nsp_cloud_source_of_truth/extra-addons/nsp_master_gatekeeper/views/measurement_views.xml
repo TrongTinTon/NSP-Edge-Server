@@ -10,7 +10,7 @@
                 <filter string="Ready" name="ready" domain="[('status','=','ready')]"/>
                 <filter string="Running" name="running" domain="[('status','=','running')]"/>
                 <filter string="Completed" name="completed" domain="[('status','=','completed')]"/>
-                <filter string="Applied" name="applied" domain="[('status','=','applied')]"/>
+                <filter string="Configured" name="applied" domain="[('status','=','applied')]"/>
                 <filter string="Failed" name="failed" domain="[('status','=','failed')]"/>
                 <group>
                     <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
@@ -44,7 +44,7 @@
                             help="Cancel the current Lane Calibration."
                             invisible="status not in ('draft','ready','running')"/>
                     <field name="status" widget="statusbar"
-                           statusbar_visible="draft,ready,running,completed,applied,cancelled"/>
+                           statusbar_visible="draft,ready,running,completed,applied,failed,cancelled"/>
                 </header>
                 <sheet>
                     <field name="is_cloud_deployment" invisible="1"/>
@@ -155,7 +155,7 @@
             <list string="Vehicles" editable="bottom" create="1" edit="1" delete="1">
                 <field name="session_id" column_invisible="1"/>
                 <field name="vehicle_scan_tid" string="RFID Tag" widget="nsp_rfid_scan"
-                       options="{'target_field': 'tag_id', 'resolved_value_field': 'vehicle_tid', 'expected_target': 'vehicle_or_available', 'require_available': False, 'require_active_assignment': False, 'skip_duplicates': True}"
+                       options="{'target_field': 'tag_id', 'resolved_value_field': 'vehicle_tid', 'expected_target': 'vehicle_or_available', 'require_available': False, 'require_active_assignment': False, 'skip_duplicates': True, 'auto_validate': True}"
                        placeholder="Scan RFID TID"/>
                 <field name="tag_id" column_invisible="1"/>
                 <field name="vehicle_tid" column_invisible="1"/>

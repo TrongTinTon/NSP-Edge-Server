@@ -17,7 +17,8 @@
                        t-on-input="onInput"
                        t-on-paste="onPaste"
                        t-on-keydown="onKeydown"
-                       t-on-focus="onFocus"/>
+                       t-on-focus="onFocus"
+                       t-on-blur="onBlur"/>
                 <div t-if="state.status === 'error' &amp;&amp; state.message"
                      class="nsp-rfid-scan__feedback"
                      role="status"

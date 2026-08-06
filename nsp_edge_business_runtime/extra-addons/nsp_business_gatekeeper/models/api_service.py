@@ -8,6 +8,27 @@ from odoo.addons.t4_coreapi.utils import endpoint, get_body
 
 _logger = logging.getLogger(__name__)
 
+_LANE_CALIBRATION_CLOUD_STATUSES = frozenset({"draft", "ready", "applied"})
+_LANE_CALIBRATION_RUNTIME_STATUSES = frozenset({"running", "completed", "failed", "cancelled"})
+_LANE_CALIBRATION_ALL_STATUSES = (
+    _LANE_CALIBRATION_CLOUD_STATUSES | _LANE_CALIBRATION_RUNTIME_STATUSES
+)
+_LANE_CALIBRATION_RUNTIME_TRANSITIONS = {
+    "draft": frozenset({"cancelled"}),
+    "ready": frozenset({"running", "completed", "failed", "cancelled"}),
+    "running": frozenset({"completed", "failed", "cancelled"}),
+    "completed": frozenset(),
+    "failed": frozenset(),
+    "cancelled": frozenset(),
+    "applied": frozenset(),
+}
+_LANE_CALIBRATION_STALE_RUNTIME_TARGETS = {
+    "completed": frozenset({"running"}),
+    "failed": frozenset({"running"}),
+    "cancelled": frozenset({"running"}),
+}
+
+
 class NspBusinessGatekeeperApiService(models.AbstractModel):
     _name = 'nsp.business.gatekeeper.api.service'
     _description = 'NspBusinessGatekeeperApiService'
@@ -592,6 +613,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         elif code in {
             "lane_calibration_not_editable",
             "invalid_status_transition",
+            "lane_calibration_revision_ahead",
             "event_uid_conflict",
             "lane_calibration_not_running",
         }:
@@ -599,35 +621,87 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         return self._error(text.replace("_", " "), status, error_code=code, details={})
 
     @api.model
-    def _measurement_set_status(self, session, status, occurred_at=False, message=False):
+    def _measurement_set_status(
+        self, session, status, occurred_at=False, message=False, revision=False,
+    ):
+        """Apply an external Lane Calibration runtime status safely.
+
+        State ownership is intentionally asymmetric:
+        - Cloud owns ``draft``, ``ready`` and ``applied`` (displayed as Configured).
+        - Edge/Controller owns ``running``, ``completed``, ``failed`` and ``cancelled``.
+
+        Cloud-owned states received through a runtime status endpoint are
+        acknowledged but never applied. Once Cloud marks a revision Configured,
+        every delayed runtime status for that same revision is stale and must be
+        ACKed instead of returning ``invalid_status_transition``.
+        """
         target = str(status or "").strip().lower()
-        allowed_statuses = {"draft", "ready", "running", "completed", "failed", "cancelled"}
-        if target not in allowed_statuses:
+        if target not in _LANE_CALIBRATION_ALL_STATUSES:
             raise ValueError("invalid_lane_calibration_status")
-        current = session.status
-        transitions = {
-            "draft": {"ready", "cancelled"},
-            "ready": {"running", "completed", "failed", "cancelled"},
-            "running": {"completed", "failed", "cancelled"},
-            "completed": set(),
-            "failed": set(),
-            "cancelled": set(),
+
+        current = str(session.status or "draft")
+        current_revision = max(int(session.revision or 1), 1)
+        try:
+            incoming_revision = (
+                current_revision
+                if revision in (False, None, "")
+                else int(revision)
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid_lane_calibration_revision") from exc
+        if incoming_revision <= 0:
+            raise ValueError("invalid_lane_calibration_revision")
+
+        result = {
+            "outcome": "duplicate",
+            "incoming_status": target,
+            "current_status": current,
+            "incoming_revision": incoming_revision,
+            "current_revision": current_revision,
+            "status_owner": (
+                "cloud" if target in _LANE_CALIBRATION_CLOUD_STATUSES else "runtime"
+            ),
         }
-        if target != current and target not in transitions.get(current, set()):
-            raise ValueError("invalid_status_transition")
+        if incoming_revision < current_revision:
+            result["outcome"] = "ignored_stale_revision"
+            return result
+        if incoming_revision > current_revision:
+            raise ValueError("lane_calibration_revision_ahead")
+
+        # Runtime clients may still retry legacy Ready/Applied records. ACK them
+        # without allowing an Edge or Controller to drive Cloud-owned lifecycle.
+        if target in _LANE_CALIBRATION_CLOUD_STATUSES and target != current:
+            result["outcome"] = "ignored_cloud_owned_status"
+            return result
+
+        # Configured is the authoritative Cloud final state for this revision.
+        # Any late Running/Completed/Failed/Cancelled status is superseded.
+        if current == "applied" and target in _LANE_CALIBRATION_RUNTIME_STATUSES:
+            result["outcome"] = "ignored_after_configured"
+            return result
+
+        if target != current:
+            if target in _LANE_CALIBRATION_STALE_RUNTIME_TARGETS.get(current, frozenset()):
+                result["outcome"] = "ignored_stale_status"
+                return result
+            if target not in _LANE_CALIBRATION_RUNTIME_TRANSITIONS.get(current, frozenset()):
+                raise ValueError("invalid_status_transition")
+
         when = occurred_at or fields.Datetime.now()
         vals = {}
         if target != current:
             vals["status"] = target
+            result["outcome"] = "applied"
+            result["current_status"] = target
         if target == "running" and not session.started_at:
             vals["started_at"] = when
         if target in ("completed", "failed", "cancelled") and not session.ended_at:
             vals["ended_at"] = when
         if vals:
             session.with_context(measurement_sync=True).write(vals)
-        if message:
+        if message and result["outcome"] == "applied":
             session.message_post(body=str(message))
-        return session
+        return result
 
     @endpoint(
         "NSP Controller Lane Calibration Pull",
@@ -1130,7 +1204,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 data,
                 {
                     "controller_code", "lane_calibration_code", "status",
-                    "occurred_at", "message",
+                    "revision", "occurred_at", "message",
                 },
             )
             self._measurement_require_fields(
@@ -1142,11 +1216,19 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             occurred_at = self._measurement_datetime(
                 data.get("occurred_at"), required=True
             )
-            self._measurement_set_status(
-                session, data.get("status"), occurred_at, data.get("message")
+            status_result = self._measurement_set_status(
+                session,
+                data.get("status"),
+                occurred_at,
+                data.get("message"),
+                revision=data.get("revision"),
             )
-            self._forward_measurement_status_now(session)
-            return self._ok(message="Lane Calibration status received.")
+            if status_result["outcome"] == "applied":
+                self._forward_measurement_status_now(session)
+            return self._ok(
+                {"status_sync": status_result},
+                message="Lane Calibration status received.",
+            )
         except Exception as exc:
             return self._measurement_error_response(exc)
 

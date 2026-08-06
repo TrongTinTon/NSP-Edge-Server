@@ -71,7 +71,7 @@ class NspMeasurementSession(models.Model):
             ("ready", "Ready"),
             ("running", "Running"),
             ("completed", "Completed"),
-            ("applied", "Applied to Operation"),
+            ("applied", "Configured"),
             ("failed", "Failed"),
             ("cancelled", "Cancelled"),
         ],
@@ -481,9 +481,9 @@ class NspMeasurementSession(models.Model):
     def action_apply_to_operation(self):
         self.ensure_one()
         if self._deployment_role() != "cloud":
-            raise UserError(_("Apply to Operation is owned by the Cloud Master."))
+            raise UserError(_("Applying calibration results is owned by the Cloud Master."))
         if self.status != "completed":
-            raise ValidationError(_("Complete the Measurement before applying it to operation."))
+            raise ValidationError(_("Complete the Lane Calibration before applying its result to a Lane configuration."))
         self._require_ready_configuration()
         for line in self.reader_line_ids:
             line.reader_id.sudo().write({

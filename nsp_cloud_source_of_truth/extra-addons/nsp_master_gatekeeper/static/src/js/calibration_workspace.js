@@ -237,7 +237,7 @@ export class NspCalibrationWorkspace extends Component {
             ready: "Ready",
             running: "Running",
             completed: "Completed",
-            applied: "Applied",
+            applied: "Configured",
             cancelled: "Cancelled",
             failed: "Failed",
         };

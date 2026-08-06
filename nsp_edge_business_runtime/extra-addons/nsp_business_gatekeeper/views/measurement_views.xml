@@ -10,7 +10,7 @@
                 <filter string="Ready" name="ready" domain="[('status','=','ready')]"/>
                 <filter string="Running" name="running" domain="[('status','=','running')]"/>
                 <filter string="Completed" name="completed" domain="[('status','=','completed')]"/>
-                <filter string="Applied" name="applied" domain="[('status','=','applied')]"/>
+                <filter string="Configured" name="applied" domain="[('status','=','applied')]"/>
                 <filter string="Failed" name="failed" domain="[('status','=','failed')]"/>
                 <group>
                     <filter string="Status" name="group_status" context="{'group_by':'status'}"/>

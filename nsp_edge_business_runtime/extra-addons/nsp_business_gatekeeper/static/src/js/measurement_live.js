@@ -154,10 +154,10 @@ export class NspMeasurementLive extends Component {
     statusLabel() {
         const labels = {
             draft: "Draft",
-            ready: "Released",
+            ready: "Ready",
             running: "In Progress",
             completed: "Completed",
-            applied: "Applied",
+            applied: "Configured",
             failed: "Failed",
             cancelled: "Cancelled",
         };

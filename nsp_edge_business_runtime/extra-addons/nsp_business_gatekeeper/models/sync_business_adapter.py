@@ -739,9 +739,22 @@ class NspSyncBusinessAdapter(models.Model):
         if status not in ("ready", "running", "completed", "applied", "failed", "cancelled"):
             raise UserError(_("Invalid Lane Calibration status: %s") % status)
         try:
-            revision = max(int(item.get("revision") or 1), 1)
+            revision = int(item.get("revision") or 1)
         except (TypeError, ValueError) as exc:
             raise UserError(_("Invalid Lane Calibration revision.")) from exc
+        if revision <= 0:
+            raise UserError(_("Invalid Lane Calibration revision."))
+
+        Session = self.env["nsp.measurement.session"].sudo().with_context(measurement_sync=True)
+        session = Session.search([("measurement_code", "=", code)], limit=1)
+        if session and revision < max(int(session.revision or 1), 1):
+            _logger.warning(
+                "Ignored stale Lane Calibration snapshot: code=%s incoming_revision=%s current_revision=%s",
+                code,
+                revision,
+                session.revision,
+            )
+            return session
 
         normalized_vehicles = []
         all_tids = set()
@@ -1036,19 +1049,44 @@ class NspSyncBusinessAdapter(models.Model):
                 "reader_port_ids": [(0, 0, {"port_no": port_no}) for port_no in row["ports"]],
             }))
 
-        Session = self.env["nsp.measurement.session"].sudo().with_context(measurement_sync=True)
-        session = Session.search([("measurement_code", "=", code)], limit=1)
+        effective_status = status
+        reset_lifecycle = False
+        if session:
+            current_revision = max(int(session.revision or 1), 1)
+            if revision > current_revision:
+                reset_lifecycle = True
+            else:
+                # A Cloud pull can overlap the Edge runtime transition. Never let
+                # a same-revision snapshot move the Edge state backwards.
+                stale_snapshot_targets = {
+                    "running": {"draft", "ready"},
+                    "completed": {"draft", "ready", "running"},
+                    "applied": {"draft", "ready", "running", "completed", "failed", "cancelled"},
+                    "failed": {"draft", "ready", "running"},
+                    "cancelled": {"draft", "ready", "running"},
+                }
+                if status in stale_snapshot_targets.get(session.status, set()):
+                    effective_status = session.status
+
         values = {
             "measurement_code": code,
             "revision": revision,
-            "status": status,
+            "status": effective_status,
             "target_line_ids": [(5, 0, 0)] + target_commands,
             "reader_line_ids": [(5, 0, 0)] + line_commands,
         }
+        if reset_lifecycle:
+            values.update({
+                "started_at": False,
+                "ended_at": False,
+                "applied_at": False,
+            })
         if session:
             session.write(values)
         else:
             session = Session.create(values)
+        if effective_status == "applied":
+            self._acknowledge_configured_status_records(session)
         return session
 
     def _apply_items(self, kind, items, request_payload=False):
@@ -1338,6 +1376,39 @@ class NspSyncBusinessAdapter(models.Model):
         return job
 
     @api.model
+    def _acknowledge_configured_status_records(self, session):
+        """Close obsolete runtime status retries after Cloud configures a revision."""
+        status_job = self._lane_calibration_push_job("edge/lane-calibrations/status")
+        if not status_job:
+            return 0
+        revision = max(int(session.revision or 1), 1)
+        record_keys = [
+            "%s:R%s:%s" % (session.measurement_code, revision, status)
+            for status in self._lane_calibration_runtime_statuses()
+        ]
+        Record = self.env["nsp.sync.record"].sudo()
+        obsolete = Record.search([
+            ("sync_action_code", "=", status_job.sync_action_code),
+            ("operation", "=", "push"),
+            ("record_key", "in", record_keys),
+            ("status", "!=", "synced"),
+        ])
+        for record_key in set(obsolete.mapped("record_key")):
+            Record.mark_result(
+                sync_job=status_job,
+                action_code=status_job.sync_action_code,
+                action_name=status_job.sync_action_name,
+                route_suffix=status_job.route_suffix,
+                record=session,
+                record_key=record_key,
+                status="synced",
+                message="Superseded by the Configured Cloud state.",
+                response={"status_sync": {"outcome": "ignored_after_configured"}},
+                operation="push",
+            )
+        return len(obsolete)
+
+    @api.model
     def push_lane_calibration_events_now(self, events):
         job = self._lane_calibration_push_job("edge/lane-calibrations/events")
         if not job:
@@ -1353,40 +1424,87 @@ class NspSyncBusinessAdapter(models.Model):
             return False
 
     @api.model
+    def _lane_calibration_runtime_statuses(self):
+        """Statuses owned and published by Edge runtime."""
+        return ("running", "completed", "failed", "cancelled")
+
+    @api.model
     def _lane_calibration_status_payload(self, session):
-        occurred_at = session.ended_at or session.started_at or session.write_date or fields.Datetime.now()
+        status = str(session.status or "draft")
+        if status not in self._lane_calibration_runtime_statuses():
+            raise UserError(_(
+                "Lane Calibration status %(status)s is Cloud-owned and must not be pushed by Edge."
+            ) % {"status": status})
+        occurred_at = (
+            session.started_at
+            if status == "running"
+            else session.ended_at
+        ) or session.write_date or fields.Datetime.now()
         return {
             "edge_server_code": self.edge_server_code,
             "lane_calibration_code": session.measurement_code,
-            "status": session.status,
+            "revision": max(int(session.revision or 1), 1),
+            "status": status,
             "occurred_at": self._iso_utc(occurred_at),
         }
 
+    @api.model
+    def _lane_calibration_status_record_key(self, session, payload=False):
+        values = payload or self._lane_calibration_status_payload(session)
+        return "%s:R%s:%s" % (
+            session.measurement_code,
+            int(values.get("revision") or session.revision or 1),
+            values.get("status") or session.status,
+        )
+
     def _pending_lane_calibration_status_sessions(self, limit):
-        self.ensure_one(); Session=self.env["nsp.measurement.session"].sudo(); Record=self.env["nsp.sync.record"].sudo(); result=Session.search([("status","!=","draft")],order="write_date,id")
-        pending=[]
-        for session in result:
-            synced=Record.search([("sync_action_code","=",self.sync_action_code),("operation","=","push"),("record_key","=",session.measurement_code),("status","=","synced"),("last_synced_at",">=",session.write_date)],limit=1)
-            if not synced: pending.append(session.id)
-            if len(pending)>=max(1,int(limit or 1)): break
+        self.ensure_one()
+        Session = self.env["nsp.measurement.session"].sudo()
+        Record = self.env["nsp.sync.record"].sudo()
+        sessions = Session.search(
+            [("status", "in", self._lane_calibration_runtime_statuses())],
+            order="write_date,id",
+        )
+        pending = []
+        for session in sessions:
+            record_key = self._lane_calibration_status_record_key(session)
+            synced = Record.search([
+                ("sync_action_code", "=", self.sync_action_code),
+                ("operation", "=", "push"),
+                ("record_key", "=", record_key),
+                ("status", "=", "synced"),
+            ], limit=1)
+            if not synced:
+                pending.append(session.id)
+            if len(pending) >= max(1, int(limit or 1)):
+                break
         return Session.browse(pending)
 
     def _push_lane_calibration_status_records(self, sessions, timeout=120):
         self.ensure_one()
-        sessions = sessions.sudo().exists().sorted(key=lambda session: (session.write_date, session.id))
+        runtime_statuses = self._lane_calibration_runtime_statuses()
+        sessions = sessions.sudo().exists().filtered(
+            lambda session: session.status in runtime_statuses
+        ).sorted(key=lambda session: (session.write_date, session.id))
         if not sessions:
-            return {"pushed": 0, "failed": 0, "has_more": False, "message": "No Lane Calibration Status to push."}
+            return {
+                "pushed": 0,
+                "failed": 0,
+                "has_more": False,
+                "message": "No runtime-owned Lane Calibration Status to push.",
+            }
         Record = self.env["nsp.sync.record"].sudo()
         pushed = 0
         for session in sessions:
             payload = self._lane_calibration_status_payload(session)
+            record_key = self._lane_calibration_status_record_key(session, payload=payload)
             Record.mark_pending(
                 sync_job=self,
                 action_code=self.sync_action_code,
                 action_name=self.sync_action_name,
                 route_suffix=self.route_suffix,
                 record=session,
-                record_key=session.measurement_code,
+                record_key=record_key,
                 message="Waiting for Cloud response.",
                 payload=payload,
                 operation="push",
@@ -1400,7 +1518,7 @@ class NspSyncBusinessAdapter(models.Model):
                     action_name=self.sync_action_name,
                     route_suffix=self.route_suffix,
                     record=session,
-                    record_key=session.measurement_code,
+                    record_key=record_key,
                     status="failed",
                     message=str(exc),
                     payload=payload,
@@ -1413,7 +1531,7 @@ class NspSyncBusinessAdapter(models.Model):
                 action_name=self.sync_action_name,
                 route_suffix=self.route_suffix,
                 record=session,
-                record_key=session.measurement_code,
+                record_key=record_key,
                 status="synced",
                 message="Lane Calibration Status accepted by Cloud.",
                 payload=payload,

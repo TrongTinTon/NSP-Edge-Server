@@ -50,6 +50,7 @@ export class NspRfidScanField extends Component {
         autoNextRow: { type: Boolean, optional: true },
         skipDuplicates: { type: Boolean, optional: true },
         nextScanField: { type: String, optional: true },
+        autoValidate: { type: Boolean, optional: true },
     };
     static defaultProps = {
         placeholder: "",
@@ -62,6 +63,7 @@ export class NspRfidScanField extends Component {
         autoNextRow: false,
         skipDuplicates: false,
         nextScanField: "",
+        autoValidate: false,
     };
 
     setup() {
@@ -153,13 +155,24 @@ export class NspRfidScanField extends Component {
         this.state.value = value;
         this.state.status = "idle";
         this.state.message = "";
+
         if (event.inputType === "insertFromPaste") {
-            this.scheduleValidation();
+            this.scheduleValidation(0);
+        } else if (this.props.autoValidate && value) {
+            // Keyboard-wedge scanners may not send Enter/Tab. Debouncing commits
+            // one complete scan while avoiding an RPC for every input event.
+            this.scheduleValidation(180);
         }
     }
 
     onPaste() {
-        this.scheduleValidation();
+        this.scheduleValidation(0);
+    }
+
+    onBlur() {
+        if (this.state.value && this.state.status !== "success") {
+            this.scheduleValidation(0);
+        }
     }
 
     onFocus(event) {
@@ -178,12 +191,12 @@ export class NspRfidScanField extends Component {
         await this.validateScan();
     }
 
-    scheduleValidation() {
+    scheduleValidation(delay = 0) {
         this.clearTimer();
         this.timer = window.setTimeout(() => {
             this.timer = null;
             void this.validateScan();
-        }, 0);
+        }, delay);
     }
 
     async validateScan() {
@@ -403,6 +416,7 @@ export const nspRfidScanField = {
         { label: _t("Auto Next Row"), name: "auto_next_row", type: "boolean" },
         { label: _t("Skip Duplicate TID"), name: "skip_duplicates", type: "boolean" },
         { label: _t("Next Scan Field"), name: "next_scan_field", type: "string" },
+        { label: _t("Validate Stable Scanner Input"), name: "auto_validate", type: "boolean" },
     ],
     extractProps: ({ options, placeholder }) => ({
         placeholder,
@@ -416,6 +430,7 @@ export const nspRfidScanField = {
         autoNextRow: Boolean(options.auto_next_row),
         skipDuplicates: Boolean(options.skip_duplicates),
         nextScanField: options.next_scan_field || "",
+        autoValidate: Boolean(options.auto_validate),
     }),
 };
 

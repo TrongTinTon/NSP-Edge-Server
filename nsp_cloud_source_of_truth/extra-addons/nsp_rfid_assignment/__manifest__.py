@@ -4,7 +4,7 @@
     "description": (
         "Assign and revoke canonical RFID Tags while preserving an immutable audit history."
     ),
-    "version": "19.0.2.0.0",
+    "version": "19.0.2.0.1",
     "sequence": 25,
     "author": "BKU Team",
     "category": "Services",
