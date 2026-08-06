@@ -61,6 +61,24 @@ class NspParkingArea(models.Model):
     reader_count = fields.Integer(compute="_compute_counts")
     lane_count = fields.Integer(compute="_compute_counts")
     whitelist_count = fields.Integer(compute="_compute_whitelist_count")
+    ready_lane_count = fields.Integer(
+        string="Ready Lanes", compute="_compute_configuration_health",
+    )
+    incomplete_lane_count = fields.Integer(
+        string="Incomplete Lanes", compute="_compute_configuration_health",
+    )
+    configuration_state = fields.Selection(
+        [
+            ("empty", "No Lanes"),
+            ("incomplete", "Needs Attention"),
+            ("ready", "Ready to Publish"),
+        ],
+        string="Configuration Readiness",
+        compute="_compute_configuration_health",
+    )
+    configuration_summary = fields.Char(
+        string="Readiness Summary", compute="_compute_configuration_health",
+    )
 
     _sql_constraints = [
         ("code_unique", "unique(code)", "Parking Area Code must be unique."),
@@ -99,6 +117,51 @@ class NspParkingArea(models.Model):
             record.controller_count = len(record.controller_ids)
             record.reader_count = len(record.reader_ids)
             record.lane_count = len(record.lane_ids.filtered("active"))
+
+    @api.depends(
+        "lane_ids.active",
+        "lane_ids.configuration_state",
+        "lane_ids.configuration_issue",
+        "lane_ids.checkin_sequence_ids",
+        "lane_ids.checkout_sequence_ids",
+    )
+    def _compute_configuration_health(self):
+        for record in self:
+            active_lanes = record.lane_ids.filtered("active")
+            ready_lanes = active_lanes.filtered(
+                lambda lane: lane.configuration_state == "ready"
+            )
+            incomplete_lanes = active_lanes - ready_lanes
+            has_checkin = any(lane.checkin_sequence_ids for lane in active_lanes)
+            has_checkout = any(lane.checkout_sequence_ids for lane in active_lanes)
+            coverage_issues = []
+            if active_lanes and not has_checkin:
+                coverage_issues.append(_("Parking Layout requires at least one Check-in Lane"))
+            if active_lanes and not has_checkout:
+                coverage_issues.append(_("Parking Layout requires at least one Check-out Lane"))
+
+            record.ready_lane_count = len(ready_lanes)
+            record.incomplete_lane_count = len(incomplete_lanes)
+            if not active_lanes:
+                record.configuration_state = "empty"
+                record.configuration_summary = _("Add at least one active Lane.")
+            elif incomplete_lanes or coverage_issues:
+                record.configuration_state = "incomplete"
+                summary_parts = []
+                if incomplete_lanes:
+                    summary_parts.append(
+                        _("%(ready)s ready · %(incomplete)s need attention") % {
+                            "ready": len(ready_lanes),
+                            "incomplete": len(incomplete_lanes),
+                        }
+                    )
+                summary_parts.extend(coverage_issues)
+                record.configuration_summary = " · ".join(summary_parts)
+            else:
+                record.configuration_state = "ready"
+                record.configuration_summary = _(
+                    "All %(count)s active Lanes are ready · Check-in and Check-out are covered."
+                ) % {"count": len(active_lanes)}
 
     def _compute_whitelist_count(self):
         count = self.env["nsp.device.whitelist"].sudo().search_count([])
@@ -302,7 +365,13 @@ class NspParkingArea(models.Model):
         if not lanes:
             return [_('Configure at least one active Parking Lane.')]
         lane_by_reader_port = {}
+        layout_has_checkin = False
+        layout_has_checkout = False
         for lane in lanes:
+            has_checkin = bool(lane.checkin_sequence_ids)
+            has_checkout = bool(lane.checkout_sequence_ids)
+            layout_has_checkin = layout_has_checkin or has_checkin
+            layout_has_checkout = layout_has_checkout or has_checkout
             try:
                 lane._validate_lane_assembly()
                 lane._validate_timeline_and_sequences()
@@ -329,11 +398,15 @@ class NspParkingArea(models.Model):
                     _("Lane %(lane)s requires at least two Reader Port Timeline points.")
                     % {"lane": lane.display_name}
                 )
-            if not lane.checkin_sequence_ids and not lane.checkout_sequence_ids:
+            if not has_checkin and not has_checkout:
                 issues.append(
                     _("Lane %(lane)s must define at least one Check-in or Check-out Sequence.")
                     % {"lane": lane.display_name}
                 )
+        if not layout_has_checkin:
+            issues.append(_("Parking Layout must contain at least one Check-in Sequence."))
+        if not layout_has_checkout:
+            issues.append(_("Parking Layout must contain at least one Check-out Sequence."))
         return issues
 
     def _publish(self, target_state):
@@ -517,6 +590,26 @@ class NspParkingLane(models.Model):
     total_path_duration = fields.Float(
         string="Total Path Duration", compute="_compute_total_path_duration", digits=(8,3),
     )
+    parking_area_state = fields.Selection(
+        related="parking_area_id.state", string="Layout State", readonly=True,
+    )
+    checkin_point_count = fields.Integer(
+        string="Check-in Points", compute="_compute_sequence_counts",
+    )
+    checkout_point_count = fields.Integer(
+        string="Check-out Points", compute="_compute_sequence_counts",
+    )
+    configuration_state = fields.Selection(
+        [
+            ("disabled", "Disabled"),
+            ("incomplete", "Needs Attention"),
+            ("ready", "Ready"),
+        ],
+        string="Readiness", compute="_compute_configuration_health",
+    )
+    configuration_issue = fields.Char(
+        string="Configuration Check", compute="_compute_configuration_health",
+    )
 
     _sql_constraints = [
         (
@@ -571,6 +664,67 @@ class NspParkingLane(models.Model):
     def _compute_timeline_point_count(self):
         for record in self:
             record.timeline_point_count = len(record.timeline_line_ids)
+
+    @api.depends("checkin_sequence_ids", "checkout_sequence_ids")
+    def _compute_sequence_counts(self):
+        for record in self:
+            record.checkin_point_count = len(record.checkin_sequence_ids)
+            record.checkout_point_count = len(record.checkout_sequence_ids)
+
+    @api.depends(
+        "active",
+        "edge_server_id",
+        "controller_id",
+        "timeline_line_ids",
+        "timeline_line_ids.sequence",
+        "timeline_line_ids.reader_id",
+        "timeline_line_ids.port_no",
+        "timeline_line_ids.duration_from_previous",
+        "checkin_sequence_ids",
+        "checkin_sequence_ids.sequence",
+        "checkin_sequence_ids.reader_id",
+        "checkin_sequence_ids.port_no",
+        "checkout_sequence_ids",
+        "checkout_sequence_ids.sequence",
+        "checkout_sequence_ids.reader_id",
+        "checkout_sequence_ids.port_no",
+    )
+    def _compute_configuration_health(self):
+        for lane in self:
+            if not lane.active:
+                lane.configuration_state = "disabled"
+                lane.configuration_issue = _("Lane is disabled.")
+                continue
+            issues = []
+            if not lane.edge_server_id:
+                issues.append(_("Server is missing"))
+            if not lane.controller_id:
+                issues.append(_("Controller is missing"))
+            timeline = lane.timeline_line_ids.sorted(
+                lambda row: (row.sequence or 0, row.id)
+            )
+            if len(timeline) < 2:
+                issues.append(_("Timeline needs at least 2 points"))
+            elif timeline.mapped("sequence") != list(range(1, len(timeline) + 1)):
+                issues.append(_("Timeline order is not contiguous"))
+            timeline_keys = [
+                (line.reader_id.id, int(line.port_no or 0)) for line in timeline
+            ]
+            if len(timeline_keys) != len(set(timeline_keys)):
+                issues.append(_("Timeline contains duplicate Reader Ports"))
+            has_checkin = bool(lane.checkin_sequence_ids)
+            has_checkout = bool(lane.checkout_sequence_ids)
+            if not has_checkin and not has_checkout:
+                issues.append(_("At least one Check-in or Check-out Sequence is required"))
+            lane.configuration_state = "incomplete" if issues else "ready"
+            if issues:
+                lane.configuration_issue = "; ".join(issues)
+            elif has_checkin and has_checkout:
+                lane.configuration_issue = _("Bidirectional Lane: Check-in and Check-out are configured.")
+            elif has_checkin:
+                lane.configuration_issue = _("Check-in Lane is configured.")
+            else:
+                lane.configuration_issue = _("Check-out Lane is configured.")
 
     @api.model
     def _active_whitelisted(self, model_name, type_code):
