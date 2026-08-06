@@ -218,8 +218,9 @@ class NspParkingArea(models.Model):
             return {"found": False}
         transactions = self.env["nsp.parking.transaction"].sudo().search(
             [
+                "|",
+                ("parking_area_id", "=", area.id),
                 ("lane_id.parking_area_id", "=", area.id),
-                ("event_type", "=", "check_in"),
             ],
             order="event_time desc, id desc", limit=limit,
         )

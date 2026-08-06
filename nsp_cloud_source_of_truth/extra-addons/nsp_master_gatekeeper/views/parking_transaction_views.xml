@@ -10,6 +10,10 @@
                 <field name="controller_code"/>
                 <field name="parking_area_id"/>
                 <field name="parking_area_code"/>
+                <field name="layout_revision"/>
+                <field name="sequence_path"/>
+                <field name="observed_duration_seconds"/>
+                <field name="allowed_duration_seconds"/>
                 <field name="lane_id"/>
                 <field name="lane_code"/>
                 <field name="reader_id"/>
@@ -20,7 +24,10 @@
                 <field name="user_id"/>
                 <field name="user_code"/>
                 <field name="user_tid"/>
+                <field name="observed_user_tids"/>
+                <field name="observed_user_codes"/>
                 <field name="borrow_id"/>
+                <field name="borrow_code"/>
                 <field name="event_type"/>
                 <field name="status"/>
                 <field name="error_code"/>
@@ -29,6 +36,8 @@
                 <filter string="Allowed" name="allowed" domain="[('status','=','allowed')]"/>
                 <filter string="Denied" name="denied" domain="[('status','=','denied')]"/>
                 <filter string="Missing User Tag" name="missing_user_tid" domain="[('error_code','=','missing_user_tid')]"/>
+                <filter string="Multiple User Tags" name="multiple_user_tags" domain="[('error_code','=','multiple_user_tags')]"/>
+                <filter string="Wrong Parking Area" name="vehicle_checked_in_other_area" domain="[('error_code','=','vehicle_checked_in_other_area')]"/>
                 <filter string="Authentication Errors" name="auth_errors"
                         domain="[('error_code','in',['vehicle_not_found','user_tag_not_assigned','unauthorized_vehicle_user'])]"/>
                 <separator/>
@@ -59,6 +68,10 @@
                        decoration-success="status == 'allowed'"
                        decoration-danger="status == 'denied'"/>
                 <field name="error_code" string="Reason" widget="badge" optional="show"/>
+                <field name="layout_revision" optional="show"/>
+                <field name="sequence_path" optional="hide"/>
+                <field name="observed_duration_seconds" optional="hide"/>
+                <field name="allowed_duration_seconds" optional="hide"/>
                 <field name="controller_code" optional="hide"/>
                 <field name="serial_number" optional="hide"/>
                 <field name="controller_id" optional="hide"/>
@@ -67,6 +80,9 @@
                 <field name="vehicle_tid" optional="hide"/>
                 <field name="user_code" optional="hide"/>
                 <field name="user_tid" optional="hide"/>
+                <field name="observed_user_tids" optional="hide"/>
+                <field name="observed_user_codes" optional="hide"/>
+                <field name="borrow_code" optional="hide"/>
                 <field name="transaction_uid" optional="hide"/>
             </list>
         </field>
@@ -92,8 +108,12 @@
                             <field name="controller_id"/>
                             <field name="parking_area_code"/>
                             <field name="parking_area_id"/>
+                            <field name="layout_revision"/>
                             <field name="lane_code"/>
                             <field name="lane_id"/>
+                            <field name="sequence_path"/>
+                            <field name="observed_duration_seconds"/>
+                            <field name="allowed_duration_seconds"/>
                             <field name="serial_number"/>
                             <field name="port_no"/>
                             <field name="reader_id"/>
@@ -110,7 +130,10 @@
                             <field name="user_id"/>
                             <field name="user_code"/>
                             <field name="user_tid"/>
+                            <field name="observed_user_tids"/>
+                            <field name="observed_user_codes"/>
                             <field name="borrow_id"/>
+                            <field name="borrow_code"/>
                         </group>
                     </group>
                 </sheet>

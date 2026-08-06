@@ -50,8 +50,14 @@ class NspSyncJobParkingLayout(models.Model):
             "published_revision": published_revision,
         }
         if parking:
+            Detection = self.env["nsp.parking.detection.event"].sudo()
+            Detection._acquire_parking_area_runtime_lock(parking, shared=False)
+            parking.invalidate_recordset(["state", "published_revision"])
             if int(parking.published_revision or 0) > published_revision:
                 return parking
+            Detection.invalidate_pending_for_runtime_change(
+                parking, published_revision, state
+            )
             self._write_changed(parking, parking_values)
         else:
             parking = Parking.create(parking_values)

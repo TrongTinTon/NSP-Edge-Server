@@ -10,9 +10,11 @@
                 <field name="user_id"/>
                 <field name="vehicle_id"/>
                 <field name="lane_id"/>
+                <field name="layout_revision"/>
                 <field name="reader_id"/>
                 <field name="port_no"/>
                 <field name="state"/>
+                <field name="error_code"/>
                 <field name="transaction_id"/>
                 <filter string="Pending" name="pending" domain="[('state','=','pending')]"/>
                 <filter string="Processed" name="processed" domain="[('state','=','processed')]"/>
@@ -33,15 +35,19 @@
             <list string="Parking Detection Events" create="0" edit="0" delete="0">
                 <field name="detected_at"/>
                 <field name="lane_id"/>
+                <field name="layout_revision" optional="show"/>
                 <field name="reader_id" optional="hide"/>
                 <field name="port_no" optional="hide"/>
                 <field name="tid"/>
+                <field name="rssi_dbm" optional="hide"/>
                 <field name="vehicle_id" optional="show"/>
                 <field name="user_id" optional="show"/>
                 <field name="state" widget="badge"
                        decoration-success="state == 'processed'"
                        decoration-danger="state == 'error'"
                        decoration-warning="state == 'pending'"/>
+                <field name="error_code" optional="show"/>
+                <field name="error_message" optional="hide"/>
                 <field name="transaction_id"/>
                 <field name="event_uid" optional="hide"/>
             </list>

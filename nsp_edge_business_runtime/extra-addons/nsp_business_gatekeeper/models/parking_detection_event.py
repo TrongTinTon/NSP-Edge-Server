@@ -49,6 +49,14 @@ class ParkingDetectionEvent(models.Model):
     tid = fields.Char(
         string="RFID TID", required=True, readonly=True, index=True,
     )
+    layout_revision = fields.Integer(
+        string="Parking Layout Revision", default=0, readonly=True, index=True,
+        help="Published Parking Layout revision used to resolve this detection.",
+    )
+    rssi_dbm = fields.Float(
+        string="RSSI (dBm)", readonly=True,
+        help="Optional signal strength reported by the Controller.",
+    )
     user_id = fields.Many2one(
         "nsp.user", string="Resolved User", ondelete="restrict",
         readonly=True, index=True,
@@ -65,6 +73,16 @@ class ParkingDetectionEvent(models.Model):
         ],
         string="State", required=True, default="pending", copy=False, readonly=True,
     )
+    error_code = fields.Selection(
+        [
+            ("layout_revision_superseded", "Layout Revision Superseded"),
+            ("parking_area_not_operational", "Parking Area Not Operational"),
+            ("sequence_timeout", "Sequence Timeout"),
+            ("processing_error", "Processing Error"),
+        ],
+        string="Processing Error", readonly=True, copy=False, index=True,
+    )
+    error_message = fields.Text(string="Processing Message", readonly=True, copy=False)
     transaction_id = fields.Many2one(
         "nsp.parking.transaction", string="Parking Transaction",
         ondelete="set null", index=True, copy=False, readonly=True,
@@ -82,16 +100,18 @@ class ParkingDetectionEvent(models.Model):
     def init(self):
         self.env.cr.execute(
             """
-            CREATE INDEX IF NOT EXISTS nsp_parking_detection_pending_lane_idx
-                ON nsp_parking_detection_event (lane_id, detected_at, id)
+            DROP INDEX IF EXISTS nsp_parking_detection_pending_lane_idx;
+            CREATE INDEX nsp_parking_detection_pending_lane_idx
+                ON nsp_parking_detection_event (lane_id, layout_revision, detected_at, id)
              WHERE state = 'pending' AND transaction_id IS NULL
             """
         )
         self.env.cr.execute(
             """
-            CREATE INDEX IF NOT EXISTS nsp_parking_detection_sequence_idx
+            DROP INDEX IF EXISTS nsp_parking_detection_sequence_idx;
+            CREATE INDEX nsp_parking_detection_sequence_idx
                 ON nsp_parking_detection_event
-                   (lane_id, tid, reader_id, port_no, detected_at, id)
+                   (lane_id, layout_revision, tid, reader_id, port_no, detected_at, id)
              WHERE state = 'pending' AND transaction_id IS NULL
             """
         )
@@ -136,6 +156,8 @@ class ParkingDetectionEvent(models.Model):
             "reader_id": int(value("reader_id") or 0),
             "port_no": int(value("port_no") or 0),
             "tid": str(value("tid") or "").strip(),
+            "layout_revision": int(value("layout_revision") or 0),
+            "rssi_dbm": float(value("rssi_dbm") or 0.0),
             "user_id": int(value("user_id") or 0),
             "vehicle_id": int(value("vehicle_id") or 0),
         }
@@ -241,6 +263,10 @@ class ParkingDetectionEvent(models.Model):
         except Exception as exc:
             raise ValidationError(_("invalid_payload: port_no")) from exc
         try:
+            rssi_dbm = float(payload.get("rssi_dbm") or 0.0)
+        except (TypeError, ValueError):
+            rssi_dbm = 0.0
+        try:
             detected_at = fields.Datetime.to_string(
                 fields.Datetime.to_datetime(payload.get("detected_at"))
             )
@@ -269,6 +295,12 @@ class ParkingDetectionEvent(models.Model):
         if topology is None:
             raise ValidationError(_("no_reader_port_timeline"))
         reader, lane, port_no = topology
+        parking_area = lane.parking_area_id
+        self._acquire_parking_area_runtime_lock(parking_area, shared=True)
+        parking_area.invalidate_recordset(["state", "published_revision"])
+        layout_revision = int(parking_area.published_revision or 0)
+        if parking_area.state != "operational" or layout_revision <= 0:
+            raise ValidationError(_("parking_area_not_operational"))
 
         vals = {
             "event_uid": event_uid,
@@ -277,6 +309,8 @@ class ParkingDetectionEvent(models.Model):
             "reader_id": reader.id,
             "port_no": port_no,
             "tid": tid,
+            "layout_revision": layout_revision,
+            "rssi_dbm": rssi_dbm,
             "user_id": assignment.user_id.id if assignment.user_id else False,
             "vehicle_id": assignment.vehicle_id.id if assignment.vehicle_id else False,
             "state": "pending",
@@ -336,18 +370,74 @@ class ParkingDetectionEvent(models.Model):
         return True
 
     @api.model
+    def _acquire_parking_area_runtime_lock(self, parking_area, shared=True):
+        """Serialize runtime snapshot changes against detection decisions.
+
+        Shared locks allow different Lanes in one Parking Area to process in
+        parallel. Parking Layout snapshot application takes the exclusive form,
+        so no detection can be accepted or classified across a revision change.
+        """
+        parking_area = parking_area.exists()
+        if not parking_area:
+            return False
+        statement = (
+            "SELECT pg_advisory_xact_lock_shared(hashtext(%s))"
+            if shared
+            else "SELECT pg_advisory_xact_lock(hashtext(%s))"
+        )
+        self.env.cr.execute(statement, (f"nsp.parking:area:{parking_area.id}",))
+        return True
+
+    @api.model
+    def invalidate_pending_for_runtime_change(self, parking_area, incoming_revision, incoming_state):
+        """Close pending detections that cannot be evaluated by the incoming runtime snapshot."""
+        parking_area = parking_area.exists()
+        if not parking_area:
+            return 0
+        try:
+            revision = int(incoming_revision or 0)
+        except (TypeError, ValueError):
+            revision = 0
+        domain = [
+            ("lane_id.parking_area_id", "=", parking_area.id),
+            ("state", "=", "pending"),
+            ("transaction_id", "=", False),
+        ]
+        pending = self.sudo().search(domain)
+        if not pending:
+            return 0
+        if incoming_state != "operational":
+            values = {
+                "state": "error",
+                "error_code": "parking_area_not_operational",
+                "error_message": _("Parking Area runtime is not operational."),
+            }
+            affected = pending
+        else:
+            affected = pending.filtered(lambda event: int(event.layout_revision or 0) != revision)
+            values = {
+                "state": "error",
+                "error_code": "layout_revision_superseded",
+                "error_message": _("Detection belongs to a superseded Parking Layout revision."),
+            }
+        if affected:
+            affected.write(values)
+        return len(affected)
+
+    @api.model
     def _pending_user_pool(self, lane):
         events = self.search([
             ("lane_id", "=", lane.id),
             ("state", "=", "pending"),
             ("transaction_id", "=", False),
+            ("layout_revision", "=", int(lane.parking_area_id.published_revision or 0)),
             ("user_id", "!=", False),
         ], order="detected_at asc, id asc")
-        return events, [event.detected_at for event in events]
+        return events
 
     @api.model
     def _authorized_user_ids(self, vehicle, event_time):
-        """Return the owner and active borrowers allowed to take this vehicle out."""
+        """Return owner and active borrowers authorized at the movement time."""
         if not vehicle or not vehicle.active:
             return set()
         user_ids = set()
@@ -365,25 +455,18 @@ class ParkingDetectionEvent(models.Model):
         return user_ids
 
     @api.model
-    def _nearest_user_from_pool(
-        self,
-        user_events,
-        anchor_at,
-        window_seconds,
-        consumed_ids,
-        authorized_user_ids=None,
-        allow_unauthorized=False,
+    def _user_candidates_from_pool(
+        self, user_events, anchor_at, window_seconds, consumed_ids
     ):
-        """Choose the nearest unused Employee Tag read in the configured sequence window.
+        """Return all unused User reads inside the configured movement window.
 
-        When the owner or an active borrower is present, an authorized read wins
-        over a closer unrelated employee read. If no authorized read exists, the
-        nearest read is returned so the denied decision remains fully auditable.
+        Repeated physical reads for one User remain one identity. Different User
+        identities in the same window produce an explicit denied transaction.
         """
         if not user_events:
             return self.browse()
         window = max(0.001, float(window_seconds or 0.0))
-        candidates = user_events.filtered(
+        return user_events.filtered(
             lambda event: (
                 event.id not in consumed_ids
                 and event.state == "pending"
@@ -395,16 +478,6 @@ class ParkingDetectionEvent(models.Model):
             event.detected_at,
             event.id,
         ))
-        if not candidates:
-            return self.browse()
-        authorized = set(authorized_user_ids or [])
-        if authorized:
-            eligible = candidates.filtered(lambda event: event.user_id.id in authorized)
-            if eligible:
-                return eligible[:1]
-        if not allow_unauthorized:
-            return self.browse()
-        return candidates[:1]
 
     @api.model
     def _lane_max_duration(self, lane):
@@ -417,11 +490,16 @@ class ParkingDetectionEvent(models.Model):
             ("lane_id", "=", lane.id),
             ("state", "=", "pending"),
             ("transaction_id", "=", False),
+            ("layout_revision", "=", int(lane.parking_area_id.published_revision or 0)),
             ("user_id", "!=", False),
             ("detected_at", "<", cutoff),
         ])
         if stale:
-            stale.write({"state": "error"})
+            stale.write({
+                "state": "error",
+                "error_code": "sequence_timeout",
+                "error_message": _("User RFID detection expired without a matching vehicle movement."),
+            })
 
 
     @api.model
@@ -432,6 +510,7 @@ class ParkingDetectionEvent(models.Model):
             ("lane_id", "=", lane.id),
             ("state", "=", "pending"),
             ("transaction_id", "=", False),
+            ("layout_revision", "=", int(lane.parking_area_id.published_revision or 0)),
             ("vehicle_id", "!=", False),
         ], order="tid asc, detected_at asc, id asc")
         if not vehicle_events:
@@ -529,19 +608,40 @@ class ParkingDetectionEvent(models.Model):
             ("lane_id", "=", lane.id),
             ("state", "=", "pending"),
             ("transaction_id", "=", False),
+            ("layout_revision", "=", int(lane.parking_area_id.published_revision or 0)),
             ("vehicle_id", "!=", False),
             ("detected_at", "<", cutoff),
         ])
         if stale:
-            stale.write({"state": "error"})
+            stale.write({
+                "state": "error",
+                "error_code": "sequence_timeout",
+                "error_message": _("Vehicle RFID detections expired before a complete movement sequence was matched."),
+            })
 
-    def _create_transaction_for_vehicle(self, vehicle_events, event_type, user_event=False):
-        group = vehicle_events | user_event if event_type == "check_out" and user_event else vehicle_events
+    def _create_transaction_for_vehicle(
+        self,
+        vehicle_events,
+        event_type,
+        user_events=False,
+        observed_duration_seconds=False,
+        allowed_duration_seconds=False,
+    ):
+        supporting_users = user_events or self.browse()
+        group = vehicle_events | supporting_users if event_type == "check_out" else vehicle_events
         transaction = self.env["nsp.parking.transaction"].sudo().create_from_detection_group(
             group,
             resolved_event_type=event_type,
+            observed_duration_seconds=observed_duration_seconds,
+            allowed_duration_seconds=allowed_duration_seconds,
         )
-        group.write({"state": "processed", "transaction_id": transaction.id})
+        # Repeated Check-in/Check-out movements are intentionally consumed with
+        # no business transaction. They are RFID acquisition noise, not a denied
+        # parking decision.
+        group.write({
+            "state": "processed",
+            "transaction_id": transaction.id if transaction else False,
+        })
         return transaction
 
     @api.model
@@ -554,7 +654,7 @@ class ParkingDetectionEvent(models.Model):
                 self._expire_orphan_user_events(lane, now)
             return transactions
 
-        user_events, _user_times = self._pending_user_pool(lane)
+        user_events = self._pending_user_pool(lane)
         vehicle_events = self.browse([
             event.id
             for match in matches
@@ -587,6 +687,7 @@ class ParkingDetectionEvent(models.Model):
             vehicle_tid = vehicle_event.tid if vehicle_event else False
             recent = self.env["nsp.parking.transaction"].sudo().search([
                 ("lane_id", "=", lane.id),
+                ("layout_revision", "=", int(lane.parking_area_id.published_revision or 0)),
                 ("event_type", "=", event_type),
                 ("vehicle_tid", "=", vehicle_tid),
                 ("event_time", ">=", match["end_at"] - timedelta(seconds=duration)),
@@ -596,49 +697,68 @@ class ParkingDetectionEvent(models.Model):
                 movement_events.write({"state": "processed", "transaction_id": recent.id})
                 continue
 
-            user_event = self.browse()
+            matched_user_events = self.browse()
             if event_type == "check_out":
-                vehicle = movement_events.mapped("vehicle_id")[:1]
-                authorized_user_ids = self._authorized_user_ids(
-                    vehicle,
-                    match["end_at"],
-                )
                 deadline = match["end_at"] + timedelta(seconds=duration)
                 deadline_reached = bool(finalize_expired and now >= deadline)
-                user_event = self._nearest_user_from_pool(
+                candidates = self._user_candidates_from_pool(
                     user_events,
                     match["end_at"],
                     duration,
                     consumed_user_ids,
-                    authorized_user_ids=authorized_user_ids,
-                    allow_unauthorized=deadline_reached,
                 )
-                if not user_event and not deadline_reached:
-                    # Keep the vehicle sequence pending until the configured
-                    # Duration expires so an owner/active borrower read that
-                    # arrives after the vehicle can still authorize Check-out.
+                candidate_users = candidates.mapped("user_id")
+                vehicle = movement_events.mapped("vehicle_id")[:1]
+                authorized_user_ids = self._authorized_user_ids(vehicle, match["end_at"])
+                has_one_authorized_identity = (
+                    len(candidate_users) == 1
+                    and candidate_users.id in authorized_user_ids
+                )
+                has_ambiguous_identities = len(candidate_users) > 1
+                if not (
+                    has_one_authorized_identity
+                    or has_ambiguous_identities
+                    or deadline_reached
+                ):
+                    # Wait for an owner/active borrower until the calibrated
+                    # sequence window expires. Multiple identities are denied
+                    # immediately because later reads cannot remove ambiguity.
                     blocked_tids.add(tid)
                     continue
+                matched_user_events = candidates
 
             try:
                 with self.env.cr.savepoint():
                     transaction = self._create_transaction_for_vehicle(
                         movement_events,
                         event_type,
-                        user_event=user_event,
+                        user_events=matched_user_events,
+                        observed_duration_seconds=max(
+                            0.0,
+                            (match["end_at"] - match["start_at"]).total_seconds(),
+                        ),
+                        allowed_duration_seconds=duration,
                     )
                     transactions |= transaction
-                    if user_event:
-                        consumed_user_ids.add(user_event.id)
+                    consumed_user_ids.update(matched_user_events.ids)
             except Exception:
                 _logger.exception(
                     "Parking sequence processing failed: lane=%s event_type=%s ids=%s",
                     lane.id, event_type, movement_events.ids,
                 )
-                movement_events.write({"state": "error"})
-                if user_event:
-                    user_event.write({"state": "error"})
-                    consumed_user_ids.add(user_event.id)
+                message = _("Parking transaction processing failed. See Edge logs for details.")
+                movement_events.write({
+                    "state": "error",
+                    "error_code": "processing_error",
+                    "error_message": message,
+                })
+                if matched_user_events:
+                    matched_user_events.write({
+                        "state": "error",
+                        "error_code": "processing_error",
+                        "error_message": message,
+                    })
+                    consumed_user_ids.update(matched_user_events.ids)
 
         if finalize_expired:
             self._expire_stale_vehicle_events(lane, now)
@@ -647,10 +767,18 @@ class ParkingDetectionEvent(models.Model):
 
     @api.model
     def _process_pending_for_lane(self, lane, now=None, finalize_expired=True):
+        area = lane.parking_area_id
+        self._acquire_parking_area_runtime_lock(area, shared=True)
         self.env.cr.execute(
             "SELECT pg_advisory_xact_lock(hashtext(%s))",
             (f"nsp.parking:lane:{lane.id}",),
         )
+        area.invalidate_recordset(["state", "published_revision"])
+        revision = int(area.published_revision or 0)
+        if area.state != "operational" or revision <= 0:
+            self.invalidate_pending_for_runtime_change(area, revision, area.state)
+            return self.env["nsp.parking.transaction"].browse()
+        self.invalidate_pending_for_runtime_change(area, revision, "operational")
         now = fields.Datetime.to_datetime(now or fields.Datetime.now())
         return self._process_sequence_matches(lane, now, finalize_expired=finalize_expired)
 

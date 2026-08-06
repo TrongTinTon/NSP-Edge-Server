@@ -1273,7 +1273,10 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 details={"field": "detections", "max_items": 1000},
             )
 
-        item_fields = {"event_uid", "serial_number", "port_no", "detected_at", "tid"}
+        item_fields = {
+            "event_uid", "serial_number", "port_no", "detected_at", "tid",
+            "rssi_dbm", "rssi",
+        }
         normalized = []
         tids = set()
         RuntimeAssignment = self.env["nsp.rfid.runtime.assignment"].sudo()
@@ -1324,12 +1327,20 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                     details={"index": index, "fields": missing, "record_key": event_uid},
                 )
 
+            raw_rssi = item.get("rssi_dbm")
+            if raw_rssi in (None, ""):
+                raw_rssi = item.get("rssi")
+            try:
+                rssi_dbm = float(raw_rssi or 0.0)
+            except (TypeError, ValueError):
+                rssi_dbm = 0.0
             payload = {
                 "event_uid": event_uid,
                 "serial_number": serial_number,
                 "port_no": port_no,
                 "detected_at": detected_at,
                 "tid": tid,
+                "rssi_dbm": rssi_dbm,
             }
             normalized.append(payload)
             tids.add(tid)

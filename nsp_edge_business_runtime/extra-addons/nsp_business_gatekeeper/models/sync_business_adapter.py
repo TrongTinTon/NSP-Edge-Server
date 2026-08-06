@@ -174,23 +174,54 @@ class NspSyncBusinessAdapter(models.Model):
     @api.model
     def _serialize_parking_transaction(self, record):
         decision = record.status if record.status in ("allowed", "denied") else "denied"
-        reader = record.reader_id
-        parking_area = record.lane_id.parking_area_id if record.lane_id else self.env["nsp.parking.area"].browse()
+        legacy_revision = int(
+            record.layout_revision
+            or (record.parking_area_id.published_revision if record.parking_area_id else 0)
+            or 0
+        )
+        legacy_sequence_path = record.sequence_path or (
+            record._sequence_path_for_lane(record.lane_id, record.event_type)
+            if record.lane_id and record.event_type else ""
+        )
+        legacy_allowed_duration = float(record.allowed_duration_seconds or 0.0)
+        if legacy_allowed_duration <= 0 and record.lane_id and record.event_type:
+            legacy_allowed_duration = record._allowed_duration_for_lane(
+                record.lane_id, record.event_type
+            )
+        legacy_observed_duration = float(record.observed_duration_seconds or 0.0)
+        if legacy_observed_duration <= 0 and record.detection_event_ids:
+            vehicle_events = record.detection_event_ids.filtered("vehicle_id").sorted(
+                key=lambda event: (event.detected_at, event.id)
+            )
+            if vehicle_events:
+                legacy_observed_duration = max(
+                    0.0,
+                    (vehicle_events[-1].detected_at - vehicle_events[0].detected_at).total_seconds(),
+                )
         payload = {
             "record_key": record.transaction_uid,
             "transaction_uid": record.transaction_uid,
-            "controller_code": record.controller_id.controller_id if record.controller_id else "",
-            "parking_area_code": parking_area.code if parking_area else "",
-            "lane_code": record.lane_id.code if record.lane_id else "",
-            "serial_number": reader.serial_number if reader else "",
+            "controller_code": record.controller_code or (record.controller_id.controller_id if record.controller_id else ""),
+            "parking_area_code": record.parking_area_code or (record.parking_area_id.code if record.parking_area_id else ""),
+            "lane_code": record.lane_code or (record.lane_id.code if record.lane_id else ""),
+            "layout_revision": legacy_revision,
+            "sequence_path": legacy_sequence_path,
+            "observed_duration_seconds": max(0.0, legacy_observed_duration),
+            "allowed_duration_seconds": max(0.001, legacy_allowed_duration),
+            "serial_number": record.serial_number or (record.reader_id.serial_number if record.reader_id else ""),
             "port_no": int(record.port_no or 0),
             "event_type": record.event_type,
             "event_time": self._dt(record.event_time),
             "vehicle_tid": record.vehicle_tid or "",
-            "vehicle_code": record.vehicle_id.vehicle_code if record.vehicle_id else "",
-            "license_plate": record.vehicle_id.license_plate if record.vehicle_id else "",
+            "vehicle_code": record.vehicle_code or (record.vehicle_id.vehicle_code if record.vehicle_id else ""),
+            "license_plate": record.license_plate or (record.vehicle_id.license_plate if record.vehicle_id else ""),
             "user_tid": record.user_tid or "",
-            "user_code": record.user_id.user_code if record.user_id else "",
+            "user_code": record.user_code or (record.user_id.user_code if record.user_id else ""),
+            "observed_user_tids": record.observed_user_tids or record.user_tid or "",
+            "observed_user_codes": record.observed_user_codes or record.user_code or (
+                record.user_id.user_code if record.user_id else ""
+            ),
+            "borrow_uid": record.borrow_code or (record.borrow_id.borrow_code if record.borrow_id else ""),
             "decision": decision,
         }
         if decision == "denied":

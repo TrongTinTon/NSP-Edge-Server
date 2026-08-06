@@ -1654,8 +1654,9 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         serials = {str(item.get("serial_number") or "").strip().upper() for item in rows}
         vehicle_codes = {str(item.get("vehicle_code") or "").strip().upper() for item in rows}
         user_codes = {str(item.get("user_code") or "").strip().upper() for item in rows}
+        borrow_codes = {str(item.get("borrow_uid") or "").strip() for item in rows}
         uids = {str(item.get("transaction_uid") or "").strip() for item in rows}
-        for values in (controller_codes, area_codes, lane_codes, serials, vehicle_codes, user_codes, uids):
+        for values in (controller_codes, area_codes, lane_codes, serials, vehicle_codes, user_codes, borrow_codes, uids):
             values.discard("")
 
         Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
@@ -1688,6 +1689,10 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         users = User.search([
             ("user_code", "in", list(user_codes)),
         ]) if user_codes else User.browse()
+        Borrow = self.env["nsp.vehicle.borrow"].sudo()
+        borrows = Borrow.search([
+            ("borrow_code", "in", list(borrow_codes)),
+        ]) if borrow_codes else Borrow.browse()
 
         Transaction = self.env["nsp.parking.transaction"].sudo()
         existing = Transaction.search([("transaction_uid", "in", list(uids))]) if uids else Transaction.browse()
@@ -1698,6 +1703,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "device_by_key": device_by_key,
             "vehicle_by_code": {record.vehicle_code: record for record in vehicles},
             "user_by_code": {record.user_code: record for record in users},
+            "borrow_by_code": {record.borrow_code: record for record in borrows},
             "transaction_by_uid": {record.transaction_uid: record for record in existing},
         }
 
@@ -1706,9 +1712,11 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         if not isinstance(item, dict):
             raise ValueError("invalid_payload")
         allowed_fields = {
-            "transaction_uid", "controller_code", "parking_area_code", "lane_code",
-            "serial_number", "port_no", "event_type", "event_time",
+            "record_key", "transaction_uid", "controller_code", "parking_area_code", "lane_code",
+            "layout_revision", "sequence_path", "observed_duration_seconds",
+            "allowed_duration_seconds", "serial_number", "port_no", "event_type", "event_time",
             "vehicle_tid", "vehicle_code", "license_plate", "user_tid", "user_code",
+            "observed_user_tids", "observed_user_codes", "borrow_uid",
             "decision", "decision_reason_code",
             "decision_message",
         }
@@ -1719,6 +1727,9 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             )
 
         uid = str(item.get("transaction_uid") or "").strip()
+        record_key = str(item.get("record_key") or uid).strip()
+        if record_key != uid:
+            raise ValueError("record_key_transaction_uid_mismatch")
         controller_code = str(item.get("controller_code") or "").strip()
         parking_area_code = str(item.get("parking_area_code") or "").strip().upper()
         lane_code = str(item.get("lane_code") or "").strip().upper()
@@ -1733,6 +1744,24 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             raise ValueError("missing_lane_code")
         if not serial_number:
             raise ValueError("missing_serial_number")
+        try:
+            layout_revision = int(item.get("layout_revision") or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid_layout_revision") from exc
+        if layout_revision <= 0:
+            raise ValueError("invalid_layout_revision")
+        sequence_path = str(item.get("sequence_path") or "").strip()
+        if not sequence_path:
+            raise ValueError("missing_sequence_path")
+        try:
+            observed_duration_seconds = float(item.get("observed_duration_seconds") or 0.0)
+            allowed_duration_seconds = float(item.get("allowed_duration_seconds") or 0.0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid_sequence_duration") from exc
+        if observed_duration_seconds < 0 or allowed_duration_seconds <= 0:
+            raise ValueError("invalid_sequence_duration")
+        if observed_duration_seconds > allowed_duration_seconds:
+            raise ValueError("observed_duration_exceeds_allowed_duration")
         try:
             port_no = int(item.get("port_no") or 0)
         except Exception as exc:
@@ -1793,9 +1822,30 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         vehicle_code = str(item.get("vehicle_code") or "").strip().upper()
         user_tid = str(item.get("user_tid") or "").strip()
         user_code = str(item.get("user_code") or "").strip().upper()
+        observed_user_tids = ",".join(sorted({
+            value.strip().upper()
+            for value in str(item.get("observed_user_tids") or "").split(",")
+            if value.strip()
+        }))
+        observed_user_codes = ",".join(sorted({
+            value.strip().upper()
+            for value in str(item.get("observed_user_codes") or "").split(",")
+            if value.strip()
+        }))
+        borrow_code = str(item.get("borrow_uid") or "").strip()
+        if event_type == "check_in" and (
+            user_tid or user_code or observed_user_tids or observed_user_codes or borrow_code
+        ):
+            raise ValueError("check_in_cannot_have_user_identity")
+        if event_type == "check_out" and decision == "allowed":
+            if not user_tid or not user_code:
+                raise ValueError("allowed_check_out_requires_user_identity")
+            if observed_user_tids != user_tid or observed_user_codes != user_code:
+                raise ValueError("allowed_check_out_identity_snapshot_mismatch")
         if use_cache:
             vehicle = cache["vehicle_by_code"].get(vehicle_code) or self.env["nsp.vehicle"].browse()
             user = cache["user_by_code"].get(user_code) or self.env["nsp.user"].browse()
+            borrow = cache["borrow_by_code"].get(borrow_code) or self.env["nsp.vehicle.borrow"].browse()
         else:
             vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False).search([
                 ("vehicle_code", "=", vehicle_code),
@@ -1803,15 +1853,24 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             user = self.env["nsp.user"].sudo().with_context(active_test=False).search([
                 ("user_code", "=", user_code),
             ], limit=1) if user_code else self.env["nsp.user"].browse()
+            borrow = self.env["nsp.vehicle.borrow"].sudo().search([
+                ("borrow_code", "=", borrow_code),
+            ], limit=1) if borrow_code else self.env["nsp.vehicle.borrow"].browse()
         if vehicle_code and not vehicle:
             raise ValueError("vehicle_not_found")
         if user_code and not user:
             raise ValueError("user_not_found")
+        if borrow and vehicle and borrow.vehicle_id != vehicle:
+            raise ValueError("borrow_vehicle_mismatch")
+        if borrow and user and borrow.borrower_id != user:
+            raise ValueError("borrow_user_mismatch")
         reason_code = Transaction._normalize_error_code(
             item.get("decision_reason_code"), item.get("decision_message")
         )
         if decision == "denied" and not reason_code:
             reason_code = "unknown"
+        if reason_code == "multiple_user_tags" and len(observed_user_tids.split(",")) < 2:
+            raise ValueError("multiple_user_tags_requires_identity_snapshot")
         if decision == "allowed" and (item.get("decision_reason_code") or item.get("decision_message")):
             raise ValueError("allowed_event_cannot_have_decision_reason")
 
@@ -1824,6 +1883,10 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "parking_area_code": parking_area_code,
             "lane_id": lane.id if lane else False,
             "lane_code": lane_code,
+            "layout_revision": layout_revision,
+            "sequence_path": sequence_path,
+            "observed_duration_seconds": observed_duration_seconds,
+            "allowed_duration_seconds": allowed_duration_seconds,
             "reader_id": device.id if device else False,
             "serial_number": serial_number,
             "port_no": port_no,
@@ -1838,6 +1901,10 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "user_id": user.id if user else False,
             "user_code": user_code or False,
             "user_tid": user_tid or False,
+            "observed_user_codes": observed_user_codes or False,
+            "observed_user_tids": observed_user_tids or False,
+            "borrow_id": borrow.id if borrow else False,
+            "borrow_code": borrow_code or False,
         }
         return Transaction.create_idempotent(
             vals, existing_by_uid=cache.get("transaction_by_uid")
@@ -1856,9 +1923,22 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             return self._error("items must contain at least one transaction", 400, error_code="invalid_payload", details={"field": "items"})
         cache = self._prepare_parking_transaction_sync_cache(edge_server, incoming)
         results = []
-        processed = failed = 0
+        processed = failed = ignored = 0
         for idx, item in enumerate(incoming):
             key = str(item.get("transaction_uid") or "").strip() if isinstance(item, dict) else ""
+            legacy_reason = (
+                str(item.get("decision_reason_code") or "").strip().lower()
+                if isinstance(item, dict) else ""
+            )
+            if legacy_reason == "continuity_duplicate":
+                ignored += 1
+                results.append({
+                    "index": idx,
+                    "record_key": key,
+                    "status": "ignored",
+                    "message": "Legacy duplicate movement ignored",
+                })
+                continue
             try:
                 with self.env.cr.savepoint():
                     rec, duplicate = self._upsert_parking_transaction_sync(edge_server, item, cache=cache)
@@ -1882,6 +1962,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         return self._ok({
             "received": len(incoming),
             "processed": processed,
+            "ignored": ignored,
             "failed": failed,
             "results": results,
         }, message="Parking transactions synced.")
