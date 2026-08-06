@@ -304,14 +304,27 @@ class ParkingTransaction(models.Model):
         return True, "", borrow
 
     @api.model
+    def _acquire_vehicle_continuity_lock(self, vehicle):
+        """Serialize movement decisions for one Vehicle across all Parking Lanes."""
+        vehicle = vehicle.exists()
+        if not vehicle:
+            return False
+        self.env.cr.execute(
+            "SELECT pg_advisory_xact_lock(hashtext(%s))",
+            (f"nsp.parking:vehicle:{vehicle.id}",),
+        )
+        return True
+
+    @api.model
     def _vehicle_continuity_decision(
         self, vehicle, event_type, event_time, parking_area=False
     ):
-        """Return the continuity action for one resolved movement.
+        """Validate the alternating Vehicle movement sequence.
 
-        ``ignore`` is reserved for a repeated Check-in or Check-out. Repeated
-        movements are acquisition noise, not business decisions, so they must
-        never create a denied Parking Transaction.
+        Only allowed transactions establish Vehicle presence. The first valid
+        business movement must be Check-in, then allowed movements must alternate
+        strictly between Check-out and Check-in. Invalid or repeated physical
+        movements are acquisition noise and do not create Parking Transactions.
         """
         if not vehicle or not event_type:
             return "allow", False, ""
@@ -319,31 +332,35 @@ class ParkingTransaction(models.Model):
         domain = [("vehicle_id", "=", vehicle.id), ("status", "=", "allowed")]
         if event_time:
             domain.append(("event_time", "<=", event_time))
-        last = self.search(domain, order="event_time desc, id desc", limit=1)
+        previous = self.search(domain, order="event_time desc, id desc", limit=1)
 
-        if not last:
+        if not previous:
             if event_type == "check_out":
                 return (
-                    "deny",
+                    "ignore",
                     "check_out_without_check_in",
-                    _("Continuity error: vehicle has no previous Check-in but a Check-out event was received."),
+                    _("Check-out ignored because the Vehicle has no previous allowed Check-in."),
                 )
             return "allow", False, ""
 
-        if last.event_type == event_type:
-            return "ignore", False, _("Repeated parking movement ignored.")
+        if previous.event_type == event_type:
+            return (
+                "ignore",
+                "repeated_movement",
+                _("Repeated parking movement ignored; Check-in and Check-out must alternate."),
+            )
 
         if event_type == "check_out" and parking_area:
-            last_area = last.parking_area_id or (
-                last.lane_id.parking_area_id if last.lane_id else False
+            previous_area = previous.parking_area_id or (
+                previous.lane_id.parking_area_id if previous.lane_id else False
             )
-            if last_area and last_area != parking_area:
+            if previous_area and previous_area != parking_area:
                 return (
                     "deny",
                     "vehicle_checked_in_other_area",
                     _(
                         "Continuity error: vehicle is checked in at another Parking Area (%s)."
-                    ) % (last_area.display_name or last.parking_area_code or "-"),
+                    ) % (previous_area.display_name or previous.parking_area_code or "-"),
                 )
 
         return "allow", False, ""
@@ -639,12 +656,9 @@ class ParkingTransaction(models.Model):
         if layout_revision <= 0 or detection_revisions != {layout_revision}:
             raise ValidationError(_("parking_layout_revision_mismatch"))
         if vehicle:
-            # Continuity is vehicle-wide, not Lane-wide. Serialize decisions for the
-            # same vehicle even when two physical Lanes process concurrently.
-            self.env.cr.execute(
-                "SELECT pg_advisory_xact_lock(hashtext(%s))",
-                (f"nsp.parking:vehicle:{vehicle.id}",),
-            )
+            # Continuity is Vehicle-wide, not Lane-wide. Serialize decisions for
+            # the same Vehicle even when different physical Lanes process concurrently.
+            self._acquire_vehicle_continuity_lock(vehicle)
 
         # Entry is intentionally vehicle-only. Even if User reads exist in the
         # same RF field, they are not part of Check-in business validation.
@@ -696,11 +710,14 @@ class ParkingTransaction(models.Model):
         )
         if continuity_action == "ignore":
             _logger.info(
-                "Repeated parking movement ignored: vehicle=%s event_type=%s lane=%s revision=%s",
+                "Parking movement ignored by sequence state: vehicle=%s event_type=%s "
+                "lane=%s revision=%s reason=%s message=%s",
                 vehicle.id if vehicle else False,
                 event_type,
                 lane.id,
                 layout_revision,
+                continuity_code or "invalid_sequence",
+                continuity_message or "",
             )
             return self.browse()
         if continuity_action == "deny":

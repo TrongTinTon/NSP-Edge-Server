@@ -1930,13 +1930,18 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 str(item.get("decision_reason_code") or "").strip().lower()
                 if isinstance(item, dict) else ""
             )
-            if legacy_reason == "continuity_duplicate":
+            if legacy_reason in ("continuity_duplicate", "check_out_without_check_in"):
                 ignored += 1
+                message = (
+                    "Legacy duplicate movement ignored"
+                    if legacy_reason == "continuity_duplicate"
+                    else "Legacy Check-out without a previous Check-in ignored"
+                )
                 results.append({
                     "index": idx,
                     "record_key": key,
                     "status": "ignored",
-                    "message": "Legacy duplicate movement ignored",
+                    "message": message,
                 })
                 continue
             try:

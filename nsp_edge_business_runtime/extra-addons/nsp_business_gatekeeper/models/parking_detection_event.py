@@ -363,7 +363,8 @@ class ParkingDetectionEvent(models.Model):
                     exc,
                 )
 
-        for lane in touched_lanes:
+        ordered_lane_ids = self._pending_lane_ids_in_event_order(touched_lanes.ids)
+        for lane in self.env["nsp.parking.lane"].sudo().browse(ordered_lane_ids).exists():
             # Cross-request movement is normal. Ingestion never expires incomplete
             # sequences; finalization belongs to the periodic pending-event job.
             self._process_pending_for_lane(lane, finalize_expired=False)
@@ -423,6 +424,34 @@ class ParkingDetectionEvent(models.Model):
         if affected:
             affected.write(values)
         return len(affected)
+
+    @api.model
+    def _pending_lane_ids_in_event_order(self, lane_ids=False):
+        """Return Lanes ordered by their earliest unconsumed detection.
+
+        Lane iteration order must not decide Vehicle continuity. Processing the
+        earliest pending physical reads first significantly reduces cross-Lane
+        reordering when Check-in and Check-out arrive in the same backlog.
+        """
+        params = []
+        lane_filter = ""
+        normalized_ids = [int(value) for value in (lane_ids or []) if int(value) > 0]
+        if normalized_ids:
+            lane_filter = " AND lane_id = ANY(%s)"
+            params.append(normalized_ids)
+        self.env.cr.execute(
+            f"""
+            SELECT lane_id
+              FROM nsp_parking_detection_event
+             WHERE state = 'pending'
+               AND transaction_id IS NULL
+               {lane_filter}
+             GROUP BY lane_id
+             ORDER BY MIN(detected_at) ASC, MIN(id) ASC, lane_id ASC
+            """,
+            params,
+        )
+        return [row[0] for row in self.env.cr.fetchall()]
 
     @api.model
     def _pending_user_pool(self, lane):
@@ -697,10 +726,41 @@ class ParkingDetectionEvent(models.Model):
                 movement_events.write({"state": "processed", "transaction_id": recent.id})
                 continue
 
+            vehicle = movement_events.mapped("vehicle_id")[:1]
+            Transaction = self.env["nsp.parking.transaction"].sudo()
+            continuity_action = continuity_code = False
+            if vehicle:
+                Transaction._acquire_vehicle_continuity_lock(vehicle)
+                continuity_action, continuity_code, _continuity_message = (
+                    Transaction._vehicle_continuity_decision(
+                        vehicle,
+                        event_type,
+                        match["end_at"],
+                        lane.parking_area_id,
+                    )
+                )
+
             matched_user_events = self.browse()
             if event_type == "check_out":
                 deadline = match["end_at"] + timedelta(seconds=duration)
                 deadline_reached = bool(finalize_expired and now >= deadline)
+                if (
+                    continuity_action == "ignore"
+                    and continuity_code == "check_out_without_check_in"
+                    and not deadline_reached
+                ):
+                    # Allow a short, configuration-bound reconciliation window
+                    # for an earlier Check-in arriving from another Lane/request.
+                    blocked_tids.add(tid)
+                    continue
+
+            if continuity_action == "ignore":
+                # Invalid sequence data is consumed at the detection layer only.
+                # It must not create a Parking Transaction or a Live Monitor event.
+                movement_events.write({"state": "processed", "transaction_id": False})
+                continue
+
+            if event_type == "check_out":
                 candidates = self._user_candidates_from_pool(
                     user_events,
                     match["end_at"],
@@ -708,7 +768,6 @@ class ParkingDetectionEvent(models.Model):
                     consumed_user_ids,
                 )
                 candidate_users = candidates.mapped("user_id")
-                vehicle = movement_events.mapped("vehicle_id")[:1]
                 authorized_user_ids = self._authorized_user_ids(vehicle, match["end_at"])
                 has_one_authorized_identity = (
                     len(candidate_users) == 1
@@ -787,15 +846,7 @@ class ParkingDetectionEvent(models.Model):
         if self._deployment_role() != "edge_server":
             return True
         now = fields.Datetime.now()
-        self.env.cr.execute(
-            """
-            SELECT DISTINCT lane_id
-              FROM nsp_parking_detection_event
-             WHERE state = 'pending'
-               AND transaction_id IS NULL
-            """
-        )
-        lane_ids = [row[0] for row in self.env.cr.fetchall()]
+        lane_ids = self._pending_lane_ids_in_event_order()
         Lane = self.env["nsp.parking.lane"].sudo()
         for lane in Lane.browse(lane_ids).exists():
             self._process_pending_for_lane(lane, now=now)
