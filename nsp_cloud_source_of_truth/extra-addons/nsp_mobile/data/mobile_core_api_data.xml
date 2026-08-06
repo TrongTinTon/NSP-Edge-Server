@@ -8,7 +8,7 @@
         <field name="token_ttl_hours">1</field>
         <field name="refresh_token_ttl_days">30</field>
         <field name="rate_limit_per_minute">180</field>
-        <field name="notes">System Mobile Application. Mobile login authenticates an internal Odoo User and resolves exactly one linked NSP User business profile. Tokens remain bound to res.users, the Mobile session and the current device.</field>
+        <field name="notes">System Mobile Application. Mobile login authenticates an internal Odoo User and requires exactly one pre-linked active NSP User business profile. Login never creates or relinks the business identity. Tokens remain bound to res.users, the Mobile session and the current device.</field>
     </record>
     <record id="action_endpoint_manager_nsp_mobile" model="action.endpoint.manager">
         <field name="name">NSP Mobile Core API Endpoints</field>

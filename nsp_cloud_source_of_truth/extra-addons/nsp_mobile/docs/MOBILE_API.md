@@ -3,7 +3,8 @@
 ## 1. Identity contract
 
 - Mobile signs in with the active internal Odoo User (`res.users`) login and password.
-- Each internal Odoo User resolves to exactly one active `nsp.user` business profile.
+- Each internal Odoo User resolves to exactly one active `nsp.user` business profile through `nsp.user.odoo_user_id`.
+- Login never creates an `nsp.user` automatically; the business identity and Odoo account must be linked before Mobile login.
 - The access token subject remains `res.users`; business authorization and data ownership use the linked `nsp.user`.
 - A successful login binds the token to one `nsp.mobile.session` and one `nsp.mobile.device`.
 - Business APIs never accept `user_id`, `odoo_user_id` or `user_code` to choose the current identity.
@@ -35,6 +36,20 @@ Rules:
 | POST | `/v1/mobile/auth/refresh` | Rotate the refresh token and issue a new access token for the same Odoo User, session and device. |
 | POST | `/v1/mobile/auth/logout` | Revoke the current Mobile session and all tokens bound to that session. |
 | PATCH | `/v1/mobile/auth/password` | Change the standard Odoo User password and require login again. |
+
+
+### Login eligibility
+
+A login succeeds only when all conditions are true:
+
+1. `res.users.login` and the standard Odoo password are valid.
+2. The Odoo User is active and belongs to the internal user group.
+3. The account does not require an uncompleted Odoo MFA step.
+4. Exactly one active `nsp.user` has `odoo_user_id` equal to the authenticated Odoo User.
+5. The Odoo User can read that linked `nsp.user` through the installed ACLs and Record Rules.
+6. `device.device_uid` is present.
+
+An unlinked or inactive NSP profile returns HTTP `403`. Invalid Odoo credentials return HTTP `401`. The API does not create or relink business identities during authentication.
 
 ### Login request
 

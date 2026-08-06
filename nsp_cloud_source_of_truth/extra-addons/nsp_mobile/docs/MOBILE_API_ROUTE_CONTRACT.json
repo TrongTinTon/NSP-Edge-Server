@@ -5,7 +5,9 @@
     "authentication_model": "res.users",
     "business_profile_model": "nsp.user",
     "cardinality": "1:1 for internal Odoo Users",
-    "token_subject_model": "res.users"
+    "token_subject_model": "res.users",
+    "profile_link_field": "nsp.user.odoo_user_id",
+    "profile_auto_create": false
   },
   "routes": [
     {"method": "POST", "path": "/v1/mobile/auth/login"},

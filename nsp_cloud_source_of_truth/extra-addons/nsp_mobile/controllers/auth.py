@@ -2,7 +2,7 @@
 import json
 import time
 
-from werkzeug.exceptions import BadRequest, TooManyRequests
+from werkzeug.exceptions import BadRequest, Forbidden, TooManyRequests
 
 from odoo import http
 from odoo.exceptions import AccessDenied, AccessError, ValidationError
@@ -19,6 +19,16 @@ class NspMobileAuthController(http.Controller):
 
     def _application(self):
         return request.env.ref('nsp_mobile.core_api_application_nsp_mobile').sudo()
+
+    def _check_auth_policy(self, application):
+        try:
+            application.check_ip_allowed(get_client_ip())
+        except AccessError as exc:
+            raise Forbidden(str(exc)) from exc
+        try:
+            check_ip_auth_rate_limit(request.env, get_client_ip())
+        except AccessError as exc:
+            raise TooManyRequests(str(exc)) from exc
 
     def _json_object(self):
         try:
@@ -53,10 +63,11 @@ class NspMobileAuthController(http.Controller):
                 'REMOTE_ADDR': request.httprequest.environ.get('REMOTE_ADDR'),
             },
         )
-        user = request.env['res.users'].sudo().browse(auth_info['uid']).exists()
+        user_id = int(auth_info.get('uid') or 0)
+        user = request.env['res.users'].sudo().browse(user_id).exists()
         if not user or not user.active:
             raise AccessDenied()
-        if user.share:
+        if not user._is_internal():
             raise AccessError('NSP Mobile requires an internal Odoo User.')
         if auth_info.get('mfa') != 'skip' and user._mfa_url():
             raise AccessError(
@@ -66,27 +77,7 @@ class NspMobileAuthController(http.Controller):
         return user
 
     def _business_user(self, odoo_user):
-        # Every internal Odoo User must resolve to exactly one NSP User profile.
-        odoo_user.sudo()._ensure_nsp_user_profile()
-        mapped_user = request.env['nsp.user'].sudo().search([
-            ('odoo_user_id', '=', odoo_user.id),
-            ('active', '=', True),
-        ])
-        if len(mapped_user) != 1:
-            raise AccessError(
-                'This Odoo User must be linked to exactly one active NSP User.'
-            )
-
-        user_env = request.env(user=odoo_user.id, su=False)
-        business_user = user_env['nsp.user'].search([
-            ('id', '=', mapped_user.id),
-            ('active', '=', True),
-        ])
-        if len(business_user) != 1:
-            raise AccessError(
-                'This Odoo User has no permission to access its NSP User profile.'
-            )
-        return business_user
+        return odoo_user._nsp_mobile_business_user()
 
     def _token_payload(self, result, application, odoo_user, business_user, device, session):
         data = {
@@ -114,12 +105,8 @@ class NspMobileAuthController(http.Controller):
     def login(self, **kw):
         started = time.time()
         application = self._application()
-        application.check_ip_allowed(get_client_ip())
         try:
-            check_ip_auth_rate_limit(request.env, get_client_ip())
-        except Exception as exc:
-            raise TooManyRequests(str(exc)) from exc
-        try:
+            self._check_auth_policy(application)
             body = self._json_object()
             unsupported = sorted(set(body) - {'login', 'password', 'device'})
             if unsupported:
@@ -145,22 +132,23 @@ class NspMobileAuthController(http.Controller):
 
             odoo_user = self._authenticate_odoo_user(login, password)
             business_user = self._business_user(odoo_user)
-            device = request.env['nsp.mobile.device'].sudo().register_or_update(
-                business_user.sudo(), device_data
-            )
-            session = request.env['nsp.mobile.session'].sudo().open_session(
-                business_user.sudo(), device,
-                ip=get_client_ip(),
-                user_agent=request.httprequest.headers.get('User-Agent'),
-            )
-            result = request.env['core.api.token'].sudo().issue_for_subject(
-                application,
-                token_kind='mobile',
-                subject_model='res.users',
-                subject_record_id=odoo_user.id,
-                session_uid=session.session_uid,
-                device_uid=device.device_uid,
-            )
+            with request.env.cr.savepoint():
+                device = request.env['nsp.mobile.device'].sudo().register_or_update(
+                    business_user.sudo(), device_data
+                )
+                session = request.env['nsp.mobile.session'].sudo().open_session(
+                    business_user.sudo(), device,
+                    ip=get_client_ip(),
+                    user_agent=request.httprequest.headers.get('User-Agent'),
+                )
+                result = request.env['core.api.token'].sudo().issue_for_subject(
+                    application,
+                    token_kind='mobile',
+                    subject_model='res.users',
+                    subject_record_id=odoo_user.id,
+                    session_uid=session.session_uid,
+                    device_uid=device.device_uid,
+                )
             self._log(self.LOGIN_PATH, application, 200, True, started, token=result['access_token_rec'])
             return api_success_response(
                 'OK',
@@ -168,6 +156,14 @@ class NspMobileAuthController(http.Controller):
                     result, application, odoo_user, business_user, device, session
                 ),
             )
+        except Forbidden as exc:
+            message = exc.description or str(exc)
+            self._log(self.LOGIN_PATH, application, 403, False, started, message)
+            return api_error_response(message, status_code=403)
+        except TooManyRequests as exc:
+            message = exc.description or str(exc)
+            self._log(self.LOGIN_PATH, application, 429, False, started, message)
+            return api_error_response(message, status_code=429)
         except BadRequest as exc:
             self._log(self.LOGIN_PATH, application, 400, False, started, exc.description)
             return api_error_response(exc.description, status_code=400)
@@ -190,12 +186,8 @@ class NspMobileAuthController(http.Controller):
     def refresh(self, **kw):
         started = time.time()
         application = self._application()
-        application.check_ip_allowed(get_client_ip())
         try:
-            check_ip_auth_rate_limit(request.env, get_client_ip())
-        except Exception as exc:
-            raise TooManyRequests(str(exc)) from exc
-        try:
+            self._check_auth_policy(application)
             body = self._json_object()
             if set(body) - {'refresh_token'}:
                 raise BadRequest('Only refresh_token is supported.')
@@ -203,45 +195,49 @@ class NspMobileAuthController(http.Controller):
             if not plaintext:
                 raise BadRequest('refresh_token is required.')
 
-            resolved_app, source_token = request.env['core.api.token'].sudo().consume_refresh_token(
-                plaintext, token_kind='mobile'
-            )
-            if (
-                not resolved_app
-                or resolved_app != application
-                or source_token.token_kind != 'mobile'
-                or source_token.subject_model != 'res.users'
-            ):
-                raise AccessDenied()
+            with request.env.cr.savepoint():
+                resolved_app, source_token = request.env['core.api.token'].sudo().consume_refresh_token(
+                    plaintext, token_kind='mobile'
+                )
+                if (
+                    not resolved_app
+                    or resolved_app != application
+                    or source_token.token_kind != 'mobile'
+                    or source_token.subject_model != 'res.users'
+                ):
+                    raise AccessDenied()
 
-            odoo_user = request.env['res.users'].sudo().browse(
-                source_token.subject_record_id
-            ).exists()
-            if not odoo_user or not odoo_user.active:
-                raise AccessDenied()
-            business_user = self._business_user(odoo_user)
-            session = request.env['nsp.mobile.session'].sudo().search([
-                ('session_uid', '=', source_token.session_uid),
-                ('user_id', '=', business_user.id),
-                ('state', '=', 'active'),
-            ], limit=1)
-            device = request.env['nsp.mobile.device'].sudo().search([
-                ('device_uid', '=', source_token.device_uid),
-                ('user_id', '=', business_user.id),
-                ('active', '=', True),
-            ], limit=1)
-            if not session or session.user_id.id != business_user.id or not device:
-                raise AccessDenied()
+                odoo_user = request.env['res.users'].sudo().browse(
+                    source_token.subject_record_id
+                ).exists()
+                if not odoo_user or not odoo_user.active:
+                    raise AccessDenied()
+                business_user = self._business_user(odoo_user)
+                device = request.env['nsp.mobile.device'].sudo().search([
+                    ('device_uid', '=', source_token.device_uid),
+                    ('user_id', '=', business_user.id),
+                    ('active', '=', True),
+                ], limit=1)
+                if not device:
+                    raise AccessDenied()
+                session = request.env['nsp.mobile.session'].sudo().search([
+                    ('session_uid', '=', source_token.session_uid),
+                    ('user_id', '=', business_user.id),
+                    ('device_id', '=', device.id),
+                    ('state', '=', 'active'),
+                ], limit=1)
+                if not session:
+                    raise AccessDenied()
 
-            session.touch(ip=get_client_ip())
-            result = request.env['core.api.token'].sudo().issue_for_subject(
-                application,
-                token_kind='mobile',
-                subject_model='res.users',
-                subject_record_id=odoo_user.id,
-                session_uid=session.session_uid,
-                device_uid=device.device_uid,
-            )
+                session.touch(ip=get_client_ip())
+                result = request.env['core.api.token'].sudo().issue_for_subject(
+                    application,
+                    token_kind='mobile',
+                    subject_model='res.users',
+                    subject_record_id=odoo_user.id,
+                    session_uid=session.session_uid,
+                    device_uid=device.device_uid,
+                )
             self._log(self.REFRESH_PATH, application, 200, True, started, token=result['access_token_rec'])
             return api_success_response(
                 'OK',
@@ -249,6 +245,14 @@ class NspMobileAuthController(http.Controller):
                     result, application, odoo_user, business_user, device, session
                 ),
             )
+        except Forbidden as exc:
+            message = exc.description or str(exc)
+            self._log(self.REFRESH_PATH, application, 403, False, started, message)
+            return api_error_response(message, status_code=403)
+        except TooManyRequests as exc:
+            message = exc.description or str(exc)
+            self._log(self.REFRESH_PATH, application, 429, False, started, message)
+            return api_error_response(message, status_code=429)
         except BadRequest as exc:
             self._log(self.REFRESH_PATH, application, 400, False, started, exc.description)
             return api_error_response(exc.description, status_code=400)

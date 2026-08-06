@@ -6,7 +6,7 @@
         'standard Odoo Groups, ACLs and Record Rules. The module issues device-bound Mobile '
         'Tokens for profile, vehicles, parking history, friends, vehicle borrowing and notifications.'
     ),
-    'version': '19.0.5.0.0',
+    'version': '19.0.5.1.0',
     'sequence': 45,
     'author': 'BKU Team',
     'category': 'Services',

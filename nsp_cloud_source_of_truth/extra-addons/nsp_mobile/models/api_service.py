@@ -24,34 +24,22 @@ class NspMobileApiService(models.Model):
         if not odoo_user or not odoo_user.active or self.env.uid != odoo_user.id:
             raise AccessError(_('Odoo User is inactive or no longer authorized.'))
 
-        mapped_user = self.env['nsp.user'].sudo().search([
-            ('odoo_user_id', '=', odoo_user.id),
-            ('active', '=', True),
-        ])
-        if len(mapped_user) != 1:
-            raise AccessError(_(
-                'The authenticated Odoo User must have exactly one active NSP User profile.'
-            ))
-        user = self.env['nsp.user'].search([
-            ('id', '=', mapped_user.id),
-            ('active', '=', True),
-        ])
-        if len(user) != 1:
-            raise AccessError(_(
-                'The authenticated Odoo User cannot access its NSP User profile.'
-            ))
+        user = odoo_user._nsp_mobile_business_user()
 
-        session = self.env['nsp.mobile.session'].sudo().search([
-            ('session_uid', '=', ctx.get('core_api_session_uid')),
-            ('user_id', '=', user.id),
-            ('state', '=', 'active'),
-        ], limit=1)
         device = self.env['nsp.mobile.device'].sudo().search([
             ('device_uid', '=', ctx.get('core_api_device_uid')),
             ('user_id', '=', user.id),
             ('active', '=', True),
         ], limit=1)
-        if not session or not device:
+        if not device:
+            raise AccessError(_('Mobile session is no longer active.'))
+        session = self.env['nsp.mobile.session'].sudo().search([
+            ('session_uid', '=', ctx.get('core_api_session_uid')),
+            ('user_id', '=', user.id),
+            ('device_id', '=', device.id),
+            ('state', '=', 'active'),
+        ], limit=1)
+        if not session:
             raise AccessError(_('Mobile session is no longer active.'))
         session.touch()
         return user, odoo_user, device, session
