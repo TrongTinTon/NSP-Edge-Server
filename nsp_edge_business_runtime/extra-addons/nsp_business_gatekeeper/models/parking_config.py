@@ -30,30 +30,65 @@ class NspParkingArea(models.Model):
         string="State", default="draft", required=True, index=True,
     )
     published_revision = fields.Integer(default=0, readonly=True, copy=False, index=True)
+    runtime_synced_at = fields.Datetime(
+        string="Synchronized At", readonly=True, copy=False, index=True,
+    )
+    is_published = fields.Boolean(compute="_compute_is_published")
     lane_ids = fields.One2many("nsp.parking.lane", "parking_area_id", string="Parking Lanes")
+    edge_server_ids = fields.Many2many(
+        "nsp.edge.server", string="Servers", compute="_compute_topology",
+    )
     controller_ids = fields.Many2many(
         "nsp.controller", string="Controllers", compute="_compute_topology",
         search="_search_controllers",
     )
     reader_ids = fields.Many2many("nsp.device", string="Readers", compute="_compute_topology")
+    edge_server_count = fields.Integer(compute="_compute_counts")
     controller_count = fields.Integer(compute="_compute_counts")
     reader_count = fields.Integer(compute="_compute_counts")
     lane_count = fields.Integer(compute="_compute_counts")
     whitelist_count = fields.Integer(compute="_compute_whitelist_count")
+    ready_lane_count = fields.Integer(
+        string="Ready Lanes", compute="_compute_configuration_health",
+    )
+    incomplete_lane_count = fields.Integer(
+        string="Incomplete Lanes", compute="_compute_configuration_health",
+    )
+    configuration_state = fields.Selection(
+        [
+            ("empty", "No Lanes"),
+            ("incomplete", "Needs Attention"),
+            ("ready", "Ready"),
+        ],
+        string="Configuration", compute="_compute_configuration_health",
+    )
+    configuration_summary = fields.Char(
+        string="Configuration Summary", compute="_compute_configuration_health",
+    )
+    published_edge_server_codes = fields.Char(
+        string="Published Edge Servers", compute="_compute_published_edge_server_codes",
+    )
 
     _sql_constraints = [
         ("code_unique", "unique(code)", "Parking Area Code must be unique."),
     ]
 
+    @api.depends("published_revision")
+    def _compute_is_published(self):
+        for record in self:
+            record.is_published = bool(record.published_revision)
+
     @api.depends(
         "lane_ids.active",
         "lane_ids.controller_id",
+        "lane_ids.controller_id.edge_server_id",
         "lane_ids.timeline_line_ids.reader_id",
         "lane_ids.timeline_line_ids.port_no",
     )
     def _compute_topology(self):
         for record in self:
             lanes = record.lane_ids.filtered("active")
+            record.edge_server_ids = lanes.mapped("controller_id.edge_server_id")
             record.controller_ids = lanes.mapped("controller_id")
             record.reader_ids = lanes.mapped("timeline_line_ids.reader_id")
 
@@ -61,12 +96,68 @@ class NspParkingArea(models.Model):
     def _search_controllers(self, operator, value):
         return [("lane_ids.controller_id", operator, value)]
 
-    @api.depends("controller_ids", "reader_ids", "lane_ids.active")
+    @api.depends("edge_server_ids", "controller_ids", "reader_ids", "lane_ids.active")
     def _compute_counts(self):
         for record in self:
+            record.edge_server_count = len(record.edge_server_ids)
             record.controller_count = len(record.controller_ids)
             record.reader_count = len(record.reader_ids)
             record.lane_count = len(record.lane_ids.filtered("active"))
+
+    @api.depends(
+        "lane_ids.active",
+        "lane_ids.controller_id.edge_server_id.edge_server_code",
+    )
+    def _compute_published_edge_server_codes(self):
+        for record in self:
+            record.published_edge_server_codes = ", ".join(sorted(
+                code for code in record.edge_server_ids.mapped("edge_server_code") if code
+            ))
+
+    @api.depends(
+        "lane_ids.active",
+        "lane_ids.configuration_state",
+        "lane_ids.configuration_issue",
+        "lane_ids.checkin_sequence_ids",
+        "lane_ids.checkout_sequence_ids",
+    )
+    def _compute_configuration_health(self):
+        for record in self:
+            active_lanes = record.lane_ids.filtered("active")
+            ready_lanes = active_lanes.filtered(
+                lambda lane: lane.configuration_state == "ready"
+            )
+            incomplete_lanes = active_lanes - ready_lanes
+            has_checkin = any(lane.checkin_sequence_ids for lane in active_lanes)
+            has_checkout = any(lane.checkout_sequence_ids for lane in active_lanes)
+            coverage_issues = []
+            if active_lanes and not has_checkin:
+                coverage_issues.append(_("Parking Layout has no Check-in Sequence"))
+            if active_lanes and not has_checkout:
+                coverage_issues.append(_("Parking Layout has no Check-out Sequence"))
+
+            record.ready_lane_count = len(ready_lanes)
+            record.incomplete_lane_count = len(incomplete_lanes)
+            if not active_lanes:
+                record.configuration_state = "empty"
+                record.configuration_summary = _("No active Lane is synchronized.")
+            elif incomplete_lanes or coverage_issues:
+                record.configuration_state = "incomplete"
+                parts = []
+                if incomplete_lanes:
+                    parts.append(
+                        _("%(ready)s ready · %(incomplete)s need attention") % {
+                            "ready": len(ready_lanes),
+                            "incomplete": len(incomplete_lanes),
+                        }
+                    )
+                parts.extend(coverage_issues)
+                record.configuration_summary = " · ".join(parts)
+            else:
+                record.configuration_state = "ready"
+                record.configuration_summary = _(
+                    "All %(count)s active Lanes match the synchronized runtime snapshot."
+                ) % {"count": len(active_lanes)}
 
     def _compute_whitelist_count(self):
         count = self.env["nsp.device.whitelist"].sudo().search_count([])
@@ -245,6 +336,13 @@ class NspParkingLane(models.Model):
         "nsp.controller", string="Controller", required=True,
         ondelete="restrict", index=True,
     )
+    edge_server_id = fields.Many2one(
+        "nsp.edge.server", string="Server",
+        related="controller_id.edge_server_id", readonly=True,
+    )
+    parking_area_state = fields.Selection(
+        related="parking_area_id.state", string="Layout State", readonly=True,
+    )
     active = fields.Boolean(default=True, index=True)
     tolerance_type = fields.Selection(
         [("percent", "Percentage (%)"), ("seconds", "Seconds")],
@@ -253,6 +351,12 @@ class NspParkingLane(models.Model):
     tolerance_value = fields.Float(string="Tolerance Value", default=30.0, required=True)
     timeline_line_ids = fields.One2many(
         "nsp.parking.lane.timeline", "lane_id", string="Reader Port Timeline",
+    )
+    reader_config_ids = fields.One2many(
+        "nsp.parking.lane.reader.config", "lane_id", string="Applied Reader Configuration",
+    )
+    reader_config_count = fields.Integer(
+        string="Configured Readers", compute="_compute_reader_config_count",
     )
     event_sequence_ids = fields.One2many(
         "nsp.parking.lane.event.sequence", "lane_id", string="Parking Event Sequences",
@@ -269,6 +373,23 @@ class NspParkingLane(models.Model):
         string="Total Path Duration", compute="_compute_total_path_duration", digits=(8, 3),
     )
     timeline_point_count = fields.Integer(string="Timeline Points", compute="_compute_timeline_point_count")
+    checkin_point_count = fields.Integer(
+        string="Check-in Points", compute="_compute_sequence_counts",
+    )
+    checkout_point_count = fields.Integer(
+        string="Check-out Points", compute="_compute_sequence_counts",
+    )
+    configuration_state = fields.Selection(
+        [
+            ("disabled", "Disabled"),
+            ("incomplete", "Needs Attention"),
+            ("ready", "Ready"),
+        ],
+        string="Configuration", compute="_compute_configuration_health",
+    )
+    configuration_issue = fields.Char(
+        string="Configuration Check", compute="_compute_configuration_health",
+    )
 
     _sql_constraints = [
         ("parking_lane_code_unique", "unique(code)", "Parking Lane Code must be unique."),
@@ -292,6 +413,135 @@ class NspParkingLane(models.Model):
     def _compute_timeline_point_count(self):
         for record in self:
             record.timeline_point_count = len(record.timeline_line_ids)
+
+    @api.depends("reader_config_ids")
+    def _compute_reader_config_count(self):
+        for record in self:
+            record.reader_config_count = len(record.reader_config_ids)
+
+    @api.depends("checkin_sequence_ids", "checkout_sequence_ids")
+    def _compute_sequence_counts(self):
+        for record in self:
+            record.checkin_point_count = len(record.checkin_sequence_ids)
+            record.checkout_point_count = len(record.checkout_sequence_ids)
+
+    @api.depends(
+        "active",
+        "controller_id",
+        "controller_id.edge_server_id",
+        "timeline_line_ids",
+        "timeline_line_ids.sequence",
+        "timeline_line_ids.reader_id",
+        "timeline_line_ids.port_no",
+        "timeline_line_ids.duration_from_previous",
+        "reader_config_ids",
+        "reader_config_ids.reader_id",
+        "reader_config_ids.power_dbm",
+        "reader_config_ids.read_interval_ms",
+        "reader_config_ids.tid_start_address",
+        "reader_config_ids.tid_length",
+        "checkin_sequence_ids",
+        "checkin_sequence_ids.sequence",
+        "checkin_sequence_ids.reader_id",
+        "checkin_sequence_ids.port_no",
+        "checkout_sequence_ids",
+        "checkout_sequence_ids.sequence",
+        "checkout_sequence_ids.reader_id",
+        "checkout_sequence_ids.port_no",
+    )
+    def _compute_configuration_health(self):
+        for lane in self:
+            if not lane.active:
+                lane.configuration_state = "disabled"
+                lane.configuration_issue = _("Lane is disabled.")
+                continue
+
+            issues = []
+            controller = lane.controller_id
+            if not controller:
+                issues.append(_("Controller is missing"))
+            elif not controller.edge_server_id:
+                issues.append(_("Server is missing"))
+
+            timeline = lane.timeline_line_ids.sorted(
+                lambda row: (row.sequence or 0, row.id)
+            )
+            if len(timeline) < 2:
+                issues.append(_("Timeline needs at least 2 points"))
+            elif timeline.mapped("sequence") != list(range(1, len(timeline) + 1)):
+                issues.append(_("Timeline order is not contiguous"))
+
+            timeline_keys = [
+                (line.reader_id.id, int(line.port_no or 0)) for line in timeline
+            ]
+            if len(timeline_keys) != len(set(timeline_keys)):
+                issues.append(_("Timeline contains duplicate Reader Ports"))
+            if controller and any(
+                line.reader_id.controller_id != controller for line in timeline
+            ):
+                issues.append(_("Timeline Reader does not belong to the Lane Controller"))
+
+            timeline_reader_ids = set(timeline.mapped("reader_id").ids)
+            configured_reader_ids = set(lane.reader_config_ids.mapped("reader_id").ids)
+            if timeline_reader_ids != configured_reader_ids:
+                issues.append(_("Reader Configuration does not match Timeline Readers"))
+
+            has_checkin = bool(lane.checkin_sequence_ids)
+            has_checkout = bool(lane.checkout_sequence_ids)
+            if not has_checkin and not has_checkout:
+                issues.append(_("At least one Check-in or Check-out Sequence is required"))
+
+            lane.configuration_state = "incomplete" if issues else "ready"
+            if issues:
+                lane.configuration_issue = "; ".join(issues)
+            elif has_checkin and has_checkout:
+                lane.configuration_issue = _("Check-in and Check-out are configured.")
+            elif has_checkin:
+                lane.configuration_issue = _("Check-in is configured.")
+            else:
+                lane.configuration_issue = _("Check-out is configured.")
+
+    def _validate_reader_configs(self):
+        for lane in self:
+            timeline_readers = lane.timeline_line_ids.mapped("reader_id")
+            config_readers = lane.reader_config_ids.mapped("reader_id")
+            if set(timeline_readers.ids) != set(config_readers.ids):
+                raise ValidationError(
+                    _("Lane %(lane)s Applied Reader Configuration does not match its Timeline Readers.")
+                    % {"lane": lane.display_name}
+                )
+            lane.reader_config_ids._validate_parameter_ranges()
+        return True
+
+    def _backfill_reader_configs_from_runtime_devices(self):
+        """Create missing Lane snapshots for layouts installed before this model.
+
+        Edge already stores the active published Reader parameters on nsp.device,
+        so this is a deterministic upgrade-only projection and does not change
+        runtime device settings.
+        """
+        Config = self.env["nsp.parking.lane.reader.config"].sudo()
+        for lane in self:
+            existing_reader_ids = set(lane.reader_config_ids.mapped("reader_id").ids)
+            timeline_readers = lane.timeline_line_ids.mapped("reader_id")
+            for reader in timeline_readers.filtered(
+                lambda item: item.id not in existing_reader_ids
+            ):
+                Config.create({
+                    "lane_id": lane.id,
+                    "reader_id": reader.id,
+                    "power_dbm": int(reader.power_dbm or 0),
+                    "read_interval_ms": int(reader.read_interval_ms or 200),
+                    "tid_start_address": int(reader.tid_addr or 0),
+                    "tid_length": int(reader.tid_len or 4),
+                    "source_type": "published_layout",
+                })
+            stale = lane.reader_config_ids.filtered(
+                lambda config: config.reader_id not in timeline_readers
+            )
+            if stale:
+                stale.unlink()
+        return True
 
     @api.model
     def _normalize_code(self, value):
@@ -372,6 +622,7 @@ class NspParkingLane(models.Model):
                     raise ValidationError(
                         _("Every Timeline point after the first requires a positive Duration.")
                     )
+            lane._validate_reader_configs()
             if not lane.checkin_sequence_ids and not lane.checkout_sequence_ids:
                 raise ValidationError(
                     _("Lane %(lane)s must define at least one Check-in or Check-out Sequence.")
@@ -460,6 +711,94 @@ class NspParkingLane(models.Model):
                 "value": float(self.tolerance_value or 0.0),
             },
         }
+
+
+
+class NspParkingLaneReaderConfig(models.Model):
+    _name = "nsp.parking.lane.reader.config"
+    _description = "NSP Edge Parking Lane Applied Reader Configuration"
+    _order = "lane_id, reader_id, id"
+    _rec_name = "reader_id"
+
+    lane_id = fields.Many2one(
+        "nsp.parking.lane", required=True, ondelete="cascade", index=True,
+    )
+    reader_id = fields.Many2one(
+        "nsp.device", string="Reader", required=True, ondelete="restrict", index=True,
+    )
+    power_dbm = fields.Integer(string="Power (dBm)", required=True)
+    read_interval_ms = fields.Integer(string="Read Interval (ms)", required=True)
+    tid_start_address = fields.Integer(string="TID Start Address (Words)", required=True)
+    tid_length = fields.Integer(string="TID Length (Words)", required=True)
+    source_type = fields.Selection(
+        [("published_layout", "Published Layout")],
+        string="Source", required=True, default="published_layout", readonly=True,
+    )
+    source_revision = fields.Integer(
+        string="Layout Revision", related="lane_id.parking_area_id.published_revision",
+        readonly=True,
+    )
+    port_summary = fields.Char(string="Ports", compute="_compute_port_summary")
+
+    _sql_constraints = [
+        (
+            "edge_lane_reader_config_unique",
+            "unique(lane_id, reader_id)",
+            "A Reader can have only one Applied Configuration per Lane.",
+        ),
+        (
+            "edge_lane_reader_power_range",
+            "CHECK(power_dbm >= 0 AND power_dbm <= 40)",
+            "Reader Power must be between 0 and 40 dBm.",
+        ),
+        (
+            "edge_lane_reader_interval_range",
+            "CHECK(read_interval_ms > 0 AND read_interval_ms <= 60000)",
+            "Read Interval must be between 1 and 60000 ms.",
+        ),
+        (
+            "edge_lane_reader_tid_addr_nonnegative",
+            "CHECK(tid_start_address >= 0)",
+            "TID Start Address cannot be negative.",
+        ),
+        (
+            "edge_lane_reader_tid_length_positive",
+            "CHECK(tid_length > 0)",
+            "TID Length must be greater than zero.",
+        ),
+    ]
+
+    @api.depends(
+        "lane_id.timeline_line_ids.reader_id",
+        "lane_id.timeline_line_ids.port_no",
+        "reader_id",
+    )
+    def _compute_port_summary(self):
+        for config in self:
+            ports = sorted({
+                int(line.port_no or 0)
+                for line in config.lane_id.timeline_line_ids
+                if line.reader_id == config.reader_id and int(line.port_no or 0) > 0
+            })
+            config.port_summary = ", ".join("P%s" % port for port in ports)
+
+    def _validate_parameter_ranges(self):
+        for config in self:
+            if config.power_dbm < 0 or config.power_dbm > 40:
+                raise ValidationError(_("Reader Power must be between 0 and 40 dBm."))
+            if config.read_interval_ms <= 0 or config.read_interval_ms > 60000:
+                raise ValidationError(_("Read Interval must be between 1 and 60000 ms."))
+            if config.tid_start_address < 0:
+                raise ValidationError(_("TID Start Address cannot be negative."))
+            if config.tid_length <= 0:
+                raise ValidationError(_("TID Length must be greater than zero."))
+        return True
+
+    @api.constrains(
+        "power_dbm", "read_interval_ms", "tid_start_address", "tid_length",
+    )
+    def _check_parameter_ranges(self):
+        self._validate_parameter_ranges()
 
 
 class NspParkingLaneTimeline(models.Model):

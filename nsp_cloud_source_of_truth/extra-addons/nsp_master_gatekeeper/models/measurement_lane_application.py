@@ -230,6 +230,10 @@ class NspMeasurementSessionLaneApplication(models.Model):
                 "observed_at": event.read_at,
                 "observed_at_ms": int(event.read_at_ms or 0),
                 "duration_from_previous": duration,
+                "reader_power_dbm": int(reader_line.reader_power_dbm or 0),
+                "read_interval_ms": int(reader_line.read_interval_ms or 200),
+                "tid_start_address": int(reader_line.reader_tid_addr or 0),
+                "tid_length": int(reader_line.reader_tid_len or 4),
                 "checkin_order": selection_order,
                 "checkout_order": len(ordered_ids) - selection_order + 1,
             })
@@ -270,6 +274,10 @@ class NspMeasurementSessionLaneApplication(models.Model):
                     "observed_at": row["observed_at"],
                     "observed_at_ms": row["observed_at_ms"],
                     "duration_from_previous": row["duration_from_previous"],
+                    "reader_power_dbm": row["reader_power_dbm"],
+                    "read_interval_ms": row["read_interval_ms"],
+                    "tid_start_address": row["tid_start_address"],
+                    "tid_length": row["tid_length"],
                     "checkin_order": row["checkin_order"],
                     "checkout_order": row["checkout_order"],
                 })
@@ -418,13 +426,36 @@ class NspMeasurementApplyLaneWizard(models.TransientModel):
                 "port_no": int(line.port_no or 0),
             }))
 
-        lane.write({
+        scope_by_reader = {
+            scope.reader_id.id: scope for scope in self.session_id.reader_line_ids
+        }
+        reader_config_commands = [(5, 0, 0)]
+        for reader in lines.mapped("reader_id"):
+            scope = scope_by_reader[reader.id]
+            reader_config_commands.append((0, 0, {
+                "reader_id": reader.id,
+                "power_dbm": int(scope.reader_power_dbm or 0),
+                "read_interval_ms": int(scope.read_interval_ms or 200),
+                "tid_start_address": int(scope.reader_tid_addr or 0),
+                "tid_length": int(scope.reader_tid_len or 4),
+                "source_type": "lane_calibration",
+                "source_reference": self.session_id.measurement_code or "",
+                "source_revision": int(self.session_id.revision or 1),
+                "applied_at": fields.Datetime.now(),
+            }))
+
+        lane.with_context(
+            skip_lane_reader_config_sync=True,
+            lane_calibration_apply=True,
+        ).write({
             "timeline_line_ids": timeline_commands,
+            "reader_config_ids": reader_config_commands,
             "checkin_sequence_ids": checkin_commands,
             "checkout_sequence_ids": checkout_commands,
         })
         lane._validate_lane_assembly()
         lane._validate_timeline_and_sequences()
+        lane._validate_reader_configs()
         if lane.parking_area_id.state != "draft":
             # The last published snapshot remains active, but the changed working
             # layout must be published explicitly as a new revision.
@@ -438,9 +469,14 @@ class NspMeasurementApplyLaneWizard(models.TransientModel):
         })
         self.session_id.message_post(
             body=_(
-                "Lane configuration applied to %(lane)s with %(count)s timeline points. "
-                "The Lane stores no reference to this Calibration."
-            ) % {"lane": lane.display_name, "count": len(lines)}
+                "Lane configuration applied to %(lane)s with %(count)s timeline points and "
+                "%(readers)s Reader configuration snapshot(s). The Lane stores only the "
+                "Calibration code/revision as audit text and no relational reference."
+            ) % {
+                "lane": lane.display_name,
+                "count": len(lines),
+                "readers": len(lines.mapped("reader_id")),
+            }
         )
         return {
             "type": "ir.actions.act_window_close",
@@ -469,5 +505,9 @@ class NspMeasurementApplyLaneWizardLine(models.TransientModel):
     observed_at = fields.Datetime(string="Detected", readonly=True)
     observed_at_ms = fields.Integer(string="ms", readonly=True)
     duration_from_previous = fields.Float(string="Duration from Previous (s)", readonly=True, digits=(8, 3))
+    reader_power_dbm = fields.Integer(string="Power (dBm)", readonly=True)
+    read_interval_ms = fields.Integer(string="Read Interval (ms)", readonly=True)
+    tid_start_address = fields.Integer(string="TID Start", readonly=True)
+    tid_length = fields.Integer(string="TID Length", readonly=True)
     checkin_order = fields.Integer(string="Check-in #", readonly=True)
     checkout_order = fields.Integer(string="Check-out #", readonly=True)

@@ -242,18 +242,27 @@ class NspParkingArea(models.Model):
         for lane in lanes:
             readers = {}
             timeline = []
+            config_by_reader = {
+                config.reader_id.id: config for config in lane.reader_config_ids
+            }
             for line in lane.timeline_line_ids.sorted(lambda row: (row.sequence or 0, row.id)):
                 reader = line.reader_id
+                config = config_by_reader.get(reader.id)
+                if not config:
+                    raise ValidationError(
+                        _("Lane %(lane)s has no Applied Reader Configuration for %(reader)s.")
+                        % {"lane": lane.display_name, "reader": reader.display_name}
+                    )
                 reader_payload = readers.setdefault(reader.id, {
                     "technical_code": reader.device_code or "",
                     "serial_number": reader.serial_number or "",
                     "reader_name": reader.name or reader.serial_number or "",
                     "physical_connection": reader.connection_type or False,
                     "reader_parameters": {
-                        "power_dbm": int(reader.power_dbm or 0),
-                        "read_interval_ms": int(reader.read_interval_ms or 200),
-                        "tid_start_address": int(reader.tid_addr or 0),
-                        "tid_length": int(reader.tid_len or 0),
+                        "power_dbm": int(config.power_dbm or 0),
+                        "read_interval_ms": int(config.read_interval_ms or 200),
+                        "tid_start_address": int(config.tid_start_address or 0),
+                        "tid_length": int(config.tid_length or 4),
                     },
                     "ports": set(),
                 })
@@ -376,6 +385,7 @@ class NspParkingArea(models.Model):
             try:
                 lane._validate_lane_assembly()
                 lane._validate_timeline_and_sequences()
+                lane._validate_reader_configs()
             except ValidationError as exc:
                 issues.append(str(exc))
                 continue
@@ -575,6 +585,13 @@ class NspParkingLane(models.Model):
     timeline_line_ids = fields.One2many(
         "nsp.parking.lane.timeline", "lane_id", string="Reader Port Timeline",
     )
+    reader_config_ids = fields.One2many(
+        "nsp.parking.lane.reader.config", "lane_id", string="Applied Reader Configuration",
+        copy=True,
+    )
+    reader_config_count = fields.Integer(
+        string="Configured Readers", compute="_compute_reader_config_count",
+    )
     checkin_sequence_ids = fields.One2many(
         "nsp.parking.lane.event.sequence", "lane_id",
         domain=[("sequence_type", "=", "check_in")], string="Check-in Sequence",
@@ -666,6 +683,79 @@ class NspParkingLane(models.Model):
         for record in self:
             record.timeline_point_count = len(record.timeline_line_ids)
 
+    @api.depends("reader_config_ids")
+    def _compute_reader_config_count(self):
+        for record in self:
+            record.reader_config_count = len(record.reader_config_ids)
+
+    @api.model
+    def _default_reader_config_values(self, reader):
+        return {
+            "reader_id": reader.id,
+            "power_dbm": int(reader.power_dbm or 0),
+            "read_interval_ms": int(reader.read_interval_ms or 200),
+            "tid_start_address": int(reader.tid_addr or 0),
+            "tid_length": int(reader.tid_len or 4),
+            "source_type": "reader_defaults",
+            "source_reference": False,
+            "source_revision": 0,
+            "applied_at": fields.Datetime.now(),
+        }
+
+    def _sync_reader_configs_from_timeline(self):
+        """Keep exactly one stable Reader configuration per Timeline Reader.
+
+        Existing snapshots are preserved so later changes on nsp.device do not
+        silently alter a working Lane. Lane Calibration replaces the snapshots
+        atomically when Apply Configuration is saved.
+        """
+        Config = self.env["nsp.parking.lane.reader.config"].sudo()
+        for lane in self:
+            readers = lane.timeline_line_ids.mapped("reader_id")
+            existing_by_reader = {
+                config.reader_id.id: config for config in lane.reader_config_ids
+            }
+            for reader in readers:
+                if existing_by_reader.get(reader.id):
+                    continue
+                create_values = lane._default_reader_config_values(reader)
+                create_values["lane_id"] = lane.id
+                Config.create(create_values)
+            stale = lane.reader_config_ids.filtered(
+                lambda config: config.reader_id not in readers
+            )
+            if stale:
+                stale.unlink()
+        return True
+
+    def _validate_reader_configs(self):
+        for lane in self:
+            timeline_readers = lane.timeline_line_ids.mapped("reader_id")
+            config_by_reader = {
+                config.reader_id.id: config for config in lane.reader_config_ids
+            }
+            missing = timeline_readers.filtered(
+                lambda reader: reader.id not in config_by_reader
+            )
+            stale = lane.reader_config_ids.filtered(
+                lambda config: config.reader_id not in timeline_readers
+            )
+            if missing:
+                raise ValidationError(
+                    _("Lane %(lane)s is missing Applied Reader Configuration for: %(readers)s")
+                    % {
+                        "lane": lane.display_name,
+                        "readers": ", ".join(missing.mapped("display_name")),
+                    }
+                )
+            if stale:
+                raise ValidationError(
+                    _("Lane %(lane)s contains Reader Configuration not used by its Timeline.")
+                    % {"lane": lane.display_name}
+                )
+            lane.reader_config_ids._validate_parameter_ranges()
+        return True
+
     @api.depends("checkin_sequence_ids", "checkout_sequence_ids")
     def _compute_sequence_counts(self):
         for record in self:
@@ -681,6 +771,12 @@ class NspParkingLane(models.Model):
         "timeline_line_ids.reader_id",
         "timeline_line_ids.port_no",
         "timeline_line_ids.duration_from_previous",
+        "reader_config_ids",
+        "reader_config_ids.reader_id",
+        "reader_config_ids.power_dbm",
+        "reader_config_ids.read_interval_ms",
+        "reader_config_ids.tid_start_address",
+        "reader_config_ids.tid_length",
         "checkin_sequence_ids",
         "checkin_sequence_ids.sequence",
         "checkin_sequence_ids.reader_id",
@@ -713,6 +809,10 @@ class NspParkingLane(models.Model):
             ]
             if len(timeline_keys) != len(set(timeline_keys)):
                 issues.append(_("Timeline contains duplicate Reader Ports"))
+            timeline_reader_ids = set(timeline.mapped("reader_id").ids)
+            configured_reader_ids = set(lane.reader_config_ids.mapped("reader_id").ids)
+            if timeline_reader_ids != configured_reader_ids:
+                issues.append(_("Applied Reader Configuration does not match Timeline Readers"))
             has_checkin = bool(lane.checkin_sequence_ids)
             has_checkout = bool(lane.checkout_sequence_ids)
             if not has_checkin and not has_checkout:
@@ -847,6 +947,119 @@ class NspParkingLane(models.Model):
 
 
 
+class NspParkingLaneReaderConfig(models.Model):
+    _name = "nsp.parking.lane.reader.config"
+    _description = "NSP Parking Lane Applied Reader Configuration"
+    _order = "lane_id, reader_id, id"
+    _rec_name = "reader_id"
+
+    lane_id = fields.Many2one(
+        "nsp.parking.lane", required=True, ondelete="cascade", index=True,
+    )
+    reader_id = fields.Many2one(
+        "nsp.device", string="Reader", required=True, ondelete="restrict", index=True,
+    )
+    power_dbm = fields.Integer(string="Power (dBm)", required=True, default=30)
+    read_interval_ms = fields.Integer(
+        string="Read Interval (ms)", required=True, default=200,
+    )
+    tid_start_address = fields.Integer(
+        string="TID Start Address (Words)", required=True, default=0,
+    )
+    tid_length = fields.Integer(
+        string="TID Length (Words)", required=True, default=4,
+    )
+    source_type = fields.Selection(
+        [
+            ("reader_defaults", "Reader Defaults"),
+            ("lane_calibration", "Lane Calibration"),
+            ("manual", "Manual"),
+        ],
+        string="Source", required=True, default="reader_defaults", readonly=True,
+    )
+    source_reference = fields.Char(string="Source Reference", readonly=True)
+    source_revision = fields.Integer(string="Source Revision", readonly=True)
+    applied_at = fields.Datetime(string="Applied At", readonly=True)
+    port_summary = fields.Char(string="Ports", compute="_compute_port_summary")
+
+    _sql_constraints = [
+        (
+            "lane_reader_config_unique",
+            "unique(lane_id, reader_id)",
+            "A Reader can have only one Applied Configuration per Lane.",
+        ),
+        (
+            "lane_reader_power_range",
+            "CHECK(power_dbm >= 0 AND power_dbm <= 40)",
+            "Reader Power must be between 0 and 40 dBm.",
+        ),
+        (
+            "lane_reader_interval_range",
+            "CHECK(read_interval_ms > 0 AND read_interval_ms <= 60000)",
+            "Read Interval must be between 1 and 60000 ms.",
+        ),
+        (
+            "lane_reader_tid_addr_nonnegative",
+            "CHECK(tid_start_address >= 0)",
+            "TID Start Address cannot be negative.",
+        ),
+        (
+            "lane_reader_tid_length_positive",
+            "CHECK(tid_length > 0)",
+            "TID Length must be greater than zero.",
+        ),
+    ]
+
+    @api.depends(
+        "lane_id.timeline_line_ids.reader_id",
+        "lane_id.timeline_line_ids.port_no",
+        "reader_id",
+    )
+    def _compute_port_summary(self):
+        for config in self:
+            ports = sorted({
+                int(line.port_no or 0)
+                for line in config.lane_id.timeline_line_ids
+                if line.reader_id == config.reader_id and int(line.port_no or 0) > 0
+            })
+            config.port_summary = ", ".join("P%s" % port for port in ports)
+
+    def _validate_parameter_ranges(self):
+        for config in self:
+            if config.power_dbm < 0 or config.power_dbm > 40:
+                raise ValidationError(_("Reader Power must be between 0 and 40 dBm."))
+            if config.read_interval_ms <= 0 or config.read_interval_ms > 60000:
+                raise ValidationError(_("Read Interval must be between 1 and 60000 ms."))
+            if config.tid_start_address < 0:
+                raise ValidationError(_("TID Start Address cannot be negative."))
+            if config.tid_length <= 0:
+                raise ValidationError(_("TID Length must be greater than zero."))
+        return True
+
+    @api.constrains(
+        "power_dbm", "read_interval_ms", "tid_start_address", "tid_length",
+    )
+    def _check_parameter_ranges(self):
+        self._validate_parameter_ranges()
+
+    def write(self, vals):
+        values = dict(vals)
+        technical_fields = {
+            "power_dbm", "read_interval_ms", "tid_start_address", "tid_length",
+        }
+        if technical_fields.intersection(values) and not self.env.context.get("lane_calibration_apply"):
+            values.update({
+                "source_type": "manual",
+                "source_reference": False,
+                "source_revision": 0,
+                "applied_at": fields.Datetime.now(),
+            })
+        result = super().write(values)
+        self._validate_parameter_ranges()
+        return result
+
+
+
 class NspParkingLaneTimeline(models.Model):
     _name = "nsp.parking.lane.timeline"
     _description = "NSP Parking Lane Reader Port Timeline"
@@ -912,7 +1125,24 @@ class NspParkingLaneTimeline(models.Model):
                 values["sequence"] = next_sequence_by_lane[lane_id]
                 next_sequence_by_lane[lane_id] += 1
             prepared.append(values)
-        return super().create(prepared)
+        records = super().create(prepared)
+        if not self.env.context.get("skip_lane_reader_config_sync"):
+            records.mapped("lane_id")._sync_reader_configs_from_timeline()
+        return records
+
+    def write(self, vals):
+        lanes = self.mapped("lane_id")
+        result = super().write(vals)
+        if not self.env.context.get("skip_lane_reader_config_sync"):
+            (lanes | self.mapped("lane_id"))._sync_reader_configs_from_timeline()
+        return result
+
+    def unlink(self):
+        lanes = self.mapped("lane_id")
+        result = super().unlink()
+        if not self.env.context.get("skip_lane_reader_config_sync"):
+            lanes._sync_reader_configs_from_timeline()
+        return result
 
     @api.constrains("sequence", "reader_id", "port_no", "lane_id")
     def _check_timeline_point(self):

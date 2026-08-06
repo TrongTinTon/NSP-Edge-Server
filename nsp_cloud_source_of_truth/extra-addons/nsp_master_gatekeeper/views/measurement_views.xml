@@ -277,6 +277,10 @@
                             <field name="port_no" string="Port"/>
                             <field name="observed_at" string="Detected"/>
                             <field name="duration_from_previous" string="Duration from Previous (s)"/>
+                            <field name="reader_power_dbm" string="Power (dBm)" optional="show"/>
+                            <field name="read_interval_ms" string="Read Interval (ms)" optional="show"/>
+                            <field name="tid_start_address" string="TID Start" optional="hide"/>
+                            <field name="tid_length" string="TID Length" optional="hide"/>
                             <field name="checkin_order" string="Check-in #"/>
                             <field name="checkout_order" string="Check-out #"/>
                         </list>

@@ -48,6 +48,7 @@ class NspSyncJobParkingLayout(models.Model):
             "branch_id": branch.id,
             "state": state,
             "published_revision": published_revision,
+            "runtime_synced_at": fields.Datetime.now(),
         }
         if parking:
             Detection = self.env["nsp.parking.detection.event"].sudo()
@@ -72,9 +73,14 @@ class NspSyncJobParkingLayout(models.Model):
             self._normalize_sync_code(record.device_code): record
             for record in readers if record.device_code
         }
+        reader_by_id = {record.id: record for record in readers}
         declared_ports_by_reader = {
             self._normalize_sync_code(code): {int(port) for port in ports}
             for code, ports in (self.env.context.get("nsp_declared_reader_ports") or {}).items()
+        }
+        declared_config_by_reader = {
+            self._normalize_sync_code(code): dict(values)
+            for code, values in (self.env.context.get("nsp_declared_reader_configs") or {}).items()
         }
 
         lanes_data = item.get("lanes") or []
@@ -84,6 +90,7 @@ class NspSyncJobParkingLayout(models.Model):
         lane_specs = {}
         timeline_specs = []
         sequence_specs = []
+        reader_config_specs = []
         for lane_item in lanes_data:
             if not isinstance(lane_item, dict):
                 raise UserError(_("Parking Lanes must contain objects."))
@@ -203,6 +210,24 @@ class NspSyncJobParkingLayout(models.Model):
             if seen_orders and seen_orders != set(range(1, len(seen_orders) + 1)):
                 raise UserError(_("Reader Port Timeline Order must be contiguous and start at 1."))
 
+            for reader_id in sorted({reader_id for reader_id, _port in seen_refs}):
+                reader = reader_by_id.get(reader_id)
+                reader_code = self._normalize_sync_code(reader.device_code)
+                config = declared_config_by_reader.get(reader_code)
+                if not config:
+                    raise UserError(
+                        _("Published Reader Configuration is missing for %s.") % reader_code
+                    )
+                reader_config_specs.append({
+                    "lane_code": lane_code,
+                    "reader_id": reader.id,
+                    "power_dbm": int(config["power_dbm"]),
+                    "read_interval_ms": int(config["read_interval_ms"]),
+                    "tid_start_address": int(config["tid_start_address"]),
+                    "tid_length": int(config["tid_length"]),
+                    "source_type": "published_layout",
+                })
+
             event_sequences = lane_item.get("event_sequences") or {}
             if not isinstance(event_sequences, dict):
                 raise UserError(_("Event Sequences must be an object."))
@@ -276,12 +301,16 @@ class NspSyncJobParkingLayout(models.Model):
         area_lanes = Lane.search([("parking_area_id", "=", parking.id)])
         Timeline = self.env["nsp.parking.lane.timeline"].sudo()
         Sequence = self.env["nsp.parking.lane.event.sequence"].sudo()
+        ReaderConfig = self.env["nsp.parking.lane.reader.config"].sudo()
         existing_sequences = Sequence.search([("lane_id", "in", area_lanes.ids)]) if area_lanes else Sequence.browse()
         existing_timeline = Timeline.search([("lane_id", "in", area_lanes.ids)]) if area_lanes else Timeline.browse()
+        existing_reader_configs = ReaderConfig.search([("lane_id", "in", area_lanes.ids)]) if area_lanes else ReaderConfig.browse()
         if existing_sequences:
             existing_sequences.unlink()
         if existing_timeline:
             existing_timeline.unlink()
+        if existing_reader_configs:
+            existing_reader_configs.unlink()
 
         timeline_values = []
         for spec in timeline_specs:
@@ -299,6 +328,14 @@ class NspSyncJobParkingLayout(models.Model):
         if sequence_values:
             Sequence.create(sequence_values)
 
+        reader_config_values = []
+        for spec in reader_config_specs:
+            values = dict(spec)
+            values["lane_id"] = lane_by_code[values.pop("lane_code")].id
+            reader_config_values.append(values)
+        if reader_config_values:
+            ReaderConfig.create(reader_config_values)
+
         incoming_lane_codes = set(lane_specs)
         stale_lanes = area_lanes.filtered(
             lambda lane: lane.code not in incoming_lane_codes and lane.active
@@ -306,6 +343,7 @@ class NspSyncJobParkingLayout(models.Model):
         if stale_lanes:
             stale_lanes.mapped("timeline_line_ids").unlink()
             stale_lanes.mapped("event_sequence_ids").unlink()
+            stale_lanes.mapped("reader_config_ids").unlink()
             stale_lanes.write({"active": False})
 
         if parking.state == "operational":
@@ -355,6 +393,7 @@ class NspSyncJobParkingLayout(models.Model):
         if stale:
             stale.mapped("lane_ids.timeline_line_ids").unlink()
             stale.mapped("lane_ids.event_sequence_ids").unlink()
+            stale.mapped("lane_ids.reader_config_ids").unlink()
             stale.mapped("lane_ids").write({"active": False})
             stale.write({"state": "blocked"})
         return len(stale)
@@ -461,6 +500,7 @@ class NspSyncJobParkingLayout(models.Model):
             seen_controller_codes = set()
             reader_owner = {}
             declared_ports_by_reader = {}
+            declared_config_by_reader = {}
 
             for controller_item in controllers:
                 if not isinstance(controller_item, dict):
@@ -575,6 +615,18 @@ class NspSyncJobParkingLayout(models.Model):
                     if previous_ports is not None and previous_ports != port_numbers:
                         raise UserError(_("RFID Reader %s has conflicting Reader Port declarations.") % reader_code)
                     declared_ports_by_reader[reader_code] = set(port_numbers)
+                    current_config = {
+                        "power_dbm": power,
+                        "read_interval_ms": interval,
+                        "tid_start_address": tid_addr,
+                        "tid_length": tid_len,
+                    }
+                    previous_config = declared_config_by_reader.get(reader_code)
+                    if previous_config and previous_config != current_config:
+                        raise UserError(
+                            _("RFID Reader %s has conflicting published parameters.") % reader_code
+                        )
+                    declared_config_by_reader[reader_code] = current_config
 
                     reader_values = {
                         "name": reader_item.get("reader_name") or serial,
@@ -610,7 +662,8 @@ class NspSyncJobParkingLayout(models.Model):
                 nsp_declared_reader_ports={
                     code: sorted(ports)
                     for code, ports in declared_ports_by_reader.items()
-                }
+                },
+                nsp_declared_reader_configs=declared_config_by_reader,
             )
             for area in areas:
                 parking_sync._apply_parking_config(area)

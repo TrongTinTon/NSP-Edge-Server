@@ -166,6 +166,7 @@
                      domain="[('id','in',available_controller_ids)]"
                      options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
               <field name="timeline_point_count" string="Timeline" readonly="1"/>
+              <field name="reader_config_count" string="Readers" readonly="1" optional="show"/>
               <field name="total_path_duration" string="Duration (s)" readonly="1"/>
               <field name="checkin_point_count" string="Check-in" readonly="1"/>
               <field name="checkout_point_count" string="Check-out" readonly="1"/>
@@ -199,6 +200,7 @@
         <field name="edge_server_id" string="Server"/>
         <field name="controller_id" string="Controller"/>
         <field name="timeline_point_count" string="Timeline" readonly="1"/>
+        <field name="reader_config_count" string="Readers" readonly="1" optional="show"/>
         <field name="total_path_duration" string="Duration (s)" readonly="1"/>
         <field name="checkin_point_count" string="Check-in" readonly="1"/>
         <field name="checkout_point_count" string="Check-out" readonly="1"/>
@@ -225,21 +227,28 @@
           </div>
 
           <div class="nsp-parking-layout-summary row g-3 mb-4">
-            <div class="col-12 col-md-4">
+            <div class="col-12 col-md-6 col-xl-3">
               <div class="nsp-parking-layout-card">
                 <div class="nsp-parking-layout-card__label">TIMELINE</div>
                 <div class="nsp-parking-layout-card__value"><field name="timeline_point_count" readonly="1" nolabel="1"/> points</div>
                 <div class="nsp-parking-layout-card__meta"><field name="total_path_duration" readonly="1" nolabel="1"/> seconds total</div>
               </div>
             </div>
-            <div class="col-12 col-md-4">
+            <div class="col-12 col-md-6 col-xl-3">
+              <div class="nsp-parking-layout-card">
+                <div class="nsp-parking-layout-card__label">READERS</div>
+                <div class="nsp-parking-layout-card__value"><field name="reader_config_count" readonly="1" nolabel="1"/> configured</div>
+                <div class="nsp-parking-layout-card__meta">Applied parameters</div>
+              </div>
+            </div>
+            <div class="col-12 col-md-6 col-xl-3">
               <div class="nsp-parking-layout-card">
                 <div class="nsp-parking-layout-card__label">CHECK-IN</div>
                 <div class="nsp-parking-layout-card__value"><field name="checkin_point_count" readonly="1" nolabel="1"/> points</div>
                 <div class="nsp-parking-layout-card__meta">Forward direction</div>
               </div>
             </div>
-            <div class="col-12 col-md-4">
+            <div class="col-12 col-md-6 col-xl-3">
               <div class="nsp-parking-layout-card">
                 <div class="nsp-parking-layout-card__label">CHECK-OUT</div>
                 <div class="nsp-parking-layout-card__value"><field name="checkout_point_count" readonly="1" nolabel="1"/> points</div>
@@ -267,6 +276,23 @@
           </group>
 
           <notebook>
+            <page string="Reader Configuration" name="reader_configuration">
+              <div class="alert alert-info" role="alert">
+                Reader settings currently applied by this Lane. Lane Calibration copies Power, Read Interval and TID parameters here. For a manually created Timeline, the selected Reader settings are captured and can be adjusted while the Layout is Draft.
+              </div>
+              <field name="reader_config_ids"
+                     readonly="parking_area_state != 'draft'"
+                     nolabel="1">
+                <list create="0" delete="0" edit="1">
+                  <field name="reader_id" string="Reader" readonly="1"/>
+                  <field name="port_summary" string="Ports" readonly="1"/>
+                  <field name="power_dbm" string="Power (dBm)"/>
+                  <field name="read_interval_ms" string="Read Interval (ms)"/>
+                  <field name="tid_start_address" string="TID Start"/>
+                  <field name="tid_length" string="TID Length"/>
+                </list>
+              </field>
+            </page>
             <page string="Detection Timeline" name="timeline">
               <div class="alert alert-secondary" role="alert">
                 Create the Lane Timeline manually or keep the timeline generated from Lane Calibration. Add Reader Ports in travel order. The first point must use 0 seconds; every following point must have a positive Duration from Previous.

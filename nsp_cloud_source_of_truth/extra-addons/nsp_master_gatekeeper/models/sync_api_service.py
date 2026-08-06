@@ -671,16 +671,29 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             expected_ports = ports_by_reader.get(reader_code, set())
             if declared_port_numbers != expected_ports:
                 raise ValueError("published_reader_ports_mismatch:%s" % reader_code)
+            try:
+                power_dbm = int(reader_parameters.get("power_dbm") or 0)
+                read_interval_ms = int(reader_parameters.get("read_interval_ms") or 0)
+                tid_start_address = int(reader_parameters.get("tid_start_address") or 0)
+                tid_length = int(reader_parameters.get("tid_length") or 0)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("published_reader_parameters_invalid:%s" % reader_code) from exc
+            if (
+                power_dbm < 0 or power_dbm > 40
+                or read_interval_ms <= 0 or read_interval_ms > 60000
+                or tid_start_address < 0 or tid_length <= 0
+            ):
+                raise ValueError("published_reader_parameters_out_of_range:%s" % reader_code)
             readers.append({
                 "technical_code": reader_code,
                 "serial_number": serial_number,
                 "reader_name": str(reader.get("reader_name") or serial_number).strip(),
                 "physical_connection": reader.get("physical_connection") or False,
                 "reader_parameters": {
-                    "power_dbm": int(reader_parameters.get("power_dbm") or 0),
-                    "read_interval_ms": int(reader_parameters.get("read_interval_ms") or 0),
-                    "tid_start_address": int(reader_parameters.get("tid_start_address") or 0),
-                    "tid_length": int(reader_parameters.get("tid_length") or 0),
+                    "power_dbm": power_dbm,
+                    "read_interval_ms": read_interval_ms,
+                    "tid_start_address": tid_start_address,
+                    "tid_length": tid_length,
                 },
                 "ports": [{"port_no": port_no} for port_no in sorted(expected_ports)],
             })
