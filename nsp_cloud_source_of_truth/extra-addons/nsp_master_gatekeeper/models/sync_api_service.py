@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 from odoo import api, fields, models
 from odoo.addons.t4_coreapi.utils import endpoint, get_body
 
+_DURATION_EPSILON_SECONDS = 0.001
+
 _LANE_CALIBRATION_CLOUD_STATUSES = frozenset({"draft", "ready", "applied"})
 _LANE_CALIBRATION_RUNTIME_STATUSES = frozenset({"running", "completed", "failed", "cancelled"})
 _LANE_CALIBRATION_ALL_STATUSES = (
@@ -1648,7 +1650,10 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
     @api.model
     def _prepare_parking_transaction_sync_cache(self, edge_server, items):
         rows = [item for item in (items or []) if isinstance(item, dict)]
-        controller_codes = {str(item.get("controller_code") or "").strip() for item in rows}
+        controller_codes = {
+            str(item.get("controller_code") or "").strip().upper()
+            for item in rows
+        }
         area_codes = {str(item.get("parking_area_code") or "").strip().upper() for item in rows}
         lane_codes = {str(item.get("lane_code") or "").strip().upper() for item in rows}
         serials = {str(item.get("serial_number") or "").strip().upper() for item in rows}
@@ -1663,7 +1668,10 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         controllers = Controller.search([
             ("controller_id", "in", list(controller_codes)),
         ]) if controller_codes else Controller.browse()
-        controller_by_code = {record.controller_id: record for record in controllers}
+        controller_by_code = {
+            str(record.controller_id or "").strip().upper(): record
+            for record in controllers
+        }
 
         Area = self.env["nsp.parking.area"].sudo()
         areas = Area.search([("code", "in", list(area_codes))]) if area_codes else Area.browse()
@@ -1728,9 +1736,14 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
 
         uid = str(item.get("transaction_uid") or "").strip()
         record_key = str(item.get("record_key") or uid).strip()
+        existing_transaction = ((cache or {}).get("transaction_by_uid") or {}).get(uid)
+        if not existing_transaction and cache is None and uid:
+            existing_transaction = self.env["nsp.parking.transaction"].sudo().search([
+                ("transaction_uid", "=", uid),
+            ], limit=1)
         if record_key != uid:
             raise ValueError("record_key_transaction_uid_mismatch")
-        controller_code = str(item.get("controller_code") or "").strip()
+        controller_code = str(item.get("controller_code") or "").strip().upper()
         parking_area_code = str(item.get("parking_area_code") or "").strip().upper()
         lane_code = str(item.get("lane_code") or "").strip().upper()
         serial_number = str(item.get("serial_number") or "").strip().upper()
@@ -1760,8 +1773,12 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             raise ValueError("invalid_sequence_duration") from exc
         if observed_duration_seconds < 0 or allowed_duration_seconds <= 0:
             raise ValueError("invalid_sequence_duration")
+        if observed_duration_seconds > allowed_duration_seconds + _DURATION_EPSILON_SECONDS:
+            raise ValueError("invalid_duration_snapshot")
         if observed_duration_seconds > allowed_duration_seconds:
-            raise ValueError("observed_duration_exceeds_allowed_duration")
+            observed_duration_seconds = allowed_duration_seconds
+        observed_duration_seconds = round(observed_duration_seconds, 6)
+        allowed_duration_seconds = round(allowed_duration_seconds, 6)
         try:
             port_no = int(item.get("port_no") or 0)
         except Exception as exc:
@@ -1777,8 +1794,18 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             controller = self.env["nsp.controller"].sudo().with_context(active_test=False).search([
                 ("controller_id", "=", controller_code),
             ], limit=1)
-        if controller and controller.edge_server_id != edge_server:
-            raise ValueError("route_not_allowed")
+        # A retry of an already accepted immutable UID must remain idempotent.
+        # For new records, the immutable published Layout revision is the route
+        # authority; the mutable Controller relation may already have changed.
+        if (
+            controller
+            and controller.edge_server_id != edge_server
+            and not existing_transaction
+            and not self._parking_transaction_matches_published_route(
+                edge_server, item, cache
+            )
+        ):
+            raise ValueError("controller_not_in_edge_scope")
 
         if use_cache:
             parking_area = cache["area_by_code"].get(parking_area_code)
@@ -1910,6 +1937,107 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             vals, existing_by_uid=cache.get("transaction_by_uid")
         )
 
+    @api.model
+    def _parking_transaction_matches_published_route(self, edge_server, item, cache):
+        """Validate routing against the immutable published Layout snapshot."""
+        if not isinstance(item, dict):
+            return False
+        area_code = str(item.get("parking_area_code") or "").strip().upper()
+        lane_code = str(item.get("lane_code") or "").strip().upper()
+        controller_code = str(item.get("controller_code") or "").strip().upper()
+        area = ((cache or {}).get("area_by_code") or {}).get(area_code)
+        if not area and area_code:
+            area = self.env["nsp.parking.area"].sudo().search([
+                ("code", "=", area_code),
+            ], limit=1)
+        try:
+            incoming_revision = int(item.get("layout_revision") or 0)
+        except (TypeError, ValueError):
+            return False
+        if (
+            not area
+            or incoming_revision <= 0
+            or incoming_revision != int(area.published_revision or 0)
+        ):
+            return False
+        try:
+            payload = self._published_parking_payload_for_edge(
+                area, edge_server.edge_server_code
+            )
+        except Exception:
+            return False
+        if not payload or int(payload.get("published_revision") or 0) != incoming_revision:
+            return False
+        return any(
+            str(lane.get("lane_code") or "").strip().upper() == lane_code
+            and str(lane.get("controller_code") or "").strip().upper() == controller_code
+            and str(lane.get("server_code") or "").strip().upper()
+                == str(edge_server.edge_server_code or "").strip().upper()
+            for lane in (payload.get("lanes") or [])
+            if isinstance(lane, dict)
+        )
+
+    @api.model
+    def _parking_transaction_sync_preflight(self, edge_server, item, cache):
+        """Classify stale or invalid queued transactions before immutable upsert."""
+        if not isinstance(item, dict):
+            return False
+        uid = str(item.get("transaction_uid") or "").strip()
+        if not uid:
+            return False
+        if (cache.get("transaction_by_uid") or {}).get(uid):
+            return False
+
+        try:
+            observed = float(item.get("observed_duration_seconds") or 0.0)
+            allowed = float(item.get("allowed_duration_seconds") or 0.0)
+        except (TypeError, ValueError):
+            return False
+        if allowed > 0 and observed > allowed + _DURATION_EPSILON_SECONDS:
+            return {
+                "status": "ignored",
+                "error_code": "invalid_duration_snapshot",
+                "message": (
+                    "Transaction ignored because observed duration %.6fs exceeds "
+                    "the published allowed duration %.6fs." % (observed, allowed)
+                ),
+            }
+
+        controller_code = str(item.get("controller_code") or "").strip().upper()
+        controller = (cache.get("controller_by_code") or {}).get(controller_code)
+        if (
+            controller
+            and controller.edge_server_id != edge_server
+            and not self._parking_transaction_matches_published_route(
+                edge_server, item, cache
+            )
+        ):
+            area_code = str(item.get("parking_area_code") or "").strip().upper()
+            area = (cache.get("area_by_code") or {}).get(area_code)
+            try:
+                incoming_revision = int(item.get("layout_revision") or 0)
+            except (TypeError, ValueError):
+                incoming_revision = 0
+            current_revision = int(area.published_revision or 0) if area else 0
+            if current_revision and incoming_revision and incoming_revision < current_revision:
+                return {
+                    "status": "ignored",
+                    "error_code": "stale_controller_route",
+                    "message": (
+                        "Historical transaction ignored because its Layout revision "
+                        "predates the current Controller-to-Edge route."
+                    ),
+                }
+            return {
+                "status": "rejected",
+                "error_code": "controller_not_in_edge_scope",
+                "message": (
+                    "Controller %s is not assigned to authenticated Edge Server %s."
+                    % (controller_code, edge_server.edge_server_code)
+                ),
+            }
+        return False
+
     @endpoint("NSP Edge Parking Transactions", route_path="edge/parking-transactions", methods="POST", code="nsp_edge_parking_transactions")
     def api_parking_transactions(self):
         data = self._payload()
@@ -1944,6 +2072,16 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     "message": message,
                 })
                 continue
+            disposition = self._parking_transaction_sync_preflight(
+                edge_server, item, cache
+            )
+            if disposition:
+                results.append({"index": idx, "record_key": key, **disposition})
+                if disposition["status"] == "ignored":
+                    ignored += 1
+                else:
+                    failed += 1
+                continue
             try:
                 with self.env.cr.savepoint():
                     rec, duplicate = self._upsert_parking_transaction_sync(edge_server, item, cache=cache)
@@ -1963,7 +2101,15 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     processed += 1
             except Exception as exc:
                 failed += 1
-                results.append({"index": idx, "record_key": key, "status": "rejected", "message": str(exc)})
+                message = str(exc)
+                error_code = message.split(":", 1)[0].strip() or "rejected"
+                results.append({
+                    "index": idx,
+                    "record_key": key,
+                    "status": "rejected",
+                    "error_code": error_code,
+                    "message": message,
+                })
         return self._ok({
             "received": len(incoming),
             "processed": processed,

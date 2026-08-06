@@ -8,6 +8,9 @@ from odoo.exceptions import UserError
 _logger = logging.getLogger(__name__)
 
 
+_DURATION_EPSILON_SECONDS = 0.001
+
+
 class NspSyncBusinessAdapter(models.Model):
     _inherit = "nsp.sync.job"
 
@@ -198,16 +201,31 @@ class NspSyncBusinessAdapter(models.Model):
                     0.0,
                     (vehicle_events[-1].detected_at - vehicle_events[0].detected_at).total_seconds(),
                 )
+        observed_duration = max(0.0, float(legacy_observed_duration or 0.0))
+        allowed_duration = max(0.001, float(legacy_allowed_duration or 0.0))
+        if (
+            observed_duration > allowed_duration
+            and observed_duration <= allowed_duration + _DURATION_EPSILON_SECONDS
+        ):
+            observed_duration = allowed_duration
         payload = {
             "record_key": record.transaction_uid,
             "transaction_uid": record.transaction_uid,
-            "controller_code": record.controller_code or (record.controller_id.controller_id if record.controller_id else ""),
-            "parking_area_code": record.parking_area_code or (record.parking_area_id.code if record.parking_area_id else ""),
-            "lane_code": record.lane_code or (record.lane_id.code if record.lane_id else ""),
+            "controller_code": str(
+                record.controller_code
+                or (record.controller_id.controller_id if record.controller_id else "")
+            ).strip().upper(),
+            "parking_area_code": str(
+                record.parking_area_code
+                or (record.parking_area_id.code if record.parking_area_id else "")
+            ).strip().upper(),
+            "lane_code": str(
+                record.lane_code or (record.lane_id.code if record.lane_id else "")
+            ).strip().upper(),
             "layout_revision": legacy_revision,
             "sequence_path": legacy_sequence_path,
-            "observed_duration_seconds": max(0.0, legacy_observed_duration),
-            "allowed_duration_seconds": max(0.001, legacy_allowed_duration),
+            "observed_duration_seconds": round(observed_duration, 6),
+            "allowed_duration_seconds": round(allowed_duration, 6),
             "serial_number": record.serial_number or (record.reader_id.serial_number if record.reader_id else ""),
             "port_no": int(record.port_no or 0),
             "event_type": record.event_type,

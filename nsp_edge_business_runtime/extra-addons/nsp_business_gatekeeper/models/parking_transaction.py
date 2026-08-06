@@ -11,6 +11,9 @@ from odoo.exceptions import AccessError, ValidationError
 _logger = logging.getLogger(__name__)
 
 
+_DURATION_EPSILON_SECONDS = 0.001
+
+
 class ParkingTransaction(models.Model):
     """Final parking business transaction created by an Edge Server.
 
@@ -649,6 +652,19 @@ class ParkingTransaction(models.Model):
             )
         if allowed_duration_seconds is False:
             allowed_duration_seconds = self._allowed_duration_for_lane(lane, event_type)
+        observed_duration_seconds = max(0.0, float(observed_duration_seconds or 0.0))
+        allowed_duration_seconds = max(0.0, float(allowed_duration_seconds or 0.0))
+        if allowed_duration_seconds <= 0:
+            raise ValidationError(_("parking_sequence_allowed_duration_missing"))
+        if observed_duration_seconds > allowed_duration_seconds + _DURATION_EPSILON_SECONDS:
+            raise ValidationError(_("parking_sequence_duration_exceeds_configured_window"))
+        # Datetime arithmetic and JSON/DB float conversion can differ by a few
+        # microseconds. Clamp only that insignificant drift; never hide a real
+        # sequence timeout.
+        if observed_duration_seconds > allowed_duration_seconds:
+            observed_duration_seconds = allowed_duration_seconds
+        observed_duration_seconds = round(observed_duration_seconds, 6)
+        allowed_duration_seconds = round(allowed_duration_seconds, 6)
         vehicle_tid = vehicle_event.tid
         vehicle = vehicle_event.vehicle_id
         layout_revision = int(lane.parking_area_id.published_revision or 0)
@@ -747,8 +763,8 @@ class ParkingTransaction(models.Model):
             "parking_area_code": lane.parking_area_id.code or "",
             "layout_revision": layout_revision,
             "sequence_path": self._sequence_path_for_lane(lane, event_type),
-            "observed_duration_seconds": max(0.0, float(observed_duration_seconds or 0.0)),
-            "allowed_duration_seconds": max(0.0, float(allowed_duration_seconds or 0.0)),
+            "observed_duration_seconds": observed_duration_seconds,
+            "allowed_duration_seconds": allowed_duration_seconds,
             "reader_id": vehicle_event.reader_id.id,
             "serial_number": vehicle_event.reader_id.serial_number or "",
             "port_no": int(vehicle_event.port_no or 0),
