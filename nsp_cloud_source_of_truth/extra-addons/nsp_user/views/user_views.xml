@@ -19,7 +19,7 @@
         <field name="name">nsp.user.list</field>
         <field name="model">nsp.user</field>
         <field name="arch" type="xml">
-            <list string="Users" create="0" decoration-muted="not active">
+            <list string="Users" decoration-muted="not active">
                 <field name="image_128" string="" widget="image" class="o_avatar" optional="show"/>
                 <field name="name" decoration-bf="1"/>
                 <field name="phone" optional="show"/>
@@ -34,7 +34,7 @@
         <field name="name">nsp.user.form</field>
         <field name="model">nsp.user</field>
         <field name="arch" type="xml">
-            <form string="User" create="0">
+            <form string="User">
                 <header>
                     <button name="action_archive" type="object" string="Archive" icon="fa-archive"
                             help="Archive user" invisible="not active" class="btn-secondary"/>

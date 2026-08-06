@@ -1,8 +1,20 @@
 from collections import defaultdict
 
-from odoo import api, fields, models, _
-from odoo.exceptions import ValidationError
+from odoo import _, api, fields, models
 from odoo.addons.nsp_core.utils import new_management_code
+from odoo.exceptions import ValidationError
+
+
+def _normalize_code(value):
+    return str(value or "").strip().upper()
+
+
+def _normalize_email(value):
+    return str(value or "").strip().lower() or False
+
+
+def _normalize_phone(value):
+    return str(value or "").strip() or False
 
 
 class NspUser(models.Model):
@@ -33,14 +45,21 @@ class NspUser(models.Model):
         ondelete="set null",
         domain=[("active", "=", True), ("share", "=", False)],
         groups="base.group_system",
-        help="Optional internal Odoo account used only when this business identity needs Web access.",
+        help=(
+            "Optional internal Odoo account used only when this business identity "
+            "needs Web access."
+        ),
     )
 
     friendship_sent_ids = fields.One2many(
-        "nsp.user.friendship", "requester_id", string="Sent Friend Requests"
+        "nsp.user.friendship",
+        "requester_id",
+        string="Sent Friend Requests",
     )
     friendship_received_ids = fields.One2many(
-        "nsp.user.friendship", "addressee_id", string="Received Friend Requests"
+        "nsp.user.friendship",
+        "addressee_id",
+        string="Received Friend Requests",
     )
     accepted_friendship_ids = fields.Many2many(
         "nsp.user.friendship",
@@ -48,26 +67,14 @@ class NspUser(models.Model):
         string="Accepted Friendships",
     )
 
-    _sql_constraints = [
-        ("user_code_unique", "unique(user_code)", "User Technical Code must be unique."),
-        (
-            "odoo_user_unique",
-            "unique(odoo_user_id)",
-            "An Odoo User can be linked to only one NSP User.",
-        ),
-    ]
-
-    @api.model
-    def _normalize_code(self, value):
-        return str(value or "").strip().upper()
-
-    @api.model
-    def _normalize_email(self, value):
-        return str(value or "").strip().lower() or False
-
-    @api.model
-    def _normalize_phone(self, value):
-        return str(value or "").strip() or False
+    _user_code_unique = models.Constraint(
+        "UNIQUE(user_code)",
+        "User Technical Code must be unique.",
+    )
+    _odoo_user_unique = models.Constraint(
+        "UNIQUE(odoo_user_id)",
+        "An Odoo User can be linked to only one NSP User.",
+    )
 
     @api.depends(
         "friendship_sent_ids.state",
@@ -76,72 +83,81 @@ class NspUser(models.Model):
         "friendship_received_ids.accepted_at",
     )
     def _compute_accepted_friendships(self):
-        mapped = defaultdict(list)
-        persisted_ids = [rec.id for rec in self if isinstance(rec.id, int)]
+        persisted_ids = [record.id for record in self if isinstance(record.id, int)]
+        friendship_ids_by_user = defaultdict(list)
+
         if persisted_ids:
-            friendships = self.env["nsp.user.friendship"].sudo().search([
-                ("state", "=", "accepted"),
-                "|",
-                ("requester_id", "in", persisted_ids),
-                ("addressee_id", "in", persisted_ids),
-            ], order="accepted_at desc, id desc")
-            wanted = set(persisted_ids)
+            friendships = self.env["nsp.user.friendship"].sudo().search(
+                [
+                    ("state", "=", "accepted"),
+                    "|",
+                    ("requester_id", "in", persisted_ids),
+                    ("addressee_id", "in", persisted_ids),
+                ],
+                order="accepted_at desc, id desc",
+            )
+            requested_ids = set(persisted_ids)
             for friendship in friendships:
-                if friendship.requester_id.id in wanted:
-                    mapped[friendship.requester_id.id].append(friendship.id)
-                if friendship.addressee_id.id in wanted:
-                    mapped[friendship.addressee_id.id].append(friendship.id)
+                if friendship.requester_id.id in requested_ids:
+                    friendship_ids_by_user[friendship.requester_id.id].append(
+                        friendship.id
+                    )
+                if friendship.addressee_id.id in requested_ids:
+                    friendship_ids_by_user[friendship.addressee_id.id].append(
+                        friendship.id
+                    )
 
         Friendship = self.env["nsp.user.friendship"]
-        for rec in self:
-            rec.accepted_friendship_ids = Friendship.browse(mapped.get(rec.id, []))
+        for record in self:
+            record.accepted_friendship_ids = Friendship.browse(
+                friendship_ids_by_user.get(record.id, [])
+            )
 
     @api.model_create_multi
     def create(self, vals_list):
         prepared = []
         for source in vals_list:
-            vals = dict(source)
-            vals["user_code"] = self._normalize_code(
-                vals.get("user_code") or new_management_code("USER")
+            values = dict(source)
+            values["user_code"] = _normalize_code(
+                values.get("user_code") or new_management_code("USER")
             )
-            if "email" in vals:
-                vals["email"] = self._normalize_email(vals.get("email"))
-            if "phone" in vals:
-                vals["phone"] = self._normalize_phone(vals.get("phone"))
-            prepared.append(vals)
+            if "email" in values:
+                values["email"] = _normalize_email(values.get("email"))
+            if "phone" in values:
+                values["phone"] = _normalize_phone(values.get("phone"))
+            prepared.append(values)
         return super().create(prepared)
 
     def write(self, vals):
         values = dict(vals)
         if "user_code" in values:
-            normalized = self._normalize_code(values.get("user_code"))
-            if any(rec.user_code and rec.user_code != normalized for rec in self):
-                raise ValidationError(_("User Technical Code cannot be changed after creation."))
-            values["user_code"] = normalized
+            normalized_code = _normalize_code(values.get("user_code"))
+            if any(
+                record.user_code and record.user_code != normalized_code
+                for record in self
+            ):
+                raise ValidationError(
+                    _("User Technical Code cannot be changed after creation.")
+                )
+            values["user_code"] = normalized_code
         if "email" in values:
-            values["email"] = self._normalize_email(values.get("email"))
+            values["email"] = _normalize_email(values.get("email"))
         if "phone" in values:
-            values["phone"] = self._normalize_phone(values.get("phone"))
+            values["phone"] = _normalize_phone(values.get("phone"))
         return super().write(values)
-
-    @api.constrains("user_code")
-    def _check_user_code(self):
-        for rec in self:
-            if not rec._normalize_code(rec.user_code):
-                raise ValidationError(_("User Technical Code is required."))
 
     @api.constrains("odoo_user_id")
     def _check_odoo_user(self):
-        for rec in self:
-            if rec.odoo_user_id and rec.odoo_user_id.share:
-                raise ValidationError(_(
-                    "Odoo User must be an internal user, not a portal or public user."
-                ))
+        for record in self:
+            if record.odoo_user_id and record.odoo_user_id.share:
+                raise ValidationError(
+                    _("Odoo User must be an internal user, not a portal or public user.")
+                )
 
     def action_archive(self):
         self.filtered("active").write({"active": False})
         return True
 
     def action_unarchive(self):
-        self.filtered(lambda rec: not rec.active).write({"active": True})
+        self.filtered(lambda record: not record.active).write({"active": True})
         return True

@@ -27,7 +27,10 @@
             <form string="RFID Tag Whitelist">
                 <sheet>
                     <group>
-                        <field name="tid" placeholder="Scan or enter TID"/>
+                        <field name="tid"
+                               widget="nsp_rfid_tid_scan"
+                               placeholder="Scan or enter TID, then press Enter"
+                               options="{'autofocus': true}"/>
                     </group>
                 </sheet>
             </form>

@@ -1,2 +1,2 @@
-from . import user
 from . import friendship
+from . import user

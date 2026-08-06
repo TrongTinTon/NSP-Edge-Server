@@ -1,14 +1,39 @@
-from odoo import api, fields, models, _
+from psycopg2 import IntegrityError, errorcodes
+
+from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
+
+
+_TARGET_FIELDS = {
+    "nsp.user": "user_id",
+    "nsp.vehicle": "vehicle_id",
+}
+_REVOKE_FIELDS = {"state", "revoked_at", "revoked_by_id"}
+_COMPUTED_FIELDS = {"tid", "target_type", "target_code", "target_name"}
+_ACTIVE_INDEX_DDL = (
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS nsp_rfid_assignment_active_tag_uniq
+        ON nsp_rfid_tag_assignment (tag_id)
+     WHERE state = 'active'
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS nsp_rfid_assignment_active_user_uniq
+        ON nsp_rfid_tag_assignment (user_id)
+     WHERE state = 'active' AND user_id IS NOT NULL
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS nsp_rfid_assignment_active_vehicle_uniq
+        ON nsp_rfid_tag_assignment (vehicle_id)
+     WHERE state = 'active' AND vehicle_id IS NOT NULL
+    """,
+)
 
 
 class NspRfidTagAssignment(models.Model):
     _name = "nsp.rfid.tag.assignment"
     _description = "NSP RFID Tag Assignment"
-    _rec_name = "display_name"
     _order = "assigned_at desc, id desc"
 
-    display_name = fields.Char(compute="_compute_display_name", store=True)
     tag_id = fields.Many2one(
         "nsp.rfid.tag",
         required=True,
@@ -29,21 +54,21 @@ class NspRfidTagAssignment(models.Model):
     state = fields.Selection(
         [("active", "Active"), ("revoked", "Revoked")],
         required=True,
-        default="active",
         readonly=True,
+        default="active",
         index=True,
     )
     assigned_at = fields.Datetime(
         required=True,
-        default=fields.Datetime.now,
         readonly=True,
+        default=fields.Datetime.now,
         index=True,
     )
     assigned_by_id = fields.Many2one(
         "res.users",
         required=True,
-        default=lambda self: self.env.user,
         readonly=True,
+        default=lambda self: self.env.user,
         ondelete="restrict",
     )
     revoked_at = fields.Datetime(readonly=True, index=True)
@@ -53,36 +78,14 @@ class NspRfidTagAssignment(models.Model):
         ondelete="restrict",
     )
 
-    _sql_constraints = [
-        (
-            "exactly_one_target",
-            "CHECK ((user_id IS NOT NULL) <> (vehicle_id IS NOT NULL))",
-            "An RFID Tag must be assigned to exactly one User or one Vehicle.",
-        ),
-    ]
+    _exactly_one_target = models.Constraint(
+        "CHECK ((user_id IS NOT NULL) <> (vehicle_id IS NOT NULL))",
+        "An RFID Tag must be assigned to exactly one User or one Vehicle.",
+    )
 
     def init(self):
-        self.env.cr.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS nsp_rfid_assignment_active_tag_uniq
-                ON nsp_rfid_tag_assignment (tag_id)
-             WHERE state = 'active'
-            """
-        )
-        self.env.cr.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS nsp_rfid_assignment_active_user_uniq
-                ON nsp_rfid_tag_assignment (user_id)
-             WHERE state = 'active' AND user_id IS NOT NULL
-            """
-        )
-        self.env.cr.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS nsp_rfid_assignment_active_vehicle_uniq
-                ON nsp_rfid_tag_assignment (vehicle_id)
-             WHERE state = 'active' AND vehicle_id IS NOT NULL
-            """
-        )
+        for statement in _ACTIVE_INDEX_DDL:
+            self.env.cr.execute(statement)
 
     @api.depends(
         "user_id.user_code",
@@ -114,7 +117,11 @@ class NspRfidTagAssignment(models.Model):
             )
 
     @api.model
-    def _resolve_values(self, values):
+    def _actor_id(self):
+        return int(self.env.context.get("rfid_audit_user_id") or self.env.user.id)
+
+    @api.model
+    def _resolve_create_values(self, values):
         tag = self.env["nsp.rfid.tag"].sudo().browse(
             int(values.get("tag_id") or 0)
         ).exists()
@@ -124,148 +131,153 @@ class NspRfidTagAssignment(models.Model):
         vehicle = self.env["nsp.vehicle"].sudo().browse(
             int(values.get("vehicle_id") or 0)
         ).exists()
-        return tag, user, vehicle
 
-    @api.model
-    def _validate_assignment(self, values, reserved, exclude_ids=None):
-        tag, user, vehicle = self._resolve_values(values)
         if not tag:
             raise ValidationError(_("RFID Tag is required."))
         if bool(user) == bool(vehicle):
-            raise ValidationError(_(
-                "An RFID Tag must be assigned to exactly one User or one Vehicle."
-            ))
+            raise ValidationError(
+                _("An RFID Tag must be assigned to exactly one User or one Vehicle.")
+            )
+
         target = user or vehicle
         if not target.active:
             raise ValidationError(_("An archived target cannot receive an RFID Tag."))
+        return tag, target, "user_id" if user else "vehicle_id"
 
-        target_key = ("user", user.id) if user else ("vehicle", vehicle.id)
-        if tag.id in reserved["tags"]:
-            raise ValidationError(_("RFID Tag %s is already assigned.") % tag.tid)
-        if target_key in reserved["targets"]:
-            raise ValidationError(_("The selected target already has an active RFID Tag."))
+    @api.model
+    def _validate_create_batch(self, resolved_rows):
+        reserved_tags = set()
+        reserved_targets = set()
+        tag_ids = set()
+        user_ids = set()
+        vehicle_ids = set()
 
-        domain = [
-            ("state", "=", "active"),
-            "|",
-            ("tag_id", "=", tag.id),
-            ("user_id" if user else "vehicle_id", "=", target.id),
-        ]
-        if exclude_ids:
-            domain.append(("id", "not in", list(exclude_ids)))
-        conflict = self.sudo().search(domain, limit=1)
-        if conflict:
-            if conflict.tag_id == tag:
+        for tag, target, target_field in resolved_rows:
+            target_key = (target_field, target.id)
+            if tag.id in reserved_tags:
                 raise ValidationError(_("RFID Tag %s is already assigned.") % tag.tid)
-            raise ValidationError(_("The selected target already has an active RFID Tag."))
+            if target_key in reserved_targets:
+                raise ValidationError(
+                    _("The selected target already has an active RFID Tag.")
+                )
+            reserved_tags.add(tag.id)
+            reserved_targets.add(target_key)
+            tag_ids.add(tag.id)
+            if target_field == "user_id":
+                user_ids.add(target.id)
+            else:
+                vehicle_ids.add(target.id)
 
-        reserved["tags"].add(tag.id)
-        reserved["targets"].add(target_key)
+        conflicts = self.sudo().search(
+            [
+                ("state", "=", "active"),
+                "|",
+                "|",
+                ("tag_id", "in", list(tag_ids)),
+                ("user_id", "in", list(user_ids) or [0]),
+                ("vehicle_id", "in", list(vehicle_ids) or [0]),
+            ]
+        )
+        active_tag_ids = set(conflicts.mapped("tag_id").ids)
+        active_user_ids = set(conflicts.mapped("user_id").ids)
+        active_vehicle_ids = set(conflicts.mapped("vehicle_id").ids)
+
+        for tag, target, target_field in resolved_rows:
+            if tag.id in active_tag_ids:
+                raise ValidationError(_("RFID Tag %s is already assigned.") % tag.tid)
+            target_conflicts = (
+                active_user_ids if target_field == "user_id" else active_vehicle_ids
+            )
+            if target.id in target_conflicts:
+                raise ValidationError(
+                    _("The selected target already has an active RFID Tag.")
+                )
+
+    @staticmethod
+    def _is_unique_violation(error):
+        return getattr(error, "pgcode", None) == errorcodes.UNIQUE_VIOLATION
 
     @api.model_create_multi
     def create(self, vals_list):
-        now = fields.Datetime.now()
-        actor_id = int(self.env.context.get("rfid_audit_user_id") or self.env.user.id)
-        reserved = {"tags": set(), "targets": set()}
+        assigned_at = fields.Datetime.now()
+        actor_id = self._actor_id()
         prepared = []
+        resolved_rows = []
+
         for source in vals_list:
-            vals = dict(source)
-            vals.update({
-                "state": "active",
-                "assigned_at": now,
-                "assigned_by_id": actor_id,
-                "revoked_at": False,
-                "revoked_by_id": False,
-            })
-            self._validate_assignment(vals, reserved)
-            prepared.append(vals)
-        assignments = super().create(prepared)
+            values = dict(source)
+            values.update(
+                {
+                    "state": "active",
+                    "assigned_at": assigned_at,
+                    "assigned_by_id": actor_id,
+                    "revoked_at": False,
+                    "revoked_by_id": False,
+                }
+            )
+            resolved_rows.append(self._resolve_create_values(values))
+            prepared.append(values)
+
+        self._validate_create_batch(resolved_rows)
+        try:
+            with self.env.cr.savepoint():
+                assignments = super().create(prepared)
+        except IntegrityError as error:
+            if not self._is_unique_violation(error):
+                raise
+            raise ValidationError(
+                _("The RFID Tag or target already has an active assignment.")
+            ) from error
+
         assignments._post_audit_message(_("RFID Tag assigned"), actor_id)
         return assignments
 
     def write(self, vals):
         values = dict(vals)
-        controlled = bool(self.env.context.get("rfid_assignment_revoke"))
-        protected = {
-            "user_id",
-            "vehicle_id",
-            "state",
-            "assigned_at",
-            "assigned_by_id",
-            "revoked_at",
-            "revoked_by_id",
-        }
-        if protected.intersection(values) and not controlled:
-            raise UserError(_("RFID assignment target and audit fields cannot be edited."))
-        if values.get("state") == "active" and self.filtered(
-            lambda record: record.state == "revoked"
-        ):
-            raise UserError(_("A revoked RFID assignment cannot be reactivated."))
-
-        if "tag_id" not in values or controlled:
-            return super().write(values)
-
-        if self.filtered(lambda assignment: assignment.state != "active"):
-            raise UserError(_("Only active RFID assignments can be edited."))
-
-        tag = self.env["nsp.rfid.tag"].sudo().browse(
-            int(values.get("tag_id") or 0)
-        ).exists()
-        if not tag:
-            raise ValidationError(_("RFID Tag is required."))
-
-        reserved = {"tags": set(), "targets": set()}
-        for assignment in self:
-            candidate = {
-                "tag_id": tag.id,
-                "user_id": assignment.user_id.id,
-                "vehicle_id": assignment.vehicle_id.id,
-            }
-            self._validate_assignment(
-                candidate,
-                reserved,
-                exclude_ids=self.ids,
+        if not values:
+            return True
+        if not self.env.context.get("rfid_assignment_revoke"):
+            if set(values).issubset(_COMPUTED_FIELDS):
+                return super().write(values)
+            raise UserError(
+                _(
+                    "RFID assignments are immutable. Revoke the assignment and "
+                    "assign the Tag again."
+                )
             )
 
-        previous = {assignment.id: assignment.tid for assignment in self}
-        actor_id = int(self.env.context.get("rfid_audit_user_id") or self.env.user.id)
-        values.update({
-            "assigned_at": fields.Datetime.now(),
-            "assigned_by_id": actor_id,
-        })
-        result = super().write(values)
-        actor = self.env["res.users"].sudo().browse(actor_id).exists()
-        author_id = actor.partner_id.id if actor and actor.partner_id else False
-        for assignment in self:
-            target = assignment.user_id or assignment.vehicle_id
-            if target and previous.get(assignment.id) != assignment.tid:
-                target.sudo().message_post(
-                    body=_("RFID Tag changed: %(old)s → %(new)s") % {
-                        "old": previous.get(assignment.id) or "-",
-                        "new": assignment.tid or "-",
-                    },
-                    subtype_xmlid="mail.mt_note",
-                    author_id=author_id,
-                )
-        return result
+        unexpected_fields = set(values) - _REVOKE_FIELDS
+        valid_transition = (
+            not unexpected_fields
+            and values.get("state") == "revoked"
+            and bool(values.get("revoked_at"))
+            and bool(values.get("revoked_by_id"))
+            and all(assignment.state == "active" for assignment in self)
+        )
+        if not valid_transition:
+            raise UserError(
+                _("RFID assignments can only transition from Active to Revoked.")
+            )
+        return super().write(values)
 
     def unlink(self):
         if self.env.context.get("module_uninstall"):
             return super().unlink()
-        actor_id = int(self.env.context.get("rfid_audit_user_id") or self.env.user.id)
-        self._post_audit_message(_("RFID Tag unassigned"), actor_id)
-        return super().unlink()
+        raise ValidationError(
+            _(
+                "RFID assignment history cannot be deleted. "
+                "Revoke the active assignment instead."
+            )
+        )
 
     @api.constrains("user_id", "vehicle_id", "state")
-    def _check_target(self):
+    def _check_active_target(self):
         for assignment in self:
-            if bool(assignment.user_id) == bool(assignment.vehicle_id):
-                raise ValidationError(_(
-                    "An RFID Tag must be assigned to exactly one User or one Vehicle."
-                ))
             target = assignment.user_id or assignment.vehicle_id
             if assignment.state == "active" and target and not target.active:
-                raise ValidationError(_("An archived target cannot have an active RFID Tag."))
+                raise ValidationError(
+                    _("An archived target cannot have an active RFID Tag.")
+                )
 
     def _post_audit_message(self, title, actor_id):
         actor = self.env["res.users"].sudo().browse(actor_id).exists()
@@ -274,25 +286,26 @@ class NspRfidTagAssignment(models.Model):
             target = assignment.user_id or assignment.vehicle_id
             if target:
                 target.sudo().message_post(
-                    body=_("%(title)s: %(tid)s") % {
-                        "title": title,
-                        "tid": assignment.tid,
-                    },
+                    body=_("%(title)s: %(tid)s")
+                    % {"title": title, "tid": assignment.tid},
                     subtype_xmlid="mail.mt_note",
                     author_id=author_id,
                 )
 
     def action_revoke(self):
-        active = self.filtered(lambda record: record.state == "active")
-        if not active:
+        active_assignments = self.filtered(lambda record: record.state == "active")
+        if not active_assignments:
             return True
-        actor_id = int(self.env.context.get("rfid_audit_user_id") or self.env.user.id)
-        active.with_context(rfid_assignment_revoke=True).write({
-            "state": "revoked",
-            "revoked_at": fields.Datetime.now(),
-            "revoked_by_id": actor_id,
-        })
-        active._post_audit_message(_("RFID Tag revoked"), actor_id)
+
+        actor_id = self._actor_id()
+        active_assignments.with_context(rfid_assignment_revoke=True).write(
+            {
+                "state": "revoked",
+                "revoked_at": fields.Datetime.now(),
+                "revoked_by_id": actor_id,
+            }
+        )
+        active_assignments._post_audit_message(_("RFID Tag revoked"), actor_id)
         return True
 
     @api.model
@@ -300,91 +313,100 @@ class NspRfidTagAssignment(models.Model):
         normalized = self.env["nsp.rfid.tag"]._normalize_tid(tid)
         if not normalized:
             return self.browse()
-        return self.sudo().search([
-            ("tid", "=", normalized),
-            ("state", "=", "active"),
-        ], limit=1)
-
-    @api.model
-    def active_for_user(self, user):
-        return self.sudo().search([
-            ("user_id", "=", user.id),
-            ("state", "=", "active"),
-        ], limit=1) if user else self.browse()
-
-    @api.model
-    def active_for_vehicle(self, vehicle):
-        return self.sudo().search([
-            ("vehicle_id", "=", vehicle.id),
-            ("state", "=", "active"),
-        ], limit=1) if vehicle else self.browse()
+        return self.sudo().search(
+            [("tid", "=", normalized), ("state", "=", "active")],
+            limit=1,
+        )
 
     @api.model
     def active_for_target(self, target):
-        if not target or target._name not in {"nsp.user", "nsp.vehicle"}:
+        target_field = _TARGET_FIELDS.get(getattr(target, "_name", None))
+        if not target_field or not target:
             return self.browse()
-        field_name = "user_id" if target._name == "nsp.user" else "vehicle_id"
-        return self.sudo().search([
-            (field_name, "=", target.id),
-            ("state", "=", "active"),
-        ], limit=1)
+        target.ensure_one()
+        if not isinstance(target.id, int):
+            return self.browse()
+        return self.sudo().search(
+            [(target_field, "=", target.id), ("state", "=", "active")],
+            limit=1,
+        )
 
     @api.model
-    def assign_tid(self, target, raw_tid):
-        if not target or target._name not in {"nsp.user", "nsp.vehicle"}:
-            raise ValidationError(_("RFID assignment target is invalid."))
-        if not target.active:
-            raise ValidationError(_("An archived target cannot receive an RFID Tag."))
-        Tag = self.env["nsp.rfid.tag"].sudo()
-        tid = Tag._normalize_tid(raw_tid)
-        if not tid:
-            return self.browse()
+    def _raise_assignment_conflict(self, target, tid):
         current = self.active_for_target(target)
         if current:
             if current.tid == tid:
                 return current
-            raise ValidationError(_(
-                "The selected target already has an active RFID Tag. Revoke it first."
-            ))
-        tag = Tag.get_or_create_by_tid(tid)
-        values = {
-            "tag_id": tag.id,
-            "user_id" if target._name == "nsp.user" else "vehicle_id": target.id,
-        }
-        return self.with_context(rfid_audit_user_id=self.env.user.id).create(values)
+            raise ValidationError(
+                _(
+                    "The selected target already has an active RFID Tag. "
+                    "Revoke it first."
+                )
+            )
+
+        if self.active_for_tid(tid):
+            raise ValidationError(_("RFID Tag %s is already assigned.") % tid)
+        return self.browse()
 
     @api.model
-    def revoke_target(self, target):
-        assignment = self.active_for_target(target)
-        if assignment:
-            assignment.with_context(rfid_audit_user_id=self.env.user.id).action_revoke()
-        return True
+    def assign_tid(self, target, raw_tid):
+        target_field = _TARGET_FIELDS.get(getattr(target, "_name", None))
+        if not target_field or not target:
+            raise ValidationError(_("RFID assignment target is invalid."))
+        target.ensure_one()
+        if not isinstance(target.id, int):
+            raise ValidationError(_("Save the target before assigning an RFID Tag."))
+        if not target.active:
+            raise ValidationError(_("An archived target cannot receive an RFID Tag."))
+
+        Tag = self.env["nsp.rfid.tag"].sudo()
+        tid = Tag._prepare_tid(raw_tid)
+        current = self._raise_assignment_conflict(target, tid)
+        if current:
+            return current
+
+        tag = Tag.get_or_create_by_tid(tid)
+        try:
+            with self.env.cr.savepoint():
+                return self.with_context(rfid_audit_user_id=self.env.user.id).create(
+                    {"tag_id": tag.id, target_field: target.id}
+                )
+        except IntegrityError:
+            current = self._raise_assignment_conflict(target, tid)
+            if current:
+                return current
+            raise
 
     @api.model
     def prepare_runtime_projection(self):
-        assignments = self.sudo().search([
-            ("state", "=", "active"),
-        ], order="tid, id")
+        assignments = self.sudo().search(
+            [("state", "=", "active")],
+            order="tid, id",
+        )
         items = []
         user_count = 0
         vehicle_count = 0
+
         for assignment in assignments:
             target = assignment.user_id or assignment.vehicle_id
             if not target or not target.active or not assignment.target_code:
                 continue
             target_type = "user" if assignment.user_id else "vehicle"
-            if target_type == "user":
-                user_count += 1
-            else:
-                vehicle_count += 1
-            items.append({
-                "tid": assignment.tid,
-                "assignment": {
-                    "target": target_type,
-                    "code": assignment.target_code,
-                    "assigned_at": fields.Datetime.to_string(assignment.assigned_at),
-                },
-            })
+            user_count += int(target_type == "user")
+            vehicle_count += int(target_type == "vehicle")
+            items.append(
+                {
+                    "tid": assignment.tid,
+                    "assignment": {
+                        "target": target_type,
+                        "code": assignment.target_code,
+                        "assigned_at": fields.Datetime.to_string(
+                            assignment.assigned_at
+                        ),
+                    },
+                }
+            )
+
         return {
             "items": items,
             "summary": {

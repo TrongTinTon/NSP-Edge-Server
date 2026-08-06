@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="nsp_rfid.RfidTidScanField">
+        <div class="nsp-rfid-tid-scan" t-att-class="statusClass">
+            <t t-if="props.readonly">
+                <span class="nsp-rfid-tid-scan__readonly font-monospace" t-esc="state.value"/>
+            </t>
+            <t t-else="">
+                <div class="nsp-rfid-tid-scan__control">
+                    <span class="nsp-rfid-tid-scan__icon" aria-hidden="true">
+                        <i t-att-class="statusIcon"/>
+                    </span>
+                    <input class="o_input nsp-rfid-tid-scan__input"
+                           type="text"
+                           inputmode="text"
+                           autocomplete="off"
+                           spellcheck="false"
+                           t-ref="input"
+                           t-att-id="props.id"
+                           t-att-value="state.value"
+                           t-att-placeholder="props.placeholder"
+                           t-on-input="onInput"
+                           t-on-paste="onPaste"
+                           t-on-keydown="onKeydown"
+                           t-on-focus="onFocus"
+                           t-on-blur="onBlur"/>
+                    <span class="nsp-rfid-tid-scan__beam" aria-hidden="true"/>
+                </div>
+                <div class="nsp-rfid-tid-scan__status"
+                     role="status"
+                     aria-live="polite">
+                    <span t-esc="state.message"/>
+                </div>
+            </t>
+        </div>
+    </t>
+</templates>

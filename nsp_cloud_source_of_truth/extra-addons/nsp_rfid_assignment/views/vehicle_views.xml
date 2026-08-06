@@ -20,6 +20,8 @@
                             string="Revoke Tag"
                             icon="fa-unlink"
                             class="btn-secondary"
+                            confirm="Revoke this RFID Tag assignment? The whitelist Tag will remain available for reassignment."
+                            groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking"
                             invisible="not active_rfid_assignment_id"/>
                 </group>
             </xpath>

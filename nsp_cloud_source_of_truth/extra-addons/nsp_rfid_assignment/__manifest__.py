@@ -1,8 +1,10 @@
 {
     "name": "NSP RFID Assignment",
-    "summary": "Assign and revoke RFID Tags from User and Vehicle forms",
-    "description": "Cloud source of truth for RFID assignments managed directly from NSP User and used to build the Edge runtime projection.",
-    "version": "19.0.1.2.1",
+    "summary": "Immutable RFID assignment history for Users and Vehicles",
+    "description": (
+        "Assign and revoke canonical RFID Tags while preserving an immutable audit history."
+    ),
+    "version": "19.0.2.0.0",
     "sequence": 25,
     "author": "BKU Team",
     "category": "Services",
@@ -15,9 +17,12 @@
         "nsp_vehicle",
         "nsp_rfid",
     ],
-    "installable": True,
-    "application": False,
-    "auto_install": False,
+    "data": [
+        "security/ir.model.access.csv",
+        "views/user_views.xml",
+        "views/vehicle_views.xml",
+        "views/rfid_tag_views.xml",
+    ],
     "assets": {
         "web.assets_backend": [
             "nsp_rfid_assignment/static/src/xml/rfid_scan_field.xml",
@@ -25,10 +30,8 @@
             "nsp_rfid_assignment/static/src/scss/rfid_scan_field.scss",
         ],
     },
-    "data": [
-        "security/ir.model.access.csv",
-        "views/user_views.xml",
-        "views/vehicle_views.xml",
-    ],
+    "installable": True,
+    "application": False,
+    "auto_install": False,
     "license": "LGPL-3",
 }

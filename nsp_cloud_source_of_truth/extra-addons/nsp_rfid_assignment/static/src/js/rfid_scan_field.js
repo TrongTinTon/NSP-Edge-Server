@@ -4,9 +4,12 @@ import { _t } from "@web/core/l10n/translation";
 import { registry } from "@web/core/registry";
 import { useService } from "@web/core/utils/hooks";
 import { standardFieldProps } from "@web/views/fields/standard_field_props";
-import { Component, onMounted, onWillUnmount, useRef, useState } from "@odoo/owl";
+import { Component, onMounted, onWillUnmount, useEffect, useRef, useState } from "@odoo/owl";
 
-function extractMany2OneId(value) {
+import { playScanTone, refocusAndSelect } from "@nsp_rfid/js/scan_feedback";
+import { normalizeRfidTid } from "@nsp_rfid/js/tid_normalizer";
+
+function many2OneId(value) {
     if (!value) {
         return false;
     }
@@ -19,7 +22,7 @@ function extractMany2OneId(value) {
     return value;
 }
 
-function extractMany2OneLabel(value) {
+function many2OneLabel(value) {
     if (!value) {
         return "";
     }
@@ -50,6 +53,7 @@ export class NspRfidScanField extends Component {
     };
     static defaultProps = {
         placeholder: "",
+        resolvedValueField: "",
         expectedTarget: "",
         requireAvailable: false,
         createMissing: false,
@@ -63,26 +67,49 @@ export class NspRfidScanField extends Component {
     setup() {
         this.orm = useService("orm");
         this.input = useRef("input");
-        const resolvedInputValue = this.props.resolvedValueField
-            ? this.props.record.data[this.props.resolvedValueField]
-            : "";
+        this.timer = null;
         this.state = useState({
-            value: this.props.record.data[this.props.name] || resolvedInputValue || "",
+            value: normalizeRfidTid(this.externalValue),
             status: "idle",
             message: "",
         });
 
-        this.validationTimer = null;
+        useEffect(
+            () => this.syncFromRecord(),
+            () => [
+                this.props.record.data[this.props.name] || "",
+                this.props.resolvedValueField
+                    ? this.props.record.data[this.props.resolvedValueField] || ""
+                    : "",
+                many2OneId(this.resolvedValue) || false,
+            ]
+        );
         onMounted(() => {
             if (this.props.autoFocus && !this.props.readonly) {
-                this.input.el?.focus();
+                refocusAndSelect(this.input);
             }
         });
-        onWillUnmount(() => {
-            if (this.validationTimer) {
-                window.clearTimeout(this.validationTimer);
-            }
-        });
+        onWillUnmount(() => this.clearTimer());
+    }
+
+    get resolvedValue() {
+        return this.props.record.data[this.props.targetField];
+    }
+
+    get externalValue() {
+        const directValue = this.props.record.data[this.props.name];
+        const resolvedValue = this.props.resolvedValueField
+            ? this.props.record.data[this.props.resolvedValueField]
+            : "";
+        return directValue || resolvedValue || "";
+    }
+
+    get resolvedLabel() {
+        return many2OneLabel(this.resolvedValue);
+    }
+
+    get readonlyLabel() {
+        return normalizeRfidTid(this.externalValue) || this.resolvedLabel;
     }
 
     get statusClass() {
@@ -93,45 +120,39 @@ export class NspRfidScanField extends Component {
         };
     }
 
-    get resolvedValue() {
-        return this.props.record.data[this.props.targetField];
+    syncFromRecord() {
+        const value = normalizeRfidTid(this.externalValue);
+        if (this.state.status === "validating" || value === this.state.value) {
+            return;
+        }
+        this.state.value = value;
+        this.state.status = "idle";
+        this.state.message = "";
     }
 
-    get resolvedLabel() {
-        return extractMany2OneLabel(this.resolvedValue);
-    }
-
-    get readonlyLabel() {
-        const resolvedInputValue = this.props.resolvedValueField
-            ? this.props.record.data[this.props.resolvedValueField]
-            : "";
-        return resolvedInputValue || this.resolvedLabel || this.state.value || "";
-    }
-
-    normalizeTid(value) {
-        return String(value || "").trim().toUpperCase().replaceAll(" ", "");
+    clearTimer() {
+        if (this.timer) {
+            window.clearTimeout(this.timer);
+            this.timer = null;
+        }
     }
 
     onInput(event) {
+        this.clearTimer();
         let value = event.target.value;
-
-        // A keyboard RFID reader can start the next scan before the browser has
-        // restored the text selection after a successful validation. In that
-        // case, discard the previously validated TID instead of appending the
-        // new scan to it.
-        if (this.state.status === "success" && this.state.value) {
-            const previous = String(this.state.value);
-            if (value.startsWith(previous) && value.length > previous.length) {
-                value = value.slice(previous.length);
-                event.target.value = value;
-            }
+        if (
+            this.state.status === "success"
+            && this.state.value
+            && value.startsWith(this.state.value)
+            && value.length > this.state.value.length
+        ) {
+            value = value.slice(this.state.value.length);
         }
-
+        value = normalizeRfidTid(value);
+        event.target.value = value;
         this.state.value = value;
-        if (this.state.status !== "validating") {
-            this.state.status = "idle";
-            this.state.message = "";
-        }
+        this.state.status = "idle";
+        this.state.message = "";
         if (event.inputType === "insertFromPaste") {
             this.scheduleValidation();
         }
@@ -141,25 +162,12 @@ export class NspRfidScanField extends Component {
         this.scheduleValidation();
     }
 
-    scheduleValidation() {
-        if (this.validationTimer) {
-            window.clearTimeout(this.validationTimer);
-        }
-        this.validationTimer = window.setTimeout(async () => {
-            this.validationTimer = null;
-            if (this.input.el) {
-                this.state.value = this.input.el.value;
-            }
-            await this.validateScan();
-        }, 0);
-    }
-
     onFocus(event) {
         event.target.select();
     }
 
     async onKeydown(event) {
-        if (!(["Enter", "Tab"].includes(event.key))) {
+        if (!["Enter", "Tab"].includes(event.key)) {
             return;
         }
         if (event.key === "Tab" && !this.state.value) {
@@ -170,35 +178,33 @@ export class NspRfidScanField extends Component {
         await this.validateScan();
     }
 
+    scheduleValidation() {
+        this.clearTimer();
+        this.timer = window.setTimeout(() => {
+            this.timer = null;
+            void this.validateScan();
+        }, 0);
+    }
+
     async validateScan() {
         if (this.state.status === "validating") {
             return;
         }
 
-        const tid = this.normalizeTid(this.state.value);
+        const tid = normalizeRfidTid(this.state.value);
         if (!tid) {
             await this.setInvalid(_t("Scan or enter an RFID TID first."));
             return;
         }
-
         this.state.value = tid;
 
-        // RFID target lists are append-only scan workflows. When the
-        // same TID is already present in an earlier row, ignore the repeated
-        // scan and keep the current blank row ready for the next tag. Do not
-        // validate again and, importantly, do not create another line.
-        if (this.props.autoNextRow || this.props.skipDuplicates) {
-            const duplicateInput = this.findDuplicateInput(tid);
-            if (duplicateInput) {
-                await this.skipDuplicateScan();
-                return;
-            }
+        if (this.shouldCheckDuplicates && this.findDuplicateInput(tid)) {
+            await this.skipDuplicateScan();
+            return;
         }
 
         this.state.status = "validating";
         this.state.message = "";
-
-        const allowTagId = extractMany2OneId(this.resolvedValue);
         let result;
         try {
             result = await this.orm.call(
@@ -208,222 +214,177 @@ export class NspRfidScanField extends Component {
                 {
                     expected_target: this.props.expectedTarget || false,
                     require_available: Boolean(this.props.requireAvailable),
-                    allow_tag_id: allowTagId || false,
+                    allow_tag_id: many2OneId(this.resolvedValue) || false,
                     create_missing: Boolean(this.props.createMissing),
-                    require_active_assignment: Boolean(this.props.requireActiveAssignment),
+                    require_active_assignment: Boolean(
+                        this.props.requireActiveAssignment
+                    ),
                 }
             );
         } catch (error) {
-            const message = error?.data?.message || error?.message || _t("RFID validation failed.");
-            await this.setInvalid(message);
+            await this.setInvalid(
+                error?.data?.message || error?.message || _t("RFID validation failed.")
+            );
             return;
         }
 
         if (!result?.valid || !result.tag_id) {
-            await this.setInvalid(result?.message || _t("RFID tag is not valid."));
+            await this.setInvalid(result?.message || _t("RFID Tag is not valid."));
             return;
         }
-
-        // Re-check using the canonical TID returned by the server. This also
-        // covers scanners that include formatting characters stripped by the
-        // backend normalizer.
-        if ((this.props.autoNextRow || this.props.skipDuplicates) && this.findDuplicateInput(result.tid)) {
+        if (this.shouldCheckDuplicates && this.findDuplicateInput(result.tid)) {
             await this.skipDuplicateScan();
             return;
         }
 
-        await this.props.record.update({
-            [this.props.name]: result.tid,
-        });
+        await this.props.record.update({ [this.props.name]: result.tid });
         this.state.value = result.tid;
         this.state.status = "success";
         this.state.message = "";
-        this.playTone(true);
-        if (this.props.nextScanField) {
-            this.focusNextScanField();
-        } else if (this.props.autoNextRow) {
-            this.advanceToNextRow();
-        } else {
-            this.refocus();
-        }
+        playScanTone(true);
+        this.moveAfterSuccess();
+    }
+
+    get shouldCheckDuplicates() {
+        return this.props.autoNextRow || this.props.skipDuplicates;
     }
 
     findDuplicateInput(tid) {
         const currentInput = this.input.el;
-        if (!currentInput) {
+        const container = currentInput?.closest(
+            ".o_field_x2many, .o_list_renderer, .o_list_view"
+        );
+        if (!container) {
             return false;
         }
-        const fieldRoot = currentInput.closest(".o_field_x2many") ||
-            currentInput.closest(".o_list_renderer") ||
-            currentInput.closest(".o_list_view");
-        if (!fieldRoot) {
-            return false;
-        }
-        const normalizedTid = this.normalizeTid(tid);
-        return Array.from(fieldRoot.querySelectorAll(".nsp-rfid-scan__input")).find((input) =>
-            input !== currentInput &&
-            input.dataset.fieldName === this.props.name &&
-            this.normalizeTid(input.value) === normalizedTid
+        return Array.from(container.querySelectorAll(".nsp-rfid-scan__input")).find(
+            (input) =>
+                input !== currentInput
+                && input.dataset.fieldName === this.props.name
+                && normalizeRfidTid(input.value) === tid
         ) || false;
     }
 
     async skipDuplicateScan() {
-        const resolvedInputValue = this.props.resolvedValueField
+        const hasResolvedTag = Boolean(many2OneId(this.resolvedValue));
+        const resolvedValue = this.props.resolvedValueField
             ? this.props.record.data[this.props.resolvedValueField]
-            : "";
-        const hasResolvedTag = Boolean(extractMany2OneId(this.resolvedValue));
-
-        // A repeated scan normally happens on the auto-created blank row.
-        // Clear that virtual row so it remains reusable and is stripped before
-        // save. Existing valid rows are restored instead of being destroyed.
-        await this.props.record.update({
-            [this.props.name]: hasResolvedTag ? (resolvedInputValue || false) : false,
-            ...(hasResolvedTag ? {} : { [this.props.targetField]: false }),
-        });
-        this.state.value = hasResolvedTag ? (resolvedInputValue || "") : "";
+            : false;
+        const updates = {
+            [this.props.name]: hasResolvedTag ? resolvedValue || false : false,
+        };
+        if (!hasResolvedTag) {
+            updates[this.props.targetField] = false;
+        }
+        await this.props.record.update(updates);
+        this.state.value = hasResolvedTag ? normalizeRfidTid(resolvedValue) : "";
         this.state.status = "idle";
         this.state.message = "";
-        this.refocus();
+        refocusAndSelect(this.input);
     }
 
     async setInvalid(message) {
-        const updates = {
-            [this.props.name]: this.normalizeTid(this.state.value),
-        };
-        // Do not destroy an already-valid relation when a later scan is invalid.
-        // New rows have no target yet, so they remain safely unresolved.
-        if (!extractMany2OneId(this.resolvedValue)) {
+        const updates = { [this.props.name]: normalizeRfidTid(this.state.value) };
+        if (!many2OneId(this.resolvedValue)) {
             updates[this.props.targetField] = false;
         }
         await this.props.record.update(updates);
         this.state.status = "error";
         this.state.message = message;
-        this.playTone(false);
-        this.refocus();
+        playScanTone(false);
+        refocusAndSelect(this.input);
     }
 
+    moveAfterSuccess() {
+        if (this.props.nextScanField) {
+            this.focusNamedField();
+        } else if (this.props.autoNextRow) {
+            this.focusNextRow();
+        } else {
+            refocusAndSelect(this.input);
+        }
+    }
 
-
-    focusNextScanField() {
+    focusNamedField() {
         window.setTimeout(() => {
-            const currentInput = this.input.el;
-            const row = currentInput?.closest("tr.o_data_row");
+            const row = this.input.el?.closest("tr.o_data_row");
             const nextInput = row
                 ? Array.from(row.querySelectorAll(".nsp-rfid-scan__input")).find(
-                    (input) => input.dataset.fieldName === this.props.nextScanField && !input.disabled
+                    (input) =>
+                        input.dataset.fieldName === this.props.nextScanField
+                        && !input.disabled
                 )
                 : false;
             if (nextInput) {
                 nextInput.focus();
                 nextInput.select();
-                return;
+            } else {
+                refocusAndSelect(this.input);
             }
-            this.refocus();
         }, 0);
     }
 
-    advanceToNextRow() {
+    focusNextRow() {
         window.setTimeout(() => {
             const currentInput = this.input.el;
-            if (!currentInput) {
+            const currentRow = currentInput?.closest("tr.o_data_row");
+            const container = currentInput?.closest(
+                ".o_field_x2many, .o_list_renderer, .o_list_view"
+            );
+            if (!currentRow || !container) {
+                refocusAndSelect(this.input);
                 return;
             }
 
-            const currentRow = currentInput.closest("tr.o_data_row");
-            const fieldRoot = currentInput.closest(".o_field_x2many") ||
-                currentInput.closest(".o_list_renderer") ||
-                currentInput.closest(".o_list_view");
-
-            if (!currentRow || !fieldRoot) {
-                this.refocus();
-                return;
-            }
-
-            const rows = Array.from(fieldRoot.querySelectorAll("tr.o_data_row"));
-            const currentIndex = rows.indexOf(currentRow);
-            const nextInput = rows.slice(currentIndex + 1)
+            const rows = Array.from(container.querySelectorAll("tr.o_data_row"));
+            const nextInput = rows
+                .slice(rows.indexOf(currentRow) + 1)
                 .map((row) => row.querySelector(".nsp-rfid-scan__input"))
-                .find((element) => element && !element.disabled);
-
+                .find((input) => input && !input.disabled);
             if (nextInput) {
                 nextInput.focus();
                 nextInput.select();
                 return;
             }
 
-            const previousCount = fieldRoot.querySelectorAll(".nsp-rfid-scan__input").length;
-            const addLine = fieldRoot.querySelector(
-                "tr.o_field_x2many_list_row_add a, " +
-                ".o_field_x2many_list_row_add a, " +
-                ".o_list_add_row a, " +
-                ".o_list_button_add"
+            const addLine = container.querySelector(
+                "tr.o_field_x2many_list_row_add a, "
+                + ".o_field_x2many_list_row_add a, "
+                + ".o_list_add_row a, .o_list_button_add"
             );
-
             if (!addLine) {
-                this.refocus();
+                refocusAndSelect(this.input);
                 return;
             }
 
+            const previousCount = container.querySelectorAll(
+                ".nsp-rfid-scan__input"
+            ).length;
             currentInput.blur();
             addLine.click();
-
-            let attempts = 0;
-            const focusCreatedRow = () => {
-                attempts += 1;
-                const inputs = Array.from(fieldRoot.querySelectorAll(".nsp-rfid-scan__input"))
-                    .filter((element) => !element.disabled && element.offsetParent !== null);
-                const blankInput = inputs.find((element, index) =>
-                    index >= previousCount && !String(element.value || "").trim()
-                ) || [...inputs].reverse().find((element) =>
-                    element !== currentInput && !String(element.value || "").trim()
-                );
-
-                if (blankInput) {
-                    blankInput.focus();
-                    blankInput.select();
-                    return;
-                }
-                if (attempts < 12) {
-                    window.setTimeout(focusCreatedRow, 50);
-                } else {
-                    this.refocus();
-                }
-            };
-            window.setTimeout(focusCreatedRow, 50);
+            this.focusCreatedRow(container, previousCount, 0);
         }, 0);
     }
 
-    refocus() {
+    focusCreatedRow(container, previousCount, attempt) {
         window.setTimeout(() => {
-            if (this.input.el) {
-                this.input.el.focus();
-                this.input.el.select();
+            const inputs = Array.from(
+                container.querySelectorAll(".nsp-rfid-scan__input")
+            ).filter((input) => !input.disabled && input.offsetParent !== null);
+            const blankInput = inputs.find(
+                (input, index) => index >= previousCount && !input.value.trim()
+            ) || [...inputs].reverse().find(
+                (input) => input !== this.input.el && !input.value.trim()
+            );
+            if (blankInput) {
+                blankInput.focus();
+                blankInput.select();
+            } else if (attempt < 11) {
+                this.focusCreatedRow(container, previousCount, attempt + 1);
+            } else {
+                refocusAndSelect(this.input);
             }
-        }, 0);
-    }
-
-    playTone(success) {
-        try {
-            const AudioContext = window.AudioContext || window.webkitAudioContext;
-            if (!AudioContext) {
-                return;
-            }
-            const context = new AudioContext();
-            const oscillator = context.createOscillator();
-            const gain = context.createGain();
-            oscillator.type = "sine";
-            oscillator.frequency.value = success ? 880 : 220;
-            gain.gain.setValueAtTime(0.0001, context.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.08, context.currentTime + 0.01);
-            gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.12);
-            oscillator.connect(gain);
-            gain.connect(context.destination);
-            oscillator.start();
-            oscillator.stop(context.currentTime + 0.13);
-            oscillator.addEventListener("ended", () => context.close());
-        } catch {
-            // Visual feedback remains the source of truth when audio is blocked.
-        }
+        }, 50);
     }
 }
 

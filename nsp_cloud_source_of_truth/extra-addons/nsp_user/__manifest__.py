@@ -1,24 +1,22 @@
 {
     "name": "NSP User",
     "summary": "NSP business identities and friendships",
-    "description": "Manage NSP business identities independently from optional Odoo Web access accounts.",
-    "version": "19.0.15.0.1",
+    "description": (
+        "Manage NSP business identities independently from optional Odoo Web accounts."
+    ),
+    "version": "19.0.16.0.0",
     "sequence": 10,
     "author": "BKU Team",
     "category": "Services",
-    "depends": [
-        "base",
-        "nsp_core",
-        "mail",
-    ],
-    "installable": True,
-    "application": False,
-    "auto_install": False,
+    "depends": ["base", "mail", "nsp_core"],
     "data": [
         "security/ir.model.access.csv",
         "views/user_views.xml",
         "views/friendship_views.xml",
         "views/menu_views.xml",
     ],
+    "installable": True,
+    "application": False,
+    "auto_install": False,
     "license": "LGPL-3",
 }

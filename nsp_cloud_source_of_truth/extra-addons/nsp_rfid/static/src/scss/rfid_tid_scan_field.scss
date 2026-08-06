@@ -1,0 +1,117 @@
+.nsp-rfid-tid-scan {
+    max-width: 42rem;
+
+    &__control {
+        position: relative;
+        display: flex;
+        align-items: center;
+        overflow: hidden;
+        border: 1px solid var(--border-color, #ced4da);
+        border-radius: 0.45rem;
+        background: var(--o-input-background-color, var(--o-view-background-color, #fff));
+        transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+    }
+
+    &__icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        align-self: stretch;
+        min-width: 2.7rem;
+        color: var(--o-brand-primary, #714b67);
+        background: rgba(113, 75, 103, 0.08);
+        border-right: 1px solid var(--border-color, #ced4da);
+        font-size: 1rem;
+    }
+
+    &__input {
+        min-height: 2.55rem;
+        flex: 1 1 auto;
+        border: 0 !important;
+        outline: 0 !important;
+        box-shadow: none !important;
+        font-family: var(--font-monospace, monospace);
+        font-size: 1rem;
+        font-weight: 650;
+        letter-spacing: 0.075em;
+        text-transform: uppercase;
+        background: transparent !important;
+    }
+
+    &__beam {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: -18%;
+        width: 18%;
+        pointer-events: none;
+        opacity: 0;
+        background: linear-gradient(90deg, transparent, rgba(113, 75, 103, 0.24), transparent);
+    }
+
+    &__status {
+        min-height: 1.25rem;
+        margin-top: 0.3rem;
+        font-size: 0.82rem;
+        color: var(--body-color, #495057);
+    }
+
+    &--scanning &__control,
+    &--validating &__control {
+        border-color: var(--o-brand-primary, #714b67);
+        box-shadow: 0 0 0 0.18rem rgba(113, 75, 103, 0.12);
+    }
+
+    &--scanning &__beam,
+    &--validating &__beam {
+        opacity: 1;
+        animation: nsp-rfid-scan-beam 760ms linear infinite;
+    }
+
+    &--success &__control {
+        border-color: #16a34a;
+        box-shadow: 0 0 0 0.18rem rgba(22, 163, 74, 0.13);
+        animation: nsp-rfid-scan-confirm 420ms ease-out;
+    }
+
+    &--success &__icon,
+    &--success &__status {
+        color: #15803d;
+    }
+
+    &--error &__control {
+        border-color: #dc2626;
+        box-shadow: 0 0 0 0.18rem rgba(220, 38, 38, 0.12);
+        animation: nsp-rfid-scan-error 320ms ease-in-out;
+    }
+
+    &--error &__icon,
+    &--error &__status {
+        color: #b91c1c;
+    }
+}
+
+@keyframes nsp-rfid-scan-beam {
+    from { transform: translateX(0); }
+    to { transform: translateX(660%); }
+}
+
+@keyframes nsp-rfid-scan-confirm {
+    0% { transform: scale(0.995); }
+    55% { transform: scale(1.006); }
+    100% { transform: scale(1); }
+}
+
+@keyframes nsp-rfid-scan-error {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-0.2rem); }
+    50% { transform: translateX(0.16rem); }
+    75% { transform: translateX(-0.08rem); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .nsp-rfid-tid-scan__beam,
+    .nsp-rfid-tid-scan__control {
+        animation: none !important;
+    }
+}

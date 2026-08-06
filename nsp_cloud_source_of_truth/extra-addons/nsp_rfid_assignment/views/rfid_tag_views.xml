@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <record id="view_nsp_rfid_tag_search_assignment" model="ir.ui.view">
+        <field name="name">nsp.rfid.tag.search.assignment</field>
+        <field name="model">nsp.rfid.tag</field>
+        <field name="inherit_id" ref="nsp_rfid.view_nsp_rfid_tag_search"/>
+        <field name="arch" type="xml">
+            <field name="tid" position="after">
+                <field name="active_target_name"/>
+                <separator/>
+                <filter string="Assigned" name="assigned" domain="[('is_assigned', '=', True)]"/>
+                <filter string="Available" name="available" domain="[('is_assigned', '=', False)]"/>
+            </field>
+        </field>
+    </record>
+
+    <record id="view_nsp_rfid_tag_list_assignment" model="ir.ui.view">
+        <field name="name">nsp.rfid.tag.list.assignment</field>
+        <field name="model">nsp.rfid.tag</field>
+        <field name="inherit_id" ref="nsp_rfid.view_nsp_rfid_tag_list"/>
+        <field name="arch" type="xml">
+            <field name="tid" position="after">
+                <field name="active_assignment_id" column_invisible="1"/>
+                <field name="is_assigned" column_invisible="1"/>
+                <field name="active_target_type" string="Assigned To" widget="badge" optional="show"/>
+                <field name="active_target_name" string="Current Target" optional="show"/>
+                <button name="action_revoke_active_assignment"
+                        type="object"
+                        string="Revoke"
+                        icon="fa-unlink"
+                        confirm="Revoke this RFID Tag assignment? The whitelist Tag will remain available for reassignment."
+                        invisible="not active_assignment_id"
+                        groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking"/>
+            </field>
+        </field>
+    </record>
+
+    <record id="view_nsp_rfid_tag_form_assignment" model="ir.ui.view">
+        <field name="name">nsp.rfid.tag.form.assignment</field>
+        <field name="model">nsp.rfid.tag</field>
+        <field name="inherit_id" ref="nsp_rfid.view_nsp_rfid_tag_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//form/sheet" position="before">
+                <header>
+                    <button name="action_revoke_active_assignment"
+                            type="object"
+                            string="Revoke Tag"
+                            icon="fa-unlink"
+                            class="btn-secondary"
+                            confirm="Revoke this RFID Tag assignment? The whitelist Tag will remain available for reassignment."
+                            invisible="not active_assignment_id"
+                            groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking"/>
+                </header>
+            </xpath>
+            <field name="tid" position="after">
+                <field name="active_assignment_id" invisible="1"/>
+                <field name="is_assigned" invisible="1"/>
+                <field name="active_target_type" string="Assigned To" readonly="1"/>
+                <field name="active_target_name" string="Current Target" readonly="1"/>
+            </field>
+            <xpath expr="//form/sheet/group" position="after">
+                <notebook>
+                    <page string="Assignment History">
+                        <field name="assignment_ids" nolabel="1" readonly="1">
+                            <list create="0" edit="0" delete="0" default_order="assigned_at desc, id desc">
+                                <field name="state" widget="badge"/>
+                                <field name="target_type" widget="badge"/>
+                                <field name="target_name"/>
+                                <field name="assigned_at"/>
+                                <field name="assigned_by_id" optional="hide"/>
+                                <field name="revoked_at" optional="show"/>
+                                <field name="revoked_by_id" optional="hide"/>
+                            </list>
+                        </field>
+                    </page>
+                </notebook>
+            </xpath>
+        </field>
+    </record>
+</odoo>

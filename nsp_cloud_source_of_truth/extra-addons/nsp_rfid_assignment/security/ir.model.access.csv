@@ -1,4 +1,4 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
-access_nsp_rfid_assignment_hr,nsp.rfid.tag.assignment HR,model_nsp_rfid_tag_assignment,nsp_core.group_nsp_hr_parking,1,1,1,1
-access_nsp_rfid_assignment_it,nsp.rfid.tag.assignment IT,model_nsp_rfid_tag_assignment,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_rfid_assignment_hr,nsp.rfid.tag.assignment HR,model_nsp_rfid_tag_assignment,nsp_core.group_nsp_hr_parking,1,1,1,0
+access_nsp_rfid_assignment_it,nsp.rfid.tag.assignment IT,model_nsp_rfid_tag_assignment,nsp_core.group_nsp_it_parking,1,1,1,0
 access_nsp_rfid_assignment_operator,nsp.rfid.tag.assignment Operator,model_nsp_rfid_tag_assignment,nsp_core.group_nsp_operator,1,0,0,0
