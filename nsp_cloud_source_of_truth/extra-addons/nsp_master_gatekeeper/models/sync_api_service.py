@@ -1,29 +1,14 @@
 from datetime import datetime, timezone
+import logging
 
 from odoo import api, fields, models
 from odoo.addons.t4_coreapi.utils import endpoint, get_body
 
-_DURATION_EPSILON_SECONDS = 0.001
+from .state_policy import classify_idempotent_replay, compare_revision
 
-_LANE_CALIBRATION_CLOUD_STATUSES = frozenset({"draft", "ready", "applied"})
-_LANE_CALIBRATION_RUNTIME_STATUSES = frozenset({"running", "completed", "failed", "cancelled"})
-_LANE_CALIBRATION_ALL_STATUSES = (
-    _LANE_CALIBRATION_CLOUD_STATUSES | _LANE_CALIBRATION_RUNTIME_STATUSES
-)
-_LANE_CALIBRATION_RUNTIME_TRANSITIONS = {
-    "draft": frozenset({"cancelled"}),
-    "ready": frozenset({"running", "completed", "failed", "cancelled"}),
-    "running": frozenset({"completed", "failed", "cancelled"}),
-    "completed": frozenset(),
-    "failed": frozenset(),
-    "cancelled": frozenset(),
-    "applied": frozenset(),
-}
-_LANE_CALIBRATION_STALE_RUNTIME_TARGETS = {
-    "completed": frozenset({"running"}),
-    "failed": frozenset({"running"}),
-    "cancelled": frozenset({"running"}),
-}
+_logger = logging.getLogger(__name__)
+
+_DURATION_EPSILON_SECONDS = 0.001
 
 
 class NspMasterGatekeeperSyncApiService(models.AbstractModel):
@@ -57,6 +42,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         try:
             body = get_body(self) or {}
         except Exception:
+            _logger.debug("Unable to decode Core API request body", exc_info=True)
             body = {}
         return body if isinstance(body, dict) else {}
 
@@ -111,10 +97,10 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         try:
             normalized = text.replace("Z", "+00:00")
             parsed = datetime.fromisoformat(normalized)
-        except Exception:
+        except (TypeError, ValueError):
             try:
                 parsed = fields.Datetime.to_datetime(text)
-            except Exception:
+            except (TypeError, ValueError):
                 parsed = False
         if not parsed:
             return fields.Datetime.now() if default_now else False
@@ -171,14 +157,10 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         if current_status not in ("online", "offline", "error", "block", "revoked"):
             raise ValueError("invalid_payload")
         last_seen_at = self._safe_datetime_value(data.get("last_seen_at"), default_now=False) or fields.Datetime.now()
+        values = {"timestamp": last_seen_at}
         if parent.status != current_status:
-            parent.write({"timestamp": last_seen_at, "status": current_status})
-        else:
-            self.env.cr.execute(
-                "UPDATE nsp_edge_server SET timestamp = %s WHERE id = %s",
-                (last_seen_at, parent.id),
-            )
-            parent.invalidate_recordset(["timestamp"])
+            values["status"] = current_status
+        parent.with_context(tracking_disable=True, mail_notrack=True).write(values)
         return parent
 
     @api.model
@@ -1065,10 +1047,10 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         text = str(value).strip()
         try:
             parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        except Exception:
+        except (TypeError, ValueError):
             try:
                 parsed = fields.Datetime.to_datetime(text)
-            except Exception as exc:
+            except (TypeError, ValueError) as exc:
                 raise ValueError("invalid_datetime") from exc
         if not parsed:
             raise ValueError("invalid_datetime")
@@ -1086,7 +1068,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         try:
             parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
             return int(parsed.microsecond / 1000)
-        except Exception:
+        except (TypeError, ValueError):
             return 0
 
     @api.model
@@ -1212,84 +1194,12 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
     def _measurement_set_status(
         self, session, status, occurred_at=False, message=False, revision=False,
     ):
-        """Apply an external Lane Calibration runtime status safely.
-
-        State ownership is intentionally asymmetric:
-        - Cloud owns ``draft``, ``ready`` and ``applied`` (displayed as Configured).
-        - Edge/Controller owns ``running``, ``completed``, ``failed`` and ``cancelled``.
-
-        Cloud-owned states received through a runtime status endpoint are
-        acknowledged but never applied. Once Cloud marks a revision Configured,
-        every delayed runtime status for that same revision is stale and must be
-        ACKed instead of returning ``invalid_status_transition``.
-        """
-        target = str(status or "").strip().lower()
-        if target not in _LANE_CALIBRATION_ALL_STATUSES:
-            raise ValueError("invalid_lane_calibration_status")
-
-        current = str(session.status or "draft")
-        current_revision = max(int(session.revision or 1), 1)
-        try:
-            incoming_revision = (
-                current_revision
-                if revision in (False, None, "")
-                else int(revision)
-            )
-        except (TypeError, ValueError) as exc:
-            raise ValueError("invalid_lane_calibration_revision") from exc
-        if incoming_revision <= 0:
-            raise ValueError("invalid_lane_calibration_revision")
-
-        result = {
-            "outcome": "duplicate",
-            "incoming_status": target,
-            "current_status": current,
-            "incoming_revision": incoming_revision,
-            "current_revision": current_revision,
-            "status_owner": (
-                "cloud" if target in _LANE_CALIBRATION_CLOUD_STATUSES else "runtime"
-            ),
-        }
-        if incoming_revision < current_revision:
-            result["outcome"] = "ignored_stale_revision"
-            return result
-        if incoming_revision > current_revision:
-            raise ValueError("lane_calibration_revision_ahead")
-
-        # Runtime clients may still retry legacy Ready/Applied records. ACK them
-        # without allowing an Edge or Controller to drive Cloud-owned lifecycle.
-        if target in _LANE_CALIBRATION_CLOUD_STATUSES and target != current:
-            result["outcome"] = "ignored_cloud_owned_status"
-            return result
-
-        # Configured is the authoritative Cloud final state for this revision.
-        # Any late Running/Completed/Failed/Cancelled status is superseded.
-        if current == "applied" and target in _LANE_CALIBRATION_RUNTIME_STATUSES:
-            result["outcome"] = "ignored_after_configured"
-            return result
-
-        if target != current:
-            if target in _LANE_CALIBRATION_STALE_RUNTIME_TARGETS.get(current, frozenset()):
-                result["outcome"] = "ignored_stale_status"
-                return result
-            if target not in _LANE_CALIBRATION_RUNTIME_TRANSITIONS.get(current, frozenset()):
-                raise ValueError("invalid_status_transition")
-
-        when = occurred_at or fields.Datetime.now()
-        vals = {}
-        if target != current:
-            vals["status"] = target
-            result["outcome"] = "applied"
-            result["current_status"] = target
-        if target == "running" and not session.started_at:
-            vals["started_at"] = when
-        if target in ("completed", "failed", "cancelled") and not session.ended_at:
-            vals["ended_at"] = when
-        if vals:
-            session.with_context(measurement_sync=True).write(vals)
-        if message and result["outcome"] == "applied":
-            session.message_post(body=str(message))
-        return result
+        return session._apply_runtime_status(
+            status,
+            occurred_at=occurred_at,
+            message=message,
+            revision=revision,
+        )
 
     @endpoint("NSP Edge Lane Calibration Snapshot", route_path="edge/lane-calibrations/snapshot", methods="POST", code="nsp_edge_lane_calibration_snapshot")
     def api_lane_calibration_snapshot(self):
@@ -1328,7 +1238,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         tid = self.env["nsp.rfid.tag"].sudo()._normalize_tid(item.get("tid"))
         try:
             port_no = int(item.get("port_no") or 0)
-        except Exception:
+        except (TypeError, ValueError):
             port_no = 0
         if port_no <= 0:
             raise ValueError("reader_port_not_found")
@@ -1401,19 +1311,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
 
     @api.model
     def _measurement_event_matches(self, event, values):
-        return (
-            event.session_id.id == values["session_id"]
-            and int(event.revision or 1) == int(values["revision"] or 1)
-            and event.serial_number == values["serial_number"]
-            and int(event.port_no or 0) == int(values["port_no"] or 0)
-            and event.tid == values["tid"]
-            and fields.Datetime.to_string(event.read_at) == fields.Datetime.to_string(values["read_at"])
-            and int(event.read_at_ms or 0) == int(values["read_at_ms"] or 0)
-            and (False if event.rssi_dbm in (False, None) else float(event.rssi_dbm))
-            == (False if values["rssi_dbm"] in (False, None) else float(values["rssi_dbm"]))
-            and int(event.power_dbm or 0) == int(values["power_dbm"] or 0)
-            and int(event.read_interval_ms or 0) == int(values["read_interval_ms"] or 0)
-        )
+        return event.matches_measurement_values(values)
 
     @api.model
     def _measurement_process_event_batch(
@@ -1447,7 +1345,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     accept_snapshot=accept_snapshot,
                 )
                 if enforce_current_snapshot and (
-                    int(values["revision"] or 1) != int(session.revision or 1)
+                    compare_revision(values["revision"] or 1, session.revision or 1) != "current"
                     or int(values["power_dbm"] or 0)
                     != int(session._reader_power_for_serial(values["serial_number"]) or 0)
                     or int(values["read_interval_ms"] or 0)
@@ -1483,7 +1381,10 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             uid = values["event_uid"]
             existing = existing_by_uid.get(uid)
             if existing:
-                if not self._measurement_event_matches(existing, values):
+                replay = classify_idempotent_replay(
+                    uid, self._measurement_event_matches(existing, values)
+                )
+                if replay == "conflict":
                     results[index] = {
                         "index": index, "record_key": key, "status": "rejected",
                         "error_code": "event_uid_conflict", "message": "event_uid_conflict",
@@ -1544,18 +1445,13 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                             "message": "Processed",
                         }
             except Exception:
+                _logger.exception(
+                    "Bulk Lane Calibration event create failed; isolating rows with savepoints"
+                )
                 created_records = Event.browse()
+                failed_attempts = {}
                 for uid, (index, key, values) in pending_by_uid.items():
                     try:
-                        existing = Event.search([("event_uid", "=", uid)], limit=1)
-                        if existing:
-                            if not self._measurement_event_matches(existing, values):
-                                raise ValueError("event_uid_conflict")
-                            results[index] = {
-                                "index": index, "record_key": key, "status": "duplicate",
-                                "message": "Already processed",
-                            }
-                            continue
                         with self.env.cr.savepoint():
                             event = Event.create(values)
                         created_records |= event
@@ -1564,10 +1460,28 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                             "message": "Processed",
                         }
                     except Exception as exc:
+                        failed_attempts[uid] = (index, key, values, exc)
+
+                concurrent_by_uid = {
+                    event.event_uid: event
+                    for event in Event.search([
+                        ("event_uid", "in", list(failed_attempts)),
+                    ])
+                } if failed_attempts else {}
+                for uid, (index, key, values, exc) in failed_attempts.items():
+                    existing = concurrent_by_uid.get(uid)
+                    if existing and self._measurement_event_matches(existing, values):
                         results[index] = {
-                            "index": index, "record_key": key, "status": "rejected",
-                            "error_code": str(exc).split(":", 1)[0], "message": str(exc),
+                            "index": index, "record_key": key, "status": "duplicate",
+                            "message": "Already processed",
                         }
+                        continue
+                    error = ValueError("event_uid_conflict") if existing else exc
+                    results[index] = {
+                        "index": index, "record_key": key, "status": "rejected",
+                        "error_code": str(error).split(":", 1)[0],
+                        "message": str(error),
+                    }
 
         for uid, duplicate_rows in duplicate_indices.items():
             primary = pending_by_uid.get(uid)
@@ -1978,6 +1892,13 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 area, edge_server.edge_server_code
             )
         except Exception:
+            _logger.exception(
+                "Failed to validate published Parking Layout payload",
+                extra={
+                    "parking_area_code": area.code if area else area_code,
+                    "incoming_revision": incoming_revision,
+                },
+            )
             return False
         if not payload or int(payload.get("published_revision") or 0) != incoming_revision:
             return False

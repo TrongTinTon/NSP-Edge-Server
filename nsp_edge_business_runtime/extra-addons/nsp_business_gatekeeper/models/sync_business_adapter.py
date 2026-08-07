@@ -291,12 +291,28 @@ class NspSyncBusinessAdapter(models.Model):
         }
 
     def _find_or_create_controller(self, code, name=False):
-        self.ensure_one(); code=str(code or "").strip().upper(); Controller=self.env["nsp.controller"].sudo().with_context(active_test=False)
-        if not code: return Controller.browse()
-        controller=Controller.search([("controller_id","=",code)],limit=1)
-        vals={"controller_name":name or (controller.controller_name if controller else code),"active":True,"cloud_removed":False}
-        if controller: self._write_changed(controller,vals); return controller
-        vals["controller_id"]=code; return Controller.create(vals)
+        self.ensure_one()
+        normalized_code = str(code or "").strip().upper()
+        Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
+        if not normalized_code:
+            return Controller.browse()
+
+        controller = Controller.search([
+            ("controller_id", "=", normalized_code),
+        ], limit=1)
+        values = {
+            "controller_name": name or (
+                controller.controller_name if controller else normalized_code
+            ),
+            "active": True,
+            "cloud_removed": False,
+        }
+        if controller:
+            self._write_changed(controller, values)
+            return controller
+
+        values["controller_id"] = normalized_code
+        return Controller.create(values)
 
     @api.model
     def _prepare_apply_cache(self, kind, items):
@@ -363,7 +379,8 @@ class NspSyncBusinessAdapter(models.Model):
         if kind == "vehicle":
             vehicle_codes = {str(item.get("vehicle_code") or "").strip().upper() for item in rows}
             owner_codes = {str(item.get("owner_user_code") or "").strip().upper() for item in rows}
-            vehicle_codes.discard(""); owner_codes.discard("")
+            vehicle_codes.discard("")
+            owner_codes.discard("")
             Vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False)
             vehicles = Vehicle.search([
                 ("vehicle_code", "in", list(vehicle_codes)),
@@ -381,6 +398,8 @@ class NspSyncBusinessAdapter(models.Model):
                 ("model_by_code", "nsp.reference.model", "model_code"),
                 ("color_by_code", "nsp.vehicle.color", "color_code"),
             )
+            # Clean-code exception: each entry targets a different Odoo model.
+            # Every model is queried once with all codes; ORM cannot batch across models.
             for cache_key, model_name, payload_field in master_specs:
                 codes = {str(item.get(payload_field) or "").strip().upper() for item in rows}
                 codes.discard("")
@@ -394,7 +413,9 @@ class NspSyncBusinessAdapter(models.Model):
             borrow_codes = {str(item.get("borrow_uid") or "").strip() for item in rows}
             vehicle_codes = {str(item.get("vehicle_code") or "").strip().upper() for item in rows}
             user_codes = {str(item.get("borrower_user_code") or "").strip().upper() for item in rows}
-            borrow_codes.discard(""); vehicle_codes.discard(""); user_codes.discard("")
+            borrow_codes.discard("")
+            vehicle_codes.discard("")
+            user_codes.discard("")
             borrows = self.env["nsp.vehicle.borrow"].sudo().search([
                 ("borrow_code", "in", list(borrow_codes)),
             ]) if borrow_codes else self.env["nsp.vehicle.borrow"].browse()
@@ -1218,7 +1239,7 @@ class NspSyncBusinessAdapter(models.Model):
         now = fields.Datetime.now()
         running = stale.filtered(lambda rec: rec.status in ("ready", "running"))
         if running:
-            running.with_context(measurement_sync=True).write({"status": "cancelled", "ended_at": now})
+            running._apply_status_transition("cancelled", {"ended_at": now})
         disposable = stale.filtered(
             lambda rec: rec.status in ("completed", "applied", "failed", "cancelled") and not rec.event_ids
         )
@@ -1228,13 +1249,48 @@ class NspSyncBusinessAdapter(models.Model):
 
     def _reconcile_business_snapshot(self, kind, items):
         """Archive/remove records absent from full Cloud master snapshots."""
-        rows=[i for i in (items or []) if isinstance(i,dict)]
-        if kind=="user":
-            keys={str(i.get("user_code") or "").strip().upper() for i in rows}; Model=self.env["nsp.user"].sudo().with_context(active_test=False); stale=Model.search([("user_code","not in",list(keys)),("active","=",True)]) if keys else Model.search([("active","=",True)]); stale.write({"active":False}) if stale else None; return len(stale)
-        if kind=="vehicle":
-            keys={str(i.get("vehicle_code") or "").strip().upper() for i in rows}; Model=self.env["nsp.vehicle"].sudo().with_context(active_test=False); stale=Model.search([("vehicle_code","not in",list(keys)),("active","=",True)]) if keys else Model.search([("active","=",True)]); stale.write({"active":False}) if stale else None; return len(stale)
-        if kind=="vehicle_borrow":
-            keys={str(i.get("borrow_uid") or "").strip() for i in rows}; Model=self.env["nsp.vehicle.borrow"].sudo(); stale=Model.search([("borrow_code","not in",list(keys))]) if keys else Model.search([]); stale.unlink() if stale else None; return len(stale)
+        rows = [item for item in (items or []) if isinstance(item, dict)]
+
+        if kind == "user":
+            keys = {
+                str(item.get("user_code") or "").strip().upper()
+                for item in rows
+                if item.get("user_code")
+            }
+            Model = self.env["nsp.user"].sudo().with_context(active_test=False)
+            domain = [("active", "=", True)]
+            if keys:
+                domain.append(("user_code", "not in", sorted(keys)))
+            stale = Model.search(domain)
+            stale.write({"active": False})
+            return len(stale)
+
+        if kind == "vehicle":
+            keys = {
+                str(item.get("vehicle_code") or "").strip().upper()
+                for item in rows
+                if item.get("vehicle_code")
+            }
+            Model = self.env["nsp.vehicle"].sudo().with_context(active_test=False)
+            domain = [("active", "=", True)]
+            if keys:
+                domain.append(("vehicle_code", "not in", sorted(keys)))
+            stale = Model.search(domain)
+            stale.write({"active": False})
+            return len(stale)
+
+        if kind == "vehicle_borrow":
+            keys = {
+                str(item.get("borrow_uid") or "").strip()
+                for item in rows
+                if item.get("borrow_uid")
+            }
+            Model = self.env["nsp.vehicle.borrow"].sudo()
+            domain = [("borrow_code", "not in", sorted(keys))] if keys else []
+            stale = Model.search(domain)
+            stale.unlink()
+            return len(stale)
+
         return 0
 
     @api.model
@@ -1287,10 +1343,23 @@ class NspSyncBusinessAdapter(models.Model):
         return payload
 
     def _pending_lane_calibration_events(self, limit):
-        self.ensure_one(); Record=self.env["nsp.sync.record"].sudo(); Event=self.env["nsp.measurement.event"].sudo(); action_code=str(self.sync_action_code or "").strip(); source_code=str(self.edge_server_code or "NSP").strip() or "NSP"
-        synced=Record.search([("source_code","=",source_code),("sync_action_code","=",action_code),("operation","=","push"),("status","=","synced")]).mapped("record_key")
-        domain=[("event_uid","not in",synced)] if synced else []
-        return Event.search(domain,order="read_at,id",limit=max(1,int(limit or 1)))
+        self.ensure_one()
+        Record = self.env["nsp.sync.record"].sudo()
+        Event = self.env["nsp.measurement.event"].sudo()
+        action_code = str(self.sync_action_code or "").strip()
+        source_code = str(self.edge_server_code or "NSP").strip() or "NSP"
+        synced_keys = Record.search([
+            ("source_code", "=", source_code),
+            ("sync_action_code", "=", action_code),
+            ("operation", "=", "push"),
+            ("status", "=", "synced"),
+        ]).mapped("record_key")
+        domain = [("event_uid", "not in", synced_keys)] if synced_keys else []
+        return Event.search(
+            domain,
+            order="read_at, id",
+            limit=max(1, int(limit or 1)),
+        )
 
     def _push_lane_calibration_event_records(self, events, timeout=120):
         self.ensure_one()
@@ -1514,20 +1583,25 @@ class NspSyncBusinessAdapter(models.Model):
             [("status", "in", self._lane_calibration_runtime_statuses())],
             order="write_date,id",
         )
-        pending = []
-        for session in sessions:
-            record_key = self._lane_calibration_status_record_key(session)
-            synced = Record.search([
-                ("sync_action_code", "=", self.sync_action_code),
-                ("operation", "=", "push"),
-                ("record_key", "=", record_key),
-                ("status", "=", "synced"),
-            ], limit=1)
-            if not synced:
-                pending.append(session.id)
-            if len(pending) >= max(1, int(limit or 1)):
-                break
-        return Session.browse(pending)
+        if not sessions:
+            return sessions
+        record_key_by_session = {
+            session.id: self._lane_calibration_status_record_key(session)
+            for session in sessions
+        }
+        synced_keys = set(Record.search([
+            ("sync_action_code", "=", self.sync_action_code),
+            ("operation", "=", "push"),
+            ("record_key", "in", list(record_key_by_session.values())),
+            ("status", "=", "synced"),
+        ]).mapped("record_key"))
+        max_items = max(1, int(limit or 1))
+        pending_ids = [
+            session.id
+            for session in sessions
+            if record_key_by_session[session.id] not in synced_keys
+        ][:max_items]
+        return Session.browse(pending_ids)
 
     def _push_lane_calibration_status_records(self, sessions, timeout=120):
         self.ensure_one()

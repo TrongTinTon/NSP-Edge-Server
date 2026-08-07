@@ -167,16 +167,18 @@ class NspMeasurementSessionValidation(models.Model):
 
     def action_start_reference_pass(self):
         self.ensure_one()
+        self.check_access("write")
         self._require_ready_configuration()
         if len(self.target_line_ids) != 1:
             raise ValidationError(_("Select exactly one Vehicle before starting a Pass."))
         if self.pass_ids.filtered(lambda item: item.state == "running"):
             raise ValidationError(_("A Run is already running."))
         if self.status == "ready":
-            self.with_context(measurement_sync=True).write({
-                "status": "running",
-                "started_at": self.started_at or fields.Datetime.now(),
-            })
+            self._apply_status_transition(
+                "running",
+                {"started_at": self.started_at or fields.Datetime.now()},
+                allow_same=False,
+            )
         elif self.status != "running":
             raise ValidationError(
                 _("Release the calibration or use Measure Again before starting a Run.")
@@ -196,6 +198,7 @@ class NspMeasurementSessionValidation(models.Model):
 
     def action_stop_reference_pass(self):
         self.ensure_one()
+        self.check_access("write")
         running = self.pass_ids.filtered(lambda item: item.state == "running").sorted("id")[-1:]
         if not running:
             raise ValidationError(_("No Run is currently running."))
@@ -204,6 +207,7 @@ class NspMeasurementSessionValidation(models.Model):
 
     def action_build_calibration_result(self):
         self.ensure_one()
+        self.check_access("write")
         accepted = self.pass_ids.filtered(
             lambda item: item.state == "accepted" and item.revision == self.revision
         ).sorted(key=lambda item: (item.pass_no, item.id))
@@ -266,6 +270,7 @@ class NspMeasurementSessionValidation(models.Model):
 
     def action_new_validation_run(self):
         self.ensure_one()
+        self.check_access("write")
         result = self._current_calibration_result()
         if not result or result.state != "validation":
             raise ValidationError(
@@ -280,9 +285,14 @@ class NspMeasurementSessionValidation(models.Model):
 
     @api.model
     def get_calibration_workspace(self, session_id, validation_run_id=False):
-        session = self.sudo().browse(int(session_id or 0)).exists()
+        try:
+            record_id = int(session_id or 0)
+        except (TypeError, ValueError):
+            record_id = 0
+        session = self.browse(record_id).exists()
         if not session:
             return {"found": False}
+        session.check_access("read")
         accepted_result = session.accepted_result_id
         current_result = session.result_ids.filtered(
             lambda item: item.state in ("draft", "validation", "accepted")
@@ -319,12 +329,18 @@ class NspMeasurementTargetLineReference(models.Model):
 
     @api.constrains("session_id")
     def _check_single_reference_vehicle(self):
-        for line in self.filtered("session_id"):
-            count = self.search_count([("session_id", "=", line.session_id.id)])
-            if count > 1:
-                raise ValidationError(
-                    _("Lane Calibration allows exactly one Vehicle. Use Validation for multi-Vehicle testing.")
-                )
+        session_ids = self.filtered("session_id").mapped("session_id").ids
+        if not session_ids:
+            return
+        rows = self._read_group(
+            [("session_id", "in", session_ids)],
+            ["session_id"],
+            ["__count"],
+        )
+        if any(count > 1 for _session, count in rows):
+            raise ValidationError(
+                _("Lane Calibration allows exactly one Vehicle. Use Validation for multi-Vehicle testing.")
+            )
 
 
 class NspMeasurementPass(models.Model):
@@ -367,52 +383,53 @@ class NspMeasurementPass(models.Model):
             record.step_count = len(record.step_ids)
 
     def action_stop_and_analyse(self):
-        for record in self:
-            if record.state != "running":
-                raise ValidationError(_("Only a running Run can be stopped."))
-            ended_at = fields.Datetime.now()
-            events = self.env["nsp.measurement.event"].sudo().search([
-                ("session_id", "=", record.session_id.id),
-                ("revision", "=", record.revision),
-                ("tid", "=", record.vehicle_tid),
-                ("read_at", ">=", record.started_at),
-                ("read_at", "<=", ended_at),
-            ], order="read_at asc, read_at_ms asc, id asc")
-            steps = record.session_id._collapse_events_to_steps(events)
-            record.step_ids.unlink()
-            commands = []
-            for row in steps:
-                commands.append((0, 0, {
-                    "sequence": row["sequence"],
-                    "reader_port_id": row["reader_port_id"],
-                    "first_read_at": row["first_read_at"],
-                    "first_read_at_ms": row["first_read_at_ms"],
-                    "last_read_at": row["last_read_at"],
-                    "last_read_at_ms": row["last_read_at_ms"],
-                    "read_count": row["read_count"],
-                    "duration_from_previous": row["duration_from_previous"],
-                }))
-            sequence = " → ".join(row["point_key"] for row in steps)
-            record.write({
-                "ended_at": ended_at,
-                "state": "completed",
-                "result_status": "complete" if len(steps) >= 2 else "insufficient",
-                "detected_sequence": sequence,
-                "missing_or_error": "" if len(steps) >= 2 else _("At least two detection points are required."),
-                "total_duration": sum(float(row["duration_from_previous"] or 0.0) for row in steps),
-                "step_ids": commands,
-            })
+        self.ensure_one()
+        self.check_access("write")
+        if self.state != "running":
+            raise ValidationError(_("Only a running Run can be stopped."))
+        ended_at = fields.Datetime.now()
+        events = self.env["nsp.measurement.event"].sudo().search([
+            ("session_id", "=", self.session_id.id),
+            ("revision", "=", self.revision),
+            ("tid", "=", self.vehicle_tid),
+            ("read_at", ">=", self.started_at),
+            ("read_at", "<=", ended_at),
+        ], order="read_at asc, read_at_ms asc, id asc")
+        steps = self.session_id._collapse_events_to_steps(events)
+        self.step_ids.unlink()
+        commands = [(0, 0, {
+            "sequence": row["sequence"],
+            "reader_port_id": row["reader_port_id"],
+            "first_read_at": row["first_read_at"],
+            "first_read_at_ms": row["first_read_at_ms"],
+            "last_read_at": row["last_read_at"],
+            "last_read_at_ms": row["last_read_at_ms"],
+            "read_count": row["read_count"],
+            "duration_from_previous": row["duration_from_previous"],
+        }) for row in steps]
+        self._apply_pass_state("completed", {
+            "ended_at": ended_at,
+            "result_status": "complete" if len(steps) >= 2 else "insufficient",
+            "detected_sequence": " → ".join(row["point_key"] for row in steps),
+            "missing_or_error": "" if len(steps) >= 2 else _("At least two detection points are required."),
+            "total_duration": sum(float(row["duration_from_previous"] or 0.0) for row in steps),
+            "step_ids": commands,
+        })
         return True
 
     def action_accept(self):
+        self.check_access("write")
         for record in self:
-            if record.state not in ("completed", "accepted") or record.result_status != "complete":
+            if record.result_status != "complete":
                 raise ValidationError(_("Only a complete Run can be accepted."))
-            record.state = "accepted"
+            record._apply_pass_state("accepted")
         return True
 
     def action_reject(self):
-        self.filtered(lambda item: item.state != "running").write({"state": "rejected"})
+        self.check_access("write")
+        records = self.filtered(lambda item: item.state != "running")
+        for record in records:
+            record._apply_pass_state("rejected")
         return True
 
     def _workspace_payload(self):
@@ -507,15 +524,18 @@ class NspMeasurementResult(models.Model):
             )
 
     def action_submit_validation(self):
+        self.check_access("write")
         for record in self:
             if len(record.line_ids) < 2:
                 raise ValidationError(_("Result requires at least two Timeline points."))
-            if record.state not in ("draft", "validation"):
-                raise ValidationError(_("Only a Draft Result can be submitted for Validation."))
-            record.write({"state": "validation", "validation_state": "pending"})
+            record._apply_result_state(
+                "validation",
+                {"validation_state": "pending"},
+            )
         return True
 
     def action_accept(self):
+        self.check_access("write")
         for record in self:
             if record.state != "validation":
                 raise ValidationError(_("Only a Result in Validation can be published as Accepted."))
@@ -524,20 +544,21 @@ class NspMeasurementResult(models.Model):
             previous = record.session_id.result_ids.filtered(
                 lambda item: item.state == "accepted" and item != record
             )
-            previous.write({"state": "superseded"})
-            record.write({
-                "state": "accepted",
+            for previous_result in previous:
+                previous_result._apply_result_state("superseded")
+            record._apply_result_state("accepted", {
                 "accepted_at": fields.Datetime.now(),
                 "accepted_by_id": self.env.user.id,
             })
-            record.session_id.with_context(measurement_sync=True).write({
-                "status": "completed",
-                "ended_at": record.session_id.ended_at or fields.Datetime.now(),
-            })
+            record.session_id._apply_status_transition(
+                "completed",
+                {"ended_at": record.session_id.ended_at or fields.Datetime.now()},
+            )
         return True
 
     def action_open_form(self):
         self.ensure_one()
+        self.check_access("read")
         return {
             "type": "ir.actions.act_window",
             "name": _("Result"),
@@ -665,102 +686,101 @@ class NspMeasurementValidationRun(models.Model):
             run.wrong_order_rate = (run.wrong_order_count * 100.0 / run.expected_count) if run.expected_count else 0.0
 
     def action_load_active_vehicles(self):
-        for run in self:
-            if run.state != "draft":
-                raise ValidationError(_("Vehicles can be loaded only while the Validation Run is Draft."))
-            limit = max(1, min(int(run.planned_vehicle_count or 100), 5000))
-            assignments = self.env["nsp.rfid.tag.assignment"].sudo().search([
-                ("state", "=", "active"),
-                ("vehicle_id", "!=", False),
-                ("vehicle_id.active", "=", True),
-            ], order="vehicle_id, id", limit=limit)
-            if not assignments:
-                raise ValidationError(_("No active Vehicle RFID assignments are available."))
-            if len(assignments) < limit:
-                raise ValidationError(
-                    _("Only %(available)s active Vehicle RFID assignments are available; %(planned)s are required for this Run.")
-                    % {"available": len(assignments), "planned": limit}
-                )
-            run.vehicle_line_ids.unlink()
-            run.write({
-                "vehicle_line_ids": [(0, 0, {
-                    "vehicle_id": assignment.vehicle_id.id,
-                    "tag_id": assignment.tag_id.id,
-                }) for assignment in assignments]
-            })
+        self.ensure_one()
+        self.check_access("write")
+        if self.state != "draft":
+            raise ValidationError(_("Vehicles can be loaded only while the Validation Run is Draft."))
+        limit = max(1, min(int(self.planned_vehicle_count or 100), 5000))
+        assignments = self.env["nsp.rfid.tag.assignment"].search([
+            ("state", "=", "active"),
+            ("vehicle_id", "!=", False),
+            ("vehicle_id.active", "=", True),
+        ], order="vehicle_id, id", limit=limit)
+        if not assignments:
+            raise ValidationError(_("No active Vehicle RFID assignments are available."))
+        if len(assignments) < limit:
+            raise ValidationError(
+                _("Only %(available)s active Vehicle RFID assignments are available; %(planned)s are required for this Run.")
+                % {"available": len(assignments), "planned": limit}
+            )
+        self.vehicle_line_ids.unlink()
+        self.write({
+            "vehicle_line_ids": [(0, 0, {
+                "vehicle_id": assignment.vehicle_id.id,
+                "tag_id": assignment.tag_id.id,
+            }) for assignment in assignments]
+        })
         return True
 
     def action_start(self):
-        for run in self:
-            if run.state != "draft":
-                raise ValidationError(_("Only a Draft Validation Run can be started."))
-            if run.result_id.state != "validation":
-                raise ValidationError(_("Validation requires a Result submitted for Validation."))
-            if not run.vehicle_line_ids:
-                raise ValidationError(_("Add at least one Vehicle to the Validation Run."))
-            if len(run.vehicle_line_ids) != int(run.planned_vehicle_count or 0):
-                raise ValidationError(
-                    _("Validation Run requires exactly %(planned)s Vehicles; currently configured: %(actual)s.")
-                    % {"planned": run.planned_vehicle_count, "actual": len(run.vehicle_line_ids)}
-                )
-            run.vehicle_line_ids.write({
-                "result": "pending", "detected_sequence": False, "missing_or_error": False,
-                "total_duration": 0.0, "detected_at": False, "actual_timeline_json": False,
-            })
-            next_revision = (
-                int(run.session_id.revision or 1)
-                if run.session_id.status == "ready"
-                else int(run.session_id.revision or 1) + 1
+        self.ensure_one()
+        self.check_access("write")
+        if self.state != "draft":
+            raise ValidationError(_("Only a Draft Validation Run can be started."))
+        if self.result_id.state != "validation":
+            raise ValidationError(_("Validation requires a Result submitted for Validation."))
+        if not self.vehicle_line_ids:
+            raise ValidationError(_("Add at least one Vehicle to the Validation Run."))
+        if len(self.vehicle_line_ids) != int(self.planned_vehicle_count or 0):
+            raise ValidationError(
+                _("Validation Run requires exactly %(planned)s Vehicles; currently configured: %(actual)s.")
+                % {"planned": self.planned_vehicle_count, "actual": len(self.vehicle_line_ids)}
             )
-            started_at = fields.Datetime.now()
-            run.write({
-                "state": "running", "started_at": started_at, "ended_at": False,
-                "measurement_revision": next_revision,
-            })
-            run.session_id.with_context(measurement_sync=True).write({
-                "revision": next_revision,
-                "status": "ready",
-                "started_at": started_at,
-                "ended_at": False,
-            })
+        self.vehicle_line_ids.write({
+            "result": "pending", "detected_sequence": False, "missing_or_error": False,
+            "total_duration": 0.0, "detected_at": False, "actual_timeline_json": False,
+        })
+        started_at = fields.Datetime.now()
+        next_revision = self.session_id._prepare_validation_revision(started_at)
+        self._apply_validation_run_state("running", {
+            "started_at": started_at,
+            "ended_at": False,
+            "measurement_revision": next_revision,
+        }, allow_same=False)
         return True
 
     def action_stop_and_analyse(self):
-        for run in self:
-            if run.state != "running":
-                raise ValidationError(_("Only a running Validation Run can be completed."))
-            ended_at = fields.Datetime.now()
-            run._analyse(ended_at)
-            run.write({"ended_at": ended_at})
-            minimum_port = min(run.port_stat_ids.mapped("detection_rate") or [100.0])
-            passed = (
-                run.complete_rate >= run.minimum_complete_rate
-                and minimum_port >= run.minimum_port_rate
-                and run.wrong_order_rate <= run.maximum_wrong_order_rate
+        self.ensure_one()
+        self.check_access("write")
+        if self.state != "running":
+            raise ValidationError(_("Only a running Validation Run can be completed."))
+        ended_at = fields.Datetime.now()
+        self._analyse(ended_at)
+        minimum_port = min(self.port_stat_ids.mapped("detection_rate") or [100.0])
+        passed = (
+            self.complete_rate >= self.minimum_complete_rate
+            and minimum_port >= self.minimum_port_rate
+            and self.wrong_order_rate <= self.maximum_wrong_order_rate
+        )
+        recommendations = [
+            _("%(port)s detection rate is %(rate).1f%%. Review Reader power, Reader position, or port configuration.")
+            % {"port": stat.display_name, "rate": stat.detection_rate}
+            for stat in self.port_stat_ids.filtered(
+                lambda row: row.detection_rate < self.minimum_port_rate
             )
-            recommendations = []
-            for stat in run.port_stat_ids.filtered(lambda row: row.detection_rate < run.minimum_port_rate):
-                recommendations.append(_(
-                    "%(port)s detection rate is %(rate).1f%%. Review Reader power, Reader position, or port configuration."
-                ) % {"port": stat.display_name, "rate": stat.detection_rate})
-            if run.not_detected_count:
-                recommendations.append(_("Re-test %(count)s Vehicles with no RFID detection.") % {"count": run.not_detected_count})
-            if run.incomplete_count:
-                recommendations.append(_("Re-test %(count)s Vehicles with incomplete or timed-out paths.") % {"count": run.incomplete_count})
-            final_state = "passed" if passed else "failed"
-            run.write({
-                "state": final_state,
-                "recommendation": "\n".join(recommendations) or _("Validation meets all configured acceptance criteria."),
+        ]
+        if self.not_detected_count:
+            recommendations.append(_("Re-test %(count)s Vehicles with no RFID detection.") % {
+                "count": self.not_detected_count,
             })
-            run.result_id.write({
-                "validation_state": final_state,
-                "validated_run_id": run.id,
-                "validated_at": ended_at,
+        if self.incomplete_count:
+            recommendations.append(_("Re-test %(count)s Vehicles with incomplete or timed-out paths.") % {
+                "count": self.incomplete_count,
             })
-            run.session_id.with_context(measurement_sync=True).write({
-                "status": "completed",
-                "ended_at": ended_at,
-            })
+        final_state = "passed" if passed else "failed"
+        self._apply_validation_run_state(final_state, {
+            "ended_at": ended_at,
+            "recommendation": "\n".join(recommendations) or _("Validation meets all configured acceptance criteria."),
+        }, allow_same=False)
+        self.result_id.write({
+            "validation_state": final_state,
+            "validated_run_id": self.id,
+            "validated_at": ended_at,
+        })
+        self.session_id._apply_status_transition(
+            "completed",
+            {"ended_at": ended_at},
+        )
         return True
 
     def _analyse(self, ended_at):
@@ -780,15 +800,26 @@ class NspMeasurementValidationRun(models.Model):
         transition_timeout = {index: 0 for index in range(1, len(result_lines))}
         port_detected = {reader_port_id: 0 for reader_port_id in expected_ids}
 
-        for vehicle_line in self.vehicle_line_ids:
-            events = self.env["nsp.measurement.event"].sudo().search([
-                ("session_id", "=", self.session_id.id),
-                ("revision", "=", int(self.measurement_revision or self.session_id.revision or 1)),
-                ("tid", "=", vehicle_line.vehicle_tid),
-                ("read_at", ">=", self.started_at),
-                ("read_at", "<=", ended_at),
-            ], order="read_at asc, read_at_ms asc, id asc")
-            steps = self.session_id._collapse_events_to_steps(events)
+        vehicle_lines = self.vehicle_line_ids
+        tids = {str(tid or "").strip().upper() for tid in vehicle_lines.mapped("vehicle_tid") if tid}
+        Event = self.env["nsp.measurement.event"].sudo()
+        events = Event.search([
+            ("session_id", "=", self.session_id.id),
+            ("revision", "=", int(self.measurement_revision or self.session_id.revision or 1)),
+            ("tid", "in", sorted(tids)),
+            ("read_at", ">=", self.started_at),
+            ("read_at", "<=", ended_at),
+        ], order="tid asc, read_at asc, read_at_ms asc, id asc") if tids else Event.browse()
+        event_ids_by_tid = {}
+        for event in events:
+            key = str(event.tid or "").strip().upper()
+            event_ids_by_tid.setdefault(key, []).append(event.id)
+
+        for vehicle_line in vehicle_lines:
+            key = str(vehicle_line.vehicle_tid or "").strip().upper()
+            steps = self.session_id._collapse_events_to_steps(
+                Event.browse(event_ids_by_tid.get(key, []))
+            )
             actual_ids = [row["reader_port_id"] for row in steps]
             for reader_port_id in expected_set.intersection(actual_ids):
                 port_detected[reader_port_id] += 1
@@ -817,11 +848,7 @@ class NspMeasurementValidationRun(models.Model):
                 result = "incomplete"
                 missing = [labels[item] for item in expected_ids if item not in actual_ids]
                 error = _("Missing: %s") % ", ".join(missing)
-            total_duration = sum(float(row["duration_from_previous"] or 0.0) for row in steps)
-            actual_labels = {
-                row["reader_port_id"]: row["point_key"]
-                for row in steps
-            }
+            actual_labels = {row["reader_port_id"]: row["point_key"] for row in steps}
             vehicle_line.write({
                 "result": result,
                 "detected_sequence": " → ".join(
@@ -829,45 +856,45 @@ class NspMeasurementValidationRun(models.Model):
                     for item in actual_ids
                 ),
                 "missing_or_error": error,
-                "total_duration": total_duration,
+                "total_duration": sum(float(row["duration_from_previous"] or 0.0) for row in steps),
                 "detected_at": steps[0]["first_read_at"] if steps else False,
                 "actual_timeline_json": json.dumps(steps, default=str, ensure_ascii=False),
             })
 
         self.port_stat_ids.unlink()
-        expected_count = len(self.vehicle_line_ids)
-        port_commands = []
-        for result_line in result_lines:
-            reader_port_id = result_line.reader_port_id.id
-            detected = int(port_detected.get(reader_port_id, 0))
-            port_commands.append((0, 0, {
-                "reader_port_id": reader_port_id,
-                "expected_count": expected_count,
-                "detected_count": detected,
-                "missed_count": max(0, expected_count - detected),
-                "detection_rate": (detected * 100.0 / expected_count) if expected_count else 0.0,
-            }))
-        self.write({"port_stat_ids": port_commands})
+        expected_count = len(vehicle_lines)
+        self.write({"port_stat_ids": [(0, 0, {
+            "reader_port_id": result_line.reader_port_id.id,
+            "expected_count": expected_count,
+            "detected_count": int(port_detected.get(result_line.reader_port_id.id, 0)),
+            "missed_count": max(
+                0,
+                expected_count - int(port_detected.get(result_line.reader_port_id.id, 0)),
+            ),
+            "detection_rate": (
+                int(port_detected.get(result_line.reader_port_id.id, 0)) * 100.0 / expected_count
+            ) if expected_count else 0.0,
+        }) for result_line in result_lines]})
 
         self.transition_stat_ids.unlink()
-        transition_commands = []
-        for index in range(1, len(result_lines)):
-            values = transition_samples[index]
-            transition_commands.append((0, 0, {
-                "from_reader_port_id": result_lines[index - 1].reader_port_id.id,
-                "to_reader_port_id": result_lines[index].reader_port_id.id,
-                "sample_count": len(values),
-                "duration_min": min(values) if values else 0.0,
-                "duration_median": median(values) if values else 0.0,
-                "duration_average": sum(values) / len(values) if values else 0.0,
-                "duration_p95": _percentile(values, 95),
-                "duration_max": max(values) if values else 0.0,
-                "timeout_count": transition_timeout[index],
-            }))
-        self.write({"transition_stat_ids": transition_commands})
+        self.write({"transition_stat_ids": [(0, 0, {
+            "from_reader_port_id": result_lines[index - 1].reader_port_id.id,
+            "to_reader_port_id": result_lines[index].reader_port_id.id,
+            "sample_count": len(transition_samples[index]),
+            "duration_min": min(transition_samples[index]) if transition_samples[index] else 0.0,
+            "duration_median": median(transition_samples[index]) if transition_samples[index] else 0.0,
+            "duration_average": (
+                sum(transition_samples[index]) / len(transition_samples[index])
+                if transition_samples[index] else 0.0
+            ),
+            "duration_p95": _percentile(transition_samples[index], 95),
+            "duration_max": max(transition_samples[index]) if transition_samples[index] else 0.0,
+            "timeout_count": transition_timeout[index],
+        }) for index in range(1, len(result_lines))]})
 
     def action_retest_failed(self):
         self.ensure_one()
+        self.check_access("write")
         failed = self.vehicle_line_ids.filtered(lambda row: row.result not in ("complete", "pending"))
         if not failed:
             raise ValidationError(_("There are no failed Vehicles to re-test."))
@@ -875,6 +902,7 @@ class NspMeasurementValidationRun(models.Model):
 
     def action_retest_selected(self):
         self.ensure_one()
+        self.check_access("write")
         selected = self.vehicle_line_ids.filtered("retry_selected")
         if not selected:
             raise ValidationError(_("Select at least one Vehicle for re-test."))
@@ -882,6 +910,7 @@ class NspMeasurementValidationRun(models.Model):
 
     def action_new_run_all(self):
         self.ensure_one()
+        self.check_access("write")
         return self._copy_for_retest(self.vehicle_line_ids)
 
     def _copy_for_retest(self, lines):
@@ -903,6 +932,7 @@ class NspMeasurementValidationRun(models.Model):
 
     def action_open_form(self):
         self.ensure_one()
+        self.check_access("read")
         return {
             "type": "ir.actions.act_window",
             "name": _("Validation Run"),
@@ -975,25 +1005,35 @@ class NspMeasurementValidationVehicle(models.Model):
 
     @api.onchange("vehicle_id")
     def _onchange_vehicle_id(self):
-        for record in self:
-            if not record.vehicle_id:
-                record.tag_id = False
-                continue
-            assignment = self.env["nsp.rfid.tag.assignment"].sudo().search([
-                ("state", "=", "active"), ("vehicle_id", "=", record.vehicle_id.id),
-            ], limit=1)
+        records = self.filtered("vehicle_id")
+        for record in self - records:
+            record.tag_id = False
+        if not records:
+            return
+        assignments = self.env["nsp.rfid.tag.assignment"].search([
+            ("state", "=", "active"),
+            ("vehicle_id", "in", records.mapped("vehicle_id").ids),
+        ], order="vehicle_id, id")
+        assignment_by_vehicle = {}
+        for assignment in assignments:
+            assignment_by_vehicle.setdefault(assignment.vehicle_id.id, assignment)
+        for record in records:
+            assignment = assignment_by_vehicle.get(record.vehicle_id.id)
             record.tag_id = assignment.tag_id if assignment else False
 
     @api.constrains("vehicle_id", "tag_id")
     def _check_assignment(self):
-        for record in self:
-            assignment = self.env["nsp.rfid.tag.assignment"].sudo().search([
-                ("state", "=", "active"),
-                ("vehicle_id", "=", record.vehicle_id.id),
-                ("tag_id", "=", record.tag_id.id),
-            ], limit=1)
-            if not assignment:
-                raise ValidationError(_("Validation Vehicle must use its active Vehicle RFID Tag."))
+        records = self.filtered(lambda row: row.vehicle_id and row.tag_id)
+        if not records:
+            return
+        assignments = self.env["nsp.rfid.tag.assignment"].search([
+            ("state", "=", "active"),
+            ("vehicle_id", "in", records.mapped("vehicle_id").ids),
+            ("tag_id", "in", records.mapped("tag_id").ids),
+        ])
+        valid_pairs = {(row.vehicle_id.id, row.tag_id.id) for row in assignments}
+        if records.filtered(lambda row: (row.vehicle_id.id, row.tag_id.id) not in valid_pairs):
+            raise ValidationError(_("Validation Vehicle must use its active Vehicle RFID Tag."))
 
     def _workspace_payload(self):
         self.ensure_one()

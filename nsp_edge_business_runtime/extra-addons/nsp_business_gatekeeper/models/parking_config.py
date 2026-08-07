@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from odoo import api, fields, models, _
-from odoo.exceptions import AccessError, ValidationError, UserError
+from odoo.exceptions import AccessError, ValidationError
 from odoo.addons.nsp_core.utils import new_management_code
 
 
@@ -187,6 +187,7 @@ class NspParkingArea(models.Model):
 
     def action_open_live_monitor(self):
         self.ensure_one()
+        self.check_access("read")
         return {
             "type": "ir.actions.client",
             "name": _("Parking Live Monitor"),
@@ -208,10 +209,11 @@ class NspParkingArea(models.Model):
             limit = min(max(int(limit or 12), 3), 50)
         except (TypeError, ValueError):
             parking_area_id, limit = 0, 12
-        area = self.sudo().browse(parking_area_id).exists()
+        area = self.browse(parking_area_id).exists()
         if not area:
             return {"found": False}
-        transactions = self.env["nsp.parking.transaction"].sudo().search(
+        area.check_access("read")
+        transactions = self.env["nsp.parking.transaction"].search(
             [
                 "|",
                 ("parking_area_id", "=", area.id),
@@ -247,26 +249,6 @@ class NspParkingArea(models.Model):
                 issues.append(str(exc))
         return issues
 
-    def action_set_operational(self):
-        for record in self:
-            issues = record._operational_issues()
-            if issues:
-                raise UserError("\n".join(issues))
-        self.write({"state": "operational"})
-        return True
-
-    def action_reset_to_draft(self):
-        self.write({"state": "draft"})
-        return True
-
-    def action_set_maintenance(self):
-        self.write({"state": "maintenance"})
-        return True
-
-    def action_set_blocked(self):
-        self.write({"state": "blocked"})
-        return True
-
     def prepare_sync_payload(self):
         self.ensure_one()
         return {
@@ -280,7 +262,8 @@ class NspParkingArea(models.Model):
 
     def _open_related_action(self, action_xmlid, records, name, context=None):
         self.ensure_one()
-        action = self.env.ref(action_xmlid).sudo().read()[0]
+        self.check_access("read")
+        action = self.env.ref(action_xmlid).read()[0]
         action.update({
             "name": name,
             "domain": [("id", "in", records.ids)] if records else [],
@@ -305,7 +288,8 @@ class NspParkingArea(models.Model):
 
     def action_open_lanes(self):
         self.ensure_one()
-        action = self.env.ref("nsp_business_gatekeeper.action_nsp_parking_lane").sudo().read()[0]
+        self.check_access("read")
+        action = self.env.ref("nsp_business_gatekeeper.action_nsp_parking_lane").read()[0]
         action.update({
             "name": _("Parking Lanes"),
             "domain": [("parking_area_id", "=", self.id)],

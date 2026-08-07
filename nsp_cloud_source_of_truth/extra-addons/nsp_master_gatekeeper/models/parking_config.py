@@ -191,6 +191,7 @@ class NspParkingArea(models.Model):
 
     def action_open_live_monitor(self):
         self.ensure_one()
+        self.check_access("read")
         return {
             "type": "ir.actions.client",
             "name": _("Parking Live Monitor"),
@@ -213,10 +214,11 @@ class NspParkingArea(models.Model):
             limit = min(max(int(limit or 12), 3), 50)
         except (TypeError, ValueError):
             parking_area_id, limit = 0, 12
-        area = self.sudo().browse(parking_area_id).exists()
+        area = self.browse(parking_area_id).exists()
         if not area:
             return {"found": False}
-        transactions = self.env["nsp.parking.transaction"].sudo().search(
+        area.check_access("read")
+        transactions = self.env["nsp.parking.transaction"].search(
             [
                 "|",
                 ("parking_area_id", "=", area.id),
@@ -421,110 +423,97 @@ class NspParkingArea(models.Model):
         return issues
 
     def _publish(self, target_state):
-        for record in self:
-            revision = int(record.published_revision or 0) + 1
-            previous_edge_codes = {
-                item.strip().upper()
-                for item in str(record.published_edge_server_codes or "").split(",")
-                if item.strip()
-            }
+        self.ensure_one()
+        self.check_access("write")
+        record = self
+        record._validate_parking_state_transition(target_state)
+        revision = int(record.published_revision or 0) + 1
+        previous_edge_codes = {
+            item.strip().upper()
+            for item in str(record.published_edge_server_codes or "").split(",")
+            if item.strip()
+        }
 
-            if target_state == "operational":
-                issues = record._operational_issues()
-                if issues:
-                    raise UserError("\n".join(issues))
-                payload = record._build_sync_payload(target_state, revision)
-                record._validate_sync_payload_contract(payload)
-                current_reader_ports = {
+        if target_state == "operational":
+            issues = record._operational_issues()
+            if issues:
+                raise UserError("\n".join(issues))
+            payload = record._build_sync_payload(target_state, revision)
+            record._validate_sync_payload_contract(payload)
+            current_reader_ports = {
+                (
+                    str(point.get("reader_code") or "").strip().upper(),
+                    int(point.get("port_no") or 0),
+                )
+                for lane_payload in payload.get("lanes", [])
+                for point in lane_payload.get("reader_port_timeline", [])
+            }
+            other_layouts = self.search([
+                ("id", "!=", record.id),
+                ("published_payload_json", "!=", False),
+            ])
+            conflicts = []
+            for other in other_layouts:
+                try:
+                    other_payload = json.loads(other.published_payload_json)
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise ValidationError(
+                        _("Published Parking Layout %(layout)s snapshot is invalid.")
+                        % {"layout": other.display_name}
+                    ) from exc
+                if other_payload.get("state") != "operational":
+                    continue
+                other_reader_ports = {
                     (
                         str(point.get("reader_code") or "").strip().upper(),
                         int(point.get("port_no") or 0),
                     )
-                    for lane_payload in payload.get("lanes", [])
+                    for lane_payload in other_payload.get("lanes", [])
                     for point in lane_payload.get("reader_port_timeline", [])
                 }
-                other_layouts = self.search([
-                    ("id", "!=", record.id),
-                    ("published_payload_json", "!=", False),
-                ])
-                conflicts = []
-                for other in other_layouts:
-                    try:
-                        other_payload = json.loads(other.published_payload_json)
-                    except Exception as exc:
-                        raise ValidationError(
-                            _("Published Parking Layout %(layout)s snapshot is invalid.")
-                            % {"layout": other.display_name}
-                        ) from exc
-                    if other_payload.get("state") != "operational":
-                        continue
-                    other_reader_ports = {
-                        (
-                            str(point.get("reader_code") or "").strip().upper(),
-                            int(point.get("port_no") or 0),
-                        )
-                        for lane_payload in other_payload.get("lanes", [])
-                        for point in lane_payload.get("reader_port_timeline", [])
-                    }
-                    overlap = sorted(current_reader_ports & other_reader_ports)
-                    if overlap:
-                        conflicts.append("%s: %s" % (
-                            other.display_name,
-                            ", ".join("%s:%s" % item for item in overlap),
-                        ))
-                if conflicts:
-                    raise UserError(
-                        _("Operational Parking Layout Reader Ports must be exclusive. Conflicts: %s")
-                        % "; ".join(conflicts)
-                    )
-                edge_codes = sorted({
-                    str(lane.get("server_code") or "").strip().upper()
-                    for lane in payload.get("lanes", [])
-                    if lane.get("server_code")
-                })
-            else:
-                # Maintenance/Blocked is an operational control action. It must
-                # update the immutable snapshot already running on Edge, never
-                # publish a potentially incomplete Cloud draft under revision.
-                if not record.published_payload_json:
-                    raise UserError(_("Publish the Parking Layout before changing its runtime state."))
-                payload = dict(record.prepare_sync_payload())
-                payload["state"] = target_state
-                payload["published_revision"] = revision
-                edge_codes = sorted({
-                    str(lane.get("server_code") or "").strip().upper()
-                    for lane in payload.get("lanes", [])
-                    if lane.get("server_code")
-                })
-
-            record.with_context(nsp_publishing=True).write({
-                "state": target_state,
-                "published_revision": revision,
-                "published_at": fields.Datetime.now(),
-                "published_payload_json": json.dumps(
-                    payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-                ),
-                "published_edge_server_codes": ",".join(edge_codes),
+                overlap = sorted(current_reader_ports & other_reader_ports)
+                if overlap:
+                    conflicts.append("%s: %s" % (
+                        other.display_name,
+                        ", ".join("%s:%s" % item for item in overlap),
+                    ))
+            if conflicts:
+                raise UserError(
+                    _("Operational Parking Layout Reader Ports must be exclusive. Conflicts: %s")
+                    % "; ".join(conflicts)
+                )
+            edge_codes = sorted({
+                str(lane.get("server_code") or "").strip().upper()
+                for lane in payload.get("lanes", [])
+                if lane.get("server_code")
             })
-            affected_codes = previous_edge_codes | set(edge_codes)
-            affected_edges = self.env["nsp.edge.server"].sudo().with_context(active_test=False).search([
-                ("edge_server_code", "in", sorted(affected_codes)),
-            ]) if affected_codes else self.env["nsp.edge.server"]
-            affected_edges.bump_config_revision()
-        return True
+        else:
+            if not record.published_payload_json:
+                raise UserError(_("Publish the Parking Layout before changing its runtime state."))
+            payload = dict(record.prepare_sync_payload())
+            payload["state"] = target_state
+            payload["published_revision"] = revision
+            edge_codes = sorted({
+                str(lane.get("server_code") or "").strip().upper()
+                for lane in payload.get("lanes", [])
+                if lane.get("server_code")
+            })
 
-    def action_set_operational(self):
-        return self._publish("operational")
-
-    def action_set_maintenance(self):
-        return self._publish("maintenance")
-
-    def action_set_blocked(self):
-        return self._publish("blocked")
-
-    def action_reset_to_draft(self):
-        # Keep the last immutable published payload active on Edge while Cloud is edited.
-        self.write({"state": "draft"})
+        record.with_context(nsp_publishing=True).write({
+            "state": target_state,
+            "published_revision": revision,
+            "published_at": fields.Datetime.now(),
+            "published_payload_json": json.dumps(
+                payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
+            "published_edge_server_codes": ",".join(edge_codes),
+        })
+        affected_codes = previous_edge_codes | set(edge_codes)
+        if affected_codes:
+            affected_edges = self.env["nsp.edge.server"].sudo().with_context(
+                active_test=False
+            ).search([("edge_server_code", "in", sorted(affected_codes))])
+            affected_edges._bump_config_revision()
         return True
 
     def prepare_sync_payload(self):
@@ -1095,35 +1084,37 @@ class NspParkingLaneTimeline(models.Model):
 
     @api.depends("lane_id.controller_id")
     def _compute_available_readers(self):
-        Reader = self.env["nsp.device"]
+        readers = self.env["nsp.device"].search([
+            ("active", "=", True),
+            ("whitelist_id.active", "=", True),
+            ("whitelist_id.device_type_code", "=", "RFID_READER"),
+        ])
+        # Reader inventory may be synchronized independently from Lane ownership.
         for record in self:
-            domain = [
-                ("active", "=", True),
-                ("whitelist_id.active", "=", True),
-                ("whitelist_id.device_type_code", "=", "RFID_READER"),
-            ]
-            # Do not filter by nsp.device.controller_id.  A Lane owns its
-            # Controller explicitly and the Reader inventory relation may be
-            # empty or updated independently by runtime synchronization.
-            record.available_reader_ids = Reader.search(domain)
+            record.available_reader_ids = readers
 
     @api.model_create_multi
     def create(self, vals_list):
+        lane_ids = {
+            int(values.get("lane_id") or 0)
+            for values in vals_list
+            if int(values.get("lane_id") or 0) and not int(values.get("sequence") or 0)
+        }
+        max_sequence_by_lane = {lane_id: 0 for lane_id in lane_ids}
+        if lane_ids:
+            rows = self._read_group(
+                [("lane_id", "in", sorted(lane_ids))],
+                ["lane_id"],
+                ["sequence:max"],
+            )
+            max_sequence_by_lane.update({lane.id: int(max_sequence or 0) for lane, max_sequence in rows})
         prepared = []
-        next_sequence_by_lane = {}
         for source in vals_list:
             values = dict(source)
             lane_id = int(values.get("lane_id") or 0)
             if lane_id and not int(values.get("sequence") or 0):
-                if lane_id not in next_sequence_by_lane:
-                    last = self.search(
-                        [("lane_id", "=", lane_id)],
-                        order="sequence desc, id desc",
-                        limit=1,
-                    )
-                    next_sequence_by_lane[lane_id] = int(last.sequence or 0) + 1
-                values["sequence"] = next_sequence_by_lane[lane_id]
-                next_sequence_by_lane[lane_id] += 1
+                max_sequence_by_lane[lane_id] = max_sequence_by_lane.get(lane_id, 0) + 1
+                values["sequence"] = max_sequence_by_lane[lane_id]
             prepared.append(values)
         records = super().create(prepared)
         if not self.env.context.get("skip_lane_reader_config_sync"):
@@ -1189,23 +1180,32 @@ class NspParkingLaneEventSequence(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
+        keys = {
+            (int(values.get("lane_id") or 0), values.get("sequence_type") or "check_in")
+            for values in vals_list
+            if int(values.get("lane_id") or 0) and not int(values.get("sequence") or 0)
+        }
+        max_sequence_by_key = {key: 0 for key in keys}
+        lane_ids = sorted({lane_id for lane_id, _sequence_type in keys})
+        if lane_ids:
+            rows = self._read_group(
+                [("lane_id", "in", lane_ids)],
+                ["lane_id", "sequence_type"],
+                ["sequence:max"],
+            )
+            max_sequence_by_key.update({
+                (lane.id, sequence_type): int(max_sequence or 0)
+                for lane, sequence_type, max_sequence in rows
+            })
         prepared = []
-        next_sequence_by_key = {}
         for source in vals_list:
             values = dict(source)
             lane_id = int(values.get("lane_id") or 0)
             sequence_type = values.get("sequence_type") or "check_in"
             if lane_id and not int(values.get("sequence") or 0):
                 key = (lane_id, sequence_type)
-                if key not in next_sequence_by_key:
-                    last = self.search(
-                        [("lane_id", "=", lane_id), ("sequence_type", "=", sequence_type)],
-                        order="sequence desc, id desc",
-                        limit=1,
-                    )
-                    next_sequence_by_key[key] = int(last.sequence or 0) + 1
-                values["sequence"] = next_sequence_by_key[key]
-                next_sequence_by_key[key] += 1
+                max_sequence_by_key[key] = max_sequence_by_key.get(key, 0) + 1
+                values["sequence"] = max_sequence_by_key[key]
             prepared.append(values)
         return super().create(prepared)
 

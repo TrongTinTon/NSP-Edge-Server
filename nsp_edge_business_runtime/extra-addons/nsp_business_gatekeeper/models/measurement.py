@@ -252,6 +252,16 @@ class NspMeasurementSession(models.Model):
 
     def _validate_measurement_scope(self):
         RuntimeAssignment = self.env["nsp.rfid.runtime.assignment"].sudo()
+        all_tids = {
+            str(tid or "").strip().upper()
+            for tid in self.mapped("target_line_ids.vehicle_tid")
+            if tid
+        }
+        assignments = RuntimeAssignment.search([("tid", "in", sorted(all_tids))]) if all_tids else RuntimeAssignment.browse()
+        assignment_by_tid = {
+            str(row.tid or "").strip().upper(): row
+            for row in assignments
+        }
         for session in self:
             reader_ids = session.reader_line_ids.mapped("reader_id").ids
             if len(reader_ids) != len(set(reader_ids)):
@@ -262,17 +272,15 @@ class NspMeasurementSession(models.Model):
             )
             if incomplete:
                 raise ValidationError(_("Every Vehicle line must contain RFID TID and License Plate."))
-            tids = session.target_line_ids.mapped("vehicle_tid")
+            tids = [str(tid or "").strip().upper() for tid in session.target_line_ids.mapped("vehicle_tid")]
             vehicle_ids = session.target_line_ids.mapped("vehicle_id").ids
             if len(tids) != len(set(tids)):
                 raise ValidationError(_("An RFID TID can be selected only once."))
             if len(vehicle_ids) != len(set(vehicle_ids)):
                 raise ValidationError(_("A Vehicle can be selected only once."))
 
-            assignments = RuntimeAssignment.search([("tid", "in", tids)]) if tids else RuntimeAssignment.browse()
-            assignment_by_tid = {row.tid: row for row in assignments}
             for target in session.target_line_ids:
-                assignment = assignment_by_tid.get(target.vehicle_tid)
+                assignment = assignment_by_tid.get(str(target.vehicle_tid or "").strip().upper())
                 if (
                     not assignment
                     or assignment.vehicle_id != target.vehicle_id
@@ -358,146 +366,17 @@ class NspMeasurementSession(models.Model):
                 values.add(code)
         return sorted(values)
 
-    def action_ready(self):
-        for session in self:
-            if session.status == "ready":
-                continue
-            if session.status != "draft":
-                raise ValidationError(_("Only draft Lane Calibrations can be released."))
-            session._require_ready_configuration()
-            session.with_context(measurement_sync=True).write({"status": "ready"})
-        return True
 
-    def action_complete(self):
-        for session in self:
-            if session.status == "completed":
-                continue
-            if session.status != "running":
-                raise ValidationError(_("Only running Lane Calibrations can be completed."))
-            session.with_context(measurement_sync=True).write(
-                {"status": "completed", "ended_at": fields.Datetime.now()}
-            )
-        return True
 
-    def action_cancel(self):
-        for session in self:
-            if session.status in ("completed", "applied", "failed", "cancelled"):
-                raise ValidationError(_("This Lane Calibration can no longer be cancelled."))
-            session.with_context(measurement_sync=True).write(
-                {"status": "cancelled", "ended_at": fields.Datetime.now()}
-            )
-        return True
 
-    def _release_new_revision(self):
-        self.ensure_one()
-        self.with_context(measurement_sync=True).write({
-            "revision": self.revision + 1,
-            "status": "ready",
-            "started_at": False,
-            "ended_at": False,
-            "applied_at": False,
-        })
-        return self.get_live_snapshot(self.id)
 
-    def action_prepare_device_reconfiguration(self):
-        """Create a new editable revision without changing historical Pass/Validation data."""
-        self.ensure_one()
-        if self.status not in ("completed", "failed", "applied"):
-            raise ValidationError(_(
-                "Devices can be changed only after the current measurement or validation has finished."
-            ))
-        running_pass = self.pass_ids.filtered(lambda item: item.state == "running")[:1]
-        if running_pass:
-            raise ValidationError(_("Stop the running Run before changing devices."))
-        running_run = self.validation_run_ids.filtered(lambda item: item.state == "running")[:1]
-        if running_run:
-            raise ValidationError(_("Stop the running Validation Run before changing devices."))
-        self.with_context(measurement_sync=True).write({
-            "revision": int(self.revision or 1) + 1,
-            "status": "draft",
-            "started_at": False,
-            "ended_at": False,
-            "applied_at": False,
-        })
-        action = self.action_open_session_form()
-        action["name"] = _("Revise · R%(revision)s") % {"revision": self.revision}
-        action["context"] = {
-            **dict(action.get("context") or {}),
-            "form_view_initial_mode": "edit",
-            "nsp_device_reconfiguration": True,
-        }
-        return action
 
-    def action_measure_again(self, reader_settings=None):
-        self.ensure_one()
-        if self.status not in ("running", "completed", "failed"):
-            raise ValidationError(_("Measure Again is available for running, completed, or failed sessions."))
-        self._require_ready_configuration()
-        if reader_settings not in (None, False, ""):
-            if not isinstance(reader_settings, list):
-                raise ValidationError(_("Reader settings must be a list."))
-            line_by_id = {line.id: line for line in self.reader_line_ids}
-            seen = set()
-            for item in reader_settings:
-                if not isinstance(item, dict):
-                    raise ValidationError(_("Invalid Reader settings."))
-                try:
-                    line_id = int(item.get("reader_line_id") or 0)
-                    power = int(item.get("power_dbm"))
-                    interval = int(item.get("read_interval_ms"))
-                except Exception as exc:
-                    raise ValidationError(_("Invalid Reader settings.")) from exc
-                line = line_by_id.get(line_id)
-                if not line or line_id in seen:
-                    raise ValidationError(_("Reader settings do not match this Lane Calibration."))
-                seen.add(line_id)
-                line.with_context(measurement_sync=True).write({
-                    "reader_power_dbm": power,
-                    "read_interval_ms": interval,
-                })
-        return self._release_new_revision()
 
-    def action_apply_reader_settings(self, reader_line_id, power_dbm, read_interval_ms):
-        """Apply one Reader configuration and release a new shared revision."""
-        self.ensure_one()
-        if self.status not in ("running", "completed", "failed"):
-            raise ValidationError(_("Reader settings can be applied only while running, completed, or failed."))
-        try:
-            line_id = int(reader_line_id or 0)
-            power = int(power_dbm)
-            interval = int(read_interval_ms)
-        except Exception as exc:
-            raise ValidationError(_("Invalid Reader settings.")) from exc
-        line = self.reader_line_ids.filtered(lambda item: item.id == line_id)[:1]
-        if not line:
-            raise ValidationError(_("Reader does not belong to this Lane Calibration."))
-        line.with_context(measurement_sync=True).write({
-            "reader_power_dbm": power,
-            "read_interval_ms": interval,
-        })
-        self._require_ready_configuration()
-        return self._release_new_revision()
 
-    def action_apply_to_operation(self):
-        self.ensure_one()
-        if self._deployment_role() != "cloud":
-            raise UserError(_("Applying calibration results is owned by the Cloud Master."))
-        if self.status != "completed":
-            raise ValidationError(_("Complete the Lane Calibration before applying its result to a Lane configuration."))
-        self._require_ready_configuration()
-        for line in self.reader_line_ids:
-            line.reader_id.sudo().write({
-                "power_dbm": int(line.reader_power_dbm or 0),
-                "read_interval_ms": int(line.read_interval_ms or 200),
-            })
-        self.with_context(measurement_sync=True).sudo().write({
-            "status": "applied",
-            "applied_at": fields.Datetime.now(),
-        })
-        return self.get_live_snapshot(self.id)
 
     def action_view_events(self):
         self.ensure_one()
+        self.check_access("read")
         module = "nsp_business_gatekeeper"
         action = self.env.ref("%s.action_nsp_measurement_event" % module).read()[0]
         action["domain"] = [("session_id", "=", self.id)]
@@ -509,6 +388,7 @@ class NspMeasurementSession(models.Model):
 
     def _measurement_form_action(self, view_xmlid, name):
         self.ensure_one()
+        self.check_access("read")
         view = self.env.ref(view_xmlid)
         return {
             "type": "ir.actions.act_window",
@@ -528,7 +408,11 @@ class NspMeasurementSession(models.Model):
         }
 
     def action_open_live(self):
-        """Keep API compatibility while using the unified Lane Calibration form."""
+        """Compatibility alias for the unified Lane Calibration form.
+
+        Deprecated since NSP 19.0. Removal target: NSP 20.0, after all
+        frontend clients use ``action_open_session_form``.
+        """
         self.ensure_one()
         return self.action_open_session_form()
 
@@ -602,14 +486,16 @@ class NspMeasurementSession(models.Model):
 
     @api.model
     def get_live_snapshot(self, session_id, last_event_id=0, limit=2000):
-        session = self.sudo().browse(int(session_id or 0)).exists()
+        try:
+            record_id = int(session_id or 0)
+            limit = min(max(int(limit or 2000), 100), 5000)
+        except (TypeError, ValueError):
+            record_id, limit = 0, 2000
+        session = self.browse(record_id).exists()
         if not session:
             return {"found": False}
-        try:
-            limit = min(max(int(limit or 2000), 100), 5000)
-        except Exception:
-            limit = 2000
-        events = self.env["nsp.measurement.event"].sudo().search(
+        session.check_access("read")
+        events = self.env["nsp.measurement.event"].search(
             [("session_id", "=", session.id), ("revision", "=", session.revision)],
             order="read_at asc, read_at_ms asc, id asc",
             limit=limit,
@@ -783,7 +669,7 @@ class NspMeasurementSession(models.Model):
         value = self.env["ir.config_parameter"].sudo().get_param(param, "7")
         try:
             retention_days = max(int(value), 1)
-        except Exception:
+        except (TypeError, ValueError):
             retention_days = 7
         cutoff = fields.Datetime.now() - timedelta(days=retention_days)
         events = self.env["nsp.measurement.event"].sudo().search(
@@ -1217,17 +1103,25 @@ class NspMeasurementReaderPort(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        next_by_reader = {}
+        reader_line_ids = {
+            int(values.get("reader_line_id") or 0)
+            for values in vals_list
+            if int(values.get("reader_line_id") or 0) and not values.get("port_no")
+        }
+        existing_by_reader = {reader_line_id: [] for reader_line_id in reader_line_ids}
+        if reader_line_ids:
+            existing = self.search([("reader_line_id", "in", sorted(reader_line_ids))])
+            for row in existing:
+                existing_by_reader.setdefault(row.reader_line_id.id, []).append(int(row.port_no or 0))
+        next_by_reader = {
+            reader_line_id: max(port_numbers or [0]) + 1
+            for reader_line_id, port_numbers in existing_by_reader.items()
+        }
         prepared = []
         for source in vals_list:
             values = dict(source)
             reader_line_id = int(values.get("reader_line_id") or 0)
             if reader_line_id and not values.get("port_no"):
-                if reader_line_id not in next_by_reader:
-                    existing = self.search([
-                        ("reader_line_id", "=", reader_line_id),
-                    ]).mapped("port_no")
-                    next_by_reader[reader_line_id] = max(existing or [0]) + 1
                 values["port_no"] = next_by_reader[reader_line_id]
                 next_by_reader[reader_line_id] += 1
             prepared.append(values)

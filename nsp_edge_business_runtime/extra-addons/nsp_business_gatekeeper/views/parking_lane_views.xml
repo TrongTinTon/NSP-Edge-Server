@@ -1,0 +1,156 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<odoo><record id="view_nsp_parking_lane_list" model="ir.ui.view">
+    <field name="name">nsp.parking.lane.list</field>
+    <field name="model">nsp.parking.lane</field>
+    <field name="arch" type="xml">
+      <list string="Lanes" create="0" edit="0" delete="0" decoration-success="configuration_state == 'ready'" decoration-warning="configuration_state == 'incomplete'" decoration-muted="configuration_state == 'disabled'">
+        <field name="parking_area_id" string="Layout"/>
+        <field name="name" string="Lane" decoration-bf="1"/>
+        <field name="edge_server_id" string="Server"/>
+        <field name="controller_id" string="Controller"/>
+        <field name="timeline_point_count" string="Timeline" readonly="1"/>
+        <field name="reader_config_count" string="Readers" readonly="1" optional="show"/>
+        <field name="total_path_duration" string="Duration (s)" readonly="1"/>
+        <field name="checkin_point_count" string="Check-in" readonly="1"/>
+        <field name="checkout_point_count" string="Check-out" readonly="1"/>
+        <field name="configuration_state" column_invisible="1"/>
+        <field name="active" widget="boolean_toggle" readonly="1"/>
+      </list>
+    </field>
+  </record>
+
+  <record id="view_nsp_parking_lane_form" model="ir.ui.view">
+    <field name="name">nsp.parking.lane.form</field>
+    <field name="model">nsp.parking.lane</field>
+    <field name="arch" type="xml">
+      <form string="Lane" create="0" edit="0" delete="0">
+        <sheet>
+          <div class="oe_title">
+            <label for="name" string="Lane"/>
+            <h1><field name="name" readonly="1"/></h1>
+            <div class="text-muted">
+              <field name="code" readonly="1" class="oe_inline"/>
+            </div>
+          </div>
+
+          <div class="nsp-parking-layout-summary row g-3 mb-4">
+            <div class="col-12 col-md-6 col-xl-3">
+              <div class="nsp-parking-layout-card">
+                <div class="nsp-parking-layout-card__label">TIMELINE</div>
+                <div class="nsp-parking-layout-card__value">
+                  <field name="timeline_point_count" readonly="1" nolabel="1"/> points
+                </div>
+                <div class="nsp-parking-layout-card__meta">
+                  <field name="total_path_duration" readonly="1" nolabel="1"/> seconds total
+                </div>
+              </div>
+            </div>
+            <div class="col-12 col-md-6 col-xl-3">
+              <div class="nsp-parking-layout-card">
+                <div class="nsp-parking-layout-card__label">READERS</div>
+                <div class="nsp-parking-layout-card__value">
+                  <field name="reader_config_count" readonly="1" nolabel="1"/> configured
+                </div>
+                <div class="nsp-parking-layout-card__meta">Applied parameters</div>
+              </div>
+            </div>
+            <div class="col-12 col-md-6 col-xl-3">
+              <div class="nsp-parking-layout-card">
+                <div class="nsp-parking-layout-card__label">CHECK-IN</div>
+                <div class="nsp-parking-layout-card__value">
+                  <field name="checkin_point_count" readonly="1" nolabel="1"/> points
+                </div>
+                <div class="nsp-parking-layout-card__meta">Forward direction</div>
+              </div>
+            </div>
+            <div class="col-12 col-md-6 col-xl-3">
+              <div class="nsp-parking-layout-card">
+                <div class="nsp-parking-layout-card__label">CHECK-OUT</div>
+                <div class="nsp-parking-layout-card__value">
+                  <field name="checkout_point_count" readonly="1" nolabel="1"/> points
+                </div>
+                <div class="nsp-parking-layout-card__meta">Reverse direction</div>
+              </div>
+            </div>
+          </div>
+
+          <group>
+            <group string="Infrastructure">
+              <field name="edge_server_id" string="Server" readonly="1"/>
+              <field name="controller_id" string="Controller" readonly="1"/>
+            </group>
+            <group string="Runtime Settings">
+              <field name="tolerance_type" string="Tolerance Unit" readonly="1"/>
+              <field name="tolerance_value" string="Tolerance" readonly="1"/>
+              <field name="active" readonly="1"/>
+            </group>
+          </group>
+
+          <notebook>
+            <page string="Reader Configuration" name="reader_configuration">
+              <div class="alert alert-info" role="alert">
+                Reader settings currently applied by this Lane from the synchronized Parking Layout.
+              </div>
+              <field name="reader_config_ids" readonly="1" nolabel="1">
+                <list create="0" edit="0" delete="0">
+                  <field name="reader_id" string="Reader"/>
+                  <field name="port_summary" string="Ports"/>
+                  <field name="power_dbm" string="Power (dBm)"/>
+                  <field name="read_interval_ms" string="Read Interval (ms)"/>
+                  <field name="tid_start_address" string="TID Start"/>
+                  <field name="tid_length" string="TID Length"/>
+                </list>
+              </field>
+            </page>
+            <page string="Detection Timeline" name="timeline">
+              <div class="alert alert-secondary" role="alert">
+                Reader Ports are displayed in travel order. Duration is measured from the previous point in the published Lane configuration.
+              </div>
+              <field name="timeline_line_ids" readonly="1" nolabel="1">
+                <list create="0" edit="0" delete="0">
+                  <field name="sequence" string="Order"/>
+                  <field name="reader_id" string="Reader"/>
+                  <field name="port_no" string="Port"/>
+                  <field name="duration_from_previous" string="Duration from Previous (s)"/>
+                  <field name="cumulative_time" string="Cumulative Time (s)"/>
+                </list>
+              </field>
+            </page>
+            <page string="Event Sequences" name="sequences">
+              <div class="alert alert-info" role="alert">
+                Check-in and Check-out sequences are the active runtime rules used to classify RFID detections on Edge.
+              </div>
+              <group col="2">
+                <group string="Check-in">
+                  <field name="checkin_sequence_ids" readonly="1" nolabel="1">
+                    <list create="0" edit="0" delete="0">
+                      <field name="sequence" string="#"/>
+                      <field name="reader_id" string="Reader"/>
+                      <field name="port_no" string="Port"/>
+                    </list>
+                  </field>
+                </group>
+                <group string="Check-out">
+                  <field name="checkout_sequence_ids" readonly="1" nolabel="1">
+                    <list create="0" edit="0" delete="0">
+                      <field name="sequence" string="#"/>
+                      <field name="reader_id" string="Reader"/>
+                      <field name="port_no" string="Port"/>
+                    </list>
+                  </field>
+                </group>
+              </group>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="action_nsp_parking_lane" model="ir.actions.act_window">
+    <field name="name">Lanes</field>
+    <field name="res_model">nsp.parking.lane</field>
+    <field name="view_mode">list,form</field>
+    <field name="context">{'create': False, 'edit': False, 'delete': False}</field>
+  </record>
+</odoo>

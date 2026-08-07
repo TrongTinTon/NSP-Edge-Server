@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
 import json
+import logging
+from datetime import timedelta
 
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
 from odoo.addons.nsp_core.utils import new_management_code
+
+_logger = logging.getLogger(__name__)
 
 
 class Device(models.Model):
@@ -262,25 +266,37 @@ class Device(models.Model):
 
     @api.model
     def cron_mark_offline_devices(self):
+        parameter = self.env["ir.config_parameter"].sudo().get_param(
+            "nsp_business_gatekeeper.device_report_timeout_sec",
+            "300",
+        )
         try:
-            timeout_sec = int(self.env["ir.config_parameter"].sudo().get_param(
-                "nsp_business_gatekeeper.device_report_timeout_sec", "300"
-            ) or "300")
-        except Exception:
+            timeout_sec = int(parameter or "300")
+        except (TypeError, ValueError):
+            _logger.warning(
+                "Invalid device report timeout %r; using 300 seconds.",
+                parameter,
+            )
             timeout_sec = 300
-        timeout_sec = max(30, timeout_sec)
-        self.env.cr.execute("""
-            UPDATE nsp_device
-               SET status = 'offline'
-             WHERE COALESCE(status, 'offline') != 'offline'
-               AND (last_seen IS NULL OR last_seen < (NOW() AT TIME ZONE 'UTC') - (%s || ' seconds')::interval)
-        """, (str(timeout_sec),))
-        self.env.cr.execute("""
-            UPDATE nsp_device d
-               SET status = 'offline'
-              FROM nsp_controller c
-             WHERE d.controller_id = c.id
-               AND COALESCE(d.status, 'offline') != 'offline'
-               AND COALESCE(c.status, 'offline') = 'offline'
-        """)
+
+        cutoff = fields.Datetime.now() - timedelta(seconds=max(30, timeout_sec))
+        # This system cron owns Reader liveness for the complete runtime scope.
+        Device = self.sudo().with_context(
+            active_test=False,
+            tracking_disable=True,
+            mail_notrack=True,
+        )
+        stale_devices = Device.search([
+            ("status", "!=", "offline"),
+            "|",
+            ("last_seen", "=", False),
+            ("last_seen", "<", cutoff),
+        ])
+        stale_devices.write({"status": "offline"})
+
+        readers_on_offline_controllers = Device.search([
+            ("status", "!=", "offline"),
+            ("controller_id.status", "=", "offline"),
+        ])
+        readers_on_offline_controllers.write({"status": "offline"})
         return True

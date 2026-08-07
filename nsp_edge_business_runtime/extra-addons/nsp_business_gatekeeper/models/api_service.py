@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from odoo import api, fields, models
 from odoo.addons.t4_coreapi.utils import endpoint, get_body
 
+from .state_policy import classify_idempotent_replay, compare_revision
+
 _logger = logging.getLogger(__name__)
 
 _LANE_CALIBRATION_CLOUD_STATUSES = frozenset({"draft", "ready", "applied"})
@@ -68,6 +70,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         try:
             body = get_body(self) or {}
         except Exception:
+            _logger.debug("Unable to decode Core API request body", exc_info=True)
             body = {}
         return body if isinstance(body, dict) else {}
 
@@ -138,10 +141,10 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         try:
             normalized = text.replace("Z", "+00:00")
             parsed = datetime.fromisoformat(normalized)
-        except Exception:
+        except (TypeError, ValueError):
             try:
                 parsed = fields.Datetime.to_datetime(text)
-            except Exception:
+            except (TypeError, ValueError):
                 parsed = False
         if not parsed:
             return fields.Datetime.now() if default_now else False
@@ -166,14 +169,10 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         if error:
             return error
         now = fields.Datetime.now()
+        values = {"timestamp": now}
         if controller.status != "online":
-            controller.write({"timestamp": now, "status": "online"})
-        else:
-            self.env.cr.execute(
-                "UPDATE nsp_controller SET timestamp = %s WHERE id = %s",
-                (now, controller.id),
-            )
-            controller.invalidate_recordset(["timestamp"])
+            values["status"] = "online"
+        controller.with_context(tracking_disable=True, mail_notrack=True).write(values)
         return self._ok({
             "controller_code": controller.controller_id,
             "status": "online",
@@ -327,7 +326,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                     "300",
                 ) or "300"
             )
-        except Exception:
+        except (TypeError, ValueError):
             freshness_sec = 300
         freshness_sec = min(max(freshness_sec, 30), 3600)
 
@@ -516,10 +515,10 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         text = str(value).strip()
         try:
             parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        except Exception:
+        except (TypeError, ValueError):
             try:
                 parsed = fields.Datetime.to_datetime(text)
-            except Exception as exc:
+            except (TypeError, ValueError) as exc:
                 raise ValueError("invalid_datetime") from exc
         if not parsed:
             raise ValueError("invalid_datetime")
@@ -537,7 +536,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         try:
             parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
             return int(parsed.microsecond / 1000)
-        except Exception:
+        except (TypeError, ValueError):
             return 0
 
     @api.model
@@ -698,7 +697,12 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         if target in ("completed", "failed", "cancelled") and not session.ended_at:
             vals["ended_at"] = when
         if vals:
-            session.with_context(measurement_sync=True).write(vals)
+            if target != current:
+                extra_values = dict(vals)
+                extra_values.pop("status", None)
+                session._apply_status_transition(target, extra_values)
+            else:
+                session.with_context(measurement_sync=True).write(vals)
         if message and result["outcome"] == "applied":
             session.message_post(body=str(message))
         return result
@@ -782,7 +786,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         tid = self.env["nsp.rfid.runtime.assignment"].sudo()._normalize_tid(item.get("tid"))
         try:
             port_no = int(item.get("port_no") or 0)
-        except Exception:
+        except (TypeError, ValueError):
             port_no = 0
         if port_no < 1 or port_no > 16:
             raise ValueError("reader_port_not_found")
@@ -928,7 +932,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                     allow_historical_scope=allow_historical_scope,
                 )
                 if enforce_current_snapshot and (
-                    int(values["revision"] or 1) != int(session.revision or 1)
+                    compare_revision(values["revision"] or 1, session.revision or 1) != "current"
                 ):
                     results[index] = {
                         "index": index,
@@ -960,7 +964,10 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             uid = values["event_uid"]
             existing = existing_by_uid.get(uid)
             if existing:
-                if not self._measurement_event_matches(existing, values):
+                replay = classify_idempotent_replay(
+                    uid, self._measurement_event_matches(existing, values)
+                )
+                if replay == "conflict":
                     results[index] = {
                         "index": index, "record_key": key, "status": "rejected",
                         "error_code": "event_uid_conflict", "message": "event_uid_conflict",
@@ -1021,18 +1028,13 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                             "message": "Processed",
                         }
             except Exception:
+                _logger.exception(
+                    "Bulk Lane Calibration event create failed; isolating rows with savepoints"
+                )
                 created_records = Event.browse()
+                failed_attempts = {}
                 for uid, (index, key, values) in pending_by_uid.items():
                     try:
-                        existing = Event.search([("event_uid", "=", uid)], limit=1)
-                        if existing:
-                            if not self._measurement_event_matches(existing, values):
-                                raise ValueError("event_uid_conflict")
-                            results[index] = {
-                                "index": index, "record_key": key, "status": "duplicate",
-                                "message": "Already processed",
-                            }
-                            continue
                         with self.env.cr.savepoint():
                             event = Event.create(values)
                         created_records |= event
@@ -1041,10 +1043,28 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                             "message": "Processed",
                         }
                     except Exception as exc:
+                        failed_attempts[uid] = (index, key, values, exc)
+
+                concurrent_by_uid = {
+                    event.event_uid: event
+                    for event in Event.search([
+                        ("event_uid", "in", list(failed_attempts)),
+                    ])
+                } if failed_attempts else {}
+                for uid, (index, key, values, exc) in failed_attempts.items():
+                    existing = concurrent_by_uid.get(uid)
+                    if existing and self._measurement_event_matches(existing, values):
                         results[index] = {
-                            "index": index, "record_key": key, "status": "rejected",
-                            "error_code": str(exc).split(":", 1)[0], "message": str(exc),
+                            "index": index, "record_key": key, "status": "duplicate",
+                            "message": "Already processed",
                         }
+                        continue
+                    error = ValueError("event_uid_conflict") if existing else exc
+                    results[index] = {
+                        "index": index, "record_key": key, "status": "rejected",
+                        "error_code": str(error).split(":", 1)[0],
+                        "message": str(error),
+                    }
 
         for uid, duplicate_rows in duplicate_indices.items():
             primary = pending_by_uid.get(uid)

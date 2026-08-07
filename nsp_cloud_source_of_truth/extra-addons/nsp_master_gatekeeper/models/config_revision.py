@@ -14,13 +14,18 @@ class NspEdgeServerRevision(models.Model):
 
     config_revision = fields.Integer(default=1, readonly=True, copy=False, index=True)
 
-    def bump_config_revision(self):
-        for record in self.sudo().exists():
-            self.env.cr.execute(
-                "UPDATE nsp_edge_server "
-                "SET config_revision = config_revision + 1 "
-                "WHERE id = %s",
-                (record.id,),
-            )
-        self.invalidate_recordset(["config_revision"])
+    def _bump_config_revision(self):
+        """Atomically bump all scoped Edge revisions in one database statement."""
+        records = self.exists()
+        if not records:
+            return True
+        # Raw SQL is intentional here: the increment must remain atomic under
+        # concurrent Parking Layout publications.  Scope is resolved by caller.
+        self.env.cr.execute(
+            "UPDATE nsp_edge_server "
+            "SET config_revision = config_revision + 1 "
+            "WHERE id IN %s",
+            (tuple(records.ids),),
+        )
+        records.invalidate_recordset(["config_revision"])
         return True

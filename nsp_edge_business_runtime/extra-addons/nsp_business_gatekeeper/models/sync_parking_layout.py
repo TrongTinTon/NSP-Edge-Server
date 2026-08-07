@@ -395,7 +395,7 @@ class NspSyncJobParkingLayout(models.Model):
             stale.mapped("lane_ids.event_sequence_ids").unlink()
             stale.mapped("lane_ids.reader_config_ids").unlink()
             stale.mapped("lane_ids").write({"active": False})
-            stale.write({"state": "blocked"})
+            stale._apply_parking_state_transition("blocked", force=True)
         return len(stale)
 
     @staticmethod

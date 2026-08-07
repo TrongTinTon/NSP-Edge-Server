@@ -8,9 +8,11 @@ from . import device_whitelist
 from . import rfid_runtime_assignment
 from . import rfid_runtime_target
 from . import parking_config
+from . import parking_state_policy
 from . import parking_detection_event
 from . import parking_transaction
 from . import measurement
+from . import measurement_state_policy
 from . import api_service
 from . import sync_job
 from . import sync_parking_layout

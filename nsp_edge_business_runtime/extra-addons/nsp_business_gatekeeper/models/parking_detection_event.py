@@ -260,7 +260,7 @@ class ParkingDetectionEvent(models.Model):
         tid = self.env["nsp.rfid.runtime.assignment"]._normalize_tid(payload.get("tid"))
         try:
             port_no = int(payload.get("port_no") or 0)
-        except Exception as exc:
+        except (TypeError, ValueError) as exc:
             raise ValidationError(_("invalid_payload: port_no")) from exc
         try:
             rssi_dbm = float(payload.get("rssi_dbm") or 0.0)
@@ -270,7 +270,7 @@ class ParkingDetectionEvent(models.Model):
             detected_at = fields.Datetime.to_string(
                 fields.Datetime.to_datetime(payload.get("detected_at"))
             )
-        except Exception:
+        except (TypeError, ValueError):
             detected_at = False
 
         if not event_uid:
@@ -330,7 +330,7 @@ class ParkingDetectionEvent(models.Model):
         for payload, assignment in detections:
             try:
                 port_no = int(payload.get("port_no") or 0)
-            except Exception:
+            except (TypeError, ValueError):
                 port_no = 0
             topology_key = (
                 str(payload.get("serial_number") or "").strip().upper(),
@@ -691,6 +691,27 @@ class ParkingDetectionEvent(models.Model):
         ])
         consumed_user_ids = set()
         blocked_tids = set()
+        Transaction = self.env["nsp.parking.transaction"].sudo()
+        layout_revision = int(lane.parking_area_id.published_revision or 0)
+        vehicle_tids = sorted({str(match.get("tid") or "").strip() for match in matches if match.get("tid")})
+        earliest_event_time = min(
+            match["end_at"] - timedelta(seconds=match["duration_seconds"])
+            for match in matches
+        )
+        latest_event_time = max(match["end_at"] for match in matches)
+        recent_transactions = Transaction.search([
+            ("lane_id", "=", lane.id),
+            ("layout_revision", "=", layout_revision),
+            ("event_type", "in", list({match["event_type"] for match in matches})),
+            ("vehicle_tid", "in", vehicle_tids),
+            ("event_time", ">=", earliest_event_time),
+            ("event_time", "<=", latest_event_time),
+        ], order="event_time desc, id desc") if vehicle_tids else Transaction.browse()
+        recent_by_key = {}
+        for transaction in recent_transactions:
+            recent_by_key.setdefault(
+                (transaction.event_type, transaction.vehicle_tid), []
+            ).append(transaction)
 
         for match in matches:
             tid = match["tid"]
@@ -714,20 +735,19 @@ class ParkingDetectionEvent(models.Model):
                 lambda rec: bool(rec.vehicle_id)
             ).sorted(key=lambda rec: (rec.detected_at, rec.id))[-1:]
             vehicle_tid = vehicle_event.tid if vehicle_event else False
-            recent = self.env["nsp.parking.transaction"].sudo().search([
-                ("lane_id", "=", lane.id),
-                ("layout_revision", "=", int(lane.parking_area_id.published_revision or 0)),
-                ("event_type", "=", event_type),
-                ("vehicle_tid", "=", vehicle_tid),
-                ("event_time", ">=", match["end_at"] - timedelta(seconds=duration)),
-                ("event_time", "<=", match["end_at"]),
-            ], order="event_time desc, id desc", limit=1) if vehicle_tid else self.env["nsp.parking.transaction"].browse()
+            window_start = match["end_at"] - timedelta(seconds=duration)
+            recent = Transaction.browse()
+            if vehicle_tid:
+                recent = next((
+                    transaction
+                    for transaction in recent_by_key.get((event_type, vehicle_tid), [])
+                    if window_start <= transaction.event_time <= match["end_at"]
+                ), Transaction.browse())
             if recent:
                 movement_events.write({"state": "processed", "transaction_id": recent.id})
                 continue
 
             vehicle = movement_events.mapped("vehicle_id")[:1]
-            Transaction = self.env["nsp.parking.transaction"].sudo()
             continuity_action = continuity_code = False
             if vehicle:
                 Transaction._acquire_vehicle_continuity_lock(vehicle)
@@ -861,7 +881,7 @@ class ParkingDetectionEvent(models.Model):
         )
         try:
             retention_days = max(1, int(raw_days))
-        except Exception:
+        except (TypeError, ValueError):
             retention_days = 7
         terminal_cutoff = fields.Datetime.now() - timedelta(days=retention_days)
         old = self.search([

@@ -1,7 +1,12 @@
 # -*- coding: utf-8 -*-
+import logging
+from datetime import timedelta
+
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError
 from odoo.addons.nsp_core.utils import new_management_code
+
+_logger = logging.getLogger(__name__)
 
 NODE_STATUS = [
     ("online", "Online"),
@@ -221,40 +226,56 @@ class NspController(models.Model):
         return True
 
     def action_archive(self):
+        self.check_access("write")
         self.write({"active": False, "status": "revoked"})
         return True
 
     def action_unarchive(self):
+        self.check_access("write")
         self.write({"active": True, "status": "offline"})
         return True
 
     @api.model
     def cron_mark_offline_controllers(self):
+        parameter = self.env["ir.config_parameter"].sudo().get_param(
+            "nsp_master_gatekeeper.controller_heartbeat_timeout_sec",
+            "120",
+        )
         try:
-            timeout_sec = int(self.env["ir.config_parameter"].sudo().get_param(
-                "nsp_master_gatekeeper.controller_heartbeat_timeout_sec", "120"
-            ) or "120")
-        except Exception:
+            timeout_sec = int(parameter or "120")
+        except (TypeError, ValueError):
+            _logger.warning(
+                "Invalid controller heartbeat timeout %r; using 120 seconds.",
+                parameter,
+            )
             timeout_sec = 120
-        timeout_sec = max(30, timeout_sec)
-        self.env.cr.execute("""
-            UPDATE nsp_controller
-               SET status = 'offline'
-             WHERE COALESCE(status, 'offline') NOT IN ('offline', 'revoked')
-               AND (timestamp IS NULL OR timestamp < (NOW() AT TIME ZONE 'UTC') - (%s || ' seconds')::interval)
-        """, (str(timeout_sec),))
-        self.env.cr.execute("""
-            UPDATE nsp_edge_server
-               SET status = 'offline'
-             WHERE COALESCE(status, 'offline') NOT IN ('offline', 'revoked')
-               AND (timestamp IS NULL OR timestamp < (NOW() AT TIME ZONE 'UTC') - (%s || ' seconds')::interval)
-        """, (str(timeout_sec),))
-        self.env.cr.execute("""
-            UPDATE nsp_device AS device
-               SET status = 'offline'
-              FROM nsp_controller AS controller
-             WHERE device.controller_id = controller.id
-               AND COALESCE(device.status, 'offline') != 'offline'
-               AND COALESCE(controller.status, 'offline') = 'offline'
-        """)
+
+        cutoff = fields.Datetime.now() - timedelta(seconds=max(30, timeout_sec))
+        system_context = {"active_test": False, "tracking_disable": True, "mail_notrack": True}
+
+        # This cron owns the global node-liveness scope.  The elevated access is
+        # intentionally limited to the three batch updates below.
+        stale_controllers = self.sudo().with_context(**system_context).search([
+            ("status", "not in", ("offline", "revoked")),
+            "|",
+            ("timestamp", "=", False),
+            ("timestamp", "<", cutoff),
+        ])
+        stale_controllers.write({"status": "offline"})
+
+        EdgeServer = self.env["nsp.edge.server"].sudo().with_context(**system_context)
+        stale_edges = EdgeServer.search([
+            ("status", "not in", ("offline", "revoked")),
+            "|",
+            ("timestamp", "=", False),
+            ("timestamp", "<", cutoff),
+        ])
+        stale_edges.write({"status": "offline"})
+
+        Device = self.env["nsp.device"].sudo().with_context(**system_context)
+        readers_on_offline_controllers = Device.search([
+            ("status", "!=", "offline"),
+            ("controller_id.status", "=", "offline"),
+        ])
+        readers_on_offline_controllers.write({"status": "offline"})
         return True

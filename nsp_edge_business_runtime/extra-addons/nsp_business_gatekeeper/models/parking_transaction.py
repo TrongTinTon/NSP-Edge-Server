@@ -299,6 +299,13 @@ class ParkingTransaction(models.Model):
         try:
             borrow = Borrow.find_valid_borrow(vehicle, borrower=user, borrow_time=event_time)
         except Exception:
+            _logger.exception(
+                "Failed to validate Vehicle Borrow access",
+                extra={
+                    "vehicle_id": vehicle.id if vehicle else False,
+                    "user_id": user.id if user else False,
+                },
+            )
             borrow = Borrow.browse()
         if not borrow:
             return False, _(
@@ -410,7 +417,11 @@ class ParkingTransaction(models.Model):
     def create(self, vals_list):
         lane_ids = {int(vals.get("lane_id") or 0) for vals in vals_list}
         lane_ids.discard(0)
-        lanes = self.env["nsp.parking.lane"].sudo().browse(list(lane_ids)).exists()
+        # Respect the caller environment. Internal ingestion already enters
+        # this create path with its authenticated runtime scope.
+        lanes = self.env["nsp.parking.lane"].browse(list(lane_ids)).exists()
+        if lanes:
+            lanes.check_access("read")
         lane_by_id = {lane.id: lane for lane in lanes}
         prepared = []
         for source in vals_list:

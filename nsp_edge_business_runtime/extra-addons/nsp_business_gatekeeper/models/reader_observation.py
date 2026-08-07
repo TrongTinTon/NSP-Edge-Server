@@ -93,7 +93,7 @@ class NspReaderObservation(models.Model):
             detected = now
         try:
             freshness = min(max(int(freshness_sec or 300), 30), 3600)
-        except Exception:
+        except (TypeError, ValueError):
             freshness = 300
         is_fresh = (now - detected).total_seconds() <= freshness
 
@@ -153,6 +153,6 @@ class NspReaderObservation(models.Model):
         self.ensure_one()
         try:
             values = json.loads(self.ports_json or "[]")
-        except Exception:
+        except (TypeError, json.JSONDecodeError):
             values = []
         return sorted({int(value) for value in values if not isinstance(value, bool) and int(value) > 0})
