@@ -11,8 +11,8 @@
         <field name="timeline_point_count" string="Timeline" readonly="1"/>
         <field name="reader_config_count" string="Readers" readonly="1" optional="show"/>
         <field name="total_path_duration" string="Duration (s)" readonly="1"/>
-        <field name="checkin_point_count" string="Check-in" readonly="1"/>
-        <field name="checkout_point_count" string="Check-out" readonly="1"/>
+        <field name="checkin_point_count" string="Lane In" readonly="1"/>
+        <field name="checkout_point_count" string="Lane Out" readonly="1"/>
         <field name="configuration_state" column_invisible="1"/>
         <field name="parking_area_state" column_invisible="1"/>
         <field name="active" widget="boolean_toggle" readonly="parking_area_state != 'draft'"/>
@@ -114,13 +114,13 @@
             </page>
             <page string="Event Sequences" name="sequences">
               <div class="alert alert-info" role="alert">
-                Each Lane must configure Check-in, Check-out, or both. Across the Parking Layout, at least one Check-in and one Check-out Sequence are required before Publish.
+                Each Lane may configure Lane In, Lane Out, or both. Across the Parking Layout, at least one Lane In and one Lane Out path are required before Publish.
               </div>
               <group col="2">
-                <group string="Check-in">
+                <group string="Lane In">
                   <field name="checkin_sequence_ids" nolabel="1" readonly="parking_area_state != 'draft'" context="{'default_lane_id': id, 'default_sequence_type': 'check_in'}">
                     <list editable="bottom" create="1" delete="1">
-                      <control><create string="Add Check-in Point"/></control>
+                      <control><create string="Add Lane In Point"/></control>
                       <field name="sequence" string="#"/>
                       <field name="sequence_type" column_invisible="1"/>
                       <field name="available_reader_ids" column_invisible="1"/>
@@ -129,10 +129,10 @@
                     </list>
                   </field>
                 </group>
-                <group string="Check-out">
+                <group string="Lane Out">
                   <field name="checkout_sequence_ids" nolabel="1" readonly="parking_area_state != 'draft'" context="{'default_lane_id': id, 'default_sequence_type': 'check_out'}">
                     <list editable="bottom" create="1" delete="1">
-                      <control><create string="Add Check-out Point"/></control>
+                      <control><create string="Add Lane Out Point"/></control>
                       <field name="sequence" string="#"/>
                       <field name="sequence_type" column_invisible="1"/>
                       <field name="available_reader_ids" column_invisible="1"/>

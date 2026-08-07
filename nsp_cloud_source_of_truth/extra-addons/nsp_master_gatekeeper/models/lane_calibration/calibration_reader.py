@@ -116,6 +116,11 @@ class NspMeasurementReaderLine(models.Model):
         string="Reader Ports", copy=True,
     )
     port_count = fields.Integer(compute="_compute_port_count")
+    port_numbers = fields.Char(
+        string="Ports",
+        compute="_compute_port_count",
+        help="Configured physical Reader ports.",
+    )
 
     available_edge_server_ids = fields.Many2many(
         "nsp.edge.server", compute="_compute_available_devices", readonly=True,
@@ -194,10 +199,12 @@ class NspMeasurementReaderLine(models.Model):
             "Read Interval must be between 1 and 60000 ms.",
         ),
     ]
-    @api.depends("reader_port_ids")
+    @api.depends("reader_port_ids", "reader_port_ids.port_no")
     def _compute_port_count(self):
         for line in self:
-            line.port_count = len(line.reader_port_ids)
+            ports = sorted({int(port.port_no or 0) for port in line.reader_port_ids if int(port.port_no or 0) > 0})
+            line.port_count = len(ports)
+            line.port_numbers = ", ".join("P%s" % port_no for port_no in ports)
 
     @api.model
     def _active_whitelisted(self, model_name, type_code):

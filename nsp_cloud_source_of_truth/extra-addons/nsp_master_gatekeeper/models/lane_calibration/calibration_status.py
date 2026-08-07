@@ -4,7 +4,113 @@
 from odoo import _, fields, models
 from odoo.exceptions import UserError, ValidationError
 
-from ...services.calibration_status_policy import CalibrationStatusPolicy
+
+
+class CalibrationStatusPolicy:
+    """Authoritative state, runtime-status, and revision policy."""
+
+    TRANSITIONS = {
+        "draft": frozenset({"ready", "cancelled"}),
+        "ready": frozenset({"running", "cancelled"}),
+        "running": frozenset({"completed", "failed", "cancelled"}),
+        "completed": frozenset({"applied"}),
+        "applied": frozenset(),
+        "failed": frozenset({"ready", "cancelled"}),
+        "cancelled": frozenset(),
+    }
+
+    REVISION_SOURCES = {
+        "ready": frozenset({"running", "completed", "failed"}),
+        "draft": frozenset({"completed", "failed", "applied"}),
+    }
+
+    CLOUD_STATUSES = frozenset({"draft", "ready", "applied"})
+    RUNTIME_STATUSES = frozenset({"running", "completed", "failed", "cancelled"})
+    ALL_STATUSES = CLOUD_STATUSES | RUNTIME_STATUSES
+
+    STALE_RUNTIME_TARGETS = {
+        "completed": frozenset({"running"}),
+        "failed": frozenset({"running"}),
+        "cancelled": frozenset({"running"}),
+    }
+
+    @classmethod
+    def validate_transition(cls, current, target, *, allow_same=True):
+        current_state = str(current or "").strip()
+        target_state = str(target or "").strip()
+        if not target_state:
+            raise ValidationError(_("Target state is required."))
+        if allow_same and current_state == target_state:
+            return target_state
+        if target_state not in cls.TRANSITIONS.get(current_state, frozenset()):
+            raise ValidationError(_(
+                "Lane Calibration cannot move from %(current)s to %(target)s."
+            ) % {
+                "current": current_state or "-",
+                "target": target_state,
+            })
+        return target_state
+
+    @classmethod
+    def validate_revision_source(cls, current, target_status):
+        allowed_sources = cls.REVISION_SOURCES.get(target_status, frozenset())
+        if current not in allowed_sources:
+            raise ValidationError(_(
+                "Lane Calibration cannot create a new %(target)s revision from %(current)s."
+            ) % {"target": target_status, "current": current})
+        return True
+
+    @classmethod
+    def classify_revision(cls, incoming, current):
+        try:
+            incoming_revision = int(incoming)
+            current_revision = int(current)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(_("Revision must be an integer.")) from exc
+        if incoming_revision <= 0 or current_revision <= 0:
+            raise ValidationError(_("Revision must be greater than zero."))
+        if incoming_revision < current_revision:
+            return "stale"
+        if incoming_revision > current_revision:
+            return "future"
+        return "current"
+
+    @classmethod
+    def classify_runtime_status(cls, current, target, incoming_revision, current_revision):
+        target_status = str(target or "").strip().lower()
+        current_status = str(current or "draft").strip().lower()
+        if target_status not in cls.ALL_STATUSES:
+            raise ValueError("invalid_lane_calibration_status")
+
+        relation = cls.classify_revision(incoming_revision, current_revision)
+        result = {
+            "outcome": "duplicate",
+            "incoming_status": target_status,
+            "current_status": current_status,
+            "incoming_revision": int(incoming_revision),
+            "current_revision": int(current_revision),
+            "status_owner": "cloud" if target_status in cls.CLOUD_STATUSES else "runtime",
+        }
+        if relation == "stale":
+            result["outcome"] = "ignored_stale_revision"
+            return result
+        if relation == "future":
+            raise ValueError("lane_calibration_revision_ahead")
+        if target_status in cls.CLOUD_STATUSES and target_status != current_status:
+            result["outcome"] = "ignored_cloud_owned_status"
+            return result
+        if current_status == "applied" and target_status in cls.RUNTIME_STATUSES:
+            result["outcome"] = "ignored_after_configured"
+            return result
+        if target_status != current_status:
+            if target_status in cls.STALE_RUNTIME_TARGETS.get(current_status, frozenset()):
+                result["outcome"] = "ignored_stale_status"
+                return result
+            try:
+                cls.validate_transition(current_status, target_status, allow_same=False)
+            except ValidationError as exc:
+                raise ValueError("invalid_status_transition") from exc
+        return result
 
 
 CALIBRATION_TRANSITIONS = CalibrationStatusPolicy.TRANSITIONS
@@ -37,8 +143,8 @@ class NspMeasurementSessionStatus(models.Model):
     def _require_ready_configuration(self):
         self.ensure_one()
         missing = []
-        if not self.target_line_ids:
-            missing.append(_("Vehicles"))
+        if len(self.target_line_ids) != 1:
+            missing.append(_("exactly one raw Calibration Tag"))
         if not self.reader_line_ids:
             missing.append(_("Readers"))
         if missing:
@@ -53,26 +159,6 @@ class NspMeasurementSessionStatus(models.Model):
             )
         self._validate_measurement_scope()
         return True
-
-    def _prepare_validation_revision(self, started_at):
-        """Release the revision consumed by one multi-Vehicle Validation Run."""
-        self.ensure_one()
-        if self.status == "ready":
-            next_revision = int(self.revision or 1)
-        elif self.status in CalibrationStatusPolicy.REVISION_SOURCES["ready"]:
-            next_revision = int(self.revision or 1) + 1
-        else:
-            raise ValidationError(_(
-                "Validation cannot start from Lane Calibration state %(state)s."
-            ) % {"state": self.status})
-        self.with_context(measurement_sync=True).write({
-            "revision": next_revision,
-            "status": "ready",
-            "started_at": started_at,
-            "ended_at": False,
-            "applied_at": False,
-        })
-        return next_revision
 
     def _release_new_revision(self, target_status="ready"):
         self.ensure_one()
@@ -130,11 +216,6 @@ class NspMeasurementSessionStatus(models.Model):
         )
         if running_passes:
             raise ValidationError(_("Stop the running Run before changing devices."))
-        running_runs = getattr(self, "validation_run_ids", self.browse()).filtered(
-            lambda item: item.state == "running"
-        )
-        if running_runs:
-            raise ValidationError(_("Stop the running Validation Run before changing devices."))
         self._release_new_revision("draft")
         action = self.action_open_session_form()
         action["name"] = _("Revise · R%(revision)s") % {"revision": self.revision}
@@ -239,3 +320,56 @@ class NspMeasurementSessionStatus(models.Model):
             allow_same=False,
         )
         return self.get_live_snapshot(self.id)
+
+
+_PASS_STATE_TRANSITIONS = {
+    "running": frozenset({"completed"}),
+    "completed": frozenset({"accepted", "rejected"}),
+    "accepted": frozenset({"rejected"}),
+    "rejected": frozenset(),
+}
+
+_RESULT_STATE_TRANSITIONS = {
+    "draft": frozenset({"accepted"}),
+    "accepted": frozenset({"superseded"}),
+    "superseded": frozenset(),
+}
+
+
+def _validate_domain_transition(current, target, transitions, label, allow_same=True):
+    if allow_same and current == target:
+        return True
+    if target not in transitions.get(current, frozenset()):
+        raise ValidationError(
+            _("%(label)s cannot move from %(current)s to %(target)s.")
+            % {"label": label, "current": current or "-", "target": target or "-"}
+        )
+    return True
+
+
+class NspMeasurementPassStatePolicy(models.Model):
+    _inherit = "nsp.measurement.pass"
+
+    def _apply_pass_state(self, target_state, extra_values=None, *, allow_same=True):
+        for record in self:
+            _validate_domain_transition(
+                record.state, target_state, _PASS_STATE_TRANSITIONS, _("Calibration Run"), allow_same
+            )
+            values = dict(extra_values or {})
+            values["state"] = target_state
+            record.write(values)
+        return True
+
+
+class NspMeasurementResultStatePolicy(models.Model):
+    _inherit = "nsp.measurement.result"
+
+    def _apply_result_state(self, target_state, extra_values=None, *, allow_same=True):
+        for record in self:
+            _validate_domain_transition(
+                record.state, target_state, _RESULT_STATE_TRANSITIONS, _("Calibration Result"), allow_same
+            )
+            values = dict(extra_values or {})
+            values["state"] = target_state
+            record.write(values)
+        return True

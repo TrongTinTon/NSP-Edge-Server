@@ -64,13 +64,12 @@
                                 </list>
                             </field>
                         </page>
-                        <page string="Vehicles" name="vehicles">
+                        <page string="Calibration Tag" name="calibration_tag">
                             <field name="target_line_ids" readonly="1">
                                 <list create="0" edit="0" delete="0">
-                                    <field name="vehicle_tid" string="RFID Tag"/>
-                                    <field name="license_plate" string="Plate"/>
-                                    <field name="owner_id" string="Owner"/>
-                                    <field name="vehicle_detection_state" string="State" widget="badge"/>
+                                    <field name="tid" string="Raw TID"/>
+                                    <field name="detection_state" string="State" widget="badge"/>
+                                    <field name="detection_count" string="Detections"/>
                                 </list>
                             </field>
                         </page>

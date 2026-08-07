@@ -55,25 +55,6 @@ class NspMeasurementSessionStatePolicy(models.Model):
             session.with_context(measurement_sync=True).write(values)
         return True
 
-    def _prepare_validation_revision(self, started_at):
-        """Release the revision consumed by one multi-Vehicle Validation Run."""
-        self.ensure_one()
-        if self.status == "ready":
-            next_revision = int(self.revision or 1)
-        elif self.status in _REVISION_TARGET_SOURCES["ready"]:
-            next_revision = int(self.revision or 1) + 1
-        else:
-            raise ValidationError(_(
-                "Validation cannot start from Lane Calibration state %(state)s."
-            ) % {"state": self.status})
-        self.with_context(measurement_sync=True).write({
-            "revision": next_revision,
-            "status": "ready",
-            "started_at": started_at,
-            "ended_at": False,
-            "applied_at": False,
-        })
-        return next_revision
 
     def _release_new_revision(self, target_status="ready"):
         self.ensure_one()
@@ -135,11 +116,6 @@ class NspMeasurementSessionStatePolicy(models.Model):
         )
         if running_passes:
             raise ValidationError(_("Stop the running Run before changing devices."))
-        running_runs = getattr(self, "validation_run_ids", self.browse()).filtered(
-            lambda item: item.state == "running"
-        )
-        if running_runs:
-            raise ValidationError(_("Stop the running Validation Run before changing devices."))
         self._release_new_revision("draft")
         action = self.action_open_session_form()
         action["name"] = _("Revise · R%(revision)s") % {"revision": self.revision}

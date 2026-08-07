@@ -7,9 +7,7 @@ from . import parking_config
 from . import parking_state_policy
 from . import parking_transaction
 from . import state_policy
-from . import measurement
-from . import measurement_validation
-from . import measurement_validation_state_policy
+from . import lane_calibration
 from . import device_whitelist
 from . import config_revision
 

@@ -136,9 +136,9 @@ class NspParkingArea(models.Model):
             has_checkout = any(lane.checkout_sequence_ids for lane in active_lanes)
             coverage_issues = []
             if active_lanes and not has_checkin:
-                coverage_issues.append(_("Parking Layout requires at least one Check-in Lane"))
+                coverage_issues.append(_("Parking Layout requires at least one Lane In"))
             if active_lanes and not has_checkout:
-                coverage_issues.append(_("Parking Layout requires at least one Check-out Lane"))
+                coverage_issues.append(_("Parking Layout requires at least one Lane Out"))
 
             record.ready_lane_count = len(ready_lanes)
             record.incomplete_lane_count = len(incomplete_lanes)
@@ -160,7 +160,7 @@ class NspParkingArea(models.Model):
             else:
                 record.configuration_state = "ready"
                 record.configuration_summary = _(
-                    "All %(count)s active Lanes are ready · Check-in and Check-out are covered."
+                    "All %(count)s active Lanes are ready · Lane In and Lane Out are covered."
                 ) % {"count": len(active_lanes)}
 
     def _compute_whitelist_count(self):
@@ -413,13 +413,13 @@ class NspParkingArea(models.Model):
                 )
             if not has_checkin and not has_checkout:
                 issues.append(
-                    _("Lane %(lane)s must define at least one Check-in or Check-out Sequence.")
+                    _("Lane %(lane)s must define at least one Lane In or Lane Out path.")
                     % {"lane": lane.display_name}
                 )
         if not layout_has_checkin:
-            issues.append(_("Parking Layout must contain at least one Check-in Sequence."))
+            issues.append(_("Parking Layout must contain at least one Lane In path."))
         if not layout_has_checkout:
-            issues.append(_("Parking Layout must contain at least one Check-out Sequence."))
+            issues.append(_("Parking Layout must contain at least one Lane Out path."))
         return issues
 
     def _publish(self, target_state):
@@ -583,11 +583,11 @@ class NspParkingLane(models.Model):
     )
     checkin_sequence_ids = fields.One2many(
         "nsp.parking.lane.event.sequence", "lane_id",
-        domain=[("sequence_type", "=", "check_in")], string="Check-in Sequence",
+        domain=[("sequence_type", "=", "check_in")], string="Lane In Path",
     )
     checkout_sequence_ids = fields.One2many(
         "nsp.parking.lane.event.sequence", "lane_id",
-        domain=[("sequence_type", "=", "check_out")], string="Check-out Sequence",
+        domain=[("sequence_type", "=", "check_out")], string="Lane Out Path",
     )
     tolerance_type = fields.Selection(
         [("percent", "Percentage (%)"), ("seconds", "Seconds")],
@@ -601,10 +601,10 @@ class NspParkingLane(models.Model):
         related="parking_area_id.state", string="Layout State", readonly=True,
     )
     checkin_point_count = fields.Integer(
-        string="Check-in Points", compute="_compute_sequence_counts",
+        string="Lane In Points", compute="_compute_sequence_counts",
     )
     checkout_point_count = fields.Integer(
-        string="Check-out Points", compute="_compute_sequence_counts",
+        string="Lane Out Points", compute="_compute_sequence_counts",
     )
     configuration_state = fields.Selection(
         [
@@ -641,9 +641,19 @@ class NspParkingLane(models.Model):
             controller_id = int(context.get("default_controller_id") or 0)
         except Exception as exc:
             raise UserError(_("Invalid quick-create Lane context.")) from exc
-        if not parking_area_id or not edge_server_id or not controller_id:
+        if not edge_server_id or not controller_id:
             raise UserError(_(
-                "Select a Parking Layout first. Server and Controller are taken from the selected Detection Timeline."
+                "Lane quick-create requires Server and Controller context from Detection Timeline."
+            ))
+        if not parking_area_id:
+            parking_area_id = self._resolve_quick_create_parking_area(
+                edge_server_id=edge_server_id,
+                controller_id=controller_id,
+            )
+        if not parking_area_id:
+            raise UserError(_(
+                "A parent Parking Layout could not be resolved automatically for this new Lane. "
+                "Use Create and Edit once to assign the Lane to a Parking Layout."
             ))
         record = self.create({
             "name": lane_name,
@@ -652,6 +662,28 @@ class NspParkingLane(models.Model):
             "controller_id": controller_id,
         })
         return record.id, record.display_name
+
+    @api.model
+    def _resolve_quick_create_parking_area(self, edge_server_id, controller_id):
+        """Resolve an unambiguous Draft layout without exposing it in Lane Direction Setup.
+
+        Prefer the Draft layout already using the same Server + Controller. If no such
+        topology exists yet, a single Draft layout in the system is still unambiguous.
+        Never guess when multiple candidates exist.
+        """
+        ParkingArea = self.env["nsp.parking.area"]
+        topology_candidates = ParkingArea.search([
+            ("state", "=", "draft"),
+            ("lane_ids.edge_server_id", "=", int(edge_server_id)),
+            ("lane_ids.controller_id", "=", int(controller_id)),
+        ], limit=2)
+        if len(topology_candidates) == 1:
+            return topology_candidates.id
+
+        draft_candidates = ParkingArea.search([("state", "=", "draft")], limit=2)
+        if len(draft_candidates) == 1:
+            return draft_candidates.id
+        return False
 
     @api.depends("name", "parking_area_id.name")
     def _compute_display_name(self):
@@ -805,16 +837,16 @@ class NspParkingLane(models.Model):
             has_checkin = bool(lane.checkin_sequence_ids)
             has_checkout = bool(lane.checkout_sequence_ids)
             if not has_checkin and not has_checkout:
-                issues.append(_("At least one Check-in or Check-out Sequence is required"))
+                issues.append(_("At least one Lane In or Lane Out path is required"))
             lane.configuration_state = "incomplete" if issues else "ready"
             if issues:
                 lane.configuration_issue = "; ".join(issues)
             elif has_checkin and has_checkout:
-                lane.configuration_issue = _("Bidirectional Lane: Check-in and Check-out are configured.")
+                lane.configuration_issue = _("Bidirectional Lane: Lane In and Lane Out are configured.")
             elif has_checkin:
-                lane.configuration_issue = _("Check-in Lane is configured.")
+                lane.configuration_issue = _("Lane In is configured.")
             else:
-                lane.configuration_issue = _("Check-out Lane is configured.")
+                lane.configuration_issue = _("Lane Out is configured.")
 
     @api.model
     def _active_whitelisted(self, model_name, type_code):
@@ -894,8 +926,8 @@ class NspParkingLane(models.Model):
             timeline_position = {key: position for position, key in enumerate(timeline_keys, start=1)}
             orientation_by_type = {}
             for sequence_type, rows, label in (
-                ("check_in", lane.checkin_sequence_ids, _("Check-in")),
-                ("check_out", lane.checkout_sequence_ids, _("Check-out")),
+                ("check_in", lane.checkin_sequence_ids, _("Lane In")),
+                ("check_out", lane.checkout_sequence_ids, _("Lane Out")),
             ):
                 ordered = rows.sorted(lambda row: (row.sequence or 0, row.id))
                 if ordered and len(ordered) < 2:
@@ -922,7 +954,7 @@ class NspParkingLane(models.Model):
                 and orientation_by_type["check_in"] == orientation_by_type["check_out"]
             ):
                 raise ValidationError(
-                    _("Check-in and Check-out Sequences must follow opposite Timeline directions.")
+                    _("Lane In and Lane Out paths must follow opposite Timeline directions.")
                 )
         return True
 
@@ -1158,7 +1190,7 @@ class NspParkingLaneEventSequence(models.Model):
     _order = "lane_id, sequence_type, sequence, id"
 
     lane_id = fields.Many2one("nsp.parking.lane", required=True, ondelete="cascade", index=True)
-    sequence_type = fields.Selection([("check_in", "Check-in"), ("check_out", "Check-out")], required=True, index=True, default="check_in")
+    sequence_type = fields.Selection([("check_in", "Lane In"), ("check_out", "Lane Out")], required=True, index=True, default="check_in")
     sequence = fields.Integer(string="Order", required=True)
     reader_id = fields.Many2one("nsp.device", string="Reader", required=True, ondelete="restrict")
     port_no = fields.Integer(string="Port", required=True)

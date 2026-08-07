@@ -5,6 +5,7 @@ from odoo import api, fields, models
 from odoo.addons.t4_coreapi.utils import endpoint, get_body
 
 from .state_policy import classify_idempotent_replay, compare_revision
+from .lane_calibration.calibration_session import _normalize_raw_tid_value
 
 _logger = logging.getLogger(__name__)
 
@@ -1091,63 +1092,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
 
     @api.model
     def _measurement_config_payload(self, session, edge_server=False):
-        lines = session.reader_line_ids
-        if edge_server:
-            lines = lines.filtered(lambda line: line.edge_server_id == edge_server)
-        readers = []
-        for line in lines.sorted(
-            key=lambda item: (
-                item.edge_server_id.edge_server_code or "",
-                item.controller_id.controller_id or "",
-                item.reader_id.serial_number or "",
-                item.id,
-            )
-        ):
-            port_rows = [
-                {"port_no": int(port.port_no or 0)}
-                for port in line.reader_port_ids.sorted(key=lambda item: (item.port_no, item.id))
-            ]
-            readers.append({
-                "server_code": line.edge_server_id.edge_server_code or "",
-                "controller_code": line.controller_id.controller_id or "",
-                "controller_name": line.controller_id.controller_name or "",
-                "technical_code": line.reader_id.device_code or "",
-                "serial_number": line.reader_id.serial_number or "",
-                "reader_name": line.reader_id.name or line.reader_id.serial_number or "",
-                "physical_connection": line.reader_id.connection_type or False,
-                "reader_parameters": {
-                    "power_dbm": int(line.reader_power_dbm or 0),
-                    "read_interval_ms": int(line.read_interval_ms or 200),
-                    "tid_start_address": int(line.reader_tid_addr or 0),
-                    "tid_length": int(line.reader_tid_len or 0),
-                },
-                "ports": port_rows,
-            })
-        vehicles = []
-        targets = session._sync_vehicle_targets() if hasattr(session, "_sync_vehicle_targets") else [
-            {"vehicle_tid": line.vehicle_tid, "vehicle": line.vehicle_id, "license_plate": line.license_plate}
-            for line in session.target_line_ids
-        ]
-        for row in sorted(targets, key=lambda item: ((item.get("license_plate") or ""), item.get("vehicle_tid") or "")):
-            vehicle = row.get("vehicle")
-            item = {
-                "vehicle_tid": row.get("vehicle_tid") or "",
-                "vehicle_code": vehicle.vehicle_code or "" if vehicle else "",
-                "license_plate": row.get("license_plate") or "",
-            }
-            owner_code = self._user_code(vehicle.owner_id) if vehicle and vehicle.owner_id else ""
-            if owner_code:
-                item["owner_user_code"] = owner_code
-            vehicles.append(item)
-        payload = {
-            "lane_calibration_code": session.measurement_code,
-            "status": session.status,
-            "desired_state": "running" if session.status in ("ready", "running") else "stopped",
-            "revision": int(session.revision or 1),
-            "vehicles": vehicles,
-            "readers": readers,
-        }
-        return payload
+        return session._calibration_sync_payload(edge_server=edge_server)
 
     @api.model
     def _measurement_session_payload(self, session, include_detail=False):
@@ -1235,7 +1180,10 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         self._measurement_require_fields(item, ["event_uid", "serial_number", "port_no", "tid", "read_at"])
         event_uid = str(item.get("event_uid") or "").strip()
         serial_number = str(item.get("serial_number") or "").strip().upper()
-        tid = self.env["nsp.rfid.tag"].sudo()._normalize_tid(item.get("tid"))
+        try:
+            tid = _normalize_raw_tid_value(item.get("tid"))
+        except ValueError as exc:
+            raise ValueError("invalid_measurement_tid") from exc
         try:
             port_no = int(item.get("port_no") or 0)
         except (TypeError, ValueError):
@@ -1329,13 +1277,16 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             try:
                 if not isinstance(item, dict):
                     raise ValueError("invalid_payload")
-                incoming_tid = self.env["nsp.rfid.tag"].sudo()._normalize_tid(item.get("tid"))
+                try:
+                    incoming_tid = _normalize_raw_tid_value(item.get("tid"))
+                except ValueError as exc:
+                    raise ValueError("invalid_measurement_tid") from exc
                 if incoming_tid not in target_tids:
                     results[index] = {
                         "index": index,
                         "record_key": key,
                         "status": "ignored",
-                        "message": "RFID Tag is not in the Measurement target list",
+                        "message": "Raw TID does not match the active Lane Calibration Tag",
                     }
                     continue
                 values = self._measurement_event_values(

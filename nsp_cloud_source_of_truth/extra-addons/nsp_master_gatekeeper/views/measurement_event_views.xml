@@ -23,16 +23,17 @@
         <field name="name">nsp.measurement.event.list</field>
         <field name="model">nsp.measurement.event</field>
         <field name="arch" type="xml">
-            <list string="Calibration Observations" create="0" edit="0" delete="0">
-                <field name="read_at"/>
-                <field name="session_id"/>
-                <field name="revision"/>
-                <field name="tid"/>
-                <field name="serial_number"/>
-                <field name="port_no"/>
+            <list string="Detection Timeline" create="0" edit="0" delete="0" default_order="read_at asc, read_at_ms asc, id asc">
+                <field name="timeline_timestamp" string="Timestamp"/>
+                <field name="tid" string="Tag"/>
+                <field name="rssi_dbm" string="RSSI"/>
+                <field name="timeline_reader" string="Reader"/>
+                <field name="port_no" string="Port"/>
+                <field name="timeline_duration_ms" string="Duration (ms)"/>
+                <field name="session_id" optional="hide"/>
+                <field name="revision" optional="hide"/>
                 <field name="power_dbm" optional="hide"/>
                 <field name="read_interval_ms" optional="hide"/>
-                <field name="rssi_dbm" optional="hide"/>
                 <field name="event_uid" optional="hide"/>
             </list>
         </field>

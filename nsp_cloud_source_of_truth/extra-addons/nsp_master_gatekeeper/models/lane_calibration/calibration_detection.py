@@ -4,6 +4,8 @@ from datetime import timedelta
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
 
+from .calibration_session import _normalize_raw_tid_value
+
 
 class NspMeasurementSessionDetection(models.Model):
     _inherit = "nsp.measurement.session"
@@ -71,6 +73,96 @@ class NspMeasurementEvent(models.Model):
     power_dbm = fields.Integer(string="Reader Power (dBm)")
     read_interval_ms = fields.Integer(string="Read Interval ms", required=True, default=200)
 
+    # Presentation-only fields for the native Odoo Detection Timeline list.
+    # They are computed from raw observations and do not change the sync contract.
+    timeline_timestamp = fields.Char(
+        string="Timestamp",
+        compute="_compute_timeline_display",
+        readonly=True,
+    )
+    timeline_reader = fields.Char(
+        string="Reader",
+        compute="_compute_timeline_display",
+        readonly=True,
+    )
+    timeline_duration_ms = fields.Float(
+        string="Duration (ms)",
+        compute="_compute_timeline_display",
+        digits=(16, 3),
+        readonly=True,
+    )
+
+    @api.depends(
+        "session_id",
+        "revision",
+        "read_at",
+        "read_at_ms",
+        "serial_number",
+        "session_id.reader_line_ids.reader_id.name",
+        "session_id.reader_line_ids.reader_id.serial_number",
+    )
+    def _compute_timeline_display(self):
+        for event in self:
+            event.timeline_timestamp = ""
+            event.timeline_reader = event.serial_number or ""
+            event.timeline_duration_ms = 0.0
+
+        persisted = self.filtered(lambda event: event.id and event.session_id)
+        if not persisted:
+            return
+
+        session_ids = persisted.mapped("session_id").ids
+        requested_pairs = {
+            (event.session_id.id, int(event.revision or 1))
+            for event in persisted
+        }
+
+        reader_name_by_key = {}
+        for session in persisted.mapped("session_id"):
+            for line in session.reader_line_ids:
+                serial = str(line.reader_id.serial_number or "").strip().upper()
+                if serial:
+                    reader_name_by_key[(session.id, serial)] = (
+                        line.reader_id.name or line.reader_id.serial_number or serial
+                    )
+
+        all_events = self.search(
+            [("session_id", "in", session_ids)],
+            order="session_id, revision, read_at asc, read_at_ms asc, id asc",
+        )
+        previous_seconds = {}
+        duration_by_id = {}
+        for event in all_events:
+            pair = (event.session_id.id, int(event.revision or 1))
+            if pair not in requested_pairs:
+                continue
+            observed_at = fields.Datetime.to_datetime(event.read_at)
+            seconds = (
+                observed_at.timestamp() + (int(event.read_at_ms or 0) / 1000.0)
+                if observed_at
+                else 0.0
+            )
+            previous = previous_seconds.get(pair)
+            duration_by_id[event.id] = (
+                max((seconds - previous) * 1000.0, 0.0)
+                if previous is not None
+                else 0.0
+            )
+            previous_seconds[pair] = seconds
+
+        for event in persisted:
+            base = fields.Datetime.to_string(event.read_at) if event.read_at else ""
+            event.timeline_timestamp = (
+                "%s.%03d" % (base, int(event.read_at_ms or 0))
+                if base
+                else ""
+            )
+            serial = str(event.serial_number or "").strip().upper()
+            event.timeline_reader = reader_name_by_key.get(
+                (event.session_id.id, serial), event.serial_number or ""
+            )
+            event.timeline_duration_ms = duration_by_id.get(event.id, 0.0)
+
     _sql_constraints = [
         ("measurement_event_uid_unique", "unique(event_uid)", "Measurement Event UID must be unique."),
         ("measurement_event_port_positive", "CHECK(port_no > 0)", "Reader Port must be greater than zero."),
@@ -86,7 +178,10 @@ class NspMeasurementEvent(models.Model):
             vals = dict(source)
             vals["event_uid"] = str(vals.get("event_uid") or "").strip()
             vals["serial_number"] = str(vals.get("serial_number") or "").strip().upper()
-            vals["tid"] = self.env["nsp.rfid.tag"]._normalize_tid(vals.get("tid"))
+            try:
+                vals["tid"] = _normalize_raw_tid_value(vals.get("tid"))
+            except ValueError as exc:
+                raise ValidationError(_("Measurement TID must contain hexadecimal characters only.")) from exc
             vals["revision"] = max(int(vals.get("revision") or 1), 1)
             vals["read_at_ms"] = max(0, min(int(vals.get("read_at_ms") or 0), 999))
             vals["read_interval_ms"] = max(1, min(int(vals.get("read_interval_ms") or 200), 60000))
@@ -137,4 +232,4 @@ class NspMeasurementEvent(models.Model):
             if key not in session._allowed_reader_port_pairs():
                 raise ValidationError(_("Measurement observation Reader Port is not part of the Lane Calibration."))
             if event.tid not in session._allowed_target_tids():
-                raise ValidationError(_("Only selected Vehicle RFID Tags may be stored in this Lane Calibration."))
+                raise ValidationError(_("Only the active Calibration Tag may be stored in this Lane Calibration."))

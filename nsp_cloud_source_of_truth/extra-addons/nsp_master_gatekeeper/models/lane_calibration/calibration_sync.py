@@ -1,18 +1,61 @@
 # -*- coding: utf-8 -*-
 from odoo import api, fields, models, _
 
-from ...services.calibration_status_policy import CalibrationStatusPolicy
+from .calibration_status import CalibrationStatusPolicy
 
 
 class NspMeasurementSessionSync(models.Model):
     _inherit = "nsp.measurement.session"
 
-    def _target_coverage(self):
-        """Return Vehicle-level RFID detection coverage for the current revision."""
+    def _calibration_sync_payload(self, edge_server=False):
+        """Serialize the Lane Calibration runtime configuration for Edge."""
         self.ensure_one()
-        targets = self.target_line_ids.sorted(
-            key=lambda line: ((line.license_plate or ""), (line.vehicle_tid or ""), line.id)
-        )
+        lines = self.reader_line_ids
+        if edge_server:
+            lines = lines.filtered(lambda line: line.edge_server_id == edge_server)
+        readers = []
+        for line in lines.sorted(
+            key=lambda item: (
+                item.edge_server_id.edge_server_code or "",
+                item.controller_id.controller_id or "",
+                item.reader_id.serial_number or "",
+                item.id,
+            )
+        ):
+            readers.append({
+                "server_code": line.edge_server_id.edge_server_code or "",
+                "controller_code": line.controller_id.controller_id or "",
+                "controller_name": line.controller_id.controller_name or "",
+                "technical_code": line.reader_id.device_code or "",
+                "serial_number": line.reader_id.serial_number or "",
+                "reader_name": line.reader_id.name or line.reader_id.serial_number or "",
+                "physical_connection": line.reader_id.connection_type or False,
+                "reader_parameters": {
+                    "power_dbm": int(line.reader_power_dbm or 0),
+                    "read_interval_ms": int(line.read_interval_ms or 200),
+                    "tid_start_address": int(line.reader_tid_addr or 0),
+                    "tid_length": int(line.reader_tid_len or 0),
+                },
+                "ports": [
+                    {"port_no": int(port.port_no or 0)}
+                    for port in line.reader_port_ids.sorted(key=lambda port: (port.port_no, port.id))
+                ],
+            })
+        calibration_tag = {"tid": self.target_line_ids[:1].tid or ""} if self.target_line_ids else False
+        return {
+            "schema_version": 2,
+            "lane_calibration_code": self.measurement_code,
+            "status": self.status,
+            "desired_state": "running" if self.status in ("ready", "running") else "stopped",
+            "revision": int(self.revision or 1),
+            "calibration_tag": calibration_tag,
+            "readers": readers,
+        }
+
+    def _target_coverage(self):
+        """Return raw calibration-tag detection coverage for the current revision."""
+        self.ensure_one()
+        targets = self.target_line_ids.sorted(key=lambda line: (line.tid or "", line.id))
         rows = self.env["nsp.measurement.event"].sudo()._read_group(
             [("session_id", "=", self.id), ("revision", "=", self.revision)],
             ["tid"],
@@ -29,16 +72,11 @@ class NspMeasurementSessionSync(models.Model):
         }
         result = []
         for line in targets:
-            data = stats.get(line.vehicle_tid, {})
+            data = stats.get(line.tid, {})
             read_count = int(data.get("read_count") or 0)
             result.append({
                 "id": line.id,
-                "tag_id": line.tag_id.id,
-                "vehicle_tid": line.vehicle_tid or "",
-                "vehicle_id": line.vehicle_id.id,
-                "license_plate": line.license_plate or "",
-                "owner_id": line.vehicle_id.owner_id.id if line.vehicle_id.owner_id else False,
-                "owner_name": line.vehicle_id.owner_id.display_name if line.vehicle_id.owner_id else "",
+                "tid": line.tid or "",
                 "detected": bool(read_count),
                 "read_count": read_count,
                 "first_read_at": fields.Datetime.to_string(data.get("first_read_at"))
@@ -65,8 +103,8 @@ class NspMeasurementSessionSync(models.Model):
             limit=limit,
         )
         steps = session._build_detection_steps(events)
-        vehicles = session._target_coverage()
-        detected_vehicle_count = sum(1 for vehicle in vehicles if vehicle["detected"])
+        tags = session._target_coverage()
+        detected_tag_count = sum(1 for tag in tags if tag["detected"])
         controllers = []
         for controller in session.reader_line_ids.mapped("controller_id").sorted(
             key=lambda item: ((item.controller_id or ""), item.id)
@@ -120,11 +158,10 @@ class NspMeasurementSessionSync(models.Model):
             "controllers": controllers,
             "controller_count": len(controllers),
             "edge_server_codes": session._edge_server_codes(),
-            "vehicles": vehicles,
-            "vehicle_count": len(vehicles),
-            "vehicle_tag_count": int(session.target_tag_count or 0),
-            "detected_vehicle_count": detected_vehicle_count,
-            "coverage_percent": round((detected_vehicle_count * 100.0 / len(vehicles)), 1) if vehicles else 0.0,
+            "tags": tags,
+            "tag_count": len(tags),
+            "detected_tag_count": detected_tag_count,
+            "coverage_percent": round((detected_tag_count * 100.0 / len(tags)), 1) if tags else 0.0,
             "readers": readers,
             "reader_count": len(readers),
             "reader_online_count": sum(1 for reader in readers if reader.get("status") in ("online", "degraded")),

@@ -12,11 +12,11 @@ class TestCalibrationTimelineBuilder(TransactionCase):
         events = [
             {
                 "id": 1, "tid": "TID01", "serial_number": "R01", "port_no": 1,
-                "timestamp": "2026-08-07T01:00:00.000Z", "observed_seconds": 100.0,
+                "timestamp": "2026-08-07T01:00:00.000Z", "observed_seconds": 100.0, "rssi_dbm": -62.0,
             },
             {
                 "id": 2, "tid": "TID01", "serial_number": "R01", "port_no": 1,
-                "timestamp": "2026-08-07T01:00:00.100Z", "observed_seconds": 100.1,
+                "timestamp": "2026-08-07T01:00:00.100Z", "observed_seconds": 100.1, "rssi_dbm": -48.0,
             },
             {
                 "id": 3, "tid": "TID01", "serial_number": "R01", "port_no": 2,
@@ -28,13 +28,6 @@ class TestCalibrationTimelineBuilder(TransactionCase):
             readers_by_serial={
                 "R01": {"controller_code": "CTRL01", "reader_name": "Reader 01"}
             },
-            targets_by_tid={
-                "TID01": {
-                    "assignment_role": "vehicle",
-                    "assigned_to": "51A-123.45",
-                    "license_plate": "51A-123.45",
-                }
-            },
         )
         self.assertEqual(len(steps), 2)
         self.assertEqual(steps[0]["read_count"], 2)
@@ -42,7 +35,8 @@ class TestCalibrationTimelineBuilder(TransactionCase):
         self.assertEqual(steps[1]["duration_from_previous"], 1.25)
         self.assertEqual(steps[1]["elapsed_from_start"], 1.25)
         self.assertEqual(steps[0]["controller_code"], "CTRL01")
-        self.assertEqual(steps[0]["license_plate"], "51A-123.45")
+        self.assertEqual(steps[0]["tid"], "TID01")
+        self.assertEqual(steps[0]["rssi_dbm"], -48.0)
 
     def test_non_consecutive_same_point_is_not_collapsed(self):
         events = [
@@ -51,3 +45,14 @@ class TestCalibrationTimelineBuilder(TransactionCase):
             {"id": 3, "tid": "T", "serial_number": "R", "port_no": 1, "observed_seconds": 3.0},
         ]
         self.assertEqual(len(CalibrationTimelineBuilder.build(events)), 3)
+
+    def test_unique_reader_port_path_keeps_first_occurrence_only(self):
+        steps = [
+            {"first_event_id": 1, "serial_number": "R01", "port_no": 1},
+            {"first_event_id": 2, "serial_number": "R01", "port_no": 2},
+            {"first_event_id": 3, "serial_number": "R01", "port_no": 1},
+            {"first_event_id": 4, "serial_number": "R02", "port_no": 1},
+        ]
+        path = CalibrationTimelineBuilder.unique_reader_port_path(steps)
+        self.assertEqual([row["first_event_id"] for row in path], [1, 2, 4])
+

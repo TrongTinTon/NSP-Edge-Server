@@ -4,6 +4,7 @@ from datetime import timedelta
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError, ValidationError
 from odoo.addons.nsp_core.utils import new_management_code
+from ..services.raw_rfid_tag import normalize_raw_tid
 
 
 def _new_measurement_code():
@@ -13,7 +14,7 @@ def _new_measurement_code():
 class NspMeasurementSession(models.Model):
     """Measurement plan shared by Cloud, Edge and one-or-more Controllers.
 
-    The Session owns Vehicle RFID targets and a list of Reader lines.
+    The Session owns one raw calibration tag and a list of Reader lines.
     Reader ownership determines Controller scope; therefore Controller is not stored
     again on the Session. Each Edge receives only Reader lines belonging to it and
     each physical Controller pulls only its own Reader subset.
@@ -35,11 +36,11 @@ class NspMeasurementSession(models.Model):
     target_line_ids = fields.One2many(
         "nsp.measurement.target.line",
         "session_id",
-        string="Vehicles",
+        string="Calibration Tag",
         copy=True,
     )
-    target_count = fields.Integer(string="Vehicles", compute="_compute_scope_counts")
-    target_tag_count = fields.Integer(string="Vehicle RFID Tags", compute="_compute_scope_counts")
+    target_count = fields.Integer(string="Calibration Tags", compute="_compute_scope_counts")
+    target_tag_count = fields.Integer(string="Calibration Tags", compute="_compute_scope_counts")
     reader_line_ids = fields.One2many(
         "nsp.measurement.reader.line",
         "session_id",
@@ -128,7 +129,7 @@ class NspMeasurementSession(models.Model):
             session.controller_count = len(controllers)
             session.reader_count = len(session.reader_line_ids)
             session.target_count = len(session.target_line_ids)
-            session.target_tag_count = len(session.target_line_ids.filtered("vehicle_tid"))
+            session.target_tag_count = len(session.target_line_ids.filtered("tid"))
 
     @api.depends("event_ids", "revision")
     def _compute_event_count(self):
@@ -145,6 +146,7 @@ class NspMeasurementSession(models.Model):
             session.event_count = counts.get((session.id, session.revision), 0)
 
     def _sanitize_target_commands(self, commands):
+        """Normalize the single raw Calibration Tag without runtime assignment lookup."""
         if not commands:
             return commands
         Target = self.env["nsp.measurement.target.line"]
@@ -162,50 +164,43 @@ class NspMeasurementSession(models.Model):
         }
         existing = self.mapped("target_line_ids") if self and not clear_all else Target
         existing = existing.filtered(lambda line: line.id not in removed_ids)
-        seen_tids = set(existing.mapped("vehicle_tid"))
-        seen_vehicles = set(existing.mapped("vehicle_id").ids)
+        seen_tids = set(existing.mapped("tid"))
+        resulting_count = len(existing)
         cleaned = []
         for command in commands:
             if not isinstance(command, (list, tuple)) or not command:
                 cleaned.append(command)
                 continue
             operation = command[0]
-            if operation not in (0, 1) or len(command) < 3:
-                cleaned.append(command)
+            if operation == 0 and len(command) >= 3:
+                values = dict(command[2] or {})
+                tid = Target._normalize_tid(values.get("tid"))
+                if not tid:
+                    continue
+                if tid in seen_tids:
+                    raise ValidationError(_("The same raw TID can be used only once."))
+                resulting_count += 1
+                if resulting_count > 1:
+                    raise ValidationError(_("Lane Calibration accepts exactly one raw RFID Tag."))
+                values["tid"] = tid
+                cleaned.append((0, 0, values))
+                seen_tids.add(tid)
                 continue
-
-            values = dict(command[2] or {})
-            current = Target.browse()
-            if operation == 1:
+            if operation == 1 and len(command) >= 3:
                 current = Target.browse(int(command[1] or 0)).exists()
-                if current:
-                    seen_tids.discard(current.vehicle_tid)
-                    seen_vehicles.discard(current.vehicle_id.id)
-
-            tid = Target._normalize_tid(
-                values.get("vehicle_tid")
-                if "vehicle_tid" in values
-                else (current.vehicle_tid if current else False)
-            )
-            vehicle_id = Target._many2one_id(
-                values.get("vehicle_id")
-                if "vehicle_id" in values
-                else (current.vehicle_id.id if current else False)
-            )
-            if operation == 0 and not tid and not vehicle_id:
+                values = dict(command[2] or {})
+                if "tid" in values:
+                    seen_tids.discard(current.tid if current else "")
+                    tid = Target._normalize_tid(values.get("tid"))
+                    if not tid:
+                        raise ValidationError(_("Raw TID is required."))
+                    if tid in seen_tids:
+                        raise ValidationError(_("The same raw TID can be used only once."))
+                    values["tid"] = tid
+                    seen_tids.add(tid)
+                cleaned.append((1, command[1], values))
                 continue
-            if not tid or not vehicle_id:
-                raise ValidationError(_("Each Vehicle line requires RFID TID and License Plate."))
-            if tid in seen_tids:
-                raise ValidationError(_("The same RFID TID can be used only once."))
-            if vehicle_id in seen_vehicles:
-                raise ValidationError(_("The same Vehicle can be used only once."))
-
-            values["vehicle_tid"] = tid
-            values["vehicle_id"] = vehicle_id
-            seen_tids.add(tid)
-            seen_vehicles.add(vehicle_id)
-            cleaned.append((operation, command[1] if operation == 1 else 0, values))
+            cleaned.append(command)
         return cleaned
 
     @api.model_create_multi
@@ -251,43 +246,14 @@ class NspMeasurementSession(models.Model):
         self._validate_measurement_scope()
 
     def _validate_measurement_scope(self):
-        RuntimeAssignment = self.env["nsp.rfid.runtime.assignment"].sudo()
-        all_tids = {
-            str(tid or "").strip().upper()
-            for tid in self.mapped("target_line_ids.vehicle_tid")
-            if tid
-        }
-        assignments = RuntimeAssignment.search([("tid", "in", sorted(all_tids))]) if all_tids else RuntimeAssignment.browse()
-        assignment_by_tid = {
-            str(row.tid or "").strip().upper(): row
-            for row in assignments
-        }
         for session in self:
             reader_ids = session.reader_line_ids.mapped("reader_id").ids
             if len(reader_ids) != len(set(reader_ids)):
                 raise ValidationError(_("A Reader can be selected only once in a Lane Calibration."))
-
-            incomplete = session.target_line_ids.filtered(
-                lambda line: not line.vehicle_tid or not line.vehicle_id or not line.license_plate
-            )
-            if incomplete:
-                raise ValidationError(_("Every Vehicle line must contain RFID TID and License Plate."))
-            tids = [str(tid or "").strip().upper() for tid in session.target_line_ids.mapped("vehicle_tid")]
-            vehicle_ids = session.target_line_ids.mapped("vehicle_id").ids
-            if len(tids) != len(set(tids)):
-                raise ValidationError(_("An RFID TID can be selected only once."))
-            if len(vehicle_ids) != len(set(vehicle_ids)):
-                raise ValidationError(_("A Vehicle can be selected only once."))
-
-            for target in session.target_line_ids:
-                assignment = assignment_by_tid.get(str(target.vehicle_tid or "").strip().upper())
-                if (
-                    not assignment
-                    or assignment.vehicle_id != target.vehicle_id
-                    or not target.vehicle_id.active
-                ):
-                    raise ValidationError(_("Vehicle RFID runtime assignment is missing, inactive or changed."))
-
+            if len(session.target_line_ids) > 1:
+                raise ValidationError(_("Lane Calibration accepts exactly one raw RFID Tag."))
+            if session.target_line_ids.filtered(lambda line: not line.tid):
+                raise ValidationError(_("Raw TID is required for Lane Calibration."))
             edge_ids = set(session.reader_line_ids.mapped("edge_server_id").ids)
             if len(edge_ids) > 1:
                 raise ValidationError(_("All Reader assemblies must use the same Server."))
@@ -296,8 +262,8 @@ class NspMeasurementSession(models.Model):
     def _require_ready_configuration(self):
         self.ensure_one()
         missing = []
-        if not self.target_line_ids:
-            missing.append(_("Vehicles"))
+        if len(self.target_line_ids) != 1:
+            missing.append(_("exactly one raw Calibration Tag"))
         if not self.reader_line_ids:
             missing.append(_("Readers"))
         if missing:
@@ -309,20 +275,9 @@ class NspMeasurementSession(models.Model):
         self._validate_measurement_scope()
 
     def _allowed_target_tids(self):
-        """Return TIDs frozen in this released Lane Calibration snapshot.
-
-        The runtime assignment is validated when the Cloud snapshot is applied.
-        Re-reading the mutable runtime-assignment table for every event can make
-        an already released calibration silently stop accepting its own target
-        after an unrelated assignment refresh. Event validation must therefore
-        use the immutable session target lines.
-        """
+        """Return the single raw TID allowed for the current calibration revision."""
         self.ensure_one()
-        return {
-            self.env["nsp.rfid.runtime.assignment"].sudo()._normalize_tid(line.vehicle_tid)
-            for line in self.target_line_ids
-            if line.vehicle_tid and line.vehicle_id
-        }
+        return {line.tid for line in self.target_line_ids if line.tid}
 
     def _allowed_reader_port_pairs(self):
         self.ensure_one()
@@ -445,11 +400,9 @@ class NspMeasurementSession(models.Model):
         return self.action_open_live()
 
     def _target_coverage(self):
-        """Return Vehicle-level RFID detection coverage for the current revision."""
+        """Return raw calibration-tag coverage for the current revision."""
         self.ensure_one()
-        targets = self.target_line_ids.sorted(
-            key=lambda line: ((line.license_plate or ""), (line.vehicle_tid or ""), line.id)
-        )
+        targets = self.target_line_ids.sorted(key=lambda line: (line.tid or "", line.id))
         rows = self.env["nsp.measurement.event"].sudo()._read_group(
             [("session_id", "=", self.id), ("revision", "=", self.revision)],
             ["tid"],
@@ -466,15 +419,11 @@ class NspMeasurementSession(models.Model):
         }
         result = []
         for line in targets:
-            data = stats.get(line.vehicle_tid, {})
+            data = stats.get(line.tid, {})
             read_count = int(data.get("read_count") or 0)
             result.append({
                 "id": line.id,
-                "vehicle_tid": line.vehicle_tid or "",
-                "vehicle_id": line.vehicle_id.id,
-                "license_plate": line.license_plate or "",
-                "owner_id": line.vehicle_id.owner_id.id if line.vehicle_id.owner_id else False,
-                "owner_name": line.vehicle_id.owner_id.display_name if line.vehicle_id.owner_id else "",
+                "tid": line.tid or "",
                 "detected": bool(read_count),
                 "read_count": read_count,
                 "first_read_at": fields.Datetime.to_string(data.get("first_read_at"))
@@ -501,8 +450,8 @@ class NspMeasurementSession(models.Model):
             limit=limit,
         )
         steps = session._build_detection_steps(events)
-        vehicles = session._target_coverage()
-        detected_vehicle_count = sum(1 for vehicle in vehicles if vehicle["detected"])
+        tags = session._target_coverage()
+        detected_tag_count = sum(1 for tag in tags if tag["detected"])
         controllers = []
         for controller in session.reader_line_ids.mapped("controller_id").sorted(
             key=lambda item: ((item.controller_id or ""), item.id)
@@ -556,11 +505,10 @@ class NspMeasurementSession(models.Model):
             "controllers": controllers,
             "controller_count": len(controllers),
             "edge_server_codes": session._edge_server_codes(),
-            "vehicles": vehicles,
-            "vehicle_count": len(vehicles),
-            "vehicle_tag_count": int(session.target_tag_count or 0),
-            "detected_vehicle_count": detected_vehicle_count,
-            "coverage_percent": round((detected_vehicle_count * 100.0 / len(vehicles)), 1) if vehicles else 0.0,
+            "tags": tags,
+            "tag_count": len(tags),
+            "detected_tag_count": detected_tag_count,
+            "coverage_percent": round((detected_tag_count * 100.0 / len(tags)), 1) if tags else 0.0,
             "readers": readers,
             "reader_count": len(readers),
             "started_at": fields.Datetime.to_string(session.started_at) if session.started_at else None,
@@ -593,14 +541,13 @@ class NspMeasurementSession(models.Model):
             for line in self.reader_line_ids
         }
         targets_by_tid = {
-            line.vehicle_tid: {
-                "assignment_role": "vehicle",
-                "assigned_to": line.license_plate or "",
-                "license_plate": line.license_plate or "",
-                "owner_name": line.vehicle_id.owner_id.display_name if line.vehicle_id.owner_id else "",
+            line.tid: {
+                "assignment_role": "calibration_tag",
+                "assigned_to": _("Calibration Tag"),
+                "license_plate": "",
             }
             for line in self.target_line_ids
-            if line.vehicle_tid
+            if line.tid
         }
         steps = []
         current = None
@@ -699,68 +646,62 @@ class NspMeasurementSession(models.Model):
 
 
 class NspMeasurementTargetLine(models.Model):
+    """One arbitrary raw RFID tag used only as the Lane Calibration probe."""
+
     _name = "nsp.measurement.target.line"
-    _description = "NSP Lane Calibration Vehicle"
-    _order = "session_id, license_plate, id"
+    _description = "NSP Lane Calibration Raw Tag"
+    _order = "session_id, id"
 
     session_id = fields.Many2one(
         "nsp.measurement.session",
         ondelete="cascade",
         index=True,
     )
-    vehicle_tid = fields.Char(
-        string="RFID TID", required=True, index=True,
+    tid = fields.Char(
+        string="Raw TID",
+        required=True,
+        index=True,
+        help=(
+            "Arbitrary raw RFID TID used for calibration. It is not resolved through "
+            "RFID runtime assignment and is not mapped to a Vehicle or User."
+        ),
     )
-    vehicle_id = fields.Many2one(
-        "nsp.vehicle", string="License Plate", required=True,
-        ondelete="restrict", index=True,
-        domain=[("active", "=", True)],
-    )
-    license_plate = fields.Char(
-        related="vehicle_id.license_plate", readonly=True, store=True, index=True,
-    )
-    owner_id = fields.Many2one(
-        related="vehicle_id.owner_id", string="Owner", readonly=True, store=True,
-    )
-    owner_locked = fields.Boolean(compute="_compute_owner_locked")
-    vehicle_detection_state = fields.Selection(
+    detection_state = fields.Selection(
         [("pending", "Not Detected"), ("detected", "Detected")],
         compute="_compute_detection_state",
     )
-    vehicle_detection_count = fields.Integer(compute="_compute_detection_state")
+    detection_count = fields.Integer(compute="_compute_detection_state")
+
+    # Storage-only compatibility with the former Vehicle-based calibration table.
+    # The Edge raw-TID workflow never resolves or uses this field. It remains
+    # optional through NSP 19.x so the existing table can be upgraded in place.
+    # Removal target: NSP 20.0 via an explicit migration.
+    vehicle_id = fields.Many2one(
+        "nsp.vehicle",
+        string="Deprecated Vehicle",
+        required=False,
+        ondelete="restrict",
+        copy=False,
+    )
+
+    # Compatibility alias for NSP 19.0 callers. Removal target: NSP 20.0.
+    vehicle_tid = fields.Char(related="tid", string="Deprecated TID Alias", readonly=False)
 
     _sql_constraints = [
         (
             "measurement_target_tid_unique",
-            "unique(session_id, vehicle_tid)",
-            "This RFID TID is already selected in the Lane Calibration.",
-        ),
-        (
-            "measurement_target_vehicle_unique",
-            "unique(session_id, vehicle_id)",
-            "This Vehicle is already selected in the Lane Calibration.",
+            "unique(session_id, tid)",
+            "This raw TID is already selected in the Lane Calibration.",
         ),
     ]
 
-    @api.depends("vehicle_id.owner_id")
-    def _compute_owner_locked(self):
-        for line in self:
-            line.owner_locked = bool(line.vehicle_id.owner_id)
-
     @api.model
     def _normalize_tid(self, value):
-        return self.env["nsp.rfid.runtime.assignment"]._normalize_tid(value)
-
-    @api.model
-    def _many2one_id(self, value):
-        if isinstance(value, (list, tuple)):
-            value = value[0] if value else False
-        if isinstance(value, dict):
-            value = value.get("id") or value.get("resId")
+        from ..services.raw_rfid_tag import normalize_raw_tid
         try:
-            return int(value or 0)
-        except (TypeError, ValueError):
-            return 0
+            return normalize_raw_tid(value)
+        except ValueError as exc:
+            raise ValidationError(_("Raw TID must contain hexadecimal characters only.")) from exc
 
     @api.depends("session_id.revision", "session_id.event_ids")
     def _compute_detection_state(self):
@@ -780,48 +721,37 @@ class NspMeasurementTargetLine(models.Model):
             count = counts.get((
                 line.session_id.id,
                 int(line.session_id.revision or 1),
-                line.vehicle_tid,
+                line.tid,
             ), 0)
-            line.vehicle_detection_count = count
-            line.vehicle_detection_state = "detected" if count else "pending"
+            line.detection_count = count
+            line.detection_state = "detected" if count else "pending"
 
     @api.model_create_multi
     def create(self, vals_list):
         prepared = []
         for source in vals_list:
-            vals = dict(source)
-            vals["vehicle_tid"] = self._normalize_tid(vals.get("vehicle_tid"))
-            if not vals["vehicle_tid"] or not self._many2one_id(vals.get("vehicle_id")):
-                raise ValidationError(_("RFID TID and License Plate are required."))
-            prepared.append(vals)
-        records = super().create(prepared)
-        records._check_runtime_assignment()
-        return records
+            values = dict(source)
+            values["tid"] = self._normalize_tid(values.get("tid"))
+            if not values["tid"]:
+                raise ValidationError(_("Raw TID is required."))
+            prepared.append(values)
+        return super().create(prepared)
 
     def write(self, vals):
         values = dict(vals)
-        if "vehicle_tid" in values:
-            values["vehicle_tid"] = self._normalize_tid(values.get("vehicle_tid"))
-            if not values["vehicle_tid"]:
-                raise ValidationError(_("RFID TID is required."))
+        if "tid" in values:
+            values["tid"] = self._normalize_tid(values.get("tid"))
+            if not values["tid"]:
+                raise ValidationError(_("Raw TID is required."))
         result = super().write(values)
-        self._check_runtime_assignment()
+        self.mapped("session_id")._validate_measurement_scope()
         return result
 
-    @api.constrains("vehicle_tid", "vehicle_id")
-    def _check_runtime_assignment(self):
-        RuntimeAssignment = self.env["nsp.rfid.runtime.assignment"].sudo()
-        tids = self.mapped("vehicle_tid")
-        assignments = RuntimeAssignment.search([("tid", "in", tids)]) if tids else RuntimeAssignment.browse()
-        by_tid = {row.tid: row for row in assignments}
-        for line in self:
-            assignment = by_tid.get(line.vehicle_tid)
-            if (
-                not assignment
-                or assignment.vehicle_id != line.vehicle_id
-                or not line.vehicle_id.active
-            ):
-                raise ValidationError(_("RFID TID is not assigned to this active Vehicle at Edge runtime."))
+    @api.constrains("tid", "session_id")
+    def _check_raw_tag(self):
+        if self.filtered(lambda line: not line.tid):
+            raise ValidationError(_("Raw TID is required."))
+        self.mapped("session_id")._validate_measurement_scope()
 
 
 class NspMeasurementReaderLine(models.Model):
@@ -1184,7 +1114,10 @@ class NspMeasurementEvent(models.Model):
             vals = dict(source)
             vals["event_uid"] = str(vals.get("event_uid") or "").strip()
             vals["serial_number"] = str(vals.get("serial_number") or "").strip().upper()
-            vals["tid"] = self.env["nsp.rfid.runtime.assignment"]._normalize_tid(vals.get("tid"))
+            try:
+                vals["tid"] = normalize_raw_tid(vals.get("tid"))
+            except ValueError as exc:
+                raise ValidationError(_("Measurement TID must contain hexadecimal characters only.")) from exc
             vals["revision"] = max(int(vals.get("revision") or 1), 1)
             vals["read_at_ms"] = max(0, min(int(vals.get("read_at_ms") or 0), 999))
             vals["read_interval_ms"] = max(1, min(int(vals.get("read_interval_ms") or 200), 60000))
@@ -1213,4 +1146,4 @@ class NspMeasurementEvent(models.Model):
             if key not in session._allowed_reader_port_pairs():
                 raise ValidationError(_("Measurement observation Reader Port is not part of the Lane Calibration."))
             if event.tid not in session._allowed_target_tids():
-                raise ValidationError(_("Only selected Vehicle RFID Tags may be stored in this Lane Calibration."))
+                raise ValidationError(_("Only the active Calibration Tag may be stored in this Lane Calibration."))

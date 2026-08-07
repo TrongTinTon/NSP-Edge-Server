@@ -3,13 +3,12 @@
 from odoo.exceptions import ValidationError
 from odoo.tests.common import TransactionCase, tagged
 
-from ..services.calibration_status_policy import CalibrationStatusPolicy
-from ..models.parking_state_policy import _PARKING_AREA_STATE_TRANSITIONS
-from ..models.measurement_validation_state_policy import (
+from ..models.lane_calibration.calibration_status import (
+    CalibrationStatusPolicy,
     _PASS_STATE_TRANSITIONS,
     _RESULT_STATE_TRANSITIONS,
-    _VALIDATION_RUN_STATE_TRANSITIONS,
 )
+from ..models.parking_state_policy import _PARKING_AREA_STATE_TRANSITIONS
 from ..models.state_policy import (
     classify_idempotent_replay,
     compare_revision,
@@ -90,14 +89,8 @@ class TestGatekeeperContractPolicies(TransactionCase):
         )
         self.assertEqual(
             validate_state_transition(
-                "draft", "validation", _RESULT_STATE_TRANSITIONS, label="Calibration Result"
+                "draft", "accepted", _RESULT_STATE_TRANSITIONS, label="Calibration Result"
             ),
-            "validation",
-        )
-        self.assertEqual(
-            validate_state_transition(
-                "running", "passed", _VALIDATION_RUN_STATE_TRANSITIONS, label="Validation Run"
-            ),
-            "passed",
+            "accepted",
         )
 

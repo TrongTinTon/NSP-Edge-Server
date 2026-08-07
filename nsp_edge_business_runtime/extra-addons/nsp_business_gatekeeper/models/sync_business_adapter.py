@@ -5,6 +5,8 @@ from datetime import timedelta, timezone
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError
 
+from ..services.raw_rfid_tag import normalize_raw_tid
+
 _logger = logging.getLogger(__name__)
 
 
@@ -787,23 +789,34 @@ class NspSyncBusinessAdapter(models.Model):
         if not isinstance(item, dict):
             raise UserError(_("Lane Calibration item must be an object."))
         unsupported_outer = set(item) - {
-            "lane_calibration_code", "status", "desired_state", "revision", "vehicles", "readers",
+            "schema_version", "lane_calibration_code", "status", "desired_state", "revision",
+            "calibration_tag", "readers",
         }
         if unsupported_outer:
             raise UserError(
                 _("Unsupported Lane Calibration field(s): %s")
                 % ", ".join(sorted(unsupported_outer))
             )
+        if int(item.get("schema_version") or 0) != 2:
+            raise UserError(_("Lane Calibration schema_version 2 is required."))
 
         code = str(item.get("lane_calibration_code") or "").strip().upper()
-        vehicle_payloads = item.get("vehicles")
+        calibration_payload = item.get("calibration_tag")
         reader_payloads = item.get("readers")
         if not code:
             raise UserError(_("Calibration Code is required."))
-        if not isinstance(vehicle_payloads, list) or not vehicle_payloads:
-            raise UserError(_("Lane Calibration must contain at least one Vehicle."))
+        if not isinstance(calibration_payload, dict) or set(calibration_payload) - {"tid"}:
+            raise UserError(_("Lane Calibration requires one calibration_tag object containing only TID."))
         if not isinstance(reader_payloads, list) or not reader_payloads:
             raise UserError(_("Lane Calibration must contain at least one RFID Reader assembly."))
+
+        try:
+            calibration_tid = normalize_raw_tid(calibration_payload.get("tid"))
+        except ValueError as exc:
+            raise UserError(_("Calibration Tag TID is invalid.")) from exc
+        if not calibration_tid:
+            raise UserError(_("Calibration Tag TID is required."))
+
 
         status = str(item.get("status") or "ready").strip().lower()
         if status not in ("ready", "running", "completed", "applied", "failed", "cancelled"):
@@ -826,74 +839,7 @@ class NspSyncBusinessAdapter(models.Model):
             )
             return session
 
-        normalized_vehicles = []
-        all_tids = set()
-        vehicle_codes = set()
-        for payload in vehicle_payloads:
-            if not isinstance(payload, dict):
-                raise UserError(_("Lane Calibration Vehicle must be an object."))
-            unsupported = set(payload) - {
-                "vehicle_tid", "vehicle_code", "license_plate", "owner_user_code",
-            }
-            if unsupported:
-                raise UserError(
-                    _("Unsupported Lane Calibration Vehicle field(s): %s")
-                    % ", ".join(sorted(unsupported))
-                )
-            tid = self._normalize_rfid_tid(payload.get("vehicle_tid"))
-            vehicle_code = str(payload.get("vehicle_code") or "").strip().upper()
-            plate = str(payload.get("license_plate") or "").strip().upper()
-            owner_code = str(payload.get("owner_user_code") or "").strip().upper()
-            if not tid or not vehicle_code or not plate:
-                raise UserError(_("Each Lane Calibration Vehicle requires RFID TID, Vehicle Code and License Plate."))
-            if tid in all_tids or vehicle_code in vehicle_codes:
-                raise UserError(_("Lane Calibration Vehicle or RFID TID is duplicated."))
-            all_tids.add(tid)
-            vehicle_codes.add(vehicle_code)
-            normalized_vehicles.append({
-                "vehicle_tid": tid,
-                "vehicle_code": vehicle_code,
-                "license_plate": plate,
-                "owner_user_code": owner_code,
-            })
-
-        assignment_by_tid = self._runtime_vehicle_assignment_map(all_tids)
-        missing_tids = sorted(all_tids - set(assignment_by_tid))
-        if missing_tids:
-            raise UserError(
-                _("Vehicle RFID runtime assignment(s) are not synchronized: %s")
-                % ", ".join(missing_tids[:20])
-            )
-
-        Vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False)
-        vehicles = Vehicle.search([("vehicle_code", "in", list(vehicle_codes))])
-        vehicle_by_code = {vehicle.vehicle_code: vehicle for vehicle in vehicles}
-        missing_vehicle_codes = sorted(vehicle_codes - set(vehicle_by_code))
-        if missing_vehicle_codes:
-            raise UserError(
-                _("Vehicle(s) are not synchronized: %s")
-                % ", ".join(missing_vehicle_codes[:20])
-            )
-
-        target_commands = []
-        Target = self.env["nsp.measurement.target.line"].sudo()
-        for payload in normalized_vehicles:
-            assignment = assignment_by_tid[payload["vehicle_tid"]]
-            vehicle = vehicle_by_code[payload["vehicle_code"]]
-            if assignment.vehicle_id != vehicle or not vehicle.active:
-                raise UserError(
-                    _("RFID TID %(tid)s is not assigned to active Vehicle %(vehicle)s.")
-                    % {"tid": payload["vehicle_tid"], "vehicle": payload["vehicle_code"]}
-                )
-            if str(vehicle.license_plate or "").strip().upper() != payload["license_plate"]:
-                raise UserError(_("Vehicle %s License Plate does not match the released calibration.") % payload["vehicle_code"])
-            actual_owner = str(vehicle.owner_id.user_code or "").strip().upper() if vehicle.owner_id else ""
-            if actual_owner != payload["owner_user_code"]:
-                raise UserError(_("Vehicle %s Owner does not match the released calibration.") % payload["vehicle_code"])
-            target_commands.append((0, 0, {
-                "vehicle_tid": payload["vehicle_tid"],
-                "vehicle_id": vehicle.id,
-            }))
+        target_commands = [(0, 0, {"tid": calibration_tid})]
 
         normalized_readers = []
         identity_rows = {}

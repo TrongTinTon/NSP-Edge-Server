@@ -111,7 +111,7 @@
 
           <separator string="Lanes"/>
           <div class="alert alert-secondary" role="alert">
-            Publish rule: this Parking Layout must contain at least one Check-in Sequence and one Check-out Sequence. Each Lane may be Check-in only, Check-out only, or bidirectional.
+            Publish rule: this Parking Layout must contain at least one Lane In path and one Lane Out path. Each Lane may be Lane In only, Lane Out only, or bidirectional.
           </div>
           <div class="alert alert-info" role="alert" invisible="state != 'draft' or not is_published">
             You are editing a new draft. The last published revision remains active on Edge until this layout is published again.
@@ -127,8 +127,8 @@
               <field name="timeline_point_count" string="Timeline" readonly="1"/>
               <field name="reader_config_count" string="Readers" readonly="1" optional="show"/>
               <field name="total_path_duration" string="Duration (s)" readonly="1"/>
-              <field name="checkin_point_count" string="Check-in" readonly="1"/>
-              <field name="checkout_point_count" string="Check-out" readonly="1"/>
+              <field name="checkin_point_count" string="Lane In" readonly="1"/>
+              <field name="checkout_point_count" string="Lane Out" readonly="1"/>
               <field name="configuration_state" column_invisible="1"/>
               <field name="configuration_issue" string="Configuration Check" readonly="1" optional="hide"/>
               <field name="active" widget="boolean_toggle"/>

@@ -12,9 +12,8 @@ class CalibrationTimelineBuilder:
     """Collapse consecutive RFID reads into ordered Reader-Port timeline steps."""
 
     @classmethod
-    def build(cls, events, *, readers_by_serial=None, targets_by_tid=None):
+    def build(cls, events, *, readers_by_serial=None):
         readers_by_serial = readers_by_serial or {}
-        targets_by_tid = targets_by_tid or {}
         steps = []
         current = None
 
@@ -27,13 +26,16 @@ class CalibrationTimelineBuilder:
             if current and current["_key"] == key:
                 current["last_seen_at"] = event.get("timestamp")
                 current["read_count"] += 1
+                rssi = event.get("rssi_dbm")
+                if rssi not in (False, None):
+                    current_rssi = current.get("rssi_dbm")
+                    current["rssi_dbm"] = float(rssi) if current_rssi in (False, None) else max(float(current_rssi), float(rssi))
                 continue
 
             if current:
                 cls._append_step(steps, current)
 
             reader = readers_by_serial.get(serial_number, {})
-            target = targets_by_tid.get(tid, {})
             current = {
                 "_key": key,
                 "_first_seconds": float(event.get("observed_seconds") or 0.0),
@@ -42,13 +44,11 @@ class CalibrationTimelineBuilder:
                 "first_seen_at": event.get("timestamp"),
                 "last_seen_at": event.get("timestamp"),
                 "tid": tid,
-                "assignment_role": target.get("assignment_role", ""),
-                "assigned_to": target.get("assigned_to", ""),
-                "license_plate": target.get("license_plate", ""),
                 "controller_code": reader.get("controller_code", ""),
                 "serial_number": serial_number,
                 "reader_name": reader.get("reader_name") or serial_number,
                 "port_no": port_no,
+                "rssi_dbm": False if event.get("rssi_dbm") in (False, None) else float(event.get("rssi_dbm")),
                 "read_count": 1,
             }
 
@@ -57,6 +57,28 @@ class CalibrationTimelineBuilder:
 
         cls._calculate_durations(steps)
         return steps
+
+
+    @staticmethod
+    def unique_reader_port_path(steps):
+        """Return the first chronological occurrence of each Reader/Port.
+
+        Raw observation may revisit the same Reader/Port when antenna coverage
+        overlaps. Lane configuration stores each physical point once, so this
+        projection intentionally preserves only the first occurrence while the
+        original Detection Timeline remains untouched.
+        """
+        result = []
+        seen = set()
+        for step in steps or []:
+            serial_number = str(step.get("serial_number") or "").strip().upper()
+            port_no = int(step.get("port_no") or 0)
+            key = (serial_number, port_no)
+            if not serial_number or port_no <= 0 or key in seen:
+                continue
+            seen.add(key)
+            result.append(step)
+        return result
 
     @staticmethod
     def _append_step(steps, step):
