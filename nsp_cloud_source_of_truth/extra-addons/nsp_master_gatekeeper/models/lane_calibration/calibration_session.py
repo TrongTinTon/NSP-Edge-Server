@@ -424,62 +424,10 @@ class NspMeasurementSession(models.Model):
         line.unlink()
         return True
 
-    def action_open_apply_configuration(self, selected_event_ids):
-        self.ensure_one()
-        self.check_access("read")
-        if self.status not in ("ready", "running", "completed"):
-            raise ValidationError(_(
-                "Lane configuration can be applied only from a released or running Lane Calibration."
-            ))
-        selected, edge_server_id, controller_id = self._configuration_steps_from_selection(
-            selected_event_ids
-        )
-        checkin = " → ".join("%s:P%s" % (row["reader_name"], row["port_no"]) for row in selected)
-        checkout = " → ".join(
-            "%s:P%s" % (row["reader_name"], row["port_no"])
-            for row in reversed(selected)
-        )
-        wizard = self.env["nsp.measurement.apply.lane.wizard"].create({
-            "session_id": self.id,
-            "edge_server_id": edge_server_id,
-            "controller_id": controller_id,
-            "checkin_overview": checkin,
-            "checkout_overview": checkout,
-            "line_ids": [
-                (0, 0, {
-                    "selection_order": row["selection_order"],
-                    "event_id": row["event_id"],
-                    "reader_id": row["reader_id"],
-                    "serial_number": row["serial_number"],
-                    "port_no": row["port_no"],
-                    "observed_at": row["observed_at"],
-                    "observed_at_ms": row["observed_at_ms"],
-                    "duration_from_previous": row["duration_from_previous"],
-                    "reader_power_dbm": row["reader_power_dbm"],
-                    "read_interval_ms": row["read_interval_ms"],
-                    "tid_start_address": row["tid_start_address"],
-                    "tid_length": row["tid_length"],
-                    "checkin_order": row["checkin_order"],
-                    "checkout_order": row["checkout_order"],
-                })
-                for row in selected
-            ],
-        })
-        return {
-            "type": "ir.actions.act_window",
-            "name": _("Apply Lane Configuration"),
-            "res_model": "nsp.measurement.apply.lane.wizard",
-            "res_id": wizard.id,
-            "view_mode": "form",
-            "views": [(
-                self.env.ref(
-                    "nsp_master_gatekeeper.view_nsp_measurement_apply_lane_wizard_form"
-                ).id,
-                "form",
-            )],
-            "target": "new",
-            "context": dict(self.env.context),
-        }
+    def action_open_apply_configuration(self, selected_event_ids=None):
+        """Deprecated compatibility alias. Use Lane Setup. Removal target: NSP 20.0."""
+        return self.action_open_lane_setup()
+
 
 
 class NspMeasurementSessionTagScope(models.Model):

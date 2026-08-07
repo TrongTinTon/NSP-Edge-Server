@@ -596,8 +596,9 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 reader_code = str(step.get("reader_code") or "").strip().upper()
                 try:
                     port_no = int(step.get("port_no") or 0)
+                    duration = float(step.get("duration_from_previous_seconds") or 0.0)
                 except (TypeError, ValueError) as exc:
-                    raise ValueError("published_event_sequence_port_invalid:%s:%s" % (lane_code, event_type)) from exc
+                    raise ValueError("published_event_sequence_step_value_invalid:%s:%s" % (lane_code, event_type)) from exc
                 ref = (reader_code, port_no)
                 if ref not in timeline_refs:
                     raise ValueError(
@@ -610,7 +611,16 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                         % (lane_code, reader_code, port_no)
                     )
                 seen_steps.add(ref)
-                runtime_steps.append({"reader_code": reader_code, "port_no": port_no})
+                order = len(runtime_steps) + 1
+                if order == 1 and duration != 0.0:
+                    raise ValueError("published_event_sequence_first_duration_invalid:%s:%s" % (lane_code, event_type))
+                if order > 1 and duration <= 0.0:
+                    raise ValueError("published_event_sequence_duration_invalid:%s:%s" % (lane_code, event_type))
+                runtime_steps.append({
+                    "reader_code": reader_code,
+                    "port_no": port_no,
+                    "duration_from_previous_seconds": duration,
+                })
             if runtime_steps and len(runtime_steps) < 2:
                 raise ValueError("published_event_sequence_insufficient:%s:%s" % (lane_code, event_type))
             runtime_sequences[event_type] = runtime_steps

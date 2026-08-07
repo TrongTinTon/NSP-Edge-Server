@@ -52,16 +52,16 @@
             </div>
             <div class="col-12 col-md-6 col-xl-3">
               <div class="nsp-parking-layout-card">
-                <div class="nsp-parking-layout-card__label">CHECK-IN</div>
+                <div class="nsp-parking-layout-card__label">LANE IN</div>
                 <div class="nsp-parking-layout-card__value"><field name="checkin_point_count" readonly="1" nolabel="1"/> points</div>
-                <div class="nsp-parking-layout-card__meta">Forward direction</div>
+                <div class="nsp-parking-layout-card__meta">Configured inbound device path</div>
               </div>
             </div>
             <div class="col-12 col-md-6 col-xl-3">
               <div class="nsp-parking-layout-card">
-                <div class="nsp-parking-layout-card__label">CHECK-OUT</div>
+                <div class="nsp-parking-layout-card__label">LANE OUT</div>
                 <div class="nsp-parking-layout-card__value"><field name="checkout_point_count" readonly="1" nolabel="1"/> points</div>
-                <div class="nsp-parking-layout-card__meta">Reverse direction</div>
+                <div class="nsp-parking-layout-card__meta">Configured outbound device path</div>
               </div>
             </div>
           </div>
@@ -107,7 +107,7 @@
                   <field name="available_reader_ids" column_invisible="1"/>
                   <field name="reader_id" string="Reader" domain="[('id','in',available_reader_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                   <field name="port_no" string="Port"/>
-                  <field name="duration_from_previous" string="Duration from Previous (s)"/>
+                  <field name="duration_from_previous" string="Compatibility Duration (s)"/>
                   <field name="cumulative_time" string="Cumulative Time (s)" readonly="1"/>
                 </list>
               </field>
@@ -126,6 +126,7 @@
                       <field name="available_reader_ids" column_invisible="1"/>
                       <field name="reader_id" string="Reader" domain="[('id','in',available_reader_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                       <field name="port_no" string="Port"/>
+                      <field name="duration_from_previous" string="Max Duration from Previous (s)"/>
                     </list>
                   </field>
                 </group>
@@ -138,6 +139,7 @@
                       <field name="available_reader_ids" column_invisible="1"/>
                       <field name="reader_id" string="Reader" domain="[('id','in',available_reader_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                       <field name="port_no" string="Port"/>
+                      <field name="duration_from_previous" string="Max Duration from Previous (s)"/>
                     </list>
                   </field>
                 </group>

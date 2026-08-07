@@ -288,6 +288,7 @@ class NspParkingArea(models.Model):
                         {
                             "reader_code": row.reader_id.device_code or "",
                             "port_no": int(row.port_no or 0),
+                            "duration_from_previous_seconds": float(row.duration_from_previous or 0.0),
                         }
                         for row in lane.checkin_sequence_ids.sorted(lambda item: (item.sequence or 0, item.id))
                     ],
@@ -295,6 +296,7 @@ class NspParkingArea(models.Model):
                         {
                             "reader_code": row.reader_id.device_code or "",
                             "port_no": int(row.port_no or 0),
+                            "duration_from_previous_seconds": float(row.duration_from_previous or 0.0),
                         }
                         for row in lane.checkout_sequence_ids.sorted(lambda item: (item.sequence or 0, item.id))
                     ],
@@ -570,6 +572,18 @@ class NspParkingLane(models.Model):
         "nsp.controller", compute="_compute_available_devices", readonly=True,
     )
     active = fields.Boolean(default=True, index=True)
+    setup_state = fields.Selection(
+        [("draft", "Draft"), ("applied", "Applied")],
+        string="Lane Setup State",
+        required=True,
+        default="applied",
+        copy=True,
+        index=True,
+        help="Draft Lane Setup cannot be published to Edge until it is applied.",
+    )
+    setup_applied_at = fields.Datetime(
+        string="Lane Setup Applied At", readonly=True, copy=False,
+    )
     timeline_point_count = fields.Integer(string="Timeline Points", compute="_compute_timeline_point_count")
     timeline_line_ids = fields.One2many(
         "nsp.parking.lane.timeline", "lane_id", string="Reader Port Timeline",
@@ -630,6 +644,26 @@ class NspParkingLane(models.Model):
     ]
 
     @api.model
+    def name_search(self, name="", domain=None, operator="ilike", limit=100):
+        """Make Lane selection reliable in Lane Setup.
+
+        Search the human Lane name/code/parent layout instead of relying only on
+        the stored computed display_name. The caller-provided domain remains the
+        authoritative scope (Lane Setup currently limits selection to active lanes
+        in Draft Parking Layouts).
+        """
+        search_domain = list(domain or [])
+        if name:
+            search_domain = [
+                "|", "|",
+                ("name", operator, name),
+                ("code", operator, name),
+                ("parking_area_id.name", operator, name),
+            ] + search_domain
+        records = self.search(search_domain, limit=limit)
+        return [(record.id, record.display_name) for record in records]
+
+    @api.model
     def name_create(self, name):
         lane_name = str(name or "").strip()
         if not lane_name:
@@ -665,7 +699,7 @@ class NspParkingLane(models.Model):
 
     @api.model
     def _resolve_quick_create_parking_area(self, edge_server_id, controller_id):
-        """Resolve an unambiguous Draft layout without exposing it in Lane Direction Setup.
+        """Resolve an unambiguous Draft layout without exposing it in Lane Setup.
 
         Prefer the Draft layout already using the same Server + Controller. If no such
         topology exists yet, a single Draft layout in the system is still unambiguous.
@@ -694,10 +728,15 @@ class NspParkingLane(models.Model):
             )
 
 
-    @api.depends("timeline_line_ids.duration_from_previous")
+    @api.depends(
+        "checkin_sequence_ids.duration_from_previous",
+        "checkout_sequence_ids.duration_from_previous",
+    )
     def _compute_total_path_duration(self):
         for record in self:
-            record.total_path_duration = sum(record.timeline_line_ids.sorted(lambda l: (l.sequence or 0, l.id)).mapped("duration_from_previous"))
+            lane_in = sum(record.checkin_sequence_ids.mapped("duration_from_previous"))
+            lane_out = sum(record.checkout_sequence_ids.mapped("duration_from_previous"))
+            record.total_path_duration = max(lane_in, lane_out)
 
     @api.depends("timeline_line_ids")
     def _compute_timeline_point_count(self):
@@ -728,7 +767,7 @@ class NspParkingLane(models.Model):
 
         Existing snapshots are preserved so later changes on nsp.device do not
         silently alter a working Lane. Lane Calibration replaces the snapshots
-        atomically when Apply Configuration is saved.
+        atomically when Lane Setup is saved.
         """
         Config = self.env["nsp.parking.lane.reader.config"].sudo()
         for lane in self:
@@ -785,6 +824,7 @@ class NspParkingLane(models.Model):
 
     @api.depends(
         "active",
+        "setup_state",
         "edge_server_id",
         "controller_id",
         "timeline_line_ids",
@@ -802,10 +842,12 @@ class NspParkingLane(models.Model):
         "checkin_sequence_ids.sequence",
         "checkin_sequence_ids.reader_id",
         "checkin_sequence_ids.port_no",
+        "checkin_sequence_ids.duration_from_previous",
         "checkout_sequence_ids",
         "checkout_sequence_ids.sequence",
         "checkout_sequence_ids.reader_id",
         "checkout_sequence_ids.port_no",
+        "checkout_sequence_ids.duration_from_previous",
     )
     def _compute_configuration_health(self):
         for lane in self:
@@ -814,6 +856,8 @@ class NspParkingLane(models.Model):
                 lane.configuration_issue = _("Lane is disabled.")
                 continue
             issues = []
+            if lane.setup_state == "draft":
+                issues.append(_("Lane Setup is saved as Draft; apply it before publishing"))
             if not lane.edge_server_id:
                 issues.append(_("Server is missing"))
             if not lane.controller_id:
@@ -892,76 +936,101 @@ class NspParkingLane(models.Model):
         self._validate_lane_assembly()
 
     def _validate_timeline_and_sequences(self):
+        """Validate Lane Setup against the calibrated hardware allowlist.
+
+        The legacy ``timeline_line_ids`` model is retained in NSP 19.x only as
+        the set of Reader/Ports made available by Lane Calibration. Lane In and
+        Lane Out are independent paths: their order and duration do not need to
+        be adjacent, reversed, or otherwise derived from the Calibration
+        Detection Timeline.
+        """
         for lane in self:
-            timeline = lane.timeline_line_ids.sorted(lambda row: (row.sequence or 0, row.id))
-            if timeline and len(timeline) < 2:
-                raise ValidationError(_("Reader Port Timeline requires at least two detection points."))
-            if timeline and timeline.mapped("sequence") != list(range(1, len(timeline) + 1)):
-                raise ValidationError(_("Timeline Order must be contiguous and start at 1."))
-            timeline_keys = [(line.reader_id.id, int(line.port_no or 0)) for line in timeline]
-            if len(timeline_keys) != len(set(timeline_keys)):
-                raise ValidationError(_("A Reader Port can appear only once in the Lane Timeline."))
-            for index, line in enumerate(timeline):
-                # Lane ownership is defined by lane.controller_id.  The Reader's
-                # inventory controller is an independently synchronized runtime
-                # relation and is not authoritative for a saved Lane topology.
-                # The Apply Configuration wizard validates the selected Reader
-                # and Port against the Calibration Infrastructure Scope before
-                # persisting this independent Lane snapshot.
+            allowed_rows = lane.timeline_line_ids.sorted(
+                lambda row: (row.sequence or 0, row.id)
+            )
+            allowed_keys = [
+                (line.reader_id.id, int(line.port_no or 0))
+                for line in allowed_rows
+            ]
+            if allowed_rows and allowed_rows.mapped("sequence") != list(
+                range(1, len(allowed_rows) + 1)
+            ):
+                raise ValidationError(_(
+                    "Calibration Antenna Scope Order must be contiguous and start at 1."
+                ))
+            if len(allowed_keys) != len(set(allowed_keys)):
+                raise ValidationError(_(
+                    "A Reader Port can appear only once in the Calibration Antenna Scope."
+                ))
+            for line in allowed_rows:
                 if not line.reader_id.active:
-                    raise ValidationError(_("Every Timeline Reader must be active."))
+                    raise ValidationError(_(
+                        "Every calibrated Reader used by Lane Setup must be active."
+                    ))
                 if (
                     not line.reader_id.whitelist_id
                     or not line.reader_id.whitelist_id.active
                     or line.reader_id.whitelist_id.device_type_code != "RFID_READER"
                 ):
-                    raise ValidationError(_("Every Timeline Reader must be an active RFID Reader from Device Whitelist."))
+                    raise ValidationError(_(
+                        "Every Lane Setup Reader must be an active RFID Reader from Device Whitelist."
+                    ))
                 if int(line.port_no or 0) < 1 or int(line.port_no or 0) > 16:
-                    raise ValidationError(_("Timeline Reader Port must be an integer from 1 to 16."))
-                if index == 0 and float(line.duration_from_previous or 0.0) != 0.0:
-                    raise ValidationError(_("The first Timeline point must have zero Duration from previous."))
-                if index > 0 and float(line.duration_from_previous or 0.0) <= 0.0:
-                    raise ValidationError(_("Every Timeline point after the first requires a positive Duration."))
+                    raise ValidationError(_(
+                        "Lane Setup Antenna/Port must be an integer from 1 to 16."
+                    ))
 
-            timeline_position = {key: position for position, key in enumerate(timeline_keys, start=1)}
-            orientation_by_type = {}
-            for sequence_type, rows, label in (
-                ("check_in", lane.checkin_sequence_ids, _("Lane In")),
-                ("check_out", lane.checkout_sequence_ids, _("Lane Out")),
+            allowed = set(allowed_keys)
+            for rows, label in (
+                (lane.checkin_sequence_ids, _("Lane In")),
+                (lane.checkout_sequence_ids, _("Lane Out")),
             ):
                 ordered = rows.sorted(lambda row: (row.sequence or 0, row.id))
-                if ordered and len(ordered) < 2:
-                    raise ValidationError(_("%(label)s Sequence requires at least two Reader Ports.") % {"label": label})
-                if ordered and ordered.mapped("sequence") != list(range(1, len(ordered) + 1)):
-                    raise ValidationError(_("%(label)s Sequence Order must be contiguous and start at 1.") % {"label": label})
-                sequence_keys = [(line.reader_id.id, int(line.port_no or 0)) for line in ordered]
-                if len(sequence_keys) != len(set(sequence_keys)):
-                    raise ValidationError(_("A Reader Port can appear only once in the %(label)s Sequence.") % {"label": label})
-                outside = [key for key in sequence_keys if key not in timeline_position]
-                if outside:
-                    raise ValidationError(_("%(label)s Sequence can use only Reader Ports from the Lane Timeline.") % {"label": label})
-                positions = [timeline_position[key] for key in sequence_keys]
-                if any(abs(current - previous) != 1 for previous, current in zip(positions, positions[1:])):
+                if not ordered:
+                    continue
+                if len(ordered) < 2:
                     raise ValidationError(
-                        _("%(label)s Sequence must follow adjacent points in the Reader Port Timeline.")
+                        _("%(label)s requires at least two Antennas.")
                         % {"label": label}
                     )
-                if len(positions) >= 2:
-                    orientation_by_type[sequence_type] = 1 if positions[1] > positions[0] else -1
-            if (
-                orientation_by_type.get("check_in")
-                and orientation_by_type.get("check_out")
-                and orientation_by_type["check_in"] == orientation_by_type["check_out"]
-            ):
-                raise ValidationError(
-                    _("Lane In and Lane Out paths must follow opposite Timeline directions.")
-                )
+                if ordered.mapped("sequence") != list(range(1, len(ordered) + 1)):
+                    raise ValidationError(
+                        _("%(label)s Order must be contiguous and start at 1.")
+                        % {"label": label}
+                    )
+                sequence_keys = [
+                    (line.reader_id.id, int(line.port_no or 0)) for line in ordered
+                ]
+                if len(sequence_keys) != len(set(sequence_keys)):
+                    raise ValidationError(
+                        _("An Antenna can appear only once in %(label)s.")
+                        % {"label": label}
+                    )
+                outside = [key for key in sequence_keys if key not in allowed]
+                if outside:
+                    raise ValidationError(
+                        _("%(label)s can use only Readers and Antennas from Lane Calibration.")
+                        % {"label": label}
+                    )
+                if float(ordered[0].duration_from_previous or 0.0) != 0.0:
+                    raise ValidationError(
+                        _("The first Antenna in %(label)s must use 0 ms Max Duration.")
+                        % {"label": label}
+                    )
+                if any(
+                    float(line.duration_from_previous or 0.0) <= 0.0
+                    for line in ordered[1:]
+                ):
+                    raise ValidationError(
+                        _("Every Antenna after the first in %(label)s requires a positive Max Duration.")
+                        % {"label": label}
+                    )
         return True
 
     @api.constrains(
         "timeline_line_ids", "timeline_line_ids.sequence", "timeline_line_ids.reader_id", "timeline_line_ids.port_no",
-        "checkin_sequence_ids", "checkin_sequence_ids.sequence", "checkin_sequence_ids.reader_id", "checkin_sequence_ids.port_no",
-        "checkout_sequence_ids", "checkout_sequence_ids.sequence", "checkout_sequence_ids.reader_id", "checkout_sequence_ids.port_no",
+        "checkin_sequence_ids", "checkin_sequence_ids.sequence", "checkin_sequence_ids.reader_id", "checkin_sequence_ids.port_no", "checkin_sequence_ids.duration_from_previous",
+        "checkout_sequence_ids", "checkout_sequence_ids.sequence", "checkout_sequence_ids.reader_id", "checkout_sequence_ids.port_no", "checkout_sequence_ids.duration_from_previous",
     )
     def _check_timeline_and_sequences(self):
         self._validate_timeline_and_sequences()
@@ -1068,7 +1137,7 @@ class NspParkingLaneReaderConfig(models.Model):
         technical_fields = {
             "power_dbm", "read_interval_ms", "tid_start_address", "tid_length",
         }
-        if technical_fields.intersection(values) and not self.env.context.get("lane_calibration_apply"):
+        if technical_fields.intersection(values) and not (self.env.context.get("lane_calibration_apply") or self.env.context.get("lane_setup")):
             values.update({
                 "source_type": "manual",
                 "source_reference": False,
@@ -1194,6 +1263,13 @@ class NspParkingLaneEventSequence(models.Model):
     sequence = fields.Integer(string="Order", required=True)
     reader_id = fields.Many2one("nsp.device", string="Reader", required=True, ondelete="restrict")
     port_no = fields.Integer(string="Port", required=True)
+    duration_from_previous = fields.Float(
+        string="Max Duration from Previous (s)",
+        required=True,
+        digits=(8, 3),
+        default=0.0,
+        help="Direction-specific maximum time from the previous Antenna.",
+    )
     available_reader_ids = fields.Many2many("nsp.device", compute="_compute_available_readers")
 
     _sql_constraints = [
@@ -1201,6 +1277,7 @@ class NspParkingLaneEventSequence(models.Model):
         ("lane_event_sequence_reader_port_unique", "unique(lane_id, sequence_type, reader_id, port_no)", "A Reader Port can appear only once per Event Sequence."),
         ("lane_event_sequence_positive", "CHECK(sequence > 0)", "Event Sequence Order must be greater than zero."),
         ("lane_event_sequence_port_range", "CHECK(port_no >= 1 AND port_no <= 16)", "Event Sequence Reader Port must be between 1 and 16."),
+        ("lane_event_sequence_duration_nonnegative", "CHECK(duration_from_previous >= 0)", "Lane Direction Duration cannot be negative."),
     ]
 
     @api.depends("lane_id.timeline_line_ids.reader_id")
@@ -1241,7 +1318,7 @@ class NspParkingLaneEventSequence(models.Model):
             prepared.append(values)
         return super().create(prepared)
 
-    @api.constrains("sequence", "reader_id", "port_no", "lane_id")
+    @api.constrains("sequence", "reader_id", "port_no", "duration_from_previous", "lane_id")
     def _check_sequence_point(self):
         for record in self:
             if record.sequence <= 0:
@@ -1253,4 +1330,10 @@ class NspParkingLaneEventSequence(models.Model):
                 for line in record.lane_id.timeline_line_ids
             }
             if (record.reader_id.id, int(record.port_no or 0)) not in allowed:
-                raise ValidationError(_("Event Sequence can use only Reader Ports from the Lane Timeline."))
+                raise ValidationError(_(
+                    "Lane Direction can use only Reader Ports from Lane Calibration."
+                ))
+            if record.sequence == 1 and float(record.duration_from_previous or 0.0) != 0.0:
+                raise ValidationError(_("The first Lane Direction Antenna must use 0 ms Max Duration."))
+            if record.sequence > 1 and float(record.duration_from_previous or 0.0) <= 0.0:
+                raise ValidationError(_("Lane Direction Antennas after the first require a positive Max Duration."))

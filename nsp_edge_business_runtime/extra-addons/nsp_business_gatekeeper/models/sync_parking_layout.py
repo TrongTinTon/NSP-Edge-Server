@@ -161,6 +161,7 @@ class NspSyncJobParkingLayout(models.Model):
             seen_orders = set()
             seen_refs = set()
             timeline_position = {}
+            timeline_duration_by_ref = {}
             for row in timeline:
                 if not isinstance(row, dict):
                     raise UserError(_("Reader Port Timeline rows must contain objects."))
@@ -192,13 +193,12 @@ class NspSyncJobParkingLayout(models.Model):
                     raise UserError(_("Timeline Port is not declared by the published Reader assembly."))
                 if sequence in seen_orders or ref in seen_refs:
                     raise UserError(_("Timeline Order and Reader Port must be unique per Lane."))
-                if sequence == 1 and duration != 0.0:
-                    raise UserError(_("The first Timeline point must have zero Duration from previous."))
-                if sequence > 1 and duration <= 0.0:
-                    raise UserError(_("Every Timeline point after the first requires a positive Duration."))
+                if duration < 0.0:
+                    raise UserError(_("Calibration Antenna Scope Duration cannot be negative."))
                 seen_orders.add(sequence)
                 seen_refs.add(ref)
                 timeline_position[ref] = sequence
+                timeline_duration_by_ref[ref] = duration
                 timeline_specs.append({
                     "lane_code": lane_code,
                     "sequence": sequence,
@@ -238,54 +238,72 @@ class NspSyncJobParkingLayout(models.Model):
                     % ", ".join(sorted(unsupported_events))
                 )
             configured_count = 0
-            orientation_by_type = {}
             for sequence_type in ("check_in", "check_out"):
                 values = event_sequences.get(sequence_type) or []
                 if not isinstance(values, list):
                     raise UserError(_("Each Event Sequence must be an array."))
                 if values and len(values) < 2:
-                    raise UserError(_("Each configured Event Sequence requires at least two Reader Ports."))
+                    raise UserError(_("Each configured Lane Direction requires at least two Antennas."))
                 seen_sequence_refs = set()
-                positions = []
+                previous_ref = False
                 for order, step in enumerate(values, start=1):
-                    if not isinstance(step, dict) or set(step) - {"reader_code", "port_no"}:
-                        raise UserError(_("Event Sequence steps must contain Reader Code and Port No."))
+                    if not isinstance(step, dict) or set(step) - {
+                        "reader_code", "port_no", "duration_from_previous_seconds"
+                    }:
+                        raise UserError(_(
+                            "Lane Direction steps must contain Reader Code, Port No. and Duration."
+                        ))
                     reader_code = self._normalize_sync_code(step.get("reader_code"))
                     try:
                         port_no = int(step.get("port_no") or 0)
+                        has_direction_duration = "duration_from_previous_seconds" in step
+                        duration = float(step.get("duration_from_previous_seconds") or 0.0)
                     except (TypeError, ValueError) as exc:
-                        raise UserError(_("Event Sequence Port No. must be an integer.")) from exc
+                        raise UserError(_("Lane Direction step values are invalid.")) from exc
                     reader = reader_by_code.get(reader_code)
                     ref = (reader.id, port_no) if reader else False
                     if not reader or ref not in seen_refs:
-                        raise UserError(_("Event Sequence Reader Port must exist in the Lane Timeline."))
+                        raise UserError(_(
+                            "Lane Direction can use only Readers and Antennas from Lane Calibration."
+                        ))
                     if ref in seen_sequence_refs:
-                        raise UserError(_("A Reader Port can appear only once in one Event Sequence."))
+                        raise UserError(_("An Antenna can appear only once in one Lane Direction."))
+                    if order > 1 and not has_direction_duration:
+                        # NSP 19.x compatibility for a rolling upgrade from a
+                        # legacy Master that still stores timing on one shared
+                        # Timeline. Removal target: NSP 20.0.
+                        current_pos = timeline_position.get(ref)
+                        previous_pos = timeline_position.get(previous_ref)
+                        if (
+                            not current_pos or not previous_pos
+                            or abs(current_pos - previous_pos) != 1
+                        ):
+                            raise UserError(_(
+                                "Legacy Lane Direction without Duration must follow adjacent Calibration Timeline points."
+                            ))
+                        higher_ref = ref if current_pos > previous_pos else previous_ref
+                        duration = float(timeline_duration_by_ref.get(higher_ref) or 0.0)
+                    if order == 1 and duration != 0.0:
+                        raise UserError(_("The first Lane Direction Antenna must use 0 ms Max Duration."))
+                    if order > 1 and duration <= 0.0:
+                        raise UserError(_("Lane Direction Antennas after the first require a positive Max Duration."))
                     seen_sequence_refs.add(ref)
-                    positions.append(timeline_position[ref])
+                    previous_ref = ref
                     sequence_specs.append({
                         "lane_code": lane_code,
                         "sequence_type": sequence_type,
                         "sequence": order,
                         "reader_id": reader.id,
                         "port_no": port_no,
+                        "duration_from_previous": duration,
                     })
-                if any(abs(current - previous) != 1 for previous, current in zip(positions, positions[1:])):
-                    raise UserError(_("Event Sequence must follow adjacent points in the Reader Port Timeline."))
-                if len(positions) >= 2:
-                    orientation_by_type[sequence_type] = 1 if positions[1] > positions[0] else -1
                 configured_count += bool(values)
-            if (
-                orientation_by_type.get("check_in")
-                and orientation_by_type.get("check_out")
-                and orientation_by_type["check_in"] == orientation_by_type["check_out"]
-            ):
-                raise UserError(_("Check-in and Check-out Sequences must follow opposite Timeline directions."))
             if state == "operational" and not configured_count:
                 raise UserError(
-                    _("Operational Lane %s requires at least one Check-in or Check-out Sequence.")
+                    _("Operational Lane %s requires at least one Lane In or Lane Out Direction.")
                     % lane_code
                 )
+
 
         Lane = self.env["nsp.parking.lane"].sudo().with_context(active_test=False)
         existing_lanes = Lane.search([("parking_area_id", "=", parking.id)])

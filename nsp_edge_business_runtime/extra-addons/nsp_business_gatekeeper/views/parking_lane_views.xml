@@ -118,24 +118,26 @@
             </page>
             <page string="Event Sequences" name="sequences">
               <div class="alert alert-info" role="alert">
-                Check-in and Check-out sequences are the active runtime rules used to classify RFID detections on Edge.
+                Lane In and Lane Out Directions are the active runtime rules used to classify RFID detections on Edge.
               </div>
               <group col="2">
-                <group string="Check-in">
+                <group string="Lane In">
                   <field name="checkin_sequence_ids" readonly="1" nolabel="1">
                     <list create="0" edit="0" delete="0">
                       <field name="sequence" string="#"/>
                       <field name="reader_id" string="Reader"/>
                       <field name="port_no" string="Port"/>
+                      <field name="duration_from_previous" string="Max Duration from Previous (s)"/>
                     </list>
                   </field>
                 </group>
-                <group string="Check-out">
+                <group string="Lane Out">
                   <field name="checkout_sequence_ids" readonly="1" nolabel="1">
                     <list create="0" edit="0" delete="0">
                       <field name="sequence" string="#"/>
                       <field name="reader_id" string="Reader"/>
                       <field name="port_no" string="Port"/>
+                      <field name="duration_from_previous" string="Max Duration from Previous (s)"/>
                     </list>
                   </field>
                 </group>

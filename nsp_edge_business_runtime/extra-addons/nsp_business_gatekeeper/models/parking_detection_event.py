@@ -545,19 +545,6 @@ class ParkingDetectionEvent(models.Model):
         if not vehicle_events:
             return []
 
-        timeline = lane.timeline_line_ids.sorted("sequence")
-        allowed_by_pair = {}
-        timeline_keys = [
-            (row.reader_id.id, int(row.port_no or 0))
-            for row in timeline
-        ]
-        for index in range(1, len(timeline)):
-            source = timeline_keys[index - 1]
-            target = timeline_keys[index]
-            allowed_by_pair[frozenset((source, target))] = max(
-                0.001, lane.allowed_duration_for_step(timeline[index].sequence)
-            )
-
         sequence_specs = []
         for event_type in ("check_in", "check_out"):
             rows = lane.event_sequence_ids.filtered(
@@ -569,6 +556,12 @@ class ParkingDetectionEvent(models.Model):
                     [
                         (row.reader_id.id, int(row.port_no or 0))
                         for row in rows
+                    ],
+                    [
+                        0.0 if index == 0 else max(
+                            0.001, lane.allowed_duration_for_direction_step(row)
+                        )
+                        for index, row in enumerate(rows)
                     ],
                 ))
 
@@ -589,7 +582,7 @@ class ParkingDetectionEvent(models.Model):
                     if previous == key:
                         continue
                 collapsed.append(event)
-            for event_type, expected_keys in sequence_specs:
+            for event_type, expected_keys, allowed_durations in sequence_specs:
                 length = len(expected_keys)
                 if length < 2 or len(collapsed) < length:
                     continue
@@ -604,14 +597,12 @@ class ParkingDetectionEvent(models.Model):
                     total_allowed = 0.0
                     valid = True
                     for index in range(1, length):
-                        allowed = allowed_by_pair.get(
-                            frozenset((actual_keys[index - 1], actual_keys[index]))
-                        )
+                        allowed = allowed_durations[index]
                         gap = (
                             window[index].detected_at
                             - window[index - 1].detected_at
                         ).total_seconds()
-                        if allowed is None or gap < 0 or gap > allowed:
+                        if gap < 0 or gap > allowed:
                             valid = False
                             break
                         total_allowed += allowed

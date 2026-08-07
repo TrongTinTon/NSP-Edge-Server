@@ -39,9 +39,9 @@
             <form string="Lane Calibration" js_class="nsp_lane_calibration_form">
                 <header>
                     <button name="action_ready" type="object" string="Release" icon="fa-cloud-upload" class="oe_highlight" invisible="status != 'draft'"/>
-                    <button name="action_open_lane_direction_setup"
+                    <button name="action_open_lane_setup"
                             type="object"
-                            string="Lane Direction Setup"
+                            string="Lane Setup"
                             icon="fa-random"
                             class="btn-secondary"
                             invisible="event_count &lt; 2"/>

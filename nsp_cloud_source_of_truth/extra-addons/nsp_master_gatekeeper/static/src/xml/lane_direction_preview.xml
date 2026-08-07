@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="nsp_master_gatekeeper.LaneDirectionPreview">
+        <div class="nsp-lane-preview">
+            <t t-if="points.length">
+                <t t-foreach="points" t-as="point" t-key="point.key">
+                    <div class="nsp-lane-preview__card">
+                        <span class="nsp-lane-preview__index" t-esc="point.number"/>
+                        <div class="nsp-lane-preview__body">
+                            <strong t-esc="point.antenna"/>
+                            <span t-if="point.identity" t-esc="point.identity"/>
+                        </div>
+                    </div>
+                    <div t-if="!point.isLast" class="nsp-lane-preview__connector">
+                        <span class="nsp-lane-preview__duration">
+                            ≤ <t t-esc="formatDuration(point.connectorMs)"/> ms
+                        </span>
+                        <span class="nsp-lane-preview__arrow">↓</span>
+                    </div>
+                </t>
+            </t>
+            <div t-else="" class="nsp-lane-preview__empty">
+                Add Antennas to preview this Direction.
+            </div>
+        </div>
+    </t>
+</templates>

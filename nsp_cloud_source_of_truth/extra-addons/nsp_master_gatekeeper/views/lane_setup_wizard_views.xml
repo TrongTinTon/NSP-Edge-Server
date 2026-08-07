@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <record id="view_nsp_lane_direction_setup_wizard_form" model="ir.ui.view">
+        <field name="name">nsp.lane.setup.wizard.form</field>
+        <field name="model">nsp.lane.setup.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Lane Setup" class="o_nsp_lane_setup_form">
+                <sheet>
+                    <field name="session_id" invisible="1"/>
+                    <field name="edge_server_id" invisible="1"/>
+                    <field name="controller_id" invisible="1"/>
+                    <field name="available_reader_ids" invisible="1"/>
+                    <field name="active_section" invisible="1"/>
+                    <field name="direction" invisible="1"/>
+                    <field name="direction_preview_anchor" invisible="1"/>
+
+                    <div class="nsp-lane-setup__lane-row">
+                        <span class="nsp-lane-setup__lane-label">Lane</span>
+                        <div class="nsp-lane-setup__lane-field">
+                            <field name="lane_id"
+                                   nolabel="1"
+                                   placeholder="Select or create a Lane..."
+                                   domain="[('active', '=', True), ('parking_area_id.state', '=', 'draft')]"
+                                   context="{'default_edge_server_id': edge_server_id, 'default_controller_id': controller_id}"
+                                   options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"/>
+                        </div>
+                    </div>
+
+                    <div class="nsp-lane-setup__workspace">
+                        <aside class="nsp-lane-setup__sidebar">
+                            <button name="action_show_device"
+                                    type="object"
+                                    string="Device"
+                                    icon="fa-microchip"
+                                    class="btn nsp-lane-setup__nav is-active"
+                                    invisible="active_section != 'device'"/>
+                            <button name="action_show_device"
+                                    type="object"
+                                    string="Device"
+                                    icon="fa-microchip"
+                                    class="btn nsp-lane-setup__nav"
+                                    invisible="active_section == 'device'"/>
+
+                            <div class="nsp-lane-setup__nav-title">Directions</div>
+
+                            <button name="action_show_lane_in"
+                                    type="object"
+                                    string="Lane In"
+                                    icon="fa-sign-in"
+                                    class="btn nsp-lane-setup__nav nsp-lane-setup__nav-child is-active"
+                                    invisible="active_section != 'lane_in'"/>
+                            <button name="action_show_lane_in"
+                                    type="object"
+                                    string="Lane In"
+                                    icon="fa-sign-in"
+                                    class="btn nsp-lane-setup__nav nsp-lane-setup__nav-child"
+                                    invisible="active_section == 'lane_in'"/>
+
+                            <button name="action_show_lane_out"
+                                    type="object"
+                                    string="Lane Out"
+                                    icon="fa-sign-out"
+                                    class="btn nsp-lane-setup__nav nsp-lane-setup__nav-child is-active"
+                                    invisible="active_section != 'lane_out'"/>
+                            <button name="action_show_lane_out"
+                                    type="object"
+                                    string="Lane Out"
+                                    icon="fa-sign-out"
+                                    class="btn nsp-lane-setup__nav nsp-lane-setup__nav-child"
+                                    invisible="active_section == 'lane_out'"/>
+                        </aside>
+
+                        <main class="nsp-lane-setup__content">
+                            <section class="nsp-lane-setup__content-section"
+                                     invisible="active_section != 'device'">
+                                <div class="nsp-lane-setup__content-header">
+                                    <h3>Device Configuration</h3>
+                                    <p>Configure the Readers used by this Lane.</p>
+                                </div>
+                                <field name="device_line_ids" nolabel="1" class="nsp-lane-setup__devices">
+                                    <list editable="bottom" create="0" delete="0">
+                                        <field name="reader_id" string="Reader" readonly="1"/>
+                                        <field name="port_summary" string="Antennas" readonly="1"/>
+                                        <field name="power_dbm" string="Power (dBm)"/>
+                                        <field name="read_interval_ms" string="Read Interval (ms)"/>
+                                        <field name="tid_start_address" string="TID Start" optional="hide"/>
+                                        <field name="tid_length" string="TID Length" optional="hide"/>
+                                    </list>
+                                </field>
+                            </section>
+
+                            <section class="nsp-lane-setup__content-section"
+                                     invisible="active_section not in ['lane_in', 'lane_out']">
+                                <div class="nsp-lane-setup__content-header">
+                                    <h3 invisible="active_section != 'lane_in'">Lane In</h3>
+                                    <h3 invisible="active_section != 'lane_out'">Lane Out</h3>
+                                    <p>Define the Reader/Antenna order and maximum duration from the previous point.</p>
+                                </div>
+
+                                <div class="nsp-lane-setup__direction-grid">
+                                    <div class="nsp-lane-setup__direction-editor">
+                                        <div class="nsp-lane-setup__section-title">Antenna Sequence</div>
+                                        <field name="direction_line_ids" nolabel="1" class="nsp-lane-setup__sequence">
+                                            <list editable="bottom" create="1" delete="1">
+                                                <control>
+                                                    <create string="Add Antenna"/>
+                                                </control>
+                                                <field name="sequence" widget="handle" string="#"/>
+                                                <field name="available_reader_ids" column_invisible="1"/>
+                                                <field name="reader_id"
+                                                       string="Reader"
+                                                       domain="[('id', 'in', available_reader_ids)]"
+                                                       options="{'no_create': True, 'no_open': True}"/>
+                                                <field name="port_no" string="Antenna"/>
+                                                <field name="antenna" column_invisible="1"/>
+                                                <field name="reader_identity" column_invisible="1"/>
+                                                <field name="duration_ms"
+                                                       string="Max Duration from Previous (ms)"
+                                                       readonly="sequence == 1"/>
+                                            </list>
+                                        </field>
+
+                                        <div class="nsp-lane-setup__hint">
+                                            <i class="fa fa-info-circle"/>
+                                            <span>
+                                                The first Antenna starts at 0 ms. Lane In and Lane Out are configured manually;
+                                                changing one Direction never reverses or rewrites the other automatically.
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    <aside class="nsp-lane-setup__preview-panel">
+                                        <div class="nsp-lane-setup__preview-header">
+                                            <h4>Direction Preview</h4>
+                                            <p>Visual representation of the Antenna sequence and maximum time limits.</p>
+                                        </div>
+                                        <field name="direction_preview_anchor"
+                                               nolabel="1"
+                                               widget="nsp_lane_direction_preview"/>
+                                    </aside>
+                                </div>
+                            </section>
+                        </main>
+                    </div>
+                </sheet>
+
+                <footer>
+                    <button name="action_save"
+                            type="object"
+                            string="Save"
+                            icon="fa-save"
+                            class="btn btn-primary"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

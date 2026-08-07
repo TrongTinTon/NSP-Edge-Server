@@ -173,7 +173,7 @@ class NspMeasurementSessionTimeline(models.Model):
 
         if len(selected) < 2:
             raise ValidationError(_(
-                "Lane Direction Setup requires at least two unique observed Reader Ports."
+                "Lane Setup requires at least two unique observed Reader Ports."
             ))
         for index, row in enumerate(selected, start=1):
             row["checkout_order"] = len(selected) - index + 1
@@ -185,8 +185,8 @@ class NspMeasurementSessionTimeline(models.Model):
         return selected, next(iter(edge_ids)), next(iter(controller_ids))
 
 
-    def action_open_lane_direction_setup(self):
-        """Open Lane Direction Setup from the current observed Detection Timeline."""
+    def action_open_lane_setup(self):
+        """Open Lane Setup using Detection Timeline as observation defaults."""
         self.ensure_one()
         self.check_access("read")
 
@@ -203,38 +203,54 @@ class NspMeasurementSessionTimeline(models.Model):
         ]
         if len(ordered_event_ids) < 2:
             raise ValidationError(_(
-                "Lane Direction Setup requires at least two observed Reader Ports in Detection Timeline."
+                "Lane Setup requires at least two observed Reader Ports in Detection Timeline."
             ))
 
         selected, edge_server_id, controller_id = self._configuration_steps_from_selection(
             ordered_event_ids
         )
-        wizard = self.env["nsp.lane.direction.setup.wizard"].create({
+        # Device Configuration is seeded from the complete Lane Calibration
+        # infrastructure scope, not only Readers that happened to appear in the
+        # observed Detection Timeline. The operator may then build Lane In/Out
+        # from any calibrated Reader/Antenna.
+        reader_defaults = {}
+        for reader_line in self.reader_line_ids:
+            reader_defaults[reader_line.reader_id.id] = {
+                "reader_id": reader_line.reader_id.id,
+                "reader_power_dbm": int(reader_line.reader_power_dbm or 0),
+                "read_interval_ms": int(reader_line.read_interval_ms or 200),
+                "tid_start_address": int(reader_line.reader_tid_addr or 0),
+                "tid_length": int(reader_line.reader_tid_len or 4),
+            }
+
+        wizard = self.env["nsp.lane.setup.wizard"].create({
             "session_id": self.id,
             "edge_server_id": edge_server_id,
             "controller_id": controller_id,
-            "line_ids": [
+            "device_line_ids": [
                 (0, 0, {
-                    "sequence": row["selection_order"],
-                    "event_id": row["event_id"],
                     "reader_id": row["reader_id"],
-                    "serial_number": row["serial_number"],
-                    "port_no": row["port_no"],
-                    "observed_at": row["observed_at"],
-                    "observed_at_ms": row["observed_at_ms"],
-                    "duration_from_previous": row["duration_from_previous"],
-                    "reader_power_dbm": row["reader_power_dbm"],
+                    "power_dbm": row["reader_power_dbm"],
                     "read_interval_ms": row["read_interval_ms"],
                     "tid_start_address": row["tid_start_address"],
                     "tid_length": row["tid_length"],
+                })
+                for row in reader_defaults.values()
+            ],
+            "direction_line_ids": [
+                (0, 0, {
+                    "sequence": row["selection_order"],
+                    "reader_id": row["reader_id"],
+                    "port_no": row["port_no"],
+                    "duration_ms": int(round(float(row["duration_from_previous"] or 0.0) * 1000.0)),
                 })
                 for row in selected
             ],
         })
         return {
             "type": "ir.actions.act_window",
-            "name": _("Lane Direction Setup"),
-            "res_model": "nsp.lane.direction.setup.wizard",
+            "name": _("Lane Setup"),
+            "res_model": "nsp.lane.setup.wizard",
             "res_id": wizard.id,
             "view_mode": "form",
             "views": [(
@@ -246,6 +262,10 @@ class NspMeasurementSessionTimeline(models.Model):
             "target": "new",
             "context": dict(self.env.context),
         }
+
+    def action_open_lane_direction_setup(self):
+        """Deprecated compatibility alias. Removal target: NSP 20.0."""
+        return self.action_open_lane_setup()
 
 
 
