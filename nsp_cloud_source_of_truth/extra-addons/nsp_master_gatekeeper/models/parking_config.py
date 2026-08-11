@@ -557,8 +557,14 @@ class NspParkingLane(models.Model):
         "nsp.controller", string="Controller", required=True,
         ondelete="restrict", index=True,
     )
+    edge_server_name = fields.Char(
+        related="edge_server_id.name", string="Server Name", readonly=True,
+    )
     edge_server_status = fields.Selection(
         related="edge_server_id.status", string="Server Status", readonly=True,
+    )
+    controller_name = fields.Char(
+        related="controller_id.controller_name", string="Controller Name", readonly=True,
     )
     controller_status = fields.Selection(
         related="controller_id.status", string="Controller Status", readonly=True,
@@ -937,6 +943,17 @@ class NspParkingLane(models.Model):
                         "readers": ", ".join(missing.mapped("display_name")),
                     }
                 )
+            extra_configs = lane.reader_config_ids.filtered(
+                lambda config: config.reader_id not in sequence_readers
+            )
+            if extra_configs:
+                raise ValidationError(
+                    _("Lane %(lane)s Device Configuration contains Reader(s) not used by Antenna Sequence: %(readers)s")
+                    % {
+                        "lane": lane.display_name,
+                        "readers": ", ".join(extra_configs.mapped("reader_id.display_name")),
+                    }
+                )
             lane.reader_config_ids._validate_parameter_ranges()
         return True
 
@@ -986,6 +1003,8 @@ class NspParkingLane(models.Model):
             configured_reader_ids = set(lane.reader_config_ids.mapped("reader_id").ids)
             if not sequence_reader_ids.issubset(configured_reader_ids):
                 issues.append(_("Device Configuration is missing one or more Readers used by Antenna Sequence"))
+            if not configured_reader_ids.issubset(sequence_reader_ids):
+                issues.append(_("Device Configuration contains one or more Readers not used by Antenna Sequence"))
 
             lane.configuration_state = "incomplete" if issues else "ready"
             lane.configuration_issue = "; ".join(issues) if issues else _("Antenna Sequence is ready.")

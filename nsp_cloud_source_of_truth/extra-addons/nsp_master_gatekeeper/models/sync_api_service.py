@@ -1084,7 +1084,9 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "revision", "power_dbm", "read_interval_ms",
         }
         self._measurement_reject_unknown_fields(item, allowed)
-        self._measurement_require_fields(item, ["event_uid", "serial_number", "port_no", "tid", "read_at"])
+        self._measurement_require_fields(
+            item, ["event_uid", "revision", "serial_number", "port_no", "tid", "read_at"]
+        )
         event_uid = str(item.get("event_uid") or "").strip()
         serial_number = str(item.get("serial_number") or "").strip().upper()
         try:
@@ -1115,7 +1117,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 raise ValueError("invalid_rssi")
         if accept_snapshot:
             try:
-                revision = int(item.get("revision") or session.revision or 1)
+                revision = int(item.get("revision"))
                 fallback_power = (
                     reader_line.reader_power_dbm
                     if reader_line
@@ -1202,20 +1204,40 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     allowed_reader_ports=allowed_reader_ports,
                     accept_snapshot=accept_snapshot,
                 )
-                if enforce_current_snapshot and (
-                    compare_revision(values["revision"] or 1, session.revision or 1) != "current"
-                    or int(values["power_dbm"] or 0)
-                    != int(session._reader_power_for_serial(values["serial_number"]) or 0)
-                    or int(values["read_interval_ms"] or 0)
-                    != int(session._reader_interval_for_serial(values["serial_number"]) or 0)
-                ):
-                    results[index] = {
-                        "index": index,
-                        "record_key": key,
-                        "status": "ignored",
-                        "message": "Stale Measurement revision/settings ignored",
-                    }
-                    continue
+                if enforce_current_snapshot:
+                    relation = compare_revision(values["revision"], session.revision or 1)
+                    if relation == "stale":
+                        results[index] = {
+                            "index": index,
+                            "record_key": key,
+                            "status": "ignored",
+                            "error_code": "lane_calibration_stale_revision",
+                            "message": "Stale Lane Calibration revision ignored",
+                        }
+                        continue
+                    if relation == "future":
+                        results[index] = {
+                            "index": index,
+                            "record_key": key,
+                            "status": "rejected",
+                            "error_code": "lane_calibration_revision_ahead",
+                            "message": "lane_calibration_revision_ahead",
+                        }
+                        continue
+                    if (
+                        int(values["power_dbm"] or 0)
+                        != int(session._reader_power_for_serial(values["serial_number"]) or 0)
+                        or int(values["read_interval_ms"] or 0)
+                        != int(session._reader_interval_for_serial(values["serial_number"]) or 0)
+                    ):
+                        results[index] = {
+                            "index": index,
+                            "record_key": key,
+                            "status": "ignored",
+                            "error_code": "lane_calibration_settings_mismatch",
+                            "message": "Lane Calibration Reader settings snapshot does not match current revision",
+                        }
+                        continue
                 prepared.append((index, key, values))
             except Exception as exc:
                 results[index] = {
@@ -1389,6 +1411,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 raise ValueError("invalid_payload")
             result, _records = self._measurement_process_event_batch(
                 session, items, allow_final=True, accept_snapshot=True,
+                enforce_current_snapshot=True,
             )
             return self._ok(result, message="Lane Calibration Events synchronized.")
         except Exception as exc:
@@ -1409,7 +1432,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 },
             )
             self._measurement_require_fields(
-                data, ["lane_calibration_code", "status", "occurred_at"]
+                data, ["lane_calibration_code", "revision", "status", "occurred_at"]
             )
             session = self._measurement_session(data.get("lane_calibration_code"))
             if not self._measurement_session_in_local_scope(session, edge_server):

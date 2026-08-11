@@ -592,12 +592,10 @@ class NspMeasurementSessionSync(models.Model):
     def _apply_runtime_status(self, status, occurred_at=False, message=False, revision=False):
         self.ensure_one()
         current_revision = max(int(self.revision or 1), 1)
+        if revision in (False, None, ""):
+            raise ValueError("invalid_lane_calibration_revision")
         try:
-            incoming_revision = (
-                current_revision
-                if revision in (False, None, "")
-                else int(revision)
-            )
+            incoming_revision = int(revision)
         except (TypeError, ValueError) as exc:
             raise ValueError("invalid_lane_calibration_revision") from exc
         if incoming_revision <= 0:

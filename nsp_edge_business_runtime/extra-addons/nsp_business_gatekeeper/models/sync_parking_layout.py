@@ -7,6 +7,13 @@ class NspSyncJobParkingLayout(models.Model):
     _inherit = "nsp.sync.job"
 
     def _apply_parking_config(self, item):
+        """Apply one current Cloud Parking Layout snapshot to the Edge projection.
+
+        Current NSP contract per Lane:
+        ``readers`` + one ``antenna_sequence`` + ``timing_tolerance``.
+        Legacy ``reader_port_timeline`` / ``event_sequences`` are rejected so the
+        Edge cannot silently run a mixed schema.
+        """
         self.ensure_one()
         if not isinstance(item, dict):
             raise UserError(_("Parking Layout item must be an object."))
@@ -65,15 +72,13 @@ class NspSyncJobParkingLayout(models.Model):
 
         controllers = self.env["nsp.controller"].sudo().with_context(active_test=False).search([])
         controller_by_code = {
-            self._normalize_sync_code(record.controller_id): record
-            for record in controllers
+            self._normalize_sync_code(record.controller_id): record for record in controllers
         }
         readers = self.env["nsp.device"].sudo().with_context(active_test=False).search([])
         reader_by_code = {
             self._normalize_sync_code(record.device_code): record
             for record in readers if record.device_code
         }
-        reader_by_id = {record.id: record for record in readers}
         declared_ports_by_reader = {
             self._normalize_sync_code(code): {int(port) for port in ports}
             for code, ports in (self.env.context.get("nsp_declared_reader_ports") or {}).items()
@@ -88,7 +93,6 @@ class NspSyncJobParkingLayout(models.Model):
             raise UserError(_("Parking Lanes must be an array."))
 
         lane_specs = {}
-        timeline_specs = []
         sequence_specs = []
         reader_config_specs = []
         for lane_item in lanes_data:
@@ -96,7 +100,7 @@ class NspSyncJobParkingLayout(models.Model):
                 raise UserError(_("Parking Lanes must contain objects."))
             unsupported_lane = set(lane_item) - {
                 "lane_code", "lane_name", "server_code", "controller_code",
-                "reader_port_timeline", "event_sequences", "timing_tolerance",
+                "antenna_sequence", "timing_tolerance", "readers",
             }
             if unsupported_lane:
                 raise UserError(
@@ -107,12 +111,14 @@ class NspSyncJobParkingLayout(models.Model):
             lane_code = self._normalize_sync_code(lane_item.get("lane_code"))
             controller_code = self._normalize_sync_code(lane_item.get("controller_code"))
             server_code = self._normalize_sync_code(lane_item.get("server_code"))
-            if not lane_code or lane_code in lane_specs or not controller_code:
-                raise UserError(_("Parking Lane Code and Controller Code are required and must be unique."))
+            if not lane_code or lane_code in lane_specs or not controller_code or not server_code:
+                raise UserError(_(
+                    "Parking Lane Code, Server Code and Controller Code are required; Lane Code must be unique."
+                ))
             controller = controller_by_code.get(controller_code)
             if not controller or not controller.active or controller.cloud_removed:
                 raise UserError(_("Controller %s is missing or inactive.") % controller_code)
-            if server_code and (
+            if (
                 not controller.edge_server_id
                 or self._normalize_sync_code(controller.edge_server_id.edge_server_code) != server_code
             ):
@@ -122,14 +128,8 @@ class NspSyncJobParkingLayout(models.Model):
                 )
 
             tolerance = lane_item.get("timing_tolerance") or {}
-            if not isinstance(tolerance, dict):
-                raise UserError(_("Timing Tolerance must be an object."))
-            unsupported_tolerance = set(tolerance) - {"type", "value"}
-            if unsupported_tolerance:
-                raise UserError(
-                    _("Unsupported Timing Tolerance field(s): %s")
-                    % ", ".join(sorted(unsupported_tolerance))
-                )
+            if not isinstance(tolerance, dict) or set(tolerance) - {"type", "value"}:
+                raise UserError(_("Timing Tolerance must contain only type and value."))
             tolerance_type = str(tolerance.get("type") or "percent").strip().lower()
             if tolerance_type not in ("percent", "seconds"):
                 raise UserError(_("Timing Tolerance type must be percent or seconds."))
@@ -140,6 +140,143 @@ class NspSyncJobParkingLayout(models.Model):
             if tolerance_value < 0:
                 raise UserError(_("Timing Tolerance cannot be negative."))
 
+            lane_readers = lane_item.get("readers") or []
+            if not isinstance(lane_readers, list) or not lane_readers:
+                raise UserError(_("Parking Lane %s must contain Device Configuration readers.") % lane_code)
+            lane_reader_by_code = {}
+            for reader_item in lane_readers:
+                if not isinstance(reader_item, dict):
+                    raise UserError(_("Lane Reader Configuration must contain objects."))
+                unsupported_reader = set(reader_item) - {
+                    "technical_code", "serial_number", "reader_name",
+                    "physical_connection", "reader_parameters", "ports",
+                }
+                if unsupported_reader:
+                    raise UserError(
+                        _("Unsupported Lane Reader field(s): %s")
+                        % ", ".join(sorted(unsupported_reader))
+                    )
+                reader_code = self._normalize_sync_code(reader_item.get("technical_code"))
+                serial = str(reader_item.get("serial_number") or "").strip().upper()
+                if not reader_code or reader_code in lane_reader_by_code:
+                    raise UserError(_("Lane Reader technical_code is required and must be unique."))
+                reader = reader_by_code.get(reader_code)
+                if not reader or not reader.active or reader.cloud_removed:
+                    raise UserError(_("Published RFID Reader %s is missing or inactive on Edge.") % reader_code)
+                if reader.controller_id != controller:
+                    raise UserError(_("Every Lane Reader must belong to the Lane Controller."))
+                if serial and str(reader.serial_number or "").strip().upper() != serial:
+                    raise UserError(_("Published RFID Reader serial does not match Edge identity: %s") % reader_code)
+
+                parameters = reader_item.get("reader_parameters") or {}
+                if not isinstance(parameters, dict) or set(parameters) - {
+                    "power_dbm", "read_interval_ms", "tid_start_address", "tid_length",
+                }:
+                    raise UserError(_("Invalid Reader Parameters payload."))
+                try:
+                    config = {
+                        "power_dbm": int(parameters.get("power_dbm") if parameters.get("power_dbm") is not None else 30),
+                        "read_interval_ms": int(parameters.get("read_interval_ms") or 200),
+                        "tid_start_address": int(parameters.get("tid_start_address") or 0),
+                        "tid_length": int(parameters.get("tid_length") or 4),
+                    }
+                except (TypeError, ValueError) as exc:
+                    raise UserError(_("Invalid Reader Parameters.")) from exc
+                if (
+                    config["power_dbm"] < 0 or config["power_dbm"] > 40
+                    or config["read_interval_ms"] <= 0 or config["read_interval_ms"] > 60000
+                    or config["tid_start_address"] < 0 or config["tid_length"] <= 0
+                ):
+                    raise UserError(_("Reader Parameters are outside the supported range."))
+
+                ports = reader_item.get("ports") or []
+                if not isinstance(ports, list) or not ports:
+                    raise UserError(_("Published RFID Reader %s has no Reader Ports.") % reader_code)
+                port_numbers = set()
+                for port in ports:
+                    if not isinstance(port, dict) or set(port) - {"port_no"}:
+                        raise UserError(_("Reader Port payload contains unsupported fields."))
+                    try:
+                        port_no = int(port.get("port_no") or 0)
+                    except (TypeError, ValueError) as exc:
+                        raise UserError(_("Reader Port No. must be an integer.")) from exc
+                    if port_no < 1 or port_no > 16 or port_no in port_numbers:
+                        raise UserError(_("Reader Port must be unique and between 1 and 16."))
+                    port_numbers.add(port_no)
+
+                declared_ports = declared_ports_by_reader.get(reader_code)
+                if declared_ports is not None and declared_ports != port_numbers:
+                    raise UserError(_("Lane Reader Ports conflict with the published Reader assembly: %s") % reader_code)
+                declared_config = declared_config_by_reader.get(reader_code)
+                if declared_config is not None and declared_config != config:
+                    raise UserError(_("Lane Reader parameters conflict with the published Reader assembly: %s") % reader_code)
+
+                lane_reader_by_code[reader_code] = {
+                    "reader": reader, "ports": port_numbers, "config": config,
+                }
+                reader_config_specs.append({
+                    "lane_code": lane_code, "reader_id": reader.id,
+                    **config, "source_type": "published_layout",
+                })
+
+            sequence = lane_item.get("antenna_sequence") or []
+            if not isinstance(sequence, list):
+                raise UserError(_("Antenna Sequence must be an array."))
+            if state == "operational" and len(sequence) < 2:
+                raise UserError(_("Operational Lane %s requires at least two Antenna Sequence points.") % lane_code)
+            seen_refs = set()
+            sequence_reader_codes = set()
+            cumulative = 0.0
+            for expected_order, row in enumerate(sequence, start=1):
+                if not isinstance(row, dict):
+                    raise UserError(_("Antenna Sequence rows must contain objects."))
+                unsupported_sequence = set(row) - {
+                    "sequence", "reader_code", "reader_serial_number", "port_no",
+                    "duration_from_previous_seconds",
+                }
+                if unsupported_sequence:
+                    raise UserError(
+                        _("Unsupported Antenna Sequence field(s): %s")
+                        % ", ".join(sorted(unsupported_sequence))
+                    )
+                reader_code = self._normalize_sync_code(row.get("reader_code"))
+                try:
+                    order = int(row.get("sequence") or 0)
+                    port_no = int(row.get("port_no") or 0)
+                    duration = float(row.get("duration_from_previous_seconds") or 0.0)
+                except (TypeError, ValueError) as exc:
+                    raise UserError(_("Invalid Antenna Sequence value.")) from exc
+                if order != expected_order:
+                    raise UserError(_("Antenna Sequence Order must be contiguous and start at 1."))
+                reader_entry = lane_reader_by_code.get(reader_code)
+                if not reader_entry or port_no not in reader_entry["ports"]:
+                    raise UserError(_("Antenna Sequence can use only Ports declared in Lane Device Configuration."))
+                reader = reader_entry["reader"]
+                serial = str(row.get("reader_serial_number") or "").strip().upper()
+                if serial and str(reader.serial_number or "").strip().upper() != serial:
+                    raise UserError(_("Antenna Sequence Reader serial does not match Device Configuration."))
+                ref = (reader.id, port_no)
+                if ref in seen_refs:
+                    raise UserError(_("A Reader Port can appear only once in an Antenna Sequence."))
+                if expected_order == 1 and duration != 0.0:
+                    raise UserError(_("The first Antenna Sequence point must use 0 seconds Max Duration."))
+                if expected_order > 1 and duration <= 0.0:
+                    raise UserError(_("Every Antenna after the first requires a positive Max Duration."))
+                seen_refs.add(ref)
+                sequence_reader_codes.add(reader_code)
+                cumulative += 0.0 if expected_order == 1 else duration
+                sequence_specs.append({
+                    "lane_code": lane_code, "sequence": expected_order,
+                    "reader_id": reader.id, "port_no": port_no,
+                    "duration_from_previous": 0.0 if expected_order == 1 else duration,
+                    "cumulative_time": cumulative,
+                })
+
+            if set(lane_reader_by_code) != sequence_reader_codes:
+                raise UserError(_(
+                    "Parking Lane Device Configuration Readers must exactly match Antenna Sequence Readers."
+                ))
+
             lane_specs[lane_code] = {
                 "parking_area_id": parking.id,
                 "code": lane_code,
@@ -149,161 +286,6 @@ class NspSyncJobParkingLayout(models.Model):
                 "tolerance_value": tolerance_value,
                 "active": True,
             }
-
-            timeline = lane_item.get("reader_port_timeline") or []
-            if not isinstance(timeline, list):
-                raise UserError(_("Reader Port Timeline must be an array."))
-            if state == "operational" and len(timeline) < 2:
-                raise UserError(
-                    _("Operational Lane %s requires at least two Reader Port Timeline points.")
-                    % lane_code
-                )
-            seen_orders = set()
-            seen_refs = set()
-            timeline_position = {}
-            timeline_duration_by_ref = {}
-            for row in timeline:
-                if not isinstance(row, dict):
-                    raise UserError(_("Reader Port Timeline rows must contain objects."))
-                unsupported_timeline = set(row) - {
-                    "sequence", "reader_code", "port_no",
-                    "duration_from_previous_seconds", "cumulative_time_seconds",
-                }
-                if unsupported_timeline:
-                    raise UserError(
-                        _("Unsupported Reader Port Timeline field(s): %s")
-                        % ", ".join(sorted(unsupported_timeline))
-                    )
-                reader_code = self._normalize_sync_code(row.get("reader_code"))
-                try:
-                    sequence = int(row.get("sequence") or 0)
-                    port_no = int(row.get("port_no") or 0)
-                    duration = float(row.get("duration_from_previous_seconds") or 0.0)
-                    cumulative = float(row.get("cumulative_time_seconds") or 0.0)
-                except (TypeError, ValueError) as exc:
-                    raise UserError(_("Invalid Reader Port Timeline value.")) from exc
-                reader = reader_by_code.get(reader_code)
-                ref = (reader.id, port_no) if reader else False
-                if sequence <= 0 or port_no < 1 or port_no > 16 or not reader:
-                    raise UserError(_("Reader Port Timeline references an invalid Reader or Port."))
-                if reader.controller_id != controller or not reader.active or reader.cloud_removed:
-                    raise UserError(_("Every Timeline Reader must be active and belong to the Lane Controller."))
-                declared_ports = declared_ports_by_reader.get(reader_code)
-                if declared_ports is not None and port_no not in declared_ports:
-                    raise UserError(_("Timeline Port is not declared by the published Reader assembly."))
-                if sequence in seen_orders or ref in seen_refs:
-                    raise UserError(_("Timeline Order and Reader Port must be unique per Lane."))
-                if duration < 0.0:
-                    raise UserError(_("Calibration Antenna Scope Duration cannot be negative."))
-                seen_orders.add(sequence)
-                seen_refs.add(ref)
-                timeline_position[ref] = sequence
-                timeline_duration_by_ref[ref] = duration
-                timeline_specs.append({
-                    "lane_code": lane_code,
-                    "sequence": sequence,
-                    "reader_id": reader.id,
-                    "port_no": port_no,
-                    "duration_from_previous": duration,
-                    "cumulative_time": max(0.0, cumulative),
-                })
-            if seen_orders and seen_orders != set(range(1, len(seen_orders) + 1)):
-                raise UserError(_("Reader Port Timeline Order must be contiguous and start at 1."))
-
-            for reader_id in sorted({reader_id for reader_id, _port in seen_refs}):
-                reader = reader_by_id.get(reader_id)
-                reader_code = self._normalize_sync_code(reader.device_code)
-                config = declared_config_by_reader.get(reader_code)
-                if not config:
-                    raise UserError(
-                        _("Published Reader Configuration is missing for %s.") % reader_code
-                    )
-                reader_config_specs.append({
-                    "lane_code": lane_code,
-                    "reader_id": reader.id,
-                    "power_dbm": int(config["power_dbm"]),
-                    "read_interval_ms": int(config["read_interval_ms"]),
-                    "tid_start_address": int(config["tid_start_address"]),
-                    "tid_length": int(config["tid_length"]),
-                    "source_type": "published_layout",
-                })
-
-            event_sequences = lane_item.get("event_sequences") or {}
-            if not isinstance(event_sequences, dict):
-                raise UserError(_("Event Sequences must be an object."))
-            unsupported_events = set(event_sequences) - {"check_in", "check_out"}
-            if unsupported_events:
-                raise UserError(
-                    _("Unsupported Event Sequence type(s): %s")
-                    % ", ".join(sorted(unsupported_events))
-                )
-            configured_count = 0
-            for sequence_type in ("check_in", "check_out"):
-                values = event_sequences.get(sequence_type) or []
-                if not isinstance(values, list):
-                    raise UserError(_("Each Event Sequence must be an array."))
-                if values and len(values) < 2:
-                    raise UserError(_("Each configured Lane Direction requires at least two Antennas."))
-                seen_sequence_refs = set()
-                previous_ref = False
-                for order, step in enumerate(values, start=1):
-                    if not isinstance(step, dict) or set(step) - {
-                        "reader_code", "port_no", "duration_from_previous_seconds"
-                    }:
-                        raise UserError(_(
-                            "Lane Direction steps must contain Reader Code, Port No. and Duration."
-                        ))
-                    reader_code = self._normalize_sync_code(step.get("reader_code"))
-                    try:
-                        port_no = int(step.get("port_no") or 0)
-                        has_direction_duration = "duration_from_previous_seconds" in step
-                        duration = float(step.get("duration_from_previous_seconds") or 0.0)
-                    except (TypeError, ValueError) as exc:
-                        raise UserError(_("Lane Direction step values are invalid.")) from exc
-                    reader = reader_by_code.get(reader_code)
-                    ref = (reader.id, port_no) if reader else False
-                    if not reader or ref not in seen_refs:
-                        raise UserError(_(
-                            "Lane Direction can use only Readers and Antennas from Lane Calibration."
-                        ))
-                    if ref in seen_sequence_refs:
-                        raise UserError(_("An Antenna can appear only once in one Lane Direction."))
-                    if order > 1 and not has_direction_duration:
-                        # NSP 19.x compatibility for a rolling upgrade from a
-                        # legacy Master that still stores timing on one shared
-                        # Timeline. Removal target: NSP 20.0.
-                        current_pos = timeline_position.get(ref)
-                        previous_pos = timeline_position.get(previous_ref)
-                        if (
-                            not current_pos or not previous_pos
-                            or abs(current_pos - previous_pos) != 1
-                        ):
-                            raise UserError(_(
-                                "Legacy Lane Direction without Duration must follow adjacent Calibration Timeline points."
-                            ))
-                        higher_ref = ref if current_pos > previous_pos else previous_ref
-                        duration = float(timeline_duration_by_ref.get(higher_ref) or 0.0)
-                    if order == 1 and duration != 0.0:
-                        raise UserError(_("The first Lane Direction Antenna must use 0 ms Max Duration."))
-                    if order > 1 and duration <= 0.0:
-                        raise UserError(_("Lane Direction Antennas after the first require a positive Max Duration."))
-                    seen_sequence_refs.add(ref)
-                    previous_ref = ref
-                    sequence_specs.append({
-                        "lane_code": lane_code,
-                        "sequence_type": sequence_type,
-                        "sequence": order,
-                        "reader_id": reader.id,
-                        "port_no": port_no,
-                        "duration_from_previous": duration,
-                    })
-                configured_count += bool(values)
-            if state == "operational" and not configured_count:
-                raise UserError(
-                    _("Operational Lane %s requires at least one Lane In or Lane Out Direction.")
-                    % lane_code
-                )
-
 
         Lane = self.env["nsp.parking.lane"].sudo().with_context(active_test=False)
         existing_lanes = Lane.search([("parking_area_id", "=", parking.id)])
@@ -317,26 +299,18 @@ class NspSyncJobParkingLayout(models.Model):
                 lane_by_code[lane_code] = lane
 
         area_lanes = Lane.search([("parking_area_id", "=", parking.id)])
-        Timeline = self.env["nsp.parking.lane.timeline"].sudo()
-        Sequence = self.env["nsp.parking.lane.event.sequence"].sudo()
+        Sequence = self.env["nsp.parking.lane.timeline"].sudo()
+        LegacySequence = self.env["nsp.parking.lane.event.sequence"].sudo()
         ReaderConfig = self.env["nsp.parking.lane.reader.config"].sudo()
-        existing_sequences = Sequence.search([("lane_id", "in", area_lanes.ids)]) if area_lanes else Sequence.browse()
-        existing_timeline = Timeline.search([("lane_id", "in", area_lanes.ids)]) if area_lanes else Timeline.browse()
+        existing_sequence = Sequence.search([("lane_id", "in", area_lanes.ids)]) if area_lanes else Sequence.browse()
+        existing_legacy = LegacySequence.search([("lane_id", "in", area_lanes.ids)]) if area_lanes else LegacySequence.browse()
         existing_reader_configs = ReaderConfig.search([("lane_id", "in", area_lanes.ids)]) if area_lanes else ReaderConfig.browse()
-        if existing_sequences:
-            existing_sequences.unlink()
-        if existing_timeline:
-            existing_timeline.unlink()
+        if existing_legacy:
+            existing_legacy.unlink()
+        if existing_sequence:
+            existing_sequence.unlink()
         if existing_reader_configs:
             existing_reader_configs.unlink()
-
-        timeline_values = []
-        for spec in timeline_specs:
-            values = dict(spec)
-            values["lane_id"] = lane_by_code[values.pop("lane_code")].id
-            timeline_values.append(values)
-        if timeline_values:
-            Timeline.create(timeline_values)
 
         sequence_values = []
         for spec in sequence_specs:
@@ -346,20 +320,18 @@ class NspSyncJobParkingLayout(models.Model):
         if sequence_values:
             Sequence.create(sequence_values)
 
-        reader_config_values = []
+        config_values = []
         for spec in reader_config_specs:
             values = dict(spec)
             values["lane_id"] = lane_by_code[values.pop("lane_code")].id
-            reader_config_values.append(values)
-        if reader_config_values:
-            ReaderConfig.create(reader_config_values)
+            config_values.append(values)
+        if config_values:
+            ReaderConfig.create(config_values)
 
         incoming_lane_codes = set(lane_specs)
-        stale_lanes = area_lanes.filtered(
-            lambda lane: lane.code not in incoming_lane_codes and lane.active
-        )
+        stale_lanes = area_lanes.filtered(lambda lane: lane.code not in incoming_lane_codes and lane.active)
         if stale_lanes:
-            stale_lanes.mapped("timeline_line_ids").unlink()
+            stale_lanes.mapped("antenna_sequence_ids").unlink()
             stale_lanes.mapped("event_sequence_ids").unlink()
             stale_lanes.mapped("reader_config_ids").unlink()
             stale_lanes.write({"active": False})
@@ -409,7 +381,7 @@ class NspSyncJobParkingLayout(models.Model):
         Parking = self.env["nsp.parking.area"].sudo().with_context(active_test=False)
         stale = Parking.search([("code", "not in", list(incoming_codes))]) if incoming_codes else Parking.search([])
         if stale:
-            stale.mapped("lane_ids.timeline_line_ids").unlink()
+            stale.mapped("lane_ids.antenna_sequence_ids").unlink()
             stale.mapped("lane_ids.event_sequence_ids").unlink()
             stale.mapped("lane_ids.reader_config_ids").unlink()
             stale.mapped("lane_ids").write({"active": False})

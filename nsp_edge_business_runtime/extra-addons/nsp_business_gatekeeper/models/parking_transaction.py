@@ -326,6 +326,22 @@ class ParkingTransaction(models.Model):
         return True
 
     @api.model
+    def _event_type_from_vehicle_state(self, vehicle, event_time=False):
+        """Resolve Check-in/Check-out from the Vehicle parking state.
+
+        A matched Antenna Sequence only proves that the Vehicle crossed a Lane.
+        If the latest allowed movement leaves the Vehicle inside Parking
+        (Check-in), this crossing is Check-out; otherwise it is Check-in.
+        """
+        if not vehicle:
+            return "check_in"
+        domain = [("vehicle_id", "=", vehicle.id), ("status", "=", "allowed")]
+        if event_time:
+            domain.append(("event_time", "<=", event_time))
+        previous = self.search(domain, order="event_time desc, id desc", limit=1)
+        return "check_out" if previous and previous.event_type == "check_in" else "check_in"
+
+    @api.model
     def _vehicle_continuity_decision(
         self, vehicle, event_type, event_time, parking_area=False
     ):
@@ -589,10 +605,8 @@ class ParkingTransaction(models.Model):
             return existing, True
 
     @api.model
-    def _sequence_path_for_lane(self, lane, event_type):
-        rows = lane.event_sequence_ids.filtered(
-            lambda row: row.sequence_type == event_type
-        ).sorted("sequence")
+    def _sequence_path_for_lane(self, lane, event_type=False):
+        rows = lane.antenna_sequence_ids.sorted("sequence")
         return ">".join(
             "%s:%s" % (
                 row.reader_id.device_code or row.reader_id.serial_number or row.reader_id.id,
@@ -602,20 +616,10 @@ class ParkingTransaction(models.Model):
         )
 
     @api.model
-    def _allowed_duration_for_lane(self, lane, event_type):
-        rows = lane.event_sequence_ids.filtered(
-            lambda row: row.sequence_type == event_type
-        ).sorted("sequence")
-        timeline_by_ref = {
-            (row.reader_id.id, int(row.port_no or 0)): row
-            for row in lane.timeline_line_ids
-        }
+    def _allowed_duration_for_lane(self, lane, event_type=False):
+        rows = lane.antenna_sequence_ids.sorted("sequence")
         return sum(
-            lane.allowed_duration_for_step(
-                timeline_by_ref[(row.reader_id.id, int(row.port_no or 0))].sequence
-            )
-            for row in rows[1:]
-            if (row.reader_id.id, int(row.port_no or 0)) in timeline_by_ref
+            lane.allowed_duration_for_step(row.sequence) for row in rows[1:]
         )
 
     @api.model
@@ -628,8 +632,9 @@ class ParkingTransaction(models.Model):
     ):
         """Create one vehicle-centric Parking Transaction.
 
-        Event Type is resolved directly by the configured directed Reader Port transition.
-        Check-in never uses User RFID. Check-out requires exactly one User RFID
+        Event Type is resolved from current Vehicle parking state after the Lane
+        Antenna Sequence has matched. Check-in never uses User RFID. Check-out
+        requires exactly one User RFID
         detection selected by the detection processor inside the configured event-sequence Duration.
         """
         detections = detections.filtered(lambda rec: rec.state == "pending")

@@ -32,7 +32,9 @@
           <field name="parking_area_state" invisible="1"/>
           <field name="setup_state" invisible="1"/>
           <field name="edge_server_id" invisible="1"/>
+          <field name="edge_server_name" invisible="1"/>
           <field name="controller_id" invisible="1"/>
+          <field name="controller_name" invisible="1"/>
           <field name="edge_server_status" invisible="1"/>
           <field name="controller_status" invisible="1"/>
 

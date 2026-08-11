@@ -779,7 +779,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         }
         self._measurement_reject_unknown_fields(item, allowed)
         self._measurement_require_fields(
-            item, ["event_uid", "serial_number", "port_no", "tid", "read_at"]
+            item, ["event_uid", "serial_number", "port_no", "tid", "read_at", "revision"]
         )
         event_uid = str(item.get("event_uid") or "").strip()
         serial_number = str(item.get("serial_number") or "").strip().upper()
@@ -815,7 +815,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 raise ValueError("invalid_rssi") from exc
         if accept_snapshot:
             try:
-                revision = int(item.get("revision") or session.revision or 1)
+                revision = int(item.get("revision"))
                 fallback_power = (
                     reader_line.reader_power_dbm
                     if reader_line
@@ -931,16 +931,42 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                     accept_snapshot=accept_snapshot,
                     allow_historical_scope=allow_historical_scope,
                 )
-                if enforce_current_snapshot and (
-                    compare_revision(values["revision"] or 1, session.revision or 1) != "current"
-                ):
-                    results[index] = {
-                        "index": index,
-                        "record_key": key,
-                        "status": "ignored",
-                        "message": "Stale Lane Calibration revision ignored",
-                    }
-                    continue
+                if enforce_current_snapshot:
+                    revision_state = compare_revision(
+                        values["revision"], session.revision or 1
+                    )
+                    if revision_state == "stale":
+                        results[index] = {
+                            "index": index,
+                            "record_key": key,
+                            "status": "ignored",
+                            "error_code": "lane_calibration_stale_revision",
+                            "message": "Stale Lane Calibration revision ignored",
+                        }
+                        continue
+                    if revision_state == "future":
+                        results[index] = {
+                            "index": index,
+                            "record_key": key,
+                            "status": "rejected",
+                            "error_code": "lane_calibration_revision_ahead",
+                            "message": "lane_calibration_revision_ahead",
+                        }
+                        continue
+                    if (
+                        int(values["power_dbm"] or 0)
+                        != int(session._reader_power_for_serial(values["serial_number"]) or 0)
+                        or int(values["read_interval_ms"] or 0)
+                        != int(session._reader_interval_for_serial(values["serial_number"]) or 0)
+                    ):
+                        results[index] = {
+                            "index": index,
+                            "record_key": key,
+                            "status": "ignored",
+                            "error_code": "lane_calibration_settings_mismatch",
+                            "message": "Lane Calibration Reader settings snapshot does not match current revision",
+                        }
+                        continue
                 prepared.append((index, key, values))
             except Exception as exc:
                 results[index] = {
@@ -1228,7 +1254,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 },
             )
             self._measurement_require_fields(
-                data, ["lane_calibration_code", "status", "occurred_at"]
+                data, ["lane_calibration_code", "status", "revision", "occurred_at"]
             )
             session = self._measurement_session(data.get("lane_calibration_code"))
             if controller not in session.reader_line_ids.mapped("controller_id"):

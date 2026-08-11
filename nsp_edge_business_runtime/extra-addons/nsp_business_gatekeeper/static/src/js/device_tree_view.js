@@ -1,6 +1,6 @@
 /** @odoo-module **/
 
-import { Component, onMounted, onWillUnmount, useState } from "@odoo/owl";
+import { Component, useState } from "@odoo/owl";
 import { ConfirmationDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
 import { registry } from "@web/core/registry";
 import { useService } from "@web/core/utils/hooks";
@@ -9,8 +9,7 @@ import { SelectCreateDialog } from "@web/views/view_dialogs/select_create_dialog
 import { standardFieldProps } from "@web/views/fields/standard_field_props";
 
 const STATUS_ONLINE = new Set(["online"]);
-const STATUS_OFFLINE = new Set(["offline", "error", "block", "revoked"]);
-const STATUS_DEGRADED = new Set(["degraded"]);
+const STATUS_OFFLINE = new Set(["offline", "error", "block", "revoked", "degraded"]);
 
 function many2oneId(value) {
     if (Array.isArray(value)) {
@@ -37,7 +36,7 @@ function toMany2one(option) {
 }
 
 export class NspDeviceTreeView extends Component {
-    static template = "nsp_master_gatekeeper.DeviceTreeView";
+    static template = "nsp_business_gatekeeper.DeviceTreeView";
     static props = { ...standardFieldProps };
 
     setup() {
@@ -63,23 +62,6 @@ export class NspDeviceTreeView extends Component {
             portEditingKey: null,
             portDraft: "",
             portError: "",
-            runtimeStatus: {},
-            masterMeta: {},
-        });
-        this.statusRefreshTimer = null;
-
-        onMounted(async () => {
-            await this.refreshOperationalStatuses();
-            this.statusRefreshTimer = setInterval(() => {
-                this.refreshOperationalStatuses();
-            }, 5000);
-        });
-
-        onWillUnmount(() => {
-            if (this.statusRefreshTimer) {
-                clearInterval(this.statusRefreshTimer);
-                this.statusRefreshTimer = null;
-            }
         });
     }
 
@@ -95,20 +77,8 @@ export class NspDeviceTreeView extends Component {
     }
 
     get editable() {
-        // device_tree_anchor is a computed presentation field, so Odoo correctly
-        // exposes the anchor itself as readonly.  That readonly flag must not be
-        // used as the business edit policy for the Tree.  Editing is owned by the
-        // parent record state instead.
-        const data = this.props.record?.data || {};
-        if (this.mode === "parking_lane") {
-            // A new Lane opened from Parking Layout may not have resolved the
-            // related parking_area_state yet. Treat an unresolved state as
-            // editable; persisted non-draft layouts remain locked.
-            return !data.parking_area_state || data.parking_area_state === "draft";
-        }
-        if (this.mode === "lane_calibration") {
-            return !data.status || data.status === "draft";
-        }
+        // Edge is a runtime projection. Device Configuration is managed on
+        // Cloud (nsp_master_gatekeeper) and is always read-only here.
         return false;
     }
 
@@ -138,14 +108,13 @@ export class NspDeviceTreeView extends Component {
         const lines = data.reader_config_ids?.records || [];
         const server = {
             id: many2oneId(data.edge_server_id) || "server",
-            // Always render the human master name, never a technical/code based display_name.
-            name: this._masterName("server", many2oneId(data.edge_server_id), data.edge_server_name || many2oneLabel(data.edge_server_id, "Server")),
-            status: this._statusFor("server", many2oneId(data.edge_server_id), data.edge_server_status),
+            name: many2oneLabel(data.edge_server_id, "Server"),
+            status: this._status(data.edge_server_status),
         };
         const controller = {
             id: many2oneId(data.controller_id) || "controller",
-            name: this._masterName("controller", many2oneId(data.controller_id), data.controller_name || many2oneLabel(data.controller_id, "Controller")),
-            status: this._statusFor("controller", many2oneId(data.controller_id), data.controller_status),
+            name: many2oneLabel(data.controller_id, "Controller"),
+            status: this._status(data.controller_status),
         };
         return lines.map((line, index) => {
             const lineData = line.data || {};
@@ -156,9 +125,9 @@ export class NspDeviceTreeView extends Component {
                 controller,
                 reader: {
                     id: many2oneId(lineData.reader_id) || `reader-${index}`,
-                    name: this._masterName("reader", many2oneId(lineData.reader_id), lineData.reader_name || many2oneLabel(lineData.reader_id, "Reader")),
-                    serial: this._masterSerial(many2oneId(lineData.reader_id), lineData.reader_serial_number || "—"),
-                    status: this._statusFor("reader", many2oneId(lineData.reader_id), lineData.reader_status),
+                    name: lineData.reader_name || many2oneLabel(lineData.reader_id, "Reader"),
+                    serial: lineData.reader_serial_number || "—",
+                    status: this._status(lineData.reader_status),
                 },
                 ports: lineData.port_summary || "—",
                 values: {
@@ -180,19 +149,19 @@ export class NspDeviceTreeView extends Component {
                 record: line,
                 server: {
                     id: many2oneId(data.edge_server_id) || `server-${index}`,
-                    name: this._masterName("server", many2oneId(data.edge_server_id), data.edge_server_name || many2oneLabel(data.edge_server_id, "Server")),
-                    status: this._statusFor("server", many2oneId(data.edge_server_id), data.edge_server_status),
+                    name: many2oneLabel(data.edge_server_id, "Server"),
+                    status: this._status(data.edge_server_status),
                 },
                 controller: {
                     id: many2oneId(data.controller_id) || `controller-${index}`,
-                    name: this._masterName("controller", many2oneId(data.controller_id), data.controller_name || many2oneLabel(data.controller_id, "Controller")),
-                    status: this._statusFor("controller", many2oneId(data.controller_id), data.controller_status),
+                    name: many2oneLabel(data.controller_id, "Controller"),
+                    status: this._status(data.controller_status),
                 },
                 reader: {
                     id: many2oneId(data.reader_id) || `reader-${index}`,
-                    name: this._masterName("reader", many2oneId(data.reader_id), data.reader_name || many2oneLabel(data.reader_id, "Reader")),
-                    serial: this._masterSerial(many2oneId(data.reader_id), data.serial_number || "—"),
-                    status: this._statusFor("reader", many2oneId(data.reader_id), data.reader_status),
+                    name: data.reader_name || many2oneLabel(data.reader_id, "Reader"),
+                    serial: data.serial_number || "—",
+                    status: this._status(data.reader_status),
                 },
                 ports: data.port_numbers || "—",
                 values: {
@@ -210,130 +179,14 @@ export class NspDeviceTreeView extends Component {
         if (STATUS_ONLINE.has(status)) {
             return "online";
         }
-        if (STATUS_DEGRADED.has(status)) {
-            return "degraded";
-        }
         if (STATUS_OFFLINE.has(status)) {
             return "offline";
         }
         return "unknown";
     }
 
-    _statusFor(kind, id, fallbackValue) {
-        const numericId = Number(id || 0);
-        const liveValue = numericId ? this.state.runtimeStatus[`${kind}:${numericId}`] : false;
-        return this._status(liveValue || fallbackValue);
-    }
-
-    _masterMeta(kind, id) {
-        const numericId = Number(id || 0);
-        return numericId ? (this.state.masterMeta[`${kind}:${numericId}`] || {}) : {};
-    }
-
-    _masterName(kind, id, fallback) {
-        const meta = this._masterMeta(kind, id);
-        return meta.name || fallback;
-    }
-
-    _masterSerial(id, fallback) {
-        const meta = this._masterMeta("reader", id);
-        return meta.serial || fallback;
-    }
-
-    async refreshOperationalStatuses() {
-        const serverIds = new Set();
-        const controllerIds = new Set();
-        const readerIds = new Set();
-
-        const parentData = this.props.record?.data || {};
-        const parentServerId = many2oneId(parentData.edge_server_id);
-        const parentControllerId = many2oneId(parentData.controller_id);
-        if (parentServerId) {
-            serverIds.add(parentServerId);
-        }
-        if (parentControllerId) {
-            controllerIds.add(parentControllerId);
-        }
-
-        for (const entry of this.entries) {
-            const serverId = Number(entry.server?.id || 0);
-            const controllerId = Number(entry.controller?.id || 0);
-            const readerId = Number(entry.reader?.id || 0);
-            if (serverId) {
-                serverIds.add(serverId);
-            }
-            if (controllerId) {
-                controllerIds.add(controllerId);
-            }
-            if (readerId) {
-                readerIds.add(readerId);
-            }
-        }
-
-        const queries = [];
-        if (serverIds.size) {
-            queries.push(
-                this.orm.read("nsp.edge.server", [...serverIds], ["name", "status"])
-                    .then((rows) => ["server", rows])
-            );
-        }
-        if (controllerIds.size) {
-            queries.push(
-                this.orm.read("nsp.controller", [...controllerIds], ["controller_name", "status"])
-                    .then((rows) => ["controller", rows])
-            );
-        }
-        if (readerIds.size) {
-            queries.push(
-                this.orm.read("nsp.device", [...readerIds], ["name", "serial_number", "status"])
-                    .then((rows) => ["reader", rows])
-            );
-        }
-        if (!queries.length) {
-            return;
-        }
-
-        try {
-            const nextStatus = { ...this.state.runtimeStatus };
-            const nextMeta = { ...this.state.masterMeta };
-            const results = await Promise.all(queries);
-            for (const [kind, rows] of results) {
-                for (const row of rows || []) {
-                    if (!row?.id) {
-                        continue;
-                    }
-                    const key = `${kind}:${row.id}`;
-                    nextStatus[key] = row.status || "unknown";
-                    if (kind === "server") {
-                        nextMeta[key] = { name: row.name || `Server ${row.id}` };
-                    } else if (kind === "controller") {
-                        nextMeta[key] = { name: row.controller_name || `Controller ${row.id}` };
-                    } else if (kind === "reader") {
-                        nextMeta[key] = {
-                            name: row.name || row.serial_number || `Reader ${row.id}`,
-                            serial: row.serial_number || "—",
-                        };
-                    }
-                }
-            }
-            this.state.runtimeStatus = nextStatus;
-            this.state.masterMeta = nextMeta;
-        } catch {
-            // Keep the last known form status when a transient refresh fails.
-        }
-    }
-
     statusLabel(status) {
-        if (status === "online") {
-            return "Online";
-        }
-        if (status === "degraded") {
-            return "Degraded";
-        }
-        if (status === "offline") {
-            return "Offline";
-        }
-        return "Unknown";
+        return status === "online" ? "Online" : status === "offline" ? "Offline" : "Unknown";
     }
 
     get tree() {
@@ -351,8 +204,8 @@ export class NspDeviceTreeView extends Component {
                 const server = {
                     key: `server-${serverId}`,
                     id: serverId,
-                    name: this._masterName("server", many2oneId(data.edge_server_id), data.edge_server_name || many2oneLabel(data.edge_server_id, "Server")),
-                    status: this._statusFor("server", many2oneId(data.edge_server_id), data.edge_server_status),
+                    name: many2oneLabel(data.edge_server_id, "Server"),
+                    status: this._status(data.edge_server_status),
                     controllers: new Map(),
                 };
                 groups.set(server.key, server);
@@ -361,8 +214,8 @@ export class NspDeviceTreeView extends Component {
                     server.controllers.set(controllerKey, {
                         key: controllerKey,
                         id: controllerId,
-                        name: this._masterName("controller", many2oneId(data.controller_id), data.controller_name || many2oneLabel(data.controller_id, "Controller")),
-                        status: this._statusFor("controller", many2oneId(data.controller_id), data.controller_status),
+                        name: many2oneLabel(data.controller_id, "Controller"),
+                        status: this._status(data.controller_status),
                         readers: [],
                     });
                 }
@@ -714,15 +567,7 @@ export class NspDeviceTreeView extends Component {
         }
         this._openReaderSearch({
             title: "Edit Reader",
-            onSelected: async (reader) => {
-                await entry.record.update({ reader_id: toMany2one(reader) });
-                this.state.configState = "Modified";
-                const updatedEntry = this.entries.find((candidate) => candidate.key === entry.key);
-                if (this.state.editing && updatedEntry) {
-                    this.state.draft = { ...updatedEntry.values };
-                }
-                await this.refreshOperationalStatuses();
-            },
+            onSelected: (reader) => entry.record.update({ reader_id: toMany2one(reader) }),
         });
     }
 
@@ -750,7 +595,6 @@ export class NspDeviceTreeView extends Component {
                 reader_id: toMany2one(reader),
             };
         await line.update(values);
-        await this.refreshOperationalStatuses();
         this.state.selectedKey = this.mode === "parking_lane"
             ? `lane-reader-${line.resId || line.id}`
             : `cal-reader-${line.resId || line.id}`;
@@ -913,194 +757,6 @@ export class NspDeviceTreeView extends Component {
         return Object.keys(errors).length === 0;
     }
 
-    _configurationValuesFromDraft() {
-        const draft = this.state.draft;
-        if (this.mode === "parking_lane") {
-            return {
-                power_dbm: Number(draft.power),
-                read_interval_ms: Number(draft.interval),
-                tid_start_address: Number(draft.tidStart),
-                tid_length: Number(draft.tidLength),
-            };
-        }
-        return {
-            reader_power_dbm: Number(draft.power),
-            read_interval_ms: Number(draft.interval),
-            reader_tid_addr: Number(draft.tidStart),
-            reader_tid_len: Number(draft.tidLength),
-        };
-    }
-
-    _sameNumberList(left, right) {
-        const a = [...left].map(Number).sort((x, y) => x - y);
-        const b = [...right].map(Number).sort((x, y) => x - y);
-        return a.length === b.length && a.every((value, index) => value === b[index]);
-    }
-
-    async _persistCalibrationConfiguration(entry, values) {
-        const identity = {
-            serverId: Number(entry.server.id || 0),
-            controllerId: Number(entry.controller.id || 0),
-            readerId: Number(entry.reader.id || 0),
-        };
-        if (!identity.serverId || !identity.controllerId || !identity.readerId) {
-            throw new Error("Server, Controller and Reader are required before saving.");
-        }
-        const identityValues = {
-            edge_server_id: identity.serverId,
-            controller_id: identity.controllerId,
-            reader_id: identity.readerId,
-        };
-        const portNumbers = this.selectedPorts.map((port) => Number(port.portNo));
-        if (!portNumbers.length) {
-            throw new Error("At least one Reader Port is required.");
-        }
-
-        const initialLineId = Number(entry.record.resId || 0);
-        const traceId = `MS-${Date.now()}-${initialLineId || "NEW"}`;
-        console.info(`[NSP MANUAL SAVE][CLICK] trace_id=${traceId}`, {
-            mode: this.mode,
-            calibrationId: Number(this.props.record?.resId || 0),
-            lineId: initialLineId,
-            identity: identityValues,
-            values,
-            portNumbers,
-        });
-
-        let lineId = initialLineId;
-        let canonical;
-        if (!lineId) {
-            let sessionId = Number(this.props.record?.resId || 0);
-            if (!sessionId) {
-                const parentSaved = await this.props.record.save();
-                sessionId = Number(this.props.record?.resId || 0);
-                if (!parentSaved || !sessionId) {
-                    throw new Error("Save the Lane Calibration before adding Reader configuration.");
-                }
-                // Parent save may already have materialized the virtual line. Prefer it
-                // if present to avoid creating the same Reader mapping twice.
-                const materialized = this.entries.find((candidate) =>
-                    Number(candidate.server.id || 0) === identity.serverId
-                    && Number(candidate.controller.id || 0) === identity.controllerId
-                    && Number(candidate.reader.id || 0) === identity.readerId
-                    && Number(candidate.record.resId || 0) > 0
-                );
-                if (materialized) {
-                    lineId = Number(materialized.record.resId);
-                }
-            }
-
-            if (!lineId) {
-                canonical = await this.orm.call(
-                    "nsp.measurement.reader.line",
-                    "action_create_device_configuration",
-                    [],
-                    {
-                        session_id: sessionId,
-                        values,
-                        port_numbers: portNumbers,
-                        identity: identityValues,
-                        trace_id: traceId,
-                    }
-                );
-                console.info(`[NSP MANUAL SAVE][CREATE RESPONSE] trace_id=${traceId}`, canonical);
-                lineId = Number(canonical?.id || 0);
-            }
-        }
-
-        if (lineId && !canonical) {
-            canonical = await this.orm.call(
-                "nsp.measurement.reader.line",
-                "action_save_device_configuration",
-                [[lineId]],
-                {
-                    values,
-                    port_numbers: portNumbers,
-                    identity: identityValues,
-                    trace_id: traceId,
-                }
-            );
-            console.info(`[NSP MANUAL SAVE][WRITE RESPONSE] trace_id=${traceId}`, canonical);
-        }
-        if (!canonical || Number(canonical.id || 0) !== lineId || !lineId) {
-            throw new Error("The server did not confirm the Reader configuration save.");
-        }
-
-        // Read back every persisted part, including the edited infrastructure identity.
-        console.info(`[NSP MANUAL SAVE][READBACK START] trace_id=${traceId}`, { lineId });
-        const rows = await this.orm.read(
-            "nsp.measurement.reader.line",
-            [lineId],
-            [
-                "edge_server_id",
-                "controller_id",
-                "reader_id",
-                "reader_power_dbm",
-                "read_interval_ms",
-                "reader_tid_addr",
-                "reader_tid_len",
-                "reader_port_ids",
-            ]
-        );
-        const row = rows[0];
-        if (!row) {
-            throw new Error("The saved Reader configuration could not be read back.");
-        }
-        const portRows = await this.orm.read(
-            "nsp.measurement.reader.port",
-            (row.reader_port_ids || []).map(Number),
-            ["port_no"]
-        );
-        const savedPorts = portRows.map((port) => Number(port.port_no));
-        console.info(`[NSP MANUAL SAVE][READBACK] trace_id=${traceId}`, {
-            row,
-            portRows,
-            savedPorts,
-        });
-        const persistedMany2oneId = (value) => Array.isArray(value) ? Number(value[0] || 0) : Number(value || 0);
-        const identityMatch =
-            persistedMany2oneId(row.edge_server_id) === identity.serverId
-            && persistedMany2oneId(row.controller_id) === identity.controllerId
-            && persistedMany2oneId(row.reader_id) === identity.readerId;
-        const scalarMatch =
-            Number(row.reader_power_dbm) === Number(values.reader_power_dbm)
-            && Number(row.read_interval_ms) === Number(values.read_interval_ms)
-            && Number(row.reader_tid_addr) === Number(values.reader_tid_addr)
-            && Number(row.reader_tid_len) === Number(values.reader_tid_len);
-        const portsMatch = this._sameNumberList(savedPorts, portNumbers);
-        console.info(`[NSP MANUAL SAVE][VERIFY] trace_id=${traceId}`, {
-            identityMatch,
-            scalarMatch,
-            portsMatch,
-            expected: { identity: identityValues, values, portNumbers },
-            actual: { row, savedPorts },
-        });
-        if (!identityMatch || !scalarMatch || !portsMatch) {
-            console.error(`[NSP MANUAL SAVE][VERIFY FAILED] trace_id=${traceId}`, {
-                identityMatch, scalarMatch, portsMatch, row, savedPorts,
-            });
-            throw new Error(`Database verification failed after saving Reader configuration. trace_id=${traceId}`);
-        }
-
-        // Reload the parent relation so the UI is rebuilt exclusively from persisted DB
-        // values.  Restore selection using the stable database id returned by the server.
-        if (this.props.record?.load) {
-            await this.props.record.load();
-        }
-        const currentEntry = this.entries.find(
-            (candidate) => Number(candidate.record.resId || 0) === lineId
-        );
-        if (!currentEntry) {
-            throw new Error("Reader configuration was saved but could not be restored in Device Configuration.");
-        }
-        this.state.selectedKey = currentEntry.key;
-        console.info(`[NSP MANUAL SAVE][DONE] trace_id=${traceId}`, {
-            lineId,
-            selectedKey: currentEntry.key,
-        });
-        return true;
-    }
-
     async saveConfiguration() {
         const entry = this.selectedEntry;
         if (!entry || !this._validateDraft() || this.state.saving) {
@@ -1108,55 +764,40 @@ export class NspDeviceTreeView extends Component {
         }
         this.state.saving = true;
         this.state.configState = "Saving...";
-        const values = this._configurationValuesFromDraft();
-        try {
-            if (this.mode === "lane_calibration") {
-                await this._persistCalibrationConfiguration(entry, values);
-            } else {
-                // Parking Lane keeps the normal relational-form lifecycle because
-                // its Reader configuration is owned by the Parking Lane draft.
-                const wasPersisted = Boolean(entry.record.resId);
-                await entry.record.update(values);
-                const saved = wasPersisted
-                    ? await entry.record.save({ reload: false })
-                    : await this.props.record.save();
-                if (!saved) {
-                    throw new Error("The Reader configuration save was rejected.");
-                }
+        const draft = this.state.draft;
+        const values = this.mode === "parking_lane"
+            ? {
+                power_dbm: Number(draft.power),
+                read_interval_ms: Number(draft.interval),
+                tid_start_address: Number(draft.tidStart),
+                tid_length: Number(draft.tidLength),
             }
-
-            await this.refreshOperationalStatuses();
+            : {
+                reader_power_dbm: Number(draft.power),
+                read_interval_ms: Number(draft.interval),
+                reader_tid_addr: Number(draft.tidStart),
+                reader_tid_len: Number(draft.tidLength),
+            };
+        try {
+            await entry.record.update(values);
             this.state.editing = false;
             this.state.configState = "Saved";
             this.state.draft = {};
             this.state.errors = {};
-            this.notification.add("Reader configuration saved and verified in the database.", {
-                title: "Configuration saved",
+            this.notification.add("Reader configuration updated in the current form.", {
+                title: "Configuration updated",
                 type: "success",
             });
         } catch (error) {
-            console.error("[NSP MANUAL SAVE][UI ERROR] Reader configuration save failed", {
-                error,
-                mode: this.mode,
-                calibrationId: Number(this.props.record?.resId || 0),
-                selectedKey: this.state.selectedKey,
-                entryResId: Number(entry?.record?.resId || 0),
-                values,
-                ports: this.selectedPorts.map((port) => Number(port.portNo)),
-            });
             this.state.configState = "Save failed";
-            this.notification.add(
-                error?.message || "Unable to update Reader configuration.",
-                {
-                    title: "Configuration error",
-                    type: "danger",
-                }
-            );
+            this.notification.add("Unable to update Reader configuration.", {
+                title: "Configuration error",
+                type: "danger",
+            });
         } finally {
             this.state.saving = false;
         }
     }
-
 }
 
 registry.category("fields").add("nsp_device_tree_view", {

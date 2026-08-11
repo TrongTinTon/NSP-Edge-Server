@@ -47,6 +47,12 @@ class NspMeasurementSession(models.Model):
         string="Readers",
         copy=True,
     )
+    device_tree_anchor = fields.Boolean(
+        string="NSP Device Tree", compute="_compute_device_tree_anchor",
+    )
+    calibration_tid = fields.Char(
+        string="Calibration Tag", compute="_compute_calibration_tid", readonly=True,
+    )
     reader_count = fields.Integer(compute="_compute_scope_counts")
     controller_ids = fields.Many2many(
         "nsp.controller",
@@ -109,6 +115,16 @@ class NspMeasurementSession(models.Model):
             "Measurement Revision must be greater than zero.",
         ),
     ]
+
+    @api.depends("reader_line_ids", "reader_line_ids.reader_id")
+    def _compute_device_tree_anchor(self):
+        for session in self:
+            session.device_tree_anchor = True
+
+    @api.depends("target_line_ids.tid")
+    def _compute_calibration_tid(self):
+        for session in self:
+            session.calibration_tid = session.target_line_ids[:1].tid or ""
 
     def _deployment_role(self):
         # Deployment ownership is defined by the installed Gatekeeper module.
@@ -787,13 +803,23 @@ class NspMeasurementReaderLine(models.Model):
         "nsp.device", string="RFID Reader", required=True,
         ondelete="restrict", index=True,
     )
+    edge_server_status = fields.Selection(
+        related="edge_server_id.status", string="Server Status", readonly=True,
+    )
+    controller_status = fields.Selection(
+        related="controller_id.status", string="Controller Status", readonly=True,
+    )
+    reader_name = fields.Char(related="reader_id.name", string="Reader Name", readonly=True)
     serial_number = fields.Char(related="reader_id.serial_number", readonly=True)
     reader_status = fields.Selection(related="reader_id.status", readonly=True)
+    # Edge stores the immutable configuration snapshot released by Cloud.
+    # These values belong to the Lane Calibration revision and must not be
+    # writable related fields back to the local Reader projection.
     reader_tid_addr = fields.Integer(
-        related="reader_id.tid_addr", string="TID Start Address (Words)", readonly=False,
+        string="TID Start Address (Words)", default=0, required=True,
     )
     reader_tid_len = fields.Integer(
-        related="reader_id.tid_len", string="TID Length (Words)", readonly=False,
+        string="TID Length (Words)", default=4, required=True,
     )
     reader_power_dbm = fields.Integer(
         string="Reader Power (dBm)", default=30, required=True,
@@ -807,6 +833,7 @@ class NspMeasurementReaderLine(models.Model):
         string="Reader Ports", copy=True,
     )
     port_count = fields.Integer(compute="_compute_port_count")
+    port_numbers = fields.Char(string="Ports", compute="_compute_port_count")
 
     available_edge_server_ids = fields.Many2many(
         "nsp.edge.server", compute="_compute_available_devices", readonly=True,
@@ -852,10 +879,12 @@ class NspMeasurementReaderLine(models.Model):
             "Read Interval must be between 1 and 60000 ms.",
         ),
     ]
-    @api.depends("reader_port_ids")
+    @api.depends("reader_port_ids", "reader_port_ids.port_no")
     def _compute_port_count(self):
         for line in self:
-            line.port_count = len(line.reader_port_ids)
+            ports = sorted({int(port.port_no or 0) for port in line.reader_port_ids if int(port.port_no or 0) > 0})
+            line.port_count = len(ports)
+            line.port_numbers = ", ".join("P%s" % port_no for port_no in ports)
 
     @api.model
     def _active_whitelisted(self, model_name, type_code):
@@ -934,6 +963,8 @@ class NspMeasurementReaderLine(models.Model):
                     "read_interval_ms",
                     int(reader.runtime_read_interval_ms or reader.read_interval_ms or 200),
                 )
+                values.setdefault("reader_tid_addr", int(reader.tid_addr or 0))
+                values.setdefault("reader_tid_len", int(reader.tid_len or 4))
             prepared.append(values)
         records = super().create(prepared)
         records._validate_line_scope()
@@ -978,10 +1009,12 @@ class NspMeasurementReaderLine(models.Model):
                 or line.reader_id.read_interval_ms
                 or 200
             )
+            line.reader_tid_addr = int(line.reader_id.tid_addr or 0)
+            line.reader_tid_len = int(line.reader_id.tid_len or 4)
 
     @api.constrains(
         "edge_server_id", "controller_id", "reader_id", "reader_port_ids",
-        "reader_power_dbm", "read_interval_ms", "session_id",
+        "reader_power_dbm", "read_interval_ms", "reader_tid_addr", "reader_tid_len", "session_id",
     )
     def _check_line_scope(self):
         self._validate_line_scope()
@@ -1098,6 +1131,73 @@ class NspMeasurementEvent(models.Model):
     rssi_dbm = fields.Float()
     power_dbm = fields.Integer(string="Reader Power (dBm)")
     read_interval_ms = fields.Integer(string="Read Interval ms", required=True, default=200)
+    timeline_timestamp = fields.Char(
+        string="Timestamp", compute="_compute_timeline_display", readonly=True,
+    )
+    timeline_reader = fields.Char(
+        string="Reader", compute="_compute_timeline_display", readonly=True,
+    )
+    timeline_duration_ms = fields.Float(
+        string="Duration (ms)", compute="_compute_timeline_display", digits=(16, 3), readonly=True,
+    )
+
+    @api.depends(
+        "session_id", "revision", "read_at", "read_at_ms", "serial_number",
+        "session_id.reader_line_ids.reader_id.name",
+        "session_id.reader_line_ids.reader_id.serial_number",
+    )
+    def _compute_timeline_display(self):
+        for event in self:
+            event.timeline_timestamp = ""
+            event.timeline_reader = event.serial_number or ""
+            event.timeline_duration_ms = 0.0
+
+        persisted = self.filtered(lambda event: event.id and event.session_id)
+        if not persisted:
+            return
+        session_ids = persisted.mapped("session_id").ids
+        requested_pairs = {
+            (event.session_id.id, int(event.revision or 1)) for event in persisted
+        }
+        reader_name_by_key = {}
+        for session in persisted.mapped("session_id"):
+            for line in session.reader_line_ids:
+                serial = str(line.reader_id.serial_number or "").strip().upper()
+                if serial:
+                    reader_name_by_key[(session.id, serial)] = (
+                        line.reader_id.name or line.reader_id.serial_number or serial
+                    )
+        all_events = self.search(
+            [("session_id", "in", session_ids)],
+            order="session_id, revision, read_at asc, read_at_ms asc, id asc",
+        )
+        previous_seconds = {}
+        duration_by_id = {}
+        for event in all_events:
+            pair = (event.session_id.id, int(event.revision or 1))
+            if pair not in requested_pairs:
+                continue
+            observed_at = fields.Datetime.to_datetime(event.read_at)
+            seconds = (
+                observed_at.timestamp() + (int(event.read_at_ms or 0) / 1000.0)
+                if observed_at else 0.0
+            )
+            previous = previous_seconds.get(pair)
+            duration_by_id[event.id] = (
+                max((seconds - previous) * 1000.0, 0.0)
+                if previous is not None else 0.0
+            )
+            previous_seconds[pair] = seconds
+        for event in persisted:
+            base = fields.Datetime.to_string(event.read_at) if event.read_at else ""
+            event.timeline_timestamp = (
+                "%s.%03d" % (base, int(event.read_at_ms or 0)) if base else ""
+            )
+            serial = str(event.serial_number or "").strip().upper()
+            event.timeline_reader = reader_name_by_key.get(
+                (event.session_id.id, serial), event.serial_number or ""
+            )
+            event.timeline_duration_ms = duration_by_id.get(event.id, 0.0)
 
     _sql_constraints = [
         ("measurement_event_uid_unique", "unique(event_uid)", "Measurement Event UID must be unique."),

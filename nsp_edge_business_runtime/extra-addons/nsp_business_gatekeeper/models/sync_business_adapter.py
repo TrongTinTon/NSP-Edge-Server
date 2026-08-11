@@ -1062,6 +1062,8 @@ class NspSyncBusinessAdapter(models.Model):
                 "reader_id": reader.id,
                 "reader_power_dbm": row["power_dbm"],
                 "read_interval_ms": row["read_interval_ms"],
+                "reader_tid_addr": row["tid_start_address"],
+                "reader_tid_len": row["tid_length"],
                 "reader_port_ids": [(0, 0, {"port_no": port_no}) for port_no in row["ports"]],
             }))
 

@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
+import logging
+
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError, ValidationError
+
+_logger = logging.getLogger(__name__)
 
 
 class NspMeasurementSessionReaderScope(models.Model):
@@ -96,8 +100,14 @@ class NspMeasurementReaderLine(models.Model):
         "nsp.device", string="RFID Reader", required=True,
         ondelete="restrict", index=True,
     )
+    edge_server_name = fields.Char(
+        related="edge_server_id.name", string="Server Name", readonly=True,
+    )
     edge_server_status = fields.Selection(
         related="edge_server_id.status", string="Server Status", readonly=True,
+    )
+    controller_name = fields.Char(
+        related="controller_id.controller_name", string="Controller Name", readonly=True,
     )
     controller_status = fields.Selection(
         related="controller_id.status", string="Controller Status", readonly=True,
@@ -105,11 +115,14 @@ class NspMeasurementReaderLine(models.Model):
     reader_name = fields.Char(related="reader_id.name", string="Reader Name", readonly=True)
     serial_number = fields.Char(related="reader_id.serial_number", readonly=True)
     reader_status = fields.Selection(related="reader_id.status", readonly=True)
+    # Contextual calibration snapshot. These values are seeded from the Reader
+    # master when the Reader is selected, then belong to this Calibration revision.
+    # Editing Lane Calibration must never mutate nsp.device master TID settings.
     reader_tid_addr = fields.Integer(
-        related="reader_id.tid_addr", string="TID Start Address (Words)", readonly=False,
+        string="TID Start Address (Words)", default=0, required=True,
     )
     reader_tid_len = fields.Integer(
-        related="reader_id.tid_len", string="TID Length (Words)", readonly=False,
+        string="TID Length (Words)", default=4, required=True,
     )
     reader_power_dbm = fields.Integer(
         string="Reader Power (dBm)", default=30, required=True,
@@ -205,6 +218,16 @@ class NspMeasurementReaderLine(models.Model):
             "CHECK(read_interval_ms > 0 AND read_interval_ms <= 60000)",
             "Read Interval must be between 1 and 60000 ms.",
         ),
+        (
+            "measurement_reader_tid_addr_nonnegative",
+            "CHECK(reader_tid_addr >= 0)",
+            "TID Start Address must be zero or greater.",
+        ),
+        (
+            "measurement_reader_tid_len_positive",
+            "CHECK(reader_tid_len > 0)",
+            "TID Length must be greater than zero.",
+        ),
     ]
     @api.depends("reader_port_ids", "reader_port_ids.port_no")
     def _compute_port_count(self):
@@ -268,58 +291,283 @@ class NspMeasurementReaderLine(models.Model):
                 port._validate_port()
         return True
 
-    @api.model_create_multi
-    # def create(self, vals_list):
-    #     prepared = []
-    #     context_session_id = self._session_id_from_context()
-    #     for source in vals_list:
-    #         values = dict(source)
-    #         if not values.get("session_id") and context_session_id:
-    #             values["session_id"] = context_session_id
-    #         # A Reader Assembly opened from an unsaved Lane Calibration is
-    #         # first kept as an x2many child without a database parent id. Odoo
-    #         # assigns session_id when the parent form is saved. Do not block
-    #         # that standard form workflow.
-    #         reader = self.env["nsp.device"].browse(values.get("reader_id")).exists()
-    #         if reader:
-    #             values.setdefault(
-    #                 "reader_power_dbm",
-    #                 int(reader.runtime_power_dbm or reader.power_dbm or 30),
-    #             )
-    #             values.setdefault(
-    #                 "read_interval_ms",
-    #                 int(reader.runtime_read_interval_ms or reader.read_interval_ms or 200),
-    #             )
-    #         prepared.append(values)
-    #     records = super().create(prepared)
-    #     records._validate_line_scope()
-    #     return records
+    @api.model
+    def _ensure_draft_session(self, session):
+        if (
+            session
+            and not self.env.context.get("measurement_sync")
+            and session.status != "draft"
+        ):
+            raise ValidationError(
+                _("Device Configuration can be changed only while Lane Calibration is Draft. Create a new Draft revision before changing devices.")
+            )
+        return True
 
-    # def write(self, vals):
-    #     if not self.env.context.get("measurement_sync"):
-    #         protected = self.filtered(
-    #             lambda line: line.session_id
-    #             and line.session_id.status not in ("draft", "completed")
-    #         )
-    #         if protected:
-    #             raise ValidationError(
-    #                 _("Device assembly can be edited only while Draft or after completion before Measure Again.")
-    #             )
-    #     result = super().write(vals)
-    #     self._validate_line_scope()
-    #     return result
+    def _ensure_lines_editable(self, incoming_session_id=False):
+        if self.env.context.get("measurement_sync"):
+            return True
+        incoming_session = self.env["nsp.measurement.session"].browse(
+            int(incoming_session_id or 0)
+        ).exists() if incoming_session_id else self.env["nsp.measurement.session"].browse()
+        if incoming_session:
+            self._ensure_draft_session(incoming_session)
+        for line in self:
+            self._ensure_draft_session(line.session_id)
+        return True
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        prepared = []
+        context_session_id = self._session_id_from_context()
+        for source in vals_list:
+            values = dict(source)
+            if not values.get("session_id") and context_session_id:
+                values["session_id"] = context_session_id
+            session = self.env["nsp.measurement.session"].browse(
+                int(values.get("session_id") or 0)
+            ).exists() if values.get("session_id") else self.env["nsp.measurement.session"].browse()
+            self._ensure_draft_session(session)
+
+            reader = self.env["nsp.device"].browse(values.get("reader_id")).exists()
+            if reader:
+                values.setdefault(
+                    "reader_power_dbm",
+                    int(reader.runtime_power_dbm or reader.power_dbm or 30),
+                )
+                values.setdefault(
+                    "read_interval_ms",
+                    int(reader.runtime_read_interval_ms or reader.read_interval_ms or 200),
+                )
+                values.setdefault("reader_tid_addr", int(reader.tid_addr or 0))
+                values.setdefault("reader_tid_len", int(reader.tid_len or 4))
+            values.setdefault("reader_port_ids", [(0, 0, {"port_no": 1})])
+            prepared.append(values)
+        records = super().create(prepared)
+        records._validate_line_scope()
+        records.mapped("session_id")._validate_reader_scope()
+        return records
+
+    def write(self, vals):
+        self._ensure_lines_editable(vals.get("session_id"))
+        result = super().write(vals)
+        self._validate_line_scope()
+        self.mapped("session_id")._validate_reader_scope()
+        return result
 
     def unlink(self):
-        if not self.env.context.get("measurement_sync"):
-            protected = self.filtered(
-                lambda line: line.session_id
-                and line.session_id.status not in ("draft", "completed")
+        sessions = self.mapped("session_id")
+        self._ensure_lines_editable()
+        result = super().unlink()
+        sessions._validate_reader_scope()
+        return result
+
+    def action_save_device_configuration(self, values=None, port_numbers=None, identity=None, trace_id=None):
+        """Persist one complete Lane Calibration Reader mapping from Device Tree.
+
+        Manual Save is the authoritative persistence boundary for the custom tree.  A
+        Reader mapping is not only its RF/TID parameters: Server, Controller and Reader
+        identities are part of the same contextual Calibration assembly.  Persist all of
+        them atomically so an Edit Reader operation can never remain only in the OWL
+        relational cache while the old database mapping survives.
+        """
+        self.ensure_one()
+        self.check_access("write")
+        self._ensure_draft_session(self.session_id)
+
+        _logger.info(
+            "[NSP MANUAL SAVE][START] trace_id=%s calibration_id=%s calibration_code=%s line_id=%s "
+            "current_server_id=%s current_controller_id=%s current_reader_id=%s "
+            "incoming_identity=%s incoming_values=%s incoming_ports=%s user_id=%s",
+            trace_id or "-",
+            self.session_id.id,
+            self.session_id.code or self.session_id.display_name,
+            self.id,
+            self.edge_server_id.id,
+            self.controller_id.id,
+            self.reader_id.id,
+            identity or {},
+            values or {},
+            port_numbers,
+            self.env.user.id,
+        )
+
+        source = dict(values or {})
+        allowed = {
+            "reader_power_dbm",
+            "read_interval_ms",
+            "reader_tid_addr",
+            "reader_tid_len",
+        }
+        unknown = sorted(set(source) - allowed)
+        if unknown:
+            raise ValidationError(
+                _("Unsupported Reader configuration fields: %s") % ", ".join(unknown)
             )
-            if protected:
-                raise ValidationError(
-                    _("Calibration device lines can be removed only while Draft or after completion before Measure Again.")
-                )
-        return super().unlink()
+
+        identity_source = dict(identity or {})
+        allowed_identity = {"edge_server_id", "controller_id", "reader_id"}
+        unknown_identity = sorted(set(identity_source) - allowed_identity)
+        if unknown_identity:
+            raise ValidationError(
+                _("Unsupported Reader identity fields: %s") % ", ".join(unknown_identity)
+            )
+
+        normalized = {
+            "reader_power_dbm": int(source.get("reader_power_dbm", self.reader_power_dbm or 0)),
+            "read_interval_ms": int(source.get("read_interval_ms", self.read_interval_ms or 0)),
+            "reader_tid_addr": int(source.get("reader_tid_addr", self.reader_tid_addr or 0)),
+            "reader_tid_len": int(source.get("reader_tid_len", self.reader_tid_len or 0)),
+        }
+        for field_name in ("edge_server_id", "controller_id", "reader_id"):
+            if field_name in identity_source:
+                record_id = int(identity_source.get(field_name) or 0)
+                if not record_id:
+                    raise ValidationError(_("Server, Controller and Reader are required."))
+                normalized[field_name] = record_id
+
+        requested_ports = port_numbers
+        if requested_ports is None:
+            requested_ports = self.reader_port_ids.mapped("port_no")
+        try:
+            requested_ports = [int(value) for value in requested_ports]
+        except (TypeError, ValueError):
+            raise ValidationError(_("Reader Ports must be integer values from 1 to 16."))
+        if not requested_ports:
+            raise ValidationError(_("Select at least one Reader Port for every RFID Reader."))
+        if len(requested_ports) != len(set(requested_ports)):
+            raise ValidationError(_("Reader Port must be unique per RFID Reader."))
+        if any(port_no < 1 or port_no > 16 for port_no in requested_ports):
+            raise ValidationError(_("Reader Port must be an integer from 1 to 16."))
+        requested_ports = sorted(requested_ports)
+
+        current_by_no = {int(port.port_no): port for port in self.reader_port_ids}
+        commands = []
+        for port_no, port in current_by_no.items():
+            if port_no not in requested_ports:
+                commands.append((2, port.id, 0))
+        for port_no in requested_ports:
+            if port_no not in current_by_no:
+                commands.append((0, 0, {"port_no": port_no}))
+        if commands:
+            normalized["reader_port_ids"] = commands
+
+        _logger.info(
+            "[NSP MANUAL SAVE][WRITE] trace_id=%s line_id=%s normalized=%s requested_ports=%s port_commands=%s",
+            trace_id or "-", self.id, normalized, requested_ports, commands,
+        )
+        try:
+            self.write(normalized)
+        except Exception:
+            _logger.exception(
+                "[NSP MANUAL SAVE][ERROR] trace_id=%s write failed calibration_id=%s line_id=%s normalized=%s ports=%s",
+                trace_id or "-", self.session_id.id, self.id, normalized, requested_ports,
+            )
+            raise
+
+        result = {
+            "id": self.id,
+            "edge_server_id": self.edge_server_id.id,
+            "controller_id": self.controller_id.id,
+            "reader_id": self.reader_id.id,
+            "reader_power_dbm": int(self.reader_power_dbm or 0),
+            "read_interval_ms": int(self.read_interval_ms or 0),
+            "reader_tid_addr": int(self.reader_tid_addr or 0),
+            "reader_tid_len": int(self.reader_tid_len or 0),
+            "port_numbers": sorted(int(port.port_no) for port in self.reader_port_ids),
+        }
+        _logger.info(
+            "[NSP MANUAL SAVE][SUCCESS] trace_id=%s calibration_id=%s line_id=%s persisted=%s",
+            trace_id or "-", self.session_id.id, self.id, result,
+        )
+        # Return canonical DB-backed configuration for explicit frontend verification.
+        return result
+
+    @api.model
+    def action_create_device_configuration(self, session_id, values=None, port_numbers=None, identity=None, trace_id=None):
+        """Create a complete Reader mapping directly from Device Tree.
+
+        This is used when the OWL One2many row is still virtual.  Persisting through the
+        parent form is intentionally avoided for an existing Lane Calibration because a
+        custom field component must not depend on an unrelated invisible One2many field's
+        save lifecycle.
+        """
+        session = self.env["nsp.measurement.session"].browse(int(session_id or 0)).exists()
+        _logger.info(
+            "[NSP MANUAL SAVE][CREATE START] trace_id=%s calibration_id=%s incoming_identity=%s incoming_values=%s incoming_ports=%s user_id=%s",
+            trace_id or "-", int(session_id or 0), identity or {}, values or {}, port_numbers, self.env.user.id,
+        )
+        if not session:
+            raise ValidationError(_("Lane Calibration was not found."))
+        session.check_access("write")
+        self._ensure_draft_session(session)
+
+        identity_source = dict(identity or {})
+        required_identity = ("edge_server_id", "controller_id", "reader_id")
+        normalized_identity = {}
+        for field_name in required_identity:
+            record_id = int(identity_source.get(field_name) or 0)
+            if not record_id:
+                raise ValidationError(_("Server, Controller and Reader are required."))
+            normalized_identity[field_name] = record_id
+
+        source = dict(values or {})
+        allowed = {
+            "reader_power_dbm",
+            "read_interval_ms",
+            "reader_tid_addr",
+            "reader_tid_len",
+        }
+        unknown = sorted(set(source) - allowed)
+        if unknown:
+            raise ValidationError(
+                _("Unsupported Reader configuration fields: %s") % ", ".join(unknown)
+            )
+
+        requested_ports = [int(value) for value in (port_numbers or [])]
+        if not requested_ports:
+            raise ValidationError(_("Select at least one Reader Port for every RFID Reader."))
+        if len(requested_ports) != len(set(requested_ports)):
+            raise ValidationError(_("Reader Port must be unique per RFID Reader."))
+        if any(port_no < 1 or port_no > 16 for port_no in requested_ports):
+            raise ValidationError(_("Reader Port must be an integer from 1 to 16."))
+
+        create_values = {
+            "session_id": session.id,
+            **normalized_identity,
+            "reader_power_dbm": int(source.get("reader_power_dbm", 30)),
+            "read_interval_ms": int(source.get("read_interval_ms", 200)),
+            "reader_tid_addr": int(source.get("reader_tid_addr", 0)),
+            "reader_tid_len": int(source.get("reader_tid_len", 4)),
+            "reader_port_ids": [(0, 0, {"port_no": port_no}) for port_no in sorted(requested_ports)],
+        }
+        _logger.info(
+            "[NSP MANUAL SAVE][CREATE] trace_id=%s calibration_id=%s create_values=%s",
+            trace_id or "-", session.id, create_values,
+        )
+        try:
+            line = self.create(create_values)
+        except Exception:
+            _logger.exception(
+                "[NSP MANUAL SAVE][CREATE ERROR] trace_id=%s calibration_id=%s create_values=%s",
+                trace_id or "-", session.id, create_values,
+            )
+            raise
+        result = {
+            "id": line.id,
+            "edge_server_id": line.edge_server_id.id,
+            "controller_id": line.controller_id.id,
+            "reader_id": line.reader_id.id,
+            "reader_power_dbm": int(line.reader_power_dbm or 0),
+            "read_interval_ms": int(line.read_interval_ms or 0),
+            "reader_tid_addr": int(line.reader_tid_addr or 0),
+            "reader_tid_len": int(line.reader_tid_len or 0),
+            "port_numbers": sorted(int(port.port_no) for port in line.reader_port_ids),
+        }
+        _logger.info(
+            "[NSP MANUAL SAVE][CREATE SUCCESS] trace_id=%s calibration_id=%s line_id=%s persisted=%s",
+            trace_id or "-", session.id, line.id, result,
+        )
+        return result
 
     @api.onchange("reader_id")
     def _onchange_reader_id(self):
@@ -334,10 +582,13 @@ class NspMeasurementReaderLine(models.Model):
                 or line.reader_id.read_interval_ms
                 or 200
             )
+            line.reader_tid_addr = int(line.reader_id.tid_addr or 0)
+            line.reader_tid_len = int(line.reader_id.tid_len or 4)
 
     @api.constrains(
         "edge_server_id", "controller_id", "reader_id", "reader_port_ids",
-        "reader_power_dbm", "read_interval_ms", "session_id",
+        "reader_power_dbm", "read_interval_ms", "reader_tid_addr",
+        "reader_tid_len", "session_id",
     )
     def _check_line_scope(self):
         self._validate_line_scope()
@@ -386,8 +637,26 @@ class NspMeasurementReaderPort(models.Model):
                     values["port_no"] = next_port if next_port <= 16 else False
         return values
 
+    @api.model
+    def _ensure_ports_editable(self, reader_lines=None):
+        if self.env.context.get("measurement_sync"):
+            return True
+        lines = reader_lines if reader_lines is not None else self.mapped("reader_line_id")
+        for line in lines:
+            line._ensure_draft_session(line.session_id)
+        return True
+
     @api.model_create_multi
     def create(self, vals_list):
+        requested_line_ids = {
+            int(values.get("reader_line_id") or 0)
+            for values in vals_list
+            if int(values.get("reader_line_id") or 0)
+        }
+        requested_lines = self.env["nsp.measurement.reader.line"].browse(
+            sorted(requested_line_ids)
+        ).exists()
+        self._ensure_ports_editable(requested_lines)
         reader_line_ids = {
             int(values.get("reader_line_id") or 0)
             for values in vals_list
@@ -413,6 +682,16 @@ class NspMeasurementReaderPort(models.Model):
         records = super().create(prepared)
         records._validate_port()
         return records
+
+    def write(self, vals):
+        self._ensure_ports_editable()
+        result = super().write(vals)
+        self._validate_port()
+        return result
+
+    def unlink(self):
+        self._ensure_ports_editable()
+        return super().unlink()
 
     @api.depends("port_no")
     def _compute_display_name(self):

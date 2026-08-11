@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="nsp_business_gatekeeper.LaneSequencePreview">
+        <div class="nsp-lane-preview">
+            <t t-if="points.length">
+                <t t-foreach="points" t-as="point" t-key="point.key">
+                    <div class="nsp-lane-preview__card">
+                        <span class="nsp-lane-preview__index" t-esc="point.number"/>
+                        <div class="nsp-lane-preview__body">
+                            <strong t-esc="point.antenna"/>
+                            <span t-if="point.identity" t-esc="point.identity"/>
+                        </div>
+                    </div>
+                    <div t-if="!point.isLast" class="nsp-lane-preview__connector">
+                        <span class="nsp-lane-preview__duration" t-esc="point.durationText"/>
+                        <span class="nsp-lane-preview__arrow">↓</span>
+                    </div>
+                </t>
+            </t>
+            <div t-else="" class="nsp-lane-preview__empty">
+                Add a line to preview this Antenna Sequence.
+            </div>
+        </div>
+    </t>
+</templates>

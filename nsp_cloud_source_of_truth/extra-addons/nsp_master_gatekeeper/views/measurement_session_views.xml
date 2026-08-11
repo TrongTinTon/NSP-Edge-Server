@@ -69,8 +69,10 @@
                            context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_measurement_reader_line_form'}">
                         <list create="1" edit="1" delete="1">
                             <field name="edge_server_id"/>
+                            <field name="edge_server_name"/>
                             <field name="edge_server_status"/>
                             <field name="controller_id"/>
+                            <field name="controller_name"/>
                             <field name="controller_status"/>
                             <field name="reader_id"/>
                             <field name="reader_name"/>

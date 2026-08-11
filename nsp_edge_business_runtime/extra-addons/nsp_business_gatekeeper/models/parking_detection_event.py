@@ -17,7 +17,7 @@ class ParkingDetectionEvent(models.Model):
 
     Controller reports physical reads only. Edge resolves each Reader Port
     against the published Lane Reader Port Timeline, collapses repeated reads,
-    and matches the resulting timeline against explicit Check-in/Check-out
+    and matches the resulting detections against the single Lane Antenna Sequence
     sequences. Raw detections remain on Edge and never synchronize to Cloud.
     """
 
@@ -533,7 +533,14 @@ class ParkingDetectionEvent(models.Model):
 
     @api.model
     def _build_vehicle_sequence_matches(self, lane):
-        if not lane.event_sequence_ids or not lane.timeline_line_ids:
+        """Match the one published Antenna Sequence for each Vehicle TID.
+
+        Direction is deliberately absent here. A successful match means only
+        that the Vehicle crossed this Lane; Check-in/Check-out is resolved later
+        from the Vehicle parking state.
+        """
+        rows = lane.antenna_sequence_ids.sorted("sequence")
+        if len(rows) < 2:
             return []
         vehicle_events = self.search([
             ("lane_id", "=", lane.id),
@@ -545,80 +552,59 @@ class ParkingDetectionEvent(models.Model):
         if not vehicle_events:
             return []
 
-        sequence_specs = []
-        for event_type in ("check_in", "check_out"):
-            rows = lane.event_sequence_ids.filtered(
-                lambda row: row.sequence_type == event_type
-            ).sorted("sequence")
-            if rows:
-                sequence_specs.append((
-                    event_type,
-                    [
-                        (row.reader_id.id, int(row.port_no or 0))
-                        for row in rows
-                    ],
-                    [
-                        0.0 if index == 0 else max(
-                            0.001, lane.allowed_duration_for_direction_step(row)
-                        )
-                        for index, row in enumerate(rows)
-                    ],
-                ))
+        expected_keys = [
+            (row.reader_id.id, int(row.port_no or 0)) for row in rows
+        ]
+        allowed_durations = [
+            0.0 if index == 0 else max(0.001, lane.allowed_duration_for_step(row.sequence))
+            for index, row in enumerate(rows)
+        ]
 
         events_by_tid = {}
         for event in vehicle_events:
             events_by_tid.setdefault(event.tid, []).append(event)
 
         matches = []
+        length = len(expected_keys)
         for tid, raw_events in events_by_tid.items():
             collapsed = []
             for event in raw_events:
                 key = (event.reader_id.id, int(event.port_no or 0))
                 if collapsed:
                     previous = (
-                        collapsed[-1].reader_id.id,
-                        int(collapsed[-1].port_no or 0),
+                        collapsed[-1].reader_id.id, int(collapsed[-1].port_no or 0)
                     )
                     if previous == key:
                         continue
                 collapsed.append(event)
-            for event_type, expected_keys, allowed_durations in sequence_specs:
-                length = len(expected_keys)
-                if length < 2 or len(collapsed) < length:
+            if len(collapsed) < length:
+                continue
+            for offset in range(0, len(collapsed) - length + 1):
+                window = collapsed[offset:offset + length]
+                actual_keys = [
+                    (event.reader_id.id, int(event.port_no or 0)) for event in window
+                ]
+                if actual_keys != expected_keys:
                     continue
-                for offset in range(0, len(collapsed) - length + 1):
-                    window = collapsed[offset:offset + length]
-                    actual_keys = [
-                        (event.reader_id.id, int(event.port_no or 0))
-                        for event in window
-                    ]
-                    if actual_keys != expected_keys:
-                        continue
-                    total_allowed = 0.0
-                    valid = True
-                    for index in range(1, length):
-                        allowed = allowed_durations[index]
-                        gap = (
-                            window[index].detected_at
-                            - window[index - 1].detected_at
-                        ).total_seconds()
-                        if gap < 0 or gap > allowed:
-                            valid = False
-                            break
-                        total_allowed += allowed
-                    if not valid:
-                        continue
-                    matches.append({
-                        "tid": tid,
-                        "event_type": event_type,
-                        "duration_seconds": max(0.001, total_allowed),
-                        "start_at": window[0].detected_at,
-                        "end_at": window[-1].detected_at,
-                        "events": self.browse([event.id for event in window]),
-                    })
-        matches.sort(
-            key=lambda item: (item["end_at"], item["start_at"], item["tid"])
-        )
+                total_allowed = 0.0
+                valid = True
+                for index in range(1, length):
+                    allowed = allowed_durations[index]
+                    gap = (window[index].detected_at - window[index - 1].detected_at).total_seconds()
+                    if gap < 0 or gap > allowed:
+                        valid = False
+                        break
+                    total_allowed += allowed
+                if not valid:
+                    continue
+                matches.append({
+                    "tid": tid,
+                    "duration_seconds": max(0.001, total_allowed),
+                    "start_at": window[0].detected_at,
+                    "end_at": window[-1].detected_at,
+                    "events": self.browse([event.id for event in window]),
+                })
+        matches.sort(key=lambda item: (item["end_at"], item["start_at"], item["tid"]))
         return matches
 
     @api.model
@@ -675,34 +661,10 @@ class ParkingDetectionEvent(models.Model):
             return transactions
 
         user_events = self._pending_user_pool(lane)
-        vehicle_events = self.browse([
-            event.id
-            for match in matches
-            for event in match["events"]
-        ])
         consumed_user_ids = set()
         blocked_tids = set()
         Transaction = self.env["nsp.parking.transaction"].sudo()
         layout_revision = int(lane.parking_area_id.published_revision or 0)
-        vehicle_tids = sorted({str(match.get("tid") or "").strip() for match in matches if match.get("tid")})
-        earliest_event_time = min(
-            match["end_at"] - timedelta(seconds=match["duration_seconds"])
-            for match in matches
-        )
-        latest_event_time = max(match["end_at"] for match in matches)
-        recent_transactions = Transaction.search([
-            ("lane_id", "=", lane.id),
-            ("layout_revision", "=", layout_revision),
-            ("event_type", "in", list({match["event_type"] for match in matches})),
-            ("vehicle_tid", "in", vehicle_tids),
-            ("event_time", ">=", earliest_event_time),
-            ("event_time", "<=", latest_event_time),
-        ], order="event_time desc, id desc") if vehicle_tids else Transaction.browse()
-        recent_by_key = {}
-        for transaction in recent_transactions:
-            recent_by_key.setdefault(
-                (transaction.event_type, transaction.vehicle_tid), []
-            ).append(transaction)
 
         for match in matches:
             tid = match["tid"]
@@ -716,73 +678,61 @@ class ParkingDetectionEvent(models.Model):
             ):
                 continue
 
-            event_type = match["event_type"]
             duration = match["duration_seconds"]
-
-            # Use the calibrated sequence window as the physical debounce window too.
-            # This prevents lingering reads from creating duplicate business transactions
-            # without reintroducing a global fixed suppression value.
             vehicle_event = movement_events.filtered(
                 lambda rec: bool(rec.vehicle_id)
             ).sorted(key=lambda rec: (rec.detected_at, rec.id))[-1:]
+            vehicle = vehicle_event.vehicle_id if vehicle_event else self.env["nsp.vehicle"].browse()
             vehicle_tid = vehicle_event.tid if vehicle_event else False
+            if not vehicle:
+                movement_events.write({
+                    "state": "error",
+                    "error_code": "vehicle_not_found",
+                    "error_message": _("Vehicle identity is missing for the matched Antenna Sequence."),
+                })
+                continue
+
+            # Vehicle-wide serialization is required because two physical Lanes
+            # can complete at nearly the same time. Resolve direction only after
+            # taking the continuity lock.
+            Transaction._acquire_vehicle_continuity_lock(vehicle)
+            event_type = Transaction._event_type_from_vehicle_state(
+                vehicle, match["end_at"]
+            )
+            continuity_action, continuity_code, _continuity_message = (
+                Transaction._vehicle_continuity_decision(
+                    vehicle, event_type, match["end_at"], lane.parking_area_id
+                )
+            )
+
             window_start = match["end_at"] - timedelta(seconds=duration)
-            recent = Transaction.browse()
-            if vehicle_tid:
-                recent = next((
-                    transaction
-                    for transaction in recent_by_key.get((event_type, vehicle_tid), [])
-                    if window_start <= transaction.event_time <= match["end_at"]
-                ), Transaction.browse())
+            recent = Transaction.search([
+                ("lane_id", "=", lane.id),
+                ("layout_revision", "=", layout_revision),
+                ("event_type", "=", event_type),
+                ("vehicle_tid", "=", vehicle_tid),
+                ("event_time", ">=", window_start),
+                ("event_time", "<=", match["end_at"]),
+            ], order="event_time desc, id desc", limit=1) if vehicle_tid else Transaction.browse()
             if recent:
                 movement_events.write({"state": "processed", "transaction_id": recent.id})
                 continue
 
-            vehicle = movement_events.mapped("vehicle_id")[:1]
-            continuity_action = continuity_code = False
-            if vehicle:
-                Transaction._acquire_vehicle_continuity_lock(vehicle)
-                continuity_action, continuity_code, _continuity_message = (
-                    Transaction._vehicle_continuity_decision(
-                        vehicle,
-                        event_type,
-                        match["end_at"],
-                        lane.parking_area_id,
-                    )
-                )
+            if continuity_action == "ignore":
+                movement_events.write({"state": "processed", "transaction_id": False})
+                continue
 
             matched_user_events = self.browse()
             if event_type == "check_out":
                 deadline = match["end_at"] + timedelta(seconds=duration)
                 deadline_reached = bool(finalize_expired and now >= deadline)
-                if (
-                    continuity_action == "ignore"
-                    and continuity_code == "check_out_without_check_in"
-                    and not deadline_reached
-                ):
-                    # Allow a short, configuration-bound reconciliation window
-                    # for an earlier Check-in arriving from another Lane/request.
-                    blocked_tids.add(tid)
-                    continue
-
-            if continuity_action == "ignore":
-                # Invalid sequence data is consumed at the detection layer only.
-                # It must not create a Parking Transaction or a Live Monitor event.
-                movement_events.write({"state": "processed", "transaction_id": False})
-                continue
-
-            if event_type == "check_out":
                 candidates = self._user_candidates_from_pool(
-                    user_events,
-                    match["end_at"],
-                    duration,
-                    consumed_user_ids,
+                    user_events, match["end_at"], duration, consumed_user_ids
                 )
                 candidate_users = candidates.mapped("user_id")
                 authorized_user_ids = self._authorized_user_ids(vehicle, match["end_at"])
                 has_one_authorized_identity = (
-                    len(candidate_users) == 1
-                    and candidate_users.id in authorized_user_ids
+                    len(candidate_users) == 1 and candidate_users.id in authorized_user_ids
                 )
                 has_ambiguous_identities = len(candidate_users) > 1
                 if not (
@@ -790,9 +740,6 @@ class ParkingDetectionEvent(models.Model):
                     or has_ambiguous_identities
                     or deadline_reached
                 ):
-                    # Wait for an owner/active borrower until the calibrated
-                    # sequence window expires. Multiple identities are denied
-                    # immediately because later reads cannot remove ambiguity.
                     blocked_tids.add(tid)
                     continue
                 matched_user_events = candidates
@@ -804,8 +751,7 @@ class ParkingDetectionEvent(models.Model):
                         event_type,
                         user_events=matched_user_events,
                         observed_duration_seconds=max(
-                            0.0,
-                            (match["end_at"] - match["start_at"]).total_seconds(),
+                            0.0, (match["end_at"] - match["start_at"]).total_seconds()
                         ),
                         allowed_duration_seconds=duration,
                     )
@@ -813,20 +759,16 @@ class ParkingDetectionEvent(models.Model):
                     consumed_user_ids.update(matched_user_events.ids)
             except Exception:
                 _logger.exception(
-                    "Parking sequence processing failed: lane=%s event_type=%s ids=%s",
+                    "Parking Antenna Sequence processing failed: lane=%s event_type=%s ids=%s",
                     lane.id, event_type, movement_events.ids,
                 )
                 message = _("Parking transaction processing failed. See Edge logs for details.")
                 movement_events.write({
-                    "state": "error",
-                    "error_code": "processing_error",
-                    "error_message": message,
+                    "state": "error", "error_code": "processing_error", "error_message": message,
                 })
                 if matched_user_events:
                     matched_user_events.write({
-                        "state": "error",
-                        "error_code": "processing_error",
-                        "error_message": message,
+                        "state": "error", "error_code": "processing_error", "error_message": message,
                     })
                     consumed_user_ids.update(matched_user_events.ids)
 
