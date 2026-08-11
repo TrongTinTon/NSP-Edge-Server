@@ -224,6 +224,7 @@ class NspMeasurementSessionTimeline(models.Model):
             }
 
         wizard = self.env["nsp.lane.setup.wizard"].create({
+            "source_scope": "calibration",
             "session_id": self.id,
             "edge_server_id": edge_server_id,
             "controller_id": controller_id,

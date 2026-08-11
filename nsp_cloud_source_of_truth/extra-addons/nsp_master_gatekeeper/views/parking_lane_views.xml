@@ -25,6 +25,15 @@
     <field name="model">nsp.parking.lane</field>
     <field name="arch" type="xml">
       <form string="Lane">
+        <header>
+          <button name="action_open_lane_setup"
+                  type="object"
+                  string="Lane Setup"
+                  icon="fa-sliders"
+                  class="btn btn-primary"
+                  invisible="parking_area_state != 'draft'"
+                  groups="nsp_core.group_nsp_it_parking"/>
+        </header>
         <sheet>
           <field name="available_controller_ids" invisible="1"/>
           <field name="available_edge_server_ids" invisible="1"/>

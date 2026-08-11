@@ -20,7 +20,7 @@
                 </t>
             </t>
             <div t-else="" class="nsp-lane-preview__empty">
-                Add Antennas to preview this Direction.
+                Add lines to preview this Direction.
             </div>
         </div>
     </t>

@@ -9,8 +9,18 @@ class NspLaneSetupWizard(models.TransientModel):
     _name = "nsp.lane.setup.wizard"
     _description = "Lane Setup"
 
+    source_scope = fields.Selection(
+        [
+            ("calibration", "Lane Calibration"),
+            ("parking_layout", "Parking Layout"),
+        ],
+        string="Setup Source",
+        required=True,
+        default="calibration",
+        readonly=True,
+    )
     session_id = fields.Many2one(
-        "nsp.measurement.session", required=True, readonly=True, ondelete="cascade"
+        "nsp.measurement.session", readonly=True, ondelete="cascade"
     )
     edge_server_id = fields.Many2one(
         "nsp.edge.server", string="Server", required=True, readonly=True
@@ -58,11 +68,41 @@ class NspLaneSetupWizard(models.TransientModel):
         help="Presentation-only anchor for the live Lane Direction preview widget.",
     )
 
-    @api.depends("device_line_ids.reader_id")
+    @api.depends("source_scope", "session_id", "session_id.reader_line_ids.reader_id", "session_id.reader_line_ids.reader_id.active")
     def _compute_available_reader_ids(self):
-        """Limit Direction Reader choices to Readers in Device Configuration."""
+        """Apply Reader scope according to the Lane Setup entry point.
+
+        * Lane Calibration -> only Readers configured on that Calibration.
+        * Parking Layout   -> every active Reader is selectable.
+        """
+        Device = self.env["nsp.device"]
+        unrestricted = self.filtered(lambda wizard: wizard.source_scope != "calibration")
+        all_active = (
+            Device.search([("active", "=", True)])
+            if unrestricted
+            else Device.browse()
+        )
         for wizard in self:
-            wizard.available_reader_ids = wizard.device_line_ids.mapped("reader_id")
+            if wizard.source_scope == "calibration" and wizard.session_id:
+                wizard.available_reader_ids = wizard.session_id.reader_line_ids.mapped(
+                    "reader_id"
+                ).filtered("active")
+            else:
+                wizard.available_reader_ids = all_active
+
+    def _allowed_reader_port_pairs(self):
+        """Return the calibrated Reader/Port allowlist, or ``None`` when unrestricted."""
+        self.ensure_one()
+        if self.source_scope != "calibration":
+            return None
+        if not self.session_id:
+            return set()
+        return {
+            (line.reader_id.id, int(port.port_no or 0))
+            for line in self.session_id.reader_line_ids
+            for port in line.reader_port_ids
+            if line.reader_id and int(port.port_no or 0) > 0
+        }
 
     def _switch_section(self, section):
         self.ensure_one()
@@ -127,8 +167,13 @@ class NspLaneSetupDeviceLine(models.TransientModel):
     wizard_id = fields.Many2one(
         "nsp.lane.setup.wizard", required=True, ondelete="cascade", index=True
     )
+    available_reader_ids = fields.Many2many(
+        "nsp.device",
+        related="wizard_id.available_reader_ids",
+        readonly=True,
+    )
     reader_id = fields.Many2one(
-        "nsp.device", string="Reader", required=True, readonly=True
+        "nsp.device", string="Reader", required=True
     )
     port_summary = fields.Char(string="Ports", compute="_compute_port_summary")
     power_dbm = fields.Integer(string="Power (dBm)", required=True, default=30)
@@ -208,22 +253,24 @@ class NspLaneSetupDirectionLine(models.TransientModel):
                     "message": _("Antenna/Port must be between 1 and 16."),
                 }
             }
-        wizard = self.wizard_id
-        session = wizard.session_id if wizard else False
-        if self.reader_id and self.port_no and session:
-            allowed = {
-                (reader_line.reader_id.id, int(port.port_no or 0))
-                for reader_line in session.reader_line_ids
-                for port in reader_line.reader_port_ids
-            }
-            if (self.reader_id.id, int(self.port_no or 0)) not in allowed:
-                self.port_no = False
+        if self.reader_id and self.port_no and self.wizard_id.source_scope == "calibration":
+            allowed_pairs = self.wizard_id._allowed_reader_port_pairs()
+            key = (self.reader_id.id, int(self.port_no or 0))
+            if key not in allowed_pairs:
+                allowed_ports = sorted(
+                    port_no
+                    for reader_id, port_no in allowed_pairs
+                    if reader_id == self.reader_id.id
+                )
                 return {
                     "warning": {
                         "title": _("Antenna outside Lane Calibration"),
                         "message": _(
-                            "Select only a Reader and Antenna/Port configured in this Lane Calibration."
-                        ),
+                            "This Lane Setup was opened from Lane Calibration. "
+                            "Use one of the calibrated Antennas for this Reader: %(ports)s."
+                        ) % {
+                            "ports": ", ".join("P%s" % port for port in allowed_ports) or _("none"),
+                        },
                     }
                 }
         return False

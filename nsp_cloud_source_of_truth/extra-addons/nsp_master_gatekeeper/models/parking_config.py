@@ -697,6 +697,68 @@ class NspParkingLane(models.Model):
         })
         return record.id, record.display_name
 
+    def action_open_lane_setup(self):
+        """Open unrestricted Lane Setup from Parking Layout/Lane management.
+
+        This entry point is intentionally independent from Lane Calibration. It
+        may select any active Reader and any valid antenna/port.
+        """
+        self.ensure_one()
+        self.check_access("write")
+        if self.parking_area_id.state != "draft":
+            raise ValidationError(_(
+                "Lane Setup can be changed only while Parking Layout is Draft."
+            ))
+
+        device_lines = [
+            (0, 0, {
+                "reader_id": config.reader_id.id,
+                "power_dbm": int(config.power_dbm or 0),
+                "read_interval_ms": int(config.read_interval_ms or 200),
+                "tid_start_address": int(config.tid_start_address or 0),
+                "tid_length": int(config.tid_length or 4),
+            })
+            for config in self.reader_config_ids.sorted(
+                lambda row: (row.reader_id.id, row.id)
+            )
+        ]
+        lane_in = self.checkin_sequence_ids.sorted(
+            lambda row: (row.sequence or 0, row.id)
+        )
+        direction_lines = [
+            (0, 0, {
+                "sequence": index,
+                "reader_id": point.reader_id.id,
+                "port_no": int(point.port_no or 0),
+                "duration_ms": int(round(float(point.duration_from_previous or 0.0) * 1000.0)),
+            })
+            for index, point in enumerate(lane_in, start=1)
+        ]
+
+        wizard = self.env["nsp.lane.setup.wizard"].create({
+            "source_scope": "parking_layout",
+            "lane_id": self.id,
+            "edge_server_id": self.edge_server_id.id,
+            "controller_id": self.controller_id.id,
+            "device_line_ids": device_lines,
+            "direction_line_ids": direction_lines,
+        })
+        return {
+            "type": "ir.actions.act_window",
+            "name": _("Lane Setup"),
+            "res_model": "nsp.lane.setup.wizard",
+            "res_id": wizard.id,
+            "view_mode": "form",
+            "views": [(
+                self.env.ref(
+                    "nsp_master_gatekeeper.view_nsp_lane_direction_setup_wizard_form"
+                ).id,
+                "form",
+            )],
+            "target": "new",
+            "context": dict(self.env.context),
+        }
+
     @api.model
     def _resolve_quick_create_parking_area(self, edge_server_id, controller_id):
         """Resolve an unambiguous Draft layout without exposing it in Lane Setup.
@@ -790,28 +852,23 @@ class NspParkingLane(models.Model):
 
     def _validate_reader_configs(self):
         for lane in self:
-            timeline_readers = lane.timeline_line_ids.mapped("reader_id")
+            direction_readers = (
+                lane.checkin_sequence_ids.mapped("reader_id")
+                | lane.checkout_sequence_ids.mapped("reader_id")
+            )
             config_by_reader = {
                 config.reader_id.id: config for config in lane.reader_config_ids
             }
-            missing = timeline_readers.filtered(
+            missing = direction_readers.filtered(
                 lambda reader: reader.id not in config_by_reader
-            )
-            stale = lane.reader_config_ids.filtered(
-                lambda config: config.reader_id not in timeline_readers
             )
             if missing:
                 raise ValidationError(
-                    _("Lane %(lane)s is missing Applied Reader Configuration for: %(readers)s")
+                    _("Lane %(lane)s is missing Device Configuration for: %(readers)s")
                     % {
                         "lane": lane.display_name,
                         "readers": ", ".join(missing.mapped("display_name")),
                     }
-                )
-            if stale:
-                raise ValidationError(
-                    _("Lane %(lane)s contains Reader Configuration not used by its Timeline.")
-                    % {"lane": lane.display_name}
                 )
             lane.reader_config_ids._validate_parameter_ranges()
         return True
@@ -876,8 +933,8 @@ class NspParkingLane(models.Model):
                 issues.append(_("Timeline contains duplicate Reader Ports"))
             timeline_reader_ids = set(timeline.mapped("reader_id").ids)
             configured_reader_ids = set(lane.reader_config_ids.mapped("reader_id").ids)
-            if timeline_reader_ids != configured_reader_ids:
-                issues.append(_("Applied Reader Configuration does not match Timeline Readers"))
+            if not timeline_reader_ids.issubset(configured_reader_ids):
+                issues.append(_("Device Configuration is missing one or more Readers used by Directions"))
             has_checkin = bool(lane.checkin_sequence_ids)
             has_checkout = bool(lane.checkout_sequence_ids)
             if not has_checkin and not has_checkout:
@@ -936,13 +993,13 @@ class NspParkingLane(models.Model):
         self._validate_lane_assembly()
 
     def _validate_timeline_and_sequences(self):
-        """Validate Lane Setup against the calibrated hardware allowlist.
+        """Validate manual Lane In/Lane Out configuration.
 
-        The legacy ``timeline_line_ids`` model is retained in NSP 19.x only as
-        the set of Reader/Ports made available by Lane Calibration. Lane In and
-        Lane Out are independent paths: their order and duration do not need to
-        be adjacent, reversed, or otherwise derived from the Calibration
-        Detection Timeline.
+        The legacy ``timeline_line_ids`` model is retained in NSP 19.x as a
+        compatibility union of Reader/Ports used by Lane directions. Lane
+        Direct Parking Layout configuration is not restricted by Lane Calibration.
+        Lane Setup opened from a Calibration enforces its own transient Reader/Port scope
+        before writing these persistent Lane records.
         """
         for lane in self:
             allowed_rows = lane.timeline_line_ids.sorted(
@@ -956,24 +1013,16 @@ class NspParkingLane(models.Model):
                 range(1, len(allowed_rows) + 1)
             ):
                 raise ValidationError(_(
-                    "Calibration Antenna Scope Order must be contiguous and start at 1."
+                    "Lane Antenna Scope Order must be contiguous and start at 1."
                 ))
             if len(allowed_keys) != len(set(allowed_keys)):
                 raise ValidationError(_(
-                    "A Reader Port can appear only once in the Calibration Antenna Scope."
+                    "A Reader Port can appear only once in the Lane Antenna Scope."
                 ))
             for line in allowed_rows:
                 if not line.reader_id.active:
                     raise ValidationError(_(
-                        "Every calibrated Reader used by Lane Setup must be active."
-                    ))
-                if (
-                    not line.reader_id.whitelist_id
-                    or not line.reader_id.whitelist_id.active
-                    or line.reader_id.whitelist_id.device_type_code != "RFID_READER"
-                ):
-                    raise ValidationError(_(
-                        "Every Lane Setup Reader must be an active RFID Reader from Device Whitelist."
+                        "Every Reader used by Lane Setup must be active."
                     ))
                 if int(line.port_no or 0) < 1 or int(line.port_no or 0) > 16:
                     raise ValidationError(_(
@@ -1009,7 +1058,7 @@ class NspParkingLane(models.Model):
                 outside = [key for key in sequence_keys if key not in allowed]
                 if outside:
                     raise ValidationError(
-                        _("%(label)s can use only Readers and Antennas from Lane Calibration.")
+                        _("%(label)s contains a Reader/Antenna outside the Lane hardware scope.")
                         % {"label": label}
                     )
                 if float(ordered[0].duration_from_previous or 0.0) != 0.0:
@@ -1101,15 +1150,18 @@ class NspParkingLaneReaderConfig(models.Model):
     ]
 
     @api.depends(
-        "lane_id.timeline_line_ids.reader_id",
-        "lane_id.timeline_line_ids.port_no",
+        "lane_id.checkin_sequence_ids.reader_id",
+        "lane_id.checkin_sequence_ids.port_no",
+        "lane_id.checkout_sequence_ids.reader_id",
+        "lane_id.checkout_sequence_ids.port_no",
         "reader_id",
     )
     def _compute_port_summary(self):
         for config in self:
+            rows = config.lane_id.checkin_sequence_ids | config.lane_id.checkout_sequence_ids
             ports = sorted({
                 int(line.port_no or 0)
-                for line in config.lane_id.timeline_line_ids
+                for line in rows
                 if line.reader_id == config.reader_id and int(line.port_no or 0) > 0
             })
             config.port_summary = ", ".join("P%s" % port for port in ports)
@@ -1245,12 +1297,6 @@ class NspParkingLaneTimeline(models.Model):
                 raise ValidationError(_("Reader Port must be between 1 and 16."))
             if not record.reader_id.active:
                 raise ValidationError(_("Timeline Reader must be active."))
-            if (
-                not record.reader_id.whitelist_id
-                or not record.reader_id.whitelist_id.active
-                or record.reader_id.whitelist_id.device_type_code != "RFID_READER"
-            ):
-                raise ValidationError(_("Timeline Reader must be an active RFID Reader from Device Whitelist."))
 
 
 class NspParkingLaneEventSequence(models.Model):
@@ -1331,7 +1377,7 @@ class NspParkingLaneEventSequence(models.Model):
             }
             if (record.reader_id.id, int(record.port_no or 0)) not in allowed:
                 raise ValidationError(_(
-                    "Lane Direction can use only Reader Ports from Lane Calibration."
+                    "Lane Direction Reader/Antenna must belong to this Lane hardware scope."
                 ))
             if record.sequence == 1 and float(record.duration_from_previous or 0.0) != 0.0:
                 raise ValidationError(_("The first Lane Direction Antenna must use 0 ms Max Duration."))

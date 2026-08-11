@@ -19,16 +19,18 @@ class LaneSetupService:
         device_lines = wizard.device_line_ids
         lane = self._validate_input(wizard, device_lines, direction_lines)
 
-        # Lane Calibration is the hardware/antenna allowlist only. Lane In and
-        # Lane Out are independent operator-defined paths and may use any
-        # calibrated Reader/Port in any order with their own durations.
+        # Lane Setup scope depends on the entry point:
+        # - Lane Calibration: use only Readers/Antenna ports configured on that session.
+        # - Parking Layout: allow all active Readers and any valid antenna port.
         effective_device_lines = device_lines
 
         values = {
             "reader_config_ids": self._build_device_commands(
                 wizard, effective_device_lines
             ),
-            "timeline_line_ids": self._build_calibration_scope_commands(wizard),
+            "timeline_line_ids": self._build_lane_scope_commands(
+                lane, wizard.direction, direction_lines
+            ),
             "setup_state": "applied" if apply_setup else "draft",
             "setup_applied_at": fields.Datetime.now() if apply_setup else False,
         }
@@ -53,19 +55,20 @@ class LaneSetupService:
             wizard.direction, wizard.direction
         )
         action_label = _("applied") if apply_setup else _("saved as draft")
-        wizard.session_id.message_post(
-            body=_(
-                "Lane Setup %(action)s for %(lane)s · %(direction)s with "
-                "%(points)s Antenna points and %(readers)s Reader configuration(s). "
-                "Lane Calibration observation data was not modified."
-            ) % {
-                "action": action_label,
-                "direction": direction_label,
-                "lane": lane.display_name,
-                "points": len(direction_lines),
-                "readers": len(effective_device_lines),
-            }
-        )
+        if wizard.session_id:
+            wizard.session_id.message_post(
+                body=_(
+                    "Lane Setup %(action)s for %(lane)s · %(direction)s with "
+                    "%(points)s Antenna points and %(readers)s Reader configuration(s). "
+                    "Lane Calibration observation data was not modified."
+                ) % {
+                    "action": action_label,
+                    "direction": direction_label,
+                    "lane": lane.display_name,
+                    "points": len(direction_lines),
+                    "readers": len(effective_device_lines),
+                }
+            )
         return {
             "type": "ir.actions.act_window_close",
             "infos": {
@@ -97,22 +100,14 @@ class LaneSetupService:
             raise ValidationError(_("The selected Lane is not assigned to a Parking Layout."))
         if lane.parking_area_id.state != "draft":
             raise ValidationError(_("Lane Setup can be changed only while Parking Layout is Draft."))
-        if lane.edge_server_id != wizard.edge_server_id or lane.controller_id != wizard.controller_id:
-            raise ValidationError(_(
-                "The selected Lane must use the same Server and Controller as Lane Calibration."
-            ))
 
-        calibrated_keys = {
-            (reader_line.reader_id.id, int(port.port_no or 0))
-            for reader_line in wizard.session_id.reader_line_ids
-            for port in reader_line.reader_port_ids
-            if reader_line.reader_id and int(port.port_no or 0) > 0
-        }
-        calibrated_reader_ids = {reader_id for reader_id, _port in calibrated_keys}
-        if not calibrated_keys:
-            raise ValidationError(_(
-                "Lane Calibration has no configured Reader/Antenna scope."
-            ))
+        if wizard.source_scope == "calibration":
+            if not wizard.session_id:
+                raise ValidationError(_("Lane Calibration scope requires a Calibration session."))
+            if lane.edge_server_id != wizard.edge_server_id or lane.controller_id != wizard.controller_id:
+                raise ValidationError(_(
+                    "The selected Lane must use the same Server and Controller as this Lane Calibration."
+                ))
 
         point_keys = [
             (line.reader_id.id, int(line.port_no or 0))
@@ -122,13 +117,29 @@ class LaneSetupService:
             raise ValidationError(_("Every Antenna requires a Reader."))
         if any(port < 1 or port > 16 for _reader_id, port in point_keys):
             raise ValidationError(_("Every Antenna/Port must be between 1 and 16."))
+
+        allowed_reader_ids = set(wizard.available_reader_ids.ids)
+        selected_reader_ids = set(device_lines.mapped("reader_id").ids) | set(
+            direction_lines.mapped("reader_id").ids
+        )
+        outside_reader_ids = selected_reader_ids - allowed_reader_ids
+        if outside_reader_ids:
+            if wizard.source_scope == "calibration":
+                raise ValidationError(_(
+                    "Lane Setup opened from Lane Calibration can use only Readers configured in that Calibration."
+                ))
+            raise ValidationError(_("Lane Setup can use only active Readers."))
+
+        allowed_pairs = wizard._allowed_reader_port_pairs()
+        if allowed_pairs is not None:
+            outside_pairs = [key for key in point_keys if key not in allowed_pairs]
+            if outside_pairs:
+                raise ValidationError(_(
+                    "Lane Setup opened from Lane Calibration can use only Reader/Antenna ports configured in that Calibration."
+                ))
+
         if len(point_keys) != len(set(point_keys)):
             raise ValidationError(_("Each Antenna can appear only once in a Lane Direction."))
-        outside_calibration = [key for key in point_keys if key not in calibrated_keys]
-        if outside_calibration:
-            raise ValidationError(_(
-                "Lane Direction can use only Readers and Antennas configured in this Lane Calibration."
-            ))
         if int(direction_lines[0].duration_ms or 0) != 0:
             raise ValidationError(_("The first Antenna must use 0 ms Max Duration."))
         for line in direction_lines[1:]:
@@ -138,10 +149,10 @@ class LaneSetupService:
                 ))
 
         configured_reader_ids = set(device_lines.mapped("reader_id").ids)
-        outside_reader_ids = configured_reader_ids - calibrated_reader_ids
-        if outside_reader_ids:
+        inactive_readers = device_lines.mapped("reader_id").filtered(lambda reader: not reader.active)
+        if inactive_readers:
             raise ValidationError(_(
-                "Device Configuration can use only Readers configured in this Lane Calibration."
+                "Device Configuration can use only active Readers."
             ))
         direction_reader_ids = set(direction_lines.mapped("reader_id").ids)
         missing_reader_ids = direction_reader_ids - configured_reader_ids
@@ -163,34 +174,44 @@ class LaneSetupService:
         return lane
 
     @staticmethod
-    def _build_calibration_scope_commands(wizard):
-        """Persist the calibrated Reader/Port allowlist on the Lane.
+    def _build_lane_scope_commands(lane, direction, direction_lines):
+        """Build the NSP 19.x compatibility Reader/Port scope from Lane paths.
 
-        ``nsp.parking.lane.timeline`` is retained as an NSP 19.x compatibility
-        container for the allowed physical Reader/Ports. Direction order and
-        timing are authoritative on each Lane In/Lane Out event sequence.
+        This compatibility Timeline is the union of the Direction currently
+        being saved and the already persisted opposite Direction. Entry-point
+        scoping is validated before persistence; direction order/timing remains
+        authoritative on the Lane In/Lane Out sequence records.
         """
         rows = []
         seen = set()
-        for reader_line in wizard.session_id.reader_line_ids.sorted(
-            lambda row: (row.reader_id.id, row.id)
-        ):
-            for port in reader_line.reader_port_ids.sorted(
-                lambda row: (int(row.port_no or 0), row.id)
-            ):
-                key = (reader_line.reader_id.id, int(port.port_no or 0))
-                if not key[0] or key[1] <= 0 or key in seen:
+
+        if direction == "lane_in":
+            existing = lane.checkout_sequence_ids.sorted(
+                lambda row: (row.sequence or 0, row.id)
+            )
+        else:
+            existing = lane.checkin_sequence_ids.sorted(
+                lambda row: (row.sequence or 0, row.id)
+            )
+
+        sources = [
+            [(line.reader_id.id, int(line.port_no or 0)) for line in direction_lines],
+            [(line.reader_id.id, int(line.port_no or 0)) for line in existing],
+        ]
+        for source in sources:
+            for reader_id, port_no in source:
+                key = (reader_id, port_no)
+                if not reader_id or port_no <= 0 or key in seen:
                     continue
                 seen.add(key)
                 rows.append(key)
+
         commands = [(5, 0, 0)]
         for index, (reader_id, port_no) in enumerate(rows, start=1):
             commands.append((0, 0, {
                 "sequence": index,
                 "reader_id": reader_id,
                 "port_no": port_no,
-                # Compatibility field only. Direction timing is stored on the
-                # Lane In/Lane Out sequence step, not on this allowlist.
                 "duration_from_previous": 0.0,
             }))
         return commands
@@ -200,15 +221,16 @@ class LaneSetupService:
         now = fields.Datetime.now()
         commands = [(5, 0, 0)]
         for line in device_lines.sorted(lambda row: (row.reader_id.id, row.id)):
+            is_calibration = wizard.source_scope == "calibration" and wizard.session_id
             commands.append((0, 0, {
                 "reader_id": line.reader_id.id,
                 "power_dbm": int(line.power_dbm or 0),
                 "read_interval_ms": int(line.read_interval_ms or 200),
                 "tid_start_address": int(line.tid_start_address or 0),
                 "tid_length": int(line.tid_length or 4),
-                "source_type": "lane_calibration",
-                "source_reference": wizard.session_id.measurement_code or "",
-                "source_revision": int(wizard.session_id.revision or 1),
+                "source_type": "lane_calibration" if is_calibration else "manual",
+                "source_reference": wizard.session_id.measurement_code if is_calibration else False,
+                "source_revision": int(wizard.session_id.revision or 0) if is_calibration else 0,
                 "applied_at": now,
             }))
         return commands

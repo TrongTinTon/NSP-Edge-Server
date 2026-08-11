@@ -46,3 +46,5 @@ access_nsp_parking_lane_reader_config_operator,nsp.parking.lane.reader.config Op
 access_nsp_lane_direction_setup_wizard_it,Lane Setup Wizard IT,nsp_master_gatekeeper.model_nsp_lane_setup_wizard,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_lane_direction_setup_wizard_line_it,Lane Setup Direction Line IT,nsp_master_gatekeeper.model_nsp_lane_setup_direction_line,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_lane_setup_device_line_it,Lane Setup Device Line IT,nsp_master_gatekeeper.model_nsp_lane_setup_device_line,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_parking_lane_create_wizard_it,Create Parking Lanes Wizard IT,nsp_master_gatekeeper.model_nsp_parking_lane_create_wizard,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_parking_lane_create_line_it,Create Parking Lanes Line IT,nsp_master_gatekeeper.model_nsp_parking_lane_create_line,nsp_core.group_nsp_it_parking,1,1,1,1

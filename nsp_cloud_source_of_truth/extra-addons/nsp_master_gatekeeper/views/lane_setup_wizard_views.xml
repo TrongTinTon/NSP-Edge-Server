@@ -6,6 +6,7 @@
         <field name="arch" type="xml">
             <form string="Lane Setup" class="o_nsp_lane_setup_form">
                 <sheet>
+                    <field name="source_scope" invisible="1"/>
                     <field name="session_id" invisible="1"/>
                     <field name="edge_server_id" invisible="1"/>
                     <field name="controller_id" invisible="1"/>
@@ -78,8 +79,9 @@
                                     <p>Configure the Readers used by this Lane.</p>
                                 </div>
                                 <field name="device_line_ids" nolabel="1" class="nsp-lane-setup__devices">
-                                    <list editable="bottom" create="0" delete="0">
-                                        <field name="reader_id" string="Reader" readonly="1"/>
+                                    <list editable="bottom" create="1" delete="1">
+                                        <field name="available_reader_ids" column_invisible="1"/>
+                                        <field name="reader_id" string="Reader" domain="[('id', 'in', available_reader_ids)]" options="{'no_create': True, 'no_open': True}"/>
                                         <field name="port_summary" string="Antennas" readonly="1"/>
                                         <field name="power_dbm" string="Power (dBm)"/>
                                         <field name="read_interval_ms" string="Read Interval (ms)"/>
@@ -102,9 +104,6 @@
                                         <div class="nsp-lane-setup__section-title">Antenna Sequence</div>
                                         <field name="direction_line_ids" nolabel="1" class="nsp-lane-setup__sequence">
                                             <list editable="bottom" create="1" delete="1">
-                                                <control>
-                                                    <create string="Add Antenna"/>
-                                                </control>
                                                 <field name="sequence" widget="handle" string="#"/>
                                                 <field name="available_reader_ids" column_invisible="1"/>
                                                 <field name="reader_id"
@@ -120,13 +119,6 @@
                                             </list>
                                         </field>
 
-                                        <div class="nsp-lane-setup__hint">
-                                            <i class="fa fa-info-circle"/>
-                                            <span>
-                                                The first Antenna starts at 0 ms. Lane In and Lane Out are configured manually;
-                                                changing one Direction never reverses or rewrites the other automatically.
-                                            </span>
-                                        </div>
                                     </div>
 
                                     <aside class="nsp-lane-setup__preview-panel">

@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <record id="view_nsp_parking_lane_create_wizard_form" model="ir.ui.view">
+        <field name="name">nsp.parking.lane.create.wizard.form</field>
+        <field name="model">nsp.parking.lane.create.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Create Parking Lanes" class="o_nsp_parking_lane_create_form">
+                <sheet>
+                    <field name="available_edge_server_ids" invisible="1"/>
+                    <field name="available_controller_ids" invisible="1"/>
+
+                    <div class="nsp-parking-lane-create__layout-row">
+                        <span class="nsp-parking-lane-create__label">Parking Layout</span>
+                        <div class="nsp-parking-lane-create__layout-field">
+                            <field name="parking_area_id" nolabel="1" readonly="1"/>
+                        </div>
+                        <div class="nsp-parking-lane-create__count">
+                            <strong><field name="lane_count" nolabel="1" readonly="1"/></strong>
+                            <span>Lane(s)</span>
+                        </div>
+                    </div>
+
+                    <div class="nsp-parking-lane-create__workspace">
+                        <aside class="nsp-parking-lane-create__sidebar">
+                            <div class="nsp-parking-lane-create__nav is-active">
+                                <i class="fa fa-road"/>
+                                <span>Parking Lanes</span>
+                            </div>
+                            <div class="nsp-parking-lane-create__nav-title">Next step</div>
+                            <div class="nsp-parking-lane-create__next">
+                                <i class="fa fa-sliders"/>
+                                <div>
+                                    <strong>Lane Setup</strong>
+                                    <span>Device · Lane In · Lane Out</span>
+                                </div>
+                            </div>
+                        </aside>
+
+                        <main class="nsp-parking-lane-create__content">
+                            <div class="nsp-parking-lane-create__header">
+                                <h3>Parking Lanes</h3>
+                                <p>Create Lane identities and assign their Server and Controller. Device and Direction configuration is completed later in Lane Setup.</p>
+                            </div>
+
+                            <field name="line_ids" nolabel="1" class="nsp-parking-lane-create__lines">
+                                <list editable="bottom" create="1" delete="1">
+                                    <control>
+                                        <create string="Add Lane"/>
+                                    </control>
+                                    <field name="name" string="Lane Name"/>
+                                    <field name="available_edge_server_ids" column_invisible="1"/>
+                                    <field name="edge_server_id"
+                                           string="Server"
+                                           domain="[('id', 'in', available_edge_server_ids)]"
+                                           options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                                    <field name="available_controller_ids" column_invisible="1"/>
+                                    <field name="controller_id"
+                                           string="Controller"
+                                           domain="[('id', 'in', available_controller_ids)]"
+                                           options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                                </list>
+                            </field>
+
+                            <div class="nsp-parking-lane-create__hint">
+                                <i class="fa fa-info-circle"/>
+                                <span>
+                                    Creating a Lane does not configure RFID Readers or travel Directions. Open Lane Setup from Parking Layout to configure any active Reader/Antenna, or open it from Lane Calibration to stay within that Calibration hardware scope.
+                                </span>
+                            </div>
+                        </main>
+                    </div>
+                </sheet>
+                <footer>
+                    <button string="Cancel" special="cancel" class="btn btn-secondary"/>
+                    <button name="action_create_lanes"
+                            type="object"
+                            string="Create Lanes"
+                            icon="fa-plus"
+                            class="btn btn-primary"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>
