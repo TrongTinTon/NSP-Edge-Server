@@ -13,4 +13,3 @@ from . import config_revision
 
 from . import sync_api_service
 
-from . import parking_lane_creation

@@ -253,7 +253,6 @@ class DeviceWhitelist(models.Model):
             values = {
                 "controller_name": self.name or self.technical_code,
                 "controller_id": self.technical_code,
-                "edge_server_id": False,
                 "active": active,
             }
             if not active:
@@ -279,7 +278,6 @@ class DeviceWhitelist(models.Model):
                 "name": self.name or self.serial_number or self.technical_code,
                 "serial_number": self.serial_number,
                 "device_code": self.technical_code,
-                "controller_id": False,
                 "active": active,
             }
             if not active:

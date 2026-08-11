@@ -96,6 +96,13 @@ class NspMeasurementReaderLine(models.Model):
         "nsp.device", string="RFID Reader", required=True,
         ondelete="restrict", index=True,
     )
+    edge_server_status = fields.Selection(
+        related="edge_server_id.status", string="Server Status", readonly=True,
+    )
+    controller_status = fields.Selection(
+        related="controller_id.status", string="Controller Status", readonly=True,
+    )
+    reader_name = fields.Char(related="reader_id.name", string="Reader Name", readonly=True)
     serial_number = fields.Char(related="reader_id.serial_number", readonly=True)
     reader_status = fields.Selection(related="reader_id.status", readonly=True)
     reader_tid_addr = fields.Integer(

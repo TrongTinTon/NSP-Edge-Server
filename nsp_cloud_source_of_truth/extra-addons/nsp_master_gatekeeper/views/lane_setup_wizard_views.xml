@@ -8,12 +8,33 @@
                 <sheet>
                     <field name="source_scope" invisible="1"/>
                     <field name="session_id" invisible="1"/>
-                    <field name="edge_server_id" invisible="1"/>
-                    <field name="controller_id" invisible="1"/>
+                    <field name="available_edge_server_ids" invisible="1"/>
+                    <field name="available_controller_ids" invisible="1"/>
                     <field name="available_reader_ids" invisible="1"/>
                     <field name="active_section" invisible="1"/>
-                    <field name="direction" invisible="1"/>
-                    <field name="direction_preview_anchor" invisible="1"/>
+                    <field name="sequence_preview_anchor" invisible="1"/>
+
+                    <div class="nsp-lane-setup__lane-row nsp-lane-setup__infrastructure-row">
+                        <span class="nsp-lane-setup__lane-label">Infrastructure</span>
+                        <div class="nsp-lane-setup__infrastructure-fields">
+                            <div class="nsp-lane-setup__infra-field">
+                                <label for="edge_server_id" string="Server"/>
+                                <field name="edge_server_id"
+                                       nolabel="1"
+                                       domain="[('id', 'in', available_edge_server_ids)]"
+                                       readonly="source_scope == 'calibration'"
+                                       options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                            </div>
+                            <div class="nsp-lane-setup__infra-field">
+                                <label for="controller_id" string="Controller"/>
+                                <field name="controller_id"
+                                       nolabel="1"
+                                       domain="[('id', 'in', available_controller_ids)]"
+                                       readonly="source_scope == 'calibration'"
+                                       options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                            </div>
+                        </div>
+                    </div>
 
                     <div class="nsp-lane-setup__lane-row">
                         <span class="nsp-lane-setup__lane-label">Lane</span>
@@ -42,33 +63,18 @@
                                     class="btn nsp-lane-setup__nav"
                                     invisible="active_section == 'device'"/>
 
-                            <div class="nsp-lane-setup__nav-title">Directions</div>
-
-                            <button name="action_show_lane_in"
+                            <button name="action_show_sequence"
                                     type="object"
-                                    string="Lane In"
-                                    icon="fa-sign-in"
-                                    class="btn nsp-lane-setup__nav nsp-lane-setup__nav-child is-active"
-                                    invisible="active_section != 'lane_in'"/>
-                            <button name="action_show_lane_in"
+                                    string="Antenna Sequence"
+                                    icon="fa-random"
+                                    class="btn nsp-lane-setup__nav is-active"
+                                    invisible="active_section != 'sequence'"/>
+                            <button name="action_show_sequence"
                                     type="object"
-                                    string="Lane In"
-                                    icon="fa-sign-in"
-                                    class="btn nsp-lane-setup__nav nsp-lane-setup__nav-child"
-                                    invisible="active_section == 'lane_in'"/>
-
-                            <button name="action_show_lane_out"
-                                    type="object"
-                                    string="Lane Out"
-                                    icon="fa-sign-out"
-                                    class="btn nsp-lane-setup__nav nsp-lane-setup__nav-child is-active"
-                                    invisible="active_section != 'lane_out'"/>
-                            <button name="action_show_lane_out"
-                                    type="object"
-                                    string="Lane Out"
-                                    icon="fa-sign-out"
-                                    class="btn nsp-lane-setup__nav nsp-lane-setup__nav-child"
-                                    invisible="active_section == 'lane_out'"/>
+                                    string="Antenna Sequence"
+                                    icon="fa-random"
+                                    class="btn nsp-lane-setup__nav"
+                                    invisible="active_section == 'sequence'"/>
                         </aside>
 
                         <main class="nsp-lane-setup__content">
@@ -76,12 +82,14 @@
                                      invisible="active_section != 'device'">
                                 <div class="nsp-lane-setup__content-header">
                                     <h3>Device Configuration</h3>
-                                    <p>Configure the Readers used by this Lane.</p>
+                                    <p>Configure the Readers used by this physical Lane.</p>
                                 </div>
                                 <field name="device_line_ids" nolabel="1" class="nsp-lane-setup__devices">
                                     <list editable="bottom" create="1" delete="1">
-                                        <field name="available_reader_ids" column_invisible="1"/>
-                                        <field name="reader_id" string="Reader" domain="[('id', 'in', available_reader_ids)]" options="{'no_create': True, 'no_open': True}"/>
+                                        <field name="reader_id"
+                                               string="Reader"
+                                               domain="[('active', '=', True)] if parent.source_scope == 'parking_layout' else [('id', 'in', parent.available_reader_ids)]"
+                                               options="{'no_create': True, 'no_open': True}"/>
                                         <field name="port_summary" string="Antennas" readonly="1"/>
                                         <field name="power_dbm" string="Power (dBm)"/>
                                         <field name="read_interval_ms" string="Read Interval (ms)"/>
@@ -92,43 +100,40 @@
                             </section>
 
                             <section class="nsp-lane-setup__content-section"
-                                     invisible="active_section not in ['lane_in', 'lane_out']">
+                                     invisible="active_section != 'sequence'">
                                 <div class="nsp-lane-setup__content-header">
-                                    <h3 invisible="active_section != 'lane_in'">Lane In</h3>
-                                    <h3 invisible="active_section != 'lane_out'">Lane Out</h3>
-                                    <p>Define the Reader/Antenna order and maximum duration from the previous point.</p>
+                                    <h3>Antenna Sequence</h3>
+                                    <p>Define the physical Reader/Antenna order used to detect a vehicle crossing this Lane.</p>
                                 </div>
 
-                                <div class="nsp-lane-setup__direction-grid">
-                                    <div class="nsp-lane-setup__direction-editor">
-                                        <div class="nsp-lane-setup__section-title">Antenna Sequence</div>
-                                        <field name="direction_line_ids" nolabel="1" class="nsp-lane-setup__sequence">
+                                <div class="nsp-lane-setup__sequence-grid">
+                                    <div class="nsp-lane-setup__sequence-editor">
+                                        <field name="sequence_line_ids" nolabel="1" class="nsp-lane-setup__sequence">
                                             <list editable="bottom" create="1" delete="1">
                                                 <field name="sequence" widget="handle" string="#"/>
-                                                <field name="available_reader_ids" column_invisible="1"/>
                                                 <field name="reader_id"
                                                        string="Reader"
-                                                       domain="[('id', 'in', available_reader_ids)]"
+                                                       domain="[('active', '=', True)] if parent.source_scope == 'parking_layout' else [('id', 'in', parent.available_reader_ids)]"
                                                        options="{'no_create': True, 'no_open': True}"/>
                                                 <field name="port_no" string="Antenna"/>
                                                 <field name="antenna" column_invisible="1"/>
                                                 <field name="reader_identity" column_invisible="1"/>
+                                                <field name="is_first_point" column_invisible="1"/>
                                                 <field name="duration_ms"
                                                        string="Max Duration from Previous (ms)"
-                                                       readonly="sequence == 1"/>
+                                                       readonly="is_first_point"/>
                                             </list>
                                         </field>
-
                                     </div>
 
                                     <aside class="nsp-lane-setup__preview-panel">
                                         <div class="nsp-lane-setup__preview-header">
-                                            <h4>Direction Preview</h4>
-                                            <p>Visual representation of the Antenna sequence and maximum time limits.</p>
+                                            <h4>Sequence Preview</h4>
+                                            <p>The same sequence identifies the Lane crossing. Vehicle parking state decides Check-in or Check-out.</p>
                                         </div>
-                                        <field name="direction_preview_anchor"
+                                        <field name="sequence_preview_anchor"
                                                nolabel="1"
-                                               widget="nsp_lane_direction_preview"/>
+                                               widget="nsp_lane_sequence_preview"/>
                                     </aside>
                                 </div>
                             </section>

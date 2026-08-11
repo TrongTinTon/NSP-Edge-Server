@@ -63,6 +63,9 @@ class NspMeasurementSession(models.Model):
         string="Readers",
         copy=True,
     )
+    device_tree_anchor = fields.Boolean(
+        string="NSP Device Tree", compute="_compute_device_tree_anchor",
+    )
     reader_count = fields.Integer(compute="_compute_scope_counts")
     controller_ids = fields.Many2many(
         "nsp.controller",
@@ -125,6 +128,11 @@ class NspMeasurementSession(models.Model):
             "Measurement Revision must be greater than zero.",
         ),
     ]
+
+    @api.depends("reader_line_ids", "reader_line_ids.reader_id")
+    def _compute_device_tree_anchor(self):
+        for session in self:
+            session.device_tree_anchor = True
 
     def _deployment_role(self):
         # Deployment ownership is defined by the installed Gatekeeper module.

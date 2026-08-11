@@ -12,7 +12,7 @@ class Device(models.Model):
     _name = "nsp.device"
     _description = "NSP RFID Reader"
     _rec_name = "name"
-    _order = "controller_id, serial_number, id"
+    _order = "serial_number, device_code, id"
 
     # Device declaration
     whitelist_id = fields.Many2one(
@@ -26,7 +26,7 @@ class Device(models.Model):
         required=False,
         copy=False,
         index=True,
-        help="Physical Reader serial number. It must be globally unique across all Edge Servers and Controllers.",
+        help="Physical Reader serial number. It must be globally unique in NSP.",
     )
     runtime_detected_serial_number = fields.Char(
         string="Detected SDK Serial",
@@ -41,14 +41,6 @@ class Device(models.Model):
     device_code = fields.Char(
         string="Device Code", required=True, readonly=True, copy=False, index=True,
         default=lambda self: new_management_code("DEV"),
-    )
-    controller_id = fields.Many2one(
-        "nsp.controller",
-        string="Controller",
-        required=False,
-        ondelete="restrict",
-        index=True,
-        help="Controller that directly manages this Reader.",
     )
     active = fields.Boolean(default=True, index=True)
 
@@ -124,7 +116,7 @@ class Device(models.Model):
 
     _sql_constraints = [
         ("serial_number_unique", "unique(serial_number)", "Reader Serial must be unique."),
-        ("device_code_controller_unique", "unique(controller_id, device_code)", "Device Code must be unique per Controller."),
+        ("device_code_unique", "unique(device_code)", "Device Code must be unique."),
         ("reader_power_range", "CHECK(power_dbm >= 0 AND power_dbm <= 40)", "Power must be between 0 and 40 dBm."),
         ("read_interval_positive", "CHECK(read_interval_ms > 0)", "Read Interval must be greater than zero."),
         ("tid_addr_non_negative", "CHECK(tid_addr >= 0)", "TID Start Address (Words) cannot be negative."),
@@ -154,12 +146,11 @@ class Device(models.Model):
         normalized = self._normalize_serial(serial)
         if conflict:
             raise ValidationError(_(
-                "Reader Serial '%(serial)s' already exists on Reader '%(reader)s' "
-                "under Controller '%(controller)s'. Reader Serial must be globally unique."
+                "Reader Serial '%(serial)s' already exists on Reader '%(reader)s'. "
+                "Reader Serial must be globally unique."
             ) % {
                 "serial": normalized,
                 "reader": conflict.display_name,
-                "controller": conflict.controller_id.display_name,
             })
         raise ValidationError(_(
             "Reader Serial '%s' is entered more than once. Reader Serial must be globally unique."
@@ -178,13 +169,6 @@ class Device(models.Model):
             if conflict:
                 self._raise_serial_conflict(serial, conflict)
 
-            controller = reader.controller_id
-            if controller:
-                for sibling in controller.device_ids:
-                    if sibling == reader:
-                        continue
-                    if self._normalize_serial(sibling.serial_number) == serial:
-                        self._raise_serial_conflict(serial)
 
     @api.model
     def name_search(self, name="", domain=None, operator="ilike", limit=100):
@@ -204,29 +188,9 @@ class Device(models.Model):
         serial = self._normalize_serial(name)
         if not serial:
             raise UserError(_("Reader Serial is required for Quick Create."))
-
-        controller = self.env["nsp.controller"]
-        controller_id = self.env.context.get("default_controller_id")
-        if controller_id:
-            controller = controller.browse(int(controller_id)).exists()
-        else:
-            controller_domain = [("active", "=", True)]
-            edge_id = self.env.context.get("default_edge_server_id")
-            if edge_id:
-                controller_domain.append(("edge_server_id", "=", int(edge_id)))
-            candidates = controller.search(controller_domain, limit=2)
-            if len(candidates) == 1:
-                controller = candidates
-
-        if len(controller) != 1:
-            raise UserError(_(
-                "Select a Controller first, or use Create and Edit... to create the Reader with its Controller and Serial."
-            ))
-
         record = self.create({
             "name": serial,
             "serial_number": serial,
-            "controller_id": controller.id,
         })
         return record.id, record.display_name
 
@@ -448,9 +412,4 @@ class Device(models.Model):
         ])
         stale_devices.write({"status": "offline"})
 
-        readers_on_offline_controllers = Device.search([
-            ("status", "!=", "offline"),
-            ("controller_id.status", "=", "offline"),
-        ])
-        readers_on_offline_controllers.write({"status": "offline"})
         return True

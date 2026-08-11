@@ -7,15 +7,12 @@
             <search string="Readers">
                 <field name="name"/>
                 <field name="serial_number"/>
-                <field name="device_code"/>
-                <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                 <field name="connection_type"/>
                 <filter string="Online" name="online" domain="[('status','=','online')]"/>
                 <filter string="Offline" name="offline" domain="[('status','=','offline')]"/>
                 <filter string="Degraded" name="degraded" domain="[('status','=','degraded')]"/>
                 <separator/>
                 <group>
-                    <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
                     <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
                 </group>
             </search>
@@ -31,8 +28,6 @@
                 <field name="name" string="Reader" decoration-bf="1"/>
                 <field name="serial_number" string="Master Serial" readonly="1"/>
                 <field name="runtime_detected_serial_number" string="Detected SDK Serial" readonly="1" optional="show"/>
-                <field name="device_code" string="Reader Code" optional="hide"/>
-                <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                 <field name="connection_type" string="Physical Connection" optional="show"/>
                 <field name="last_seen" readonly="1" optional="show"/>
                 <field name="firmware_version" readonly="1" optional="hide"/>
@@ -58,9 +53,7 @@
                         <group string="Device Declaration">
                             <field name="serial_number" string="Master Serial" readonly="1"/>
                             <field name="runtime_detected_serial_number" string="Detected SDK Serial" readonly="1"/>
-                            <field name="controller_id" readonly="context.get('default_controller_id')" domain="[('edge_server_id', '=', context.get('default_edge_server_id'))] if context.get('default_edge_server_id') else []" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_controllers_form', 'default_edge_server_id': context.get('default_edge_server_id')}"/>
                             <field name="connection_type" string="Physical Connection" widget="nsp_grouped_connection"/>
-                            <field name="device_code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
                         <group string="Runtime Status">
                             <field name="status" widget="badge" readonly="1" decoration-success="status == 'online'" decoration-danger="status == 'offline'" decoration-warning="status == 'degraded'"/>
@@ -83,7 +76,7 @@
                             <div class="text-muted mb-2">
                                 Use Add a line to add physical Antennas while creating or editing this Reader.
                             </div>
-                            <field name="antennas_ids" context="{'default_device_id': id, 'default_controller_id': controller_id, 'default_edge_server_id': context.get('default_edge_server_id')}">
+                            <field name="antennas_ids" context="{'default_device_id': id}">
                                 <list string="Antennas" create="0" edit="1" delete="0">
                                     <control>
                                         <create string="Add a line"/>
@@ -115,8 +108,6 @@
                 <field name="name" string="Reader"/>
                 <field name="serial_number" string="Master Serial"/>
                 <field name="runtime_detected_serial_number" string="Detected SDK Serial"/>
-                <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                <field name="device_code" string="Technical Code" optional="hide"/>
                 <field name="last_seen"/>
                 <field name="firmware_version"/>
                 <field name="runtime_power_dbm" string="Reader Power (dBm)"/>
@@ -168,12 +159,10 @@
                 <field name="antenna_no" string="Antenna No"/>
                 <field name="device_id" string="Reader" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                 <field name="device_serial" string="Reader Serial"/>
-                <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                 <separator/>
                 <group>
                     <filter string="Reader" name="group_device" context="{'group_by':'device_id'}"/>
-                    <filter string="Controller" name="group_controller" context="{'group_by':'controller_id'}"/>
-                </group>
+                    </group>
             </search>
         </field>
     </record>
@@ -183,7 +172,6 @@
         <field name="model">nsp.device.antenna</field>
         <field name="arch" type="xml">
             <list string="Antennas" create="0" edit="1" delete="0">
-                <field name="controller_id" readonly="1" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                 <field name="device_id" string="Reader" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
                 <field name="antenna_no" string="Antenna No"/>
             </list>
@@ -201,11 +189,10 @@
                     </div>
                     <group>
                         <group string="Antenna Configuration">
-                            <field name="device_id" string="Reader" domain="[('controller_id', '=', context.get('default_controller_id'))] if context.get('default_controller_id') else ([('controller_id.edge_server_id', '=', context.get('default_edge_server_id'))] if context.get('default_edge_server_id') else [])" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" context="{'form_view_ref': 'nsp_master_gatekeeper.nsp_device_view_form', 'default_controller_id': context.get('default_controller_id'), 'default_edge_server_id': context.get('default_edge_server_id')}"/>
+                            <field name="device_id" string="Reader" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}" context="{'form_view_ref': 'nsp_master_gatekeeper.nsp_device_view_form'}"/>
                             <field name="antenna_no" string="Antenna No"/>
                         </group>
-                        <group string="Ownership">
-                            <field name="controller_id" readonly="1" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                        <group string="Reader Reference">
                             <field name="device_serial" string="Reader Serial" readonly="1"/>
                         </group>
                     </group>

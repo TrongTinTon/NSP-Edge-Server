@@ -168,16 +168,12 @@ class NspMeasurementSessionTimeline(models.Model):
                 "read_interval_ms": int(reader_line.read_interval_ms or 200),
                 "tid_start_address": int(reader_line.reader_tid_addr or 0),
                 "tid_length": int(reader_line.reader_tid_len or 4),
-                "checkin_order": selection_order,
             })
 
         if len(selected) < 2:
             raise ValidationError(_(
                 "Lane Setup requires at least two unique observed Reader Ports."
             ))
-        for index, row in enumerate(selected, start=1):
-            row["checkout_order"] = len(selected) - index + 1
-
         if len(controller_ids) != 1 or len(edge_ids) != 1:
             raise ValidationError(_(
                 "A Lane must be built from Detection Timeline rows belonging to one Server and one Controller."
@@ -210,9 +206,8 @@ class NspMeasurementSessionTimeline(models.Model):
             ordered_event_ids
         )
         # Device Configuration is seeded from the complete Lane Calibration
-        # infrastructure scope, not only Readers that happened to appear in the
-        # observed Detection Timeline. The operator may then build Lane In/Out
-        # from any calibrated Reader/Antenna.
+        # infrastructure scope. The Antenna Sequence is seeded from observed
+        # Detection Timeline order and remains editable inside that calibrated scope.
         reader_defaults = {}
         for reader_line in self.reader_line_ids:
             reader_defaults[reader_line.reader_id.id] = {
@@ -238,7 +233,7 @@ class NspMeasurementSessionTimeline(models.Model):
                 })
                 for row in reader_defaults.values()
             ],
-            "direction_line_ids": [
+            "sequence_line_ids": [
                 (0, 0, {
                     "sequence": row["selection_order"],
                     "reader_id": row["reader_id"],

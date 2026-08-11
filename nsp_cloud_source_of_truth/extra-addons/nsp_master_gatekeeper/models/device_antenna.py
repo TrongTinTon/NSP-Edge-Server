@@ -46,12 +46,6 @@ class DeviceAntenna(models.Model):
         related="device_id.serial_number",
         readonly=True,
     )
-    controller_id = fields.Many2one(
-        "nsp.controller",
-        string="Controller",
-        related="device_id.controller_id",
-        readonly=True,
-    )
     active = fields.Boolean(default=True, index=True)
 
     _sql_constraints = [

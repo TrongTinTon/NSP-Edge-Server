@@ -166,28 +166,7 @@
         height: 56px;
     }
 
-    .nsp-lane-setup__sequence .o_field_x2many_list_row_add td {
-        padding: 12px 8px 2px;
-        text-align: right;
-    }
 
-    .nsp-lane-setup__sequence .o_field_x2many_list_row_add a {
-        display: inline-flex;
-        align-items: center;
-        padding: 7px 12px;
-        border: 1px solid var(--nsp-lane-primary);
-        border-radius: 7px;
-        color: var(--nsp-lane-primary);
-        font-size: 12px;
-        font-weight: 700;
-        text-decoration: none;
-    }
-
-    .nsp-lane-setup__sequence .o_field_x2many_list_row_add a::before {
-        content: "+";
-        margin-right: 6px;
-        font-size: 16px;
-    }
 }
 
 /* Keep modal styling compiler-safe.
@@ -224,16 +203,16 @@
     }
 }
 
-/* Direction editor + presentation-only preview. */
+/* Antenna Sequence editor + presentation-only preview. */
 .o_nsp_lane_setup_form {
-    .nsp-lane-setup__direction-grid {
+    .nsp-lane-setup__sequence-grid {
         display: grid;
         grid-template-columns: minmax(0, 1.15fr) minmax(280px, .85fr);
         gap: 24px;
         align-items: start;
     }
 
-    .nsp-lane-setup__direction-editor,
+    .nsp-lane-setup__sequence-editor,
     .nsp-lane-setup__preview-panel {
         min-width: 0;
     }
@@ -285,7 +264,7 @@
         max-width: 340px;
         min-height: 66px;
         padding: 12px 15px;
-        border: 1px solid #d9e1eb;
+        border: 1px solid var(--nsp-lane-border);
         border-radius: 9px;
         background: var(--nsp-lane-surface);
         box-shadow: 0 1px 2px rgba(20, 35, 60, .04);
@@ -338,17 +317,17 @@
 
     .nsp-lane-preview__duration {
         padding: 3px 9px;
-        border: 1px solid #e2e7ee;
+        border: 1px solid var(--nsp-lane-border);
         border-radius: 999px;
         background: var(--nsp-lane-surface-subtle);
-        color: #4f5d70;
+        color: var(--nsp-lane-muted);
         font-size: 10px;
         font-weight: 650;
     }
 
     .nsp-lane-preview__arrow {
         margin-top: 2px;
-        color: #8391a3;
+        color: var(--nsp-lane-muted);
         font-size: 18px;
         line-height: 1;
     }
@@ -356,7 +335,7 @@
     .nsp-lane-preview__empty {
         width: 100%;
         padding: 28px 20px;
-        border: 1px dashed #cfd7e3;
+        border: 1px dashed var(--nsp-lane-border);
         border-radius: 9px;
         color: var(--nsp-lane-muted);
         font-size: 12px;
@@ -366,7 +345,7 @@
 
 @media (max-width: 1100px) {
     .o_nsp_lane_setup_form {
-        .nsp-lane-setup__direction-grid {
+        .nsp-lane-setup__sequence-grid {
             grid-template-columns: 1fr;
         }
 
@@ -376,5 +355,40 @@
             border-top: 1px solid var(--nsp-lane-border);
             border-left: 0;
         }
+    }
+}
+
+/* Lane infrastructure is configured inside Lane Setup, not in Parking Lanes Add a line. */
+.o_nsp_lane_setup_form {
+    .nsp-lane-setup__infrastructure-fields {
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr);
+        gap: 16px;
+        width: 100%;
+        max-width: 760px;
+    }
+}
+
+@media (max-width: 900px) {
+    .o_nsp_lane_setup_form {
+        .nsp-lane-setup__infrastructure-fields {
+            grid-template-columns: 1fr;
+        }
+    }
+}
+
+.o_nsp_lane_setup_form {
+    .nsp-lane-setup__infra-field {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        gap: 5px;
+    }
+
+    .nsp-lane-setup__infra-field > label {
+        margin: 0;
+        color: var(--nsp-lane-muted);
+        font-size: 12px;
+        font-weight: 650;
     }
 }

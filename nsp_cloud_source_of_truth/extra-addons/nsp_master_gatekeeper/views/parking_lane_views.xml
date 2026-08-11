@@ -1,18 +1,21 @@
-<?xml version='1.0' encoding='UTF-8'?>
-<odoo><record id="view_nsp_parking_lane_list" model="ir.ui.view">
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+  <record id="view_nsp_parking_lane_list" model="ir.ui.view">
     <field name="name">nsp.parking.lane.list</field>
     <field name="model">nsp.parking.lane</field>
     <field name="arch" type="xml">
-      <list string="Lanes" decoration-success="configuration_state == 'ready'" decoration-warning="configuration_state == 'incomplete'" decoration-muted="configuration_state == 'disabled'">
+      <list string="Lanes"
+            decoration-success="configuration_state == 'ready'"
+            decoration-warning="configuration_state == 'incomplete'"
+            decoration-muted="configuration_state == 'disabled'">
         <field name="parking_area_id" string="Layout"/>
         <field name="name" string="Lane" decoration-bf="1"/>
         <field name="edge_server_id" string="Server"/>
         <field name="controller_id" string="Controller"/>
-        <field name="timeline_point_count" string="Timeline" readonly="1"/>
+        <field name="sequence_point_count" string="Sequence Points" readonly="1"/>
         <field name="reader_config_count" string="Readers" readonly="1" optional="show"/>
-        <field name="total_path_duration" string="Duration (s)" readonly="1"/>
-        <field name="checkin_point_count" string="Lane In" readonly="1"/>
-        <field name="checkout_point_count" string="Lane Out" readonly="1"/>
+        <field name="total_path_duration" string="Max Window (s)" readonly="1"/>
+        <field name="configuration_issue" string="Configuration" readonly="1" optional="show"/>
         <field name="configuration_state" column_invisible="1"/>
         <field name="parking_area_state" column_invisible="1"/>
         <field name="active" widget="boolean_toggle" readonly="parking_area_state != 'draft'"/>
@@ -24,137 +27,76 @@
     <field name="name">nsp.parking.lane.form</field>
     <field name="model">nsp.parking.lane</field>
     <field name="arch" type="xml">
-      <form string="Lane">
-        <header>
-          <button name="action_open_lane_setup"
-                  type="object"
-                  string="Lane Setup"
-                  icon="fa-sliders"
-                  class="btn btn-primary"
-                  invisible="parking_area_state != 'draft'"
-                  groups="nsp_core.group_nsp_it_parking"/>
-        </header>
+      <form string="Lane" class="o_nsp_parking_lane_form">
         <sheet>
-          <field name="available_controller_ids" invisible="1"/>
-          <field name="available_edge_server_ids" invisible="1"/>
           <field name="parking_area_state" invisible="1"/>
+          <field name="setup_state" invisible="1"/>
+          <field name="edge_server_id" invisible="1"/>
+          <field name="controller_id" invisible="1"/>
+          <field name="edge_server_status" invisible="1"/>
+          <field name="controller_status" invisible="1"/>
+
           <div class="oe_title">
-            <label for="name" string="Lane"/>
-            <h1><field name="name" placeholder="Lane" readonly="parking_area_state != 'draft'"/></h1>
-            <div class="text-muted"><field name="code" readonly="1" class="oe_inline"/></div>
+            <label for="name" string="Name"/>
+            <h1>
+              <field name="name" placeholder="Lane name..." readonly="parking_area_state != 'draft'"/>
+            </h1>
           </div>
 
-          <div class="nsp-parking-layout-summary row g-3 mb-4">
-            <div class="col-12 col-md-6 col-xl-3">
-              <div class="nsp-parking-layout-card">
-                <div class="nsp-parking-layout-card__label">TIMELINE</div>
-                <div class="nsp-parking-layout-card__value"><field name="timeline_point_count" readonly="1" nolabel="1"/> points</div>
-                <div class="nsp-parking-layout-card__meta"><field name="total_path_duration" readonly="1" nolabel="1"/> seconds total</div>
-              </div>
-            </div>
-            <div class="col-12 col-md-6 col-xl-3">
-              <div class="nsp-parking-layout-card">
-                <div class="nsp-parking-layout-card__label">READERS</div>
-                <div class="nsp-parking-layout-card__value"><field name="reader_config_count" readonly="1" nolabel="1"/> configured</div>
-                <div class="nsp-parking-layout-card__meta">Applied parameters</div>
-              </div>
-            </div>
-            <div class="col-12 col-md-6 col-xl-3">
-              <div class="nsp-parking-layout-card">
-                <div class="nsp-parking-layout-card__label">LANE IN</div>
-                <div class="nsp-parking-layout-card__value"><field name="checkin_point_count" readonly="1" nolabel="1"/> points</div>
-                <div class="nsp-parking-layout-card__meta">Configured inbound device path</div>
-              </div>
-            </div>
-            <div class="col-12 col-md-6 col-xl-3">
-              <div class="nsp-parking-layout-card">
-                <div class="nsp-parking-layout-card__label">LANE OUT</div>
-                <div class="nsp-parking-layout-card__value"><field name="checkout_point_count" readonly="1" nolabel="1"/> points</div>
-                <div class="nsp-parking-layout-card__meta">Configured outbound device path</div>
-              </div>
-            </div>
-          </div>
+          <!-- Keep the relational collection loaded for the reusable Tree widget.
+               CRUD is intentionally performed by the Tree; there is no duplicate
+               native mapping editor in the form. -->
+          <field name="reader_config_ids" invisible="1">
+            <list create="1" edit="1" delete="1">
+              <field name="reader_id"/>
+              <field name="reader_name"/>
+              <field name="reader_serial_number"/>
+              <field name="reader_status"/>
+              <field name="port_summary"/>
+              <field name="power_dbm"/>
+              <field name="read_interval_ms"/>
+              <field name="tid_start_address"/>
+              <field name="tid_length"/>
+            </list>
+          </field>
 
-          <group>
-            <group string="Infrastructure">
-              <field name="edge_server_id" string="Server" readonly="parking_area_state != 'draft'" domain="[('id','in',available_edge_server_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-              <field name="controller_id" string="Controller" readonly="parking_area_state != 'draft'" domain="[('id','in',available_controller_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-            </group>
-            <group string="Runtime Settings">
-              <field name="tolerance_type" string="Tolerance Unit" readonly="parking_area_state != 'draft'"/>
-              <field name="tolerance_value" string="Tolerance" readonly="parking_area_state != 'draft'"/>
-              <field name="active" readonly="parking_area_state != 'draft'"/>
-            </group>
-          </group>
+          <separator string="Device Configuration"/>
+          <field name="device_tree_anchor"
+                 nolabel="1"
+                 class="o_nsp_device_tree_field"
+                 widget="nsp_device_tree_view"/>
 
-          <notebook>
-            <page string="Reader Configuration" name="reader_configuration">
-              <div class="alert alert-info" role="alert">
-                Reader settings currently applied by this Lane. Lane Calibration copies Power, Read Interval and TID parameters here. For a manually created Timeline, the selected Reader settings are captured and can be adjusted while the Layout is Draft.
-              </div>
-              <field name="reader_config_ids" readonly="parking_area_state != 'draft'" nolabel="1">
-                <list create="0" delete="0" edit="1">
-                  <field name="reader_id" string="Reader" readonly="1"/>
-                  <field name="port_summary" string="Ports" readonly="1"/>
-                  <field name="power_dbm" string="Power (dBm)"/>
-                  <field name="read_interval_ms" string="Read Interval (ms)"/>
-                  <field name="tid_start_address" string="TID Start"/>
-                  <field name="tid_length" string="TID Length"/>
-                </list>
-              </field>
-            </page>
-            <page string="Detection Timeline" name="timeline">
-              <div class="alert alert-secondary" role="alert">
-                Create the Lane Timeline manually or keep the timeline generated from Lane Calibration. Add Reader Ports in travel order. The first point must use 0 seconds; every following point must have a positive Duration from Previous.
-              </div>
-              <field name="timeline_line_ids" readonly="parking_area_state != 'draft'" nolabel="1" context="{'default_lane_id': id}">
+          <separator string="Antenna Sequence"/>
+          <div class="nsp-parking-sequence-grid">
+            <section class="nsp-parking-sequence-grid__editor">
+              <field name="antenna_sequence_ids"
+                     nolabel="1"
+                     readonly="parking_area_state != 'draft'">
                 <list editable="bottom" create="1" edit="1" delete="1">
-                  <control>
-                    <create string="Add Timeline Point"/>
-                  </control>
-                  <field name="sequence" string="Order"/>
-                  <field name="available_reader_ids" column_invisible="1"/>
-                  <field name="reader_id" string="Reader" domain="[('id','in',available_reader_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                  <field name="port_no" string="Port"/>
-                  <field name="duration_from_previous" string="Compatibility Duration (s)"/>
-                  <field name="cumulative_time" string="Cumulative Time (s)" readonly="1"/>
+                  <field name="sequence" string="#" widget="handle"/>
+                  <field name="reader_id"
+                         string="Reader"
+                         domain="[('active', '=', True)]"
+                         options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
+                  <field name="port_no" string="Antenna"/>
+                  <field name="is_first_point" column_invisible="1"/>
+                  <field name="duration_from_previous"
+                         string="Max Duration from Previous (s)"
+                         readonly="is_first_point"/>
+                  <field name="cumulative_time" string="Cumulative (s)" readonly="1" optional="hide"/>
                 </list>
               </field>
-            </page>
-            <page string="Event Sequences" name="sequences">
-              <div class="alert alert-info" role="alert">
-                Each Lane may configure Lane In, Lane Out, or both. Across the Parking Layout, at least one Lane In and one Lane Out path are required before Publish.
+            </section>
+            <aside class="nsp-parking-sequence-grid__preview">
+              <div class="nsp-parking-sequence-grid__preview-head">
+                <h4>Sequence Preview</h4>
+                <p>Live preview of the current Reader/Antenna order and timing window.</p>
               </div>
-              <group col="2">
-                <group string="Lane In">
-                  <field name="checkin_sequence_ids" nolabel="1" readonly="parking_area_state != 'draft'" context="{'default_lane_id': id, 'default_sequence_type': 'check_in'}">
-                    <list editable="bottom" create="1" delete="1">
-                      <control><create string="Add Lane In Point"/></control>
-                      <field name="sequence" string="#"/>
-                      <field name="sequence_type" column_invisible="1"/>
-                      <field name="available_reader_ids" column_invisible="1"/>
-                      <field name="reader_id" string="Reader" domain="[('id','in',available_reader_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                      <field name="port_no" string="Port"/>
-                      <field name="duration_from_previous" string="Max Duration from Previous (s)"/>
-                    </list>
-                  </field>
-                </group>
-                <group string="Lane Out">
-                  <field name="checkout_sequence_ids" nolabel="1" readonly="parking_area_state != 'draft'" context="{'default_lane_id': id, 'default_sequence_type': 'check_out'}">
-                    <list editable="bottom" create="1" delete="1">
-                      <control><create string="Add Lane Out Point"/></control>
-                      <field name="sequence" string="#"/>
-                      <field name="sequence_type" column_invisible="1"/>
-                      <field name="available_reader_ids" column_invisible="1"/>
-                      <field name="reader_id" string="Reader" domain="[('id','in',available_reader_ids)]" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                      <field name="port_no" string="Port"/>
-                      <field name="duration_from_previous" string="Max Duration from Previous (s)"/>
-                    </list>
-                  </field>
-                </group>
-              </group>
-            </page>
-          </notebook>
+              <field name="antenna_sequence_preview_anchor"
+                     nolabel="1"
+                     widget="nsp_lane_sequence_preview"/>
+            </aside>
+          </div>
         </sheet>
       </form>
     </field>

@@ -62,22 +62,38 @@
                                readonly="status != 'draft'"/>
                     </group>
 
-                    <separator string="Device Configuration"/>
+                    <!-- Keep Reader assemblies loaded for the Tree widget.  The
+                         Tree is the single CRUD surface; no duplicate Manage section. -->
                     <field name="reader_line_ids"
-                           nolabel="1"
-                           readonly="status != 'draft'"
+                           invisible="1"
                            context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_measurement_reader_line_form'}">
-                        <list string="Device Configuration" create="1" delete="1" open_form_view="1">
-                            <field name="edge_server_id" string="Server"/>
-                            <field name="controller_id" string="Controller"/>
-                            <field name="reader_id" string="Reader"/>
-                            <field name="serial_number" string="Serial" readonly="1"/>
-                            <field name="port_numbers" string="Ports" readonly="1"/>
-                            <field name="reader_power_dbm" string="Power (dBm)"/>
-                            <field name="read_interval_ms" string="Interval (ms)"/>
-                            <field name="reader_status" string="Status" widget="badge" readonly="1"/>
+                        <list create="1" edit="1" delete="1">
+                            <field name="edge_server_id"/>
+                            <field name="edge_server_status"/>
+                            <field name="controller_id"/>
+                            <field name="controller_status"/>
+                            <field name="reader_id"/>
+                            <field name="reader_name"/>
+                            <field name="serial_number"/>
+                            <field name="port_numbers"/>
+                            <field name="reader_tid_addr"/>
+                            <field name="reader_tid_len"/>
+                            <field name="reader_power_dbm"/>
+                            <field name="read_interval_ms"/>
+                            <field name="reader_status"/>
+                            <field name="reader_port_ids">
+                                <list create="1" edit="1" delete="1">
+                                    <field name="port_no"/>
+                                </list>
+                            </field>
                         </list>
                     </field>
+
+                    <separator string="Device Configuration"/>
+                    <field name="device_tree_anchor"
+                           nolabel="1"
+                           class="o_nsp_device_tree_field"
+                           widget="nsp_device_tree_view"/>
 
                     <separator string="Detection Timeline"/>
                     <field name="event_count" invisible="1"/>

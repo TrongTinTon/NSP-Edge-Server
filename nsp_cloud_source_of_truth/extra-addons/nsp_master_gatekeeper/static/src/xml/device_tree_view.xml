@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="nsp_master_gatekeeper.DeviceTreeView">
+        <div class="nsp-device-tree">
+            <aside class="nsp-device-tree__tree-panel">
+                <div class="nsp-device-tree__tree-header">
+                    <div class="nsp-device-tree__tree-title-row">
+                        <div>
+                            <h3>NSP Tree View</h3>
+                            <p>Server → Controller → Reader</p>
+                        </div>
+                    </div>
+                    <div class="nsp-device-tree__search">
+                        <i class="fa fa-search" aria-hidden="true"/>
+                        <input type="search" placeholder="Search..." t-att-value="state.query" t-on-input="onSearchInput"/>
+                    </div>
+                </div>
+
+                <div class="nsp-device-tree__tree-scroll">
+                    <button t-if="canAddServer" type="button" class="nsp-device-tree__add-node"
+                            t-on-click="addServer">
+                        <i class="fa fa-plus"/> <span>Add Server</span>
+                    </button>
+                    <t t-if="tree.length">
+                        <t t-foreach="tree" t-as="server" t-key="server.key">
+                            <div class="nsp-device-tree__node nsp-device-tree__node--server">
+                                <div class="nsp-device-tree__row nsp-device-tree__row--group">
+                                    <button type="button" class="nsp-device-tree__group-main"
+                                            t-on-click="() => this.toggleExpanded(server.key)">
+                                        <span class="nsp-device-tree__chevron"><i t-att-class="isExpanded(server.key) ? 'fa fa-chevron-down' : 'fa fa-chevron-right'"/></span>
+                                        <span class="nsp-device-tree__icon"><i class="fa fa-server"/></span>
+                                        <span class="nsp-device-tree__name" t-esc="server.name"/>
+                                        <span t-att-class="'nsp-device-tree__dot is-' + server.status"/>
+                                    </button>
+                                    <div t-if="editable" class="nsp-device-tree__row-actions">
+                                        <button t-if="canAddController(server)" type="button" class="nsp-device-tree__icon-action"
+                                                title="Add Controller" t-on-click="() => this.addController(server)"><i class="fa fa-plus"/></button>
+                                        <button type="button" class="nsp-device-tree__icon-action" title="Edit Server"
+                                                t-on-click="() => this.editServer(server)"><i class="fa fa-pencil"/></button>
+                                        <button type="button" class="nsp-device-tree__icon-action is-danger" title="Remove Server"
+                                                t-on-click="() => this.deleteServer(server)"><i class="fa fa-trash"/></button>
+                                    </div>
+                                </div>
+                                <div t-if="isExpanded(server.key)" class="nsp-device-tree__children">
+                                    <t t-foreach="server.controllers" t-as="controller" t-key="controller.key">
+                                        <div class="nsp-device-tree__node nsp-device-tree__node--controller">
+                                            <div class="nsp-device-tree__row nsp-device-tree__row--group">
+                                                <button type="button" class="nsp-device-tree__group-main"
+                                                        t-on-click="() => this.toggleExpanded(controller.key)">
+                                                    <span class="nsp-device-tree__chevron"><i t-att-class="isExpanded(controller.key) ? 'fa fa-chevron-down' : 'fa fa-chevron-right'"/></span>
+                                                    <span class="nsp-device-tree__icon"><i class="fa fa-sitemap"/></span>
+                                                    <span class="nsp-device-tree__name" t-esc="controller.name"/>
+                                                    <span t-att-class="'nsp-device-tree__dot is-' + controller.status"/>
+                                                </button>
+                                                <div t-if="editable" class="nsp-device-tree__row-actions">
+                                                    <button type="button" class="nsp-device-tree__icon-action" title="Add Reader"
+                                                            t-on-click="() => this.addReader(server, controller)"><i class="fa fa-plus"/></button>
+                                                    <button type="button" class="nsp-device-tree__icon-action" title="Edit Controller"
+                                                            t-on-click="() => this.editController(server, controller)"><i class="fa fa-pencil"/></button>
+                                                    <button type="button" class="nsp-device-tree__icon-action is-danger" title="Remove Controller"
+                                                            t-on-click="() => this.deleteController(server, controller)"><i class="fa fa-trash"/></button>
+                                                </div>
+                                            </div>
+                                            <div t-if="isExpanded(controller.key)" class="nsp-device-tree__children">
+                                                <t t-foreach="controller.readers" t-as="entry" t-key="entry.key">
+                                                    <div t-att-class="'nsp-device-tree__row nsp-device-tree__row--reader ' + (selectedEntry &amp;&amp; selectedEntry.key === entry.key ? 'is-selected' : '')">
+                                                        <button type="button" class="nsp-device-tree__reader-main" t-on-click="() => this.selectReader(entry)">
+                                                            <span class="nsp-device-tree__chevron"/>
+                                                            <span class="nsp-device-tree__icon"><i class="fa fa-microchip"/></span>
+                                                            <span class="nsp-device-tree__reader-copy">
+                                                                <span class="nsp-device-tree__name" t-esc="entry.reader.name"/>
+                                                                <span class="nsp-device-tree__reader-status">
+                                                                    <span t-att-class="'nsp-device-tree__dot is-' + entry.reader.status"/>
+                                                                    <span t-esc="statusLabel(entry.reader.status)"/>
+                                                                </span>
+                                                            </span>
+                                                        </button>
+                                                        <div t-if="editable" class="nsp-device-tree__row-actions">
+                                                            <button type="button" class="nsp-device-tree__icon-action" title="Edit Reader"
+                                                                    t-on-click="() => this.editMapping(entry)"><i class="fa fa-pencil"/></button>
+                                                            <button type="button" class="nsp-device-tree__icon-action is-danger" title="Remove Reader"
+                                                                    t-on-click="() => this.deleteMapping(entry)"><i class="fa fa-trash"/></button>
+                                                        </div>
+                                                    </div>
+                                                </t>
+                                            </div>
+                                        </div>
+                                    </t>
+                                </div>
+                            </div>
+                        </t>
+                    </t>
+                    <div t-else="" class="nsp-device-tree__empty">
+                        <i class="fa fa-sitemap"/>
+                        <strong>No Device Tree mapping</strong>
+                        <span>Add a Server to start building the hierarchy.</span>
+                    </div>
+                </div>
+            </aside>
+
+            <section class="nsp-device-tree__config-panel">
+                <t t-if="selectedEntry">
+                    <header class="nsp-device-tree__config-header">
+                        <div class="nsp-device-tree__config-identity">
+                            <span class="nsp-device-tree__reader-icon"><i class="fa fa-microchip"/></span>
+                            <div>
+                                <div class="nsp-device-tree__title-line">
+                                    <h3 t-esc="selectedEntry.reader.name"/>
+                                    <span t-att-class="'nsp-device-tree__operational is-' + selectedEntry.reader.status">
+                                        <span t-att-class="'nsp-device-tree__dot is-' + selectedEntry.reader.status"/>
+                                        <span t-esc="statusLabel(selectedEntry.reader.status)"/>
+                                    </span>
+                                </div>
+                                <div class="nsp-device-tree__breadcrumb" t-esc="breadcrumb"/>
+                            </div>
+                        </div>
+                        <div class="nsp-device-tree__actions">
+                            <button t-if="!state.editing &amp;&amp; editable" type="button" class="btn btn-primary nsp-device-tree__edit-button" t-on-click="startEdit">
+                                <i class="fa fa-pencil me-1"/> Edit Configuration
+                            </button>
+                            <t t-if="state.editing">
+                                <button type="button" class="btn btn-secondary" t-att-disabled="state.saving" t-on-click="cancelEdit">Cancel</button>
+                                <button type="button" class="btn btn-primary" t-att-disabled="state.saving" t-on-click="saveConfiguration">
+                                    <i class="fa fa-save me-1"/><t t-esc="state.saving ? 'Saving...' : 'Save'"/>
+                                </button>
+                            </t>
+                        </div>
+                    </header>
+
+                    <div class="nsp-device-tree__config-scroll">
+                        <div class="nsp-device-tree__section-head">
+                            <div>
+                                <div class="nsp-device-tree__section-title-line">
+                                    <h4>Reader Information</h4>
+                                    <span t-att-class="'nsp-device-tree__mode-badge ' + (state.editing ? 'is-edit' : 'is-view')"
+                                          t-esc="state.editing ? 'Edit mode' : 'View mode'"/>
+                                </div>
+                                <p>Configuration state and operational state are independent.</p>
+                            </div>
+                        </div>
+                        <div class="nsp-device-tree__fields">
+                            <div class="nsp-device-tree__field"><label>Reader Name</label><div class="nsp-device-tree__value" t-esc="selectedEntry.reader.name"/></div>
+                            <div class="nsp-device-tree__field"><label>Serial</label><div class="nsp-device-tree__value" t-esc="selectedEntry.reader.serial"/></div>
+                            <div class="nsp-device-tree__field">
+                                <label>Power</label>
+                                <t t-if="state.editing"><div class="nsp-device-tree__input-wrap"><input type="number" min="0" max="40" data-field="power" t-att-class="'form-control ' + (state.errors.power ? 'is-invalid' : '')" t-att-value="state.draft.power" t-on-input="onConfigInput"/><span>dBm</span></div><small t-if="state.errors.power" class="text-danger" t-esc="state.errors.power"/></t>
+                                <div t-else="" class="nsp-device-tree__value"><t t-esc="selectedEntry.values.power"/> dBm</div>
+                            </div>
+                            <div class="nsp-device-tree__field">
+                                <label>Read Interval</label>
+                                <t t-if="state.editing"><div class="nsp-device-tree__input-wrap"><input type="number" min="1" max="60000" data-field="interval" t-att-class="'form-control ' + (state.errors.interval ? 'is-invalid' : '')" t-att-value="state.draft.interval" t-on-input="onConfigInput"/><span>ms</span></div><small t-if="state.errors.interval" class="text-danger" t-esc="state.errors.interval"/></t>
+                                <div t-else="" class="nsp-device-tree__value"><t t-esc="selectedEntry.values.interval"/> ms</div>
+                            </div>
+                            <div class="nsp-device-tree__field">
+                                <label>TID Start Address</label>
+                                <t t-if="state.editing"><div class="nsp-device-tree__input-wrap"><input type="number" min="0" data-field="tidStart" t-att-class="'form-control ' + (state.errors.tidStart ? 'is-invalid' : '')" t-att-value="state.draft.tidStart" t-on-input="onConfigInput"/><span>words</span></div><small t-if="state.errors.tidStart" class="text-danger" t-esc="state.errors.tidStart"/></t>
+                                <div t-else="" class="nsp-device-tree__value"><t t-esc="selectedEntry.values.tidStart"/> words</div>
+                            </div>
+                            <div class="nsp-device-tree__field">
+                                <label>TID Length</label>
+                                <t t-if="state.editing"><div class="nsp-device-tree__input-wrap"><input type="number" min="1" data-field="tidLength" t-att-class="'form-control ' + (state.errors.tidLength ? 'is-invalid' : '')" t-att-value="state.draft.tidLength" t-on-input="onConfigInput"/><span>words</span></div><small t-if="state.errors.tidLength" class="text-danger" t-esc="state.errors.tidLength"/></t>
+                                <div t-else="" class="nsp-device-tree__value"><t t-esc="selectedEntry.values.tidLength"/> words</div>
+                            </div>
+                            <div class="nsp-device-tree__field nsp-device-tree__field--full"><label>Antennas / Ports</label><div class="nsp-device-tree__value" t-esc="selectedEntry.ports"/></div>
+                        </div>
+                        <div class="nsp-device-tree__meta"><span>Configuration <strong t-esc="state.configState"/></span><span>Operational <strong t-esc="statusLabel(selectedEntry.reader.status)"/></span></div>
+                    </div>
+                </t>
+                <div t-else="" class="nsp-device-tree__config-empty"><i class="fa fa-microchip"/><h3>Reader Configuration</h3><p>Select a Reader from the NSP Tree View.</p></div>
+            </section>
+        </div>
+    </t>
+</templates>

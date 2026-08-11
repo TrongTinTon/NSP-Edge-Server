@@ -2,8 +2,7 @@
 import logging
 from datetime import timedelta
 
-from odoo import api, fields, models, _
-from odoo.exceptions import UserError
+from odoo import api, fields, models
 from odoo.addons.nsp_core.utils import new_management_code
 
 _logger = logging.getLogger(__name__)
@@ -16,7 +15,15 @@ NODE_STATUS = [
     ("error", "Error"),
 ]
 
+
 class NspEdgeServer(models.Model):
+    """Independent Server identity.
+
+    Deployment topology is intentionally not stored on the Server master. Server,
+    Controller and Reader are associated only by Lane Calibration or Parking Lane
+    configuration records.
+    """
+
     _name = "nsp.edge.server"
     _description = "NSP Edge Server"
     _inherit = ["mail.thread", "mail.activity.mixin"]
@@ -30,49 +37,22 @@ class NspEdgeServer(models.Model):
     edge_server_code = fields.Char(
         string="Edge Server Code", required=True, readonly=True, copy=False, index=True,
         default=lambda self: new_management_code("EDGE"),
-        help="Stable code assigned to this Edge Server by the Cloud Server.",
+        help="Stable Cloud-managed Server identity.",
     )
-    name = fields.Char(string="Edge Server Name", required=True, default="NSP Edge Server", tracking=True)
-    timestamp = fields.Datetime(string="Last Heartbeat", readonly=True, copy=False, index=True)
-    status = fields.Selection(NODE_STATUS, default="offline", required=True, index=True, tracking=True)
+    name = fields.Char(
+        string="Edge Server Name", required=True, default="NSP Edge Server", tracking=True,
+    )
+    timestamp = fields.Datetime(
+        string="Last Heartbeat", readonly=True, copy=False, index=True,
+    )
+    status = fields.Selection(
+        NODE_STATUS, default="offline", required=True, index=True, tracking=True,
+    )
     active = fields.Boolean(default=True, index=True)
-    controller_ids = fields.One2many("nsp.controller", "edge_server_id", string="Controllers")
-    reader_ids = fields.Many2many(
-        "nsp.device",
-        string="Readers",
-        compute="_compute_inventory",
-        readonly=True,
-        help="Readers managed by the Controllers assigned to this Edge Server.",
-    )
-    antenna_ids = fields.Many2many(
-        "nsp.device.antenna",
-        string="Antennas",
-        compute="_compute_inventory",
-        readonly=True,
-        help="Physical antennas declared on Readers managed by this Edge Server.",
-    )
-    controller_count = fields.Integer(string="Controllers", compute="_compute_inventory")
-    reader_count = fields.Integer(string="Readers", compute="_compute_inventory")
-    antenna_count = fields.Integer(string="Antennas", compute="_compute_inventory")
 
     _sql_constraints = [
         ("edge_server_code_unique", "unique(edge_server_code)", "Edge Server Code must be unique."),
     ]
-
-    @api.depends(
-        "controller_ids",
-        "controller_ids.device_ids",
-        "controller_ids.device_ids.antennas_ids",
-    )
-    def _compute_inventory(self):
-        for record in self:
-            readers = record.controller_ids.mapped("device_ids")
-            antennas = readers.mapped("antennas_ids")
-            record.reader_ids = readers
-            record.antenna_ids = antennas
-            record.controller_count = len(record.controller_ids)
-            record.reader_count = len(readers)
-            record.antenna_count = len(antennas)
 
     @api.model
     def name_search(self, name="", domain=None, operator="ilike", limit=100):
@@ -90,12 +70,14 @@ class NspEdgeServer(models.Model):
     def create(self, vals_list):
         prepared = []
         for source in vals_list:
-            vals = dict(source)
-            vals["edge_server_code"] = str(
-                vals.get("edge_server_code") or new_management_code("EDGE")
+            values = dict(source)
+            values["edge_server_code"] = str(
+                values.get("edge_server_code") or new_management_code("EDGE")
             ).strip().upper()
-            vals["name"] = str(vals.get("name") or vals["edge_server_code"] or "NSP Edge Server").strip()
-            prepared.append(vals)
+            values["name"] = str(
+                values.get("name") or values["edge_server_code"] or "NSP Edge Server"
+            ).strip()
+            prepared.append(values)
         return super().create(prepared)
 
     def write(self, vals):
@@ -104,17 +86,15 @@ class NspEdgeServer(models.Model):
             values["edge_server_code"] = str(values["edge_server_code"]).strip().upper()
         return super().write(values)
 
-    def unlink(self):
-        if self.controller_ids:
-            raise UserError(_("Move or archive the Controllers assigned to this Edge Server first."))
-        return super().unlink()
 
 class NspController(models.Model):
+    """Independent Controller identity with no Server or Reader ownership fields."""
+
     _name = "nsp.controller"
     _description = "NSP Controller"
     _inherit = ["mail.thread", "mail.activity.mixin"]
     _rec_name = "controller_name"
-    _order = "edge_server_id, controller_name, controller_id, id"
+    _order = "controller_name, controller_id, id"
 
     whitelist_id = fields.Many2one(
         "nsp.device.whitelist", string="Device Whitelist", readonly=True, copy=False,
@@ -123,41 +103,22 @@ class NspController(models.Model):
     controller_id = fields.Char(
         string="Controller Code", required=True, readonly=True, copy=False, index=True,
         default=lambda self: new_management_code("CTRL"),
-        help="Stable Controller Code provisioned by the server.",
+        help="Stable Cloud-managed Controller identity.",
     )
-    controller_name = fields.Char(string="Controller Name", required=True, default="NSP Gatekeeper Controller", tracking=True)
-    edge_server_id = fields.Many2one(
-        "nsp.edge.server", string="Edge Server", required=False, ondelete="restrict", index=True, tracking=True,
-        help="Edge Server responsible for synchronization with this Controller. This is a direct relation, not a parent/child Controller hierarchy.",
+    controller_name = fields.Char(
+        string="Controller Name", required=True, default="NSP Gatekeeper Controller", tracking=True,
     )
-    timestamp = fields.Datetime(string="Last Heartbeat", readonly=True, copy=False, index=True)
+    timestamp = fields.Datetime(
+        string="Last Heartbeat", readonly=True, copy=False, index=True,
+    )
     active = fields.Boolean(default=True, index=True)
-    status = fields.Selection(NODE_STATUS, default="offline", required=True, index=True, tracking=True)
-    device_ids = fields.One2many("nsp.device", "controller_id", string="Readers")
-    reader_count = fields.Integer(string="Readers", compute="_compute_reader_counts")
-    antenna_count = fields.Integer(string="Antennas", compute="_compute_reader_counts")
+    status = fields.Selection(
+        NODE_STATUS, default="offline", required=True, index=True, tracking=True,
+    )
+
     _sql_constraints = [
         ("controller_id_unique", "unique(controller_id)", "Controller Code must be unique."),
     ]
-
-    @api.depends("device_ids", "device_ids.antennas_ids")
-    def _compute_reader_counts(self):
-        for record in self:
-            record.reader_count = len(record.device_ids)
-            record.antenna_count = len(record.device_ids.mapped("antennas_ids"))
-
-    @api.onchange("device_ids")
-    def _onchange_reader_serials_unique(self):
-        Device = self.env["nsp.device"]
-        for controller in self:
-            seen = set()
-            for reader in controller.device_ids:
-                serial = Device._normalize_serial(reader.serial_number)
-                if not serial:
-                    continue
-                if serial in seen:
-                    Device._raise_serial_conflict(serial)
-                seen.add(serial)
 
     @api.model
     def name_search(self, name="", domain=None, operator="ilike", limit=100):
@@ -175,38 +136,23 @@ class NspController(models.Model):
     def name_create(self, name):
         controller_name = str(name or "").strip()
         if not controller_name:
-            raise UserError(_("Controller Name is required."))
-
-        edge = self.env["nsp.edge.server"]
-        edge_id = self.env.context.get("default_edge_server_id")
-        if edge_id:
-            edge = edge.browse(int(edge_id)).exists()
-        else:
-            candidates = edge.search([("active", "=", True)], limit=2)
-            if len(candidates) == 1:
-                edge = candidates
-
-        if len(edge) != 1:
-            raise UserError(_(
-                "Select an Edge Server first, or use Create and Edit... to create the Controller with its Edge Server."
-            ))
-
-        record = self.create({
-            "controller_name": controller_name,
-            "edge_server_id": edge.id,
-        })
+            from odoo.exceptions import UserError
+            raise UserError("Controller Name is required.")
+        record = self.create({"controller_name": controller_name})
         return record.id, record.display_name
 
     @api.model_create_multi
     def create(self, vals_list):
         prepared = []
         for source in vals_list:
-            vals = dict(source)
-            vals["controller_id"] = str(
-                vals.get("controller_id") or new_management_code("CTRL")
+            values = dict(source)
+            values["controller_id"] = str(
+                values.get("controller_id") or new_management_code("CTRL")
             ).strip().upper()
-            vals["controller_name"] = str(vals.get("controller_name") or vals["controller_id"] or "NSP Controller").strip()
-            prepared.append(vals)
+            values["controller_name"] = str(
+                values.get("controller_name") or values["controller_id"] or "NSP Controller"
+            ).strip()
+            prepared.append(values)
         return super().create(prepared)
 
     def write(self, vals):
@@ -251,10 +197,11 @@ class NspController(models.Model):
             timeout_sec = 120
 
         cutoff = fields.Datetime.now() - timedelta(seconds=max(30, timeout_sec))
-        system_context = {"active_test": False, "tracking_disable": True, "mail_notrack": True}
-
-        # This cron owns the global node-liveness scope.  The elevated access is
-        # intentionally limited to the three batch updates below.
+        system_context = {
+            "active_test": False,
+            "tracking_disable": True,
+            "mail_notrack": True,
+        }
         stale_controllers = self.sudo().with_context(**system_context).search([
             ("status", "not in", ("offline", "revoked")),
             "|",
@@ -263,19 +210,13 @@ class NspController(models.Model):
         ])
         stale_controllers.write({"status": "offline"})
 
-        EdgeServer = self.env["nsp.edge.server"].sudo().with_context(**system_context)
-        stale_edges = EdgeServer.search([
+        stale_edges = self.env["nsp.edge.server"].sudo().with_context(
+            **system_context
+        ).search([
             ("status", "not in", ("offline", "revoked")),
             "|",
             ("timestamp", "=", False),
             ("timestamp", "<", cutoff),
         ])
         stale_edges.write({"status": "offline"})
-
-        Device = self.env["nsp.device"].sudo().with_context(**system_context)
-        readers_on_offline_controllers = Device.search([
-            ("status", "!=", "offline"),
-            ("controller_id.status", "=", "offline"),
-        ])
-        readers_on_offline_controllers.write({"status": "offline"})
         return True

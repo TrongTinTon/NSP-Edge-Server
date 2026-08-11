@@ -166,12 +166,12 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
 
     @api.model
     def _edge_runtime_status_scope(self, edge_server):
-        """Build status ownership from immutable runtime scope.
+        """Build status scope from published contextual mappings.
 
-        Controller ownership for Lane Calibration is frozen on
-        ``nsp.measurement.reader.line.controller_id``.  It must not be rebuilt
-        from the mutable ``nsp.device.controller_id`` relation when processing
-        ``edge/status``.  Reader Code remains the stable management identity.
+        Reader inventory has no Controller owner. Parking Lane and Lane
+        Calibration mappings explicitly define which Controller may report each
+        Reader in the current runtime context. Reader Code remains the stable
+        management identity.
         """
         edge_code = str(edge_server.edge_server_code or "").strip().upper()
         Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
@@ -209,11 +209,11 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     controller_codes.add(controller_code)
                 for reader in lane.get("readers") or []:
                     register_reader(
-                        controller_code,
+                        reader.get("controller_code") or controller_code,
                         reader.get("technical_code") or reader.get("reader_code"),
                     )
-                for step in lane.get("reader_port_timeline") or []:
-                    register_reader(controller_code, step.get("reader_code"))
+                # Lane Controller + Reader is an explicit runtime association,
+                # not a permanent Reader ownership relation.
 
         ReaderLine = self.env["nsp.measurement.reader.line"].sudo()
         calibration_lines = ReaderLine.search([
@@ -259,8 +259,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 device = direct_device_by_scope.get((controller_code, reader_code))
                 if not device:
                     candidates = candidates_by_code.get(reader_code, Device.browse())
-                    exact = candidates.filtered(lambda row: row.controller_id == controller)
-                    device = exact[:1] or (candidates[:1] if len(candidates) == 1 else Device.browse())
+                    device = candidates[:1] if len(candidates) == 1 else Device.browse()
                 if not device:
                     continue
                 device_by_key[(controller.id, reader_code)] = device
@@ -344,7 +343,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             values["runtime_read_interval_ms"] = interval
 
         # Reader Code and the released runtime scope own the Cloud record.  The
-        # mutable Reader.controller_id relation and raw SDK serial do not.
+        # inventory ownership is not used; the explicit contextual mapping does.
         device.write(values)
         return device
 
@@ -522,6 +521,11 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
 
     @api.model
     def _runtime_lane_projection(self, lane):
+        """Normalize one published Lane without consulting inventory ownership.
+
+        Server, Controller and Reader are independent identities. Their runtime
+        association is carried by this Lane payload only.
+        """
         lane_code = str(lane.get("lane_code") or "").strip().upper()
         server_code = str(lane.get("server_code") or "").strip().upper()
         controller_code = str(lane.get("controller_code") or "").strip().upper()
@@ -532,100 +536,52 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         if not controller_code:
             raise ValueError("published_lane_controller_identity_missing:%s" % lane_code)
 
-        source_timeline = lane.get("reader_port_timeline") or []
-        if not isinstance(source_timeline, list):
-            raise ValueError("published_reader_port_timeline_invalid:%s" % lane_code)
+        source_sequence = lane.get("antenna_sequence") or []
+        if not isinstance(source_sequence, list):
+            raise ValueError("published_antenna_sequence_invalid:%s" % lane_code)
 
-        runtime_timeline = []
+        runtime_sequence = []
         ports_by_reader = {}
         serial_by_reader = {}
-        timeline_refs = set()
-        for point in source_timeline:
+        sequence_refs = set()
+        for point in source_sequence:
             if not isinstance(point, dict):
-                raise ValueError("published_reader_port_timeline_point_invalid:%s" % lane_code)
+                raise ValueError("published_antenna_sequence_point_invalid:%s" % lane_code)
             reader_code = str(point.get("reader_code") or "").strip().upper()
             reader_serial = str(point.get("reader_serial_number") or "").strip().upper()
             try:
+                sequence = int(point.get("sequence") or 0)
                 port_no = int(point.get("port_no") or 0)
+                duration = float(point.get("duration_from_previous_seconds") or 0.0)
             except (TypeError, ValueError) as exc:
-                raise ValueError("published_reader_port_invalid:%s" % lane_code) from exc
-            if not reader_code or not reader_serial or port_no < 1 or port_no > 16:
-                raise ValueError("published_reader_port_identity_missing:%s" % lane_code)
+                raise ValueError("published_antenna_sequence_value_invalid:%s" % lane_code) from exc
+            if not reader_code or not reader_serial or not 1 <= port_no <= 16:
+                raise ValueError("published_antenna_sequence_identity_missing:%s" % lane_code)
             previous_serial = serial_by_reader.get(reader_code)
             if previous_serial and previous_serial != reader_serial:
                 raise ValueError("published_reader_serial_conflict:%s" % reader_code)
             serial_by_reader[reader_code] = reader_serial
-            runtime_ref = (reader_code, port_no)
-            if runtime_ref in timeline_refs:
-                raise ValueError("published_reader_port_duplicated:%s:%s" % runtime_ref)
-            timeline_refs.add(runtime_ref)
+            ref = (reader_code, port_no)
+            if ref in sequence_refs:
+                raise ValueError("published_antenna_sequence_duplicated:%s:%s" % ref)
+            sequence_refs.add(ref)
             ports_by_reader.setdefault(reader_code, set()).add(port_no)
-            runtime_timeline.append({
-                "sequence": int(point.get("sequence") or 0),
+            runtime_sequence.append({
+                "sequence": sequence,
                 "reader_code": reader_code,
                 "port_no": port_no,
-                "duration_from_previous_seconds": float(
-                    point.get("duration_from_previous_seconds") or 0.0
-                ),
-                "cumulative_time_seconds": float(
-                    point.get("cumulative_time_seconds") or 0.0
-                ),
+                "duration_from_previous_seconds": duration,
             })
 
-        runtime_timeline.sort(
-            key=lambda row: (row["sequence"], row["reader_code"], row["port_no"])
-        )
-        if len(runtime_timeline) < 2:
-            raise ValueError("published_reader_port_timeline_insufficient:%s" % lane_code)
-        if [row["sequence"] for row in runtime_timeline] != list(range(1, len(runtime_timeline) + 1)):
-            raise ValueError("published_reader_port_timeline_sequence_invalid:%s" % lane_code)
-
-        source_sequences = lane.get("event_sequences") or {}
-        if not isinstance(source_sequences, dict):
-            raise ValueError("published_event_sequences_invalid:%s" % lane_code)
-        runtime_sequences = {}
-        for event_type in ("check_in", "check_out"):
-            source_steps = source_sequences.get(event_type) or []
-            if not isinstance(source_steps, list):
-                raise ValueError("published_event_sequence_invalid:%s:%s" % (lane_code, event_type))
-            runtime_steps = []
-            seen_steps = set()
-            for step in source_steps:
-                if not isinstance(step, dict):
-                    raise ValueError("published_event_sequence_step_invalid:%s:%s" % (lane_code, event_type))
-                reader_code = str(step.get("reader_code") or "").strip().upper()
-                try:
-                    port_no = int(step.get("port_no") or 0)
-                    duration = float(step.get("duration_from_previous_seconds") or 0.0)
-                except (TypeError, ValueError) as exc:
-                    raise ValueError("published_event_sequence_step_value_invalid:%s:%s" % (lane_code, event_type)) from exc
-                ref = (reader_code, port_no)
-                if ref not in timeline_refs:
-                    raise ValueError(
-                        "published_event_sequence_reader_port_not_found:%s:%s:%s"
-                        % (lane_code, reader_code or "UNKNOWN", port_no)
-                    )
-                if ref in seen_steps:
-                    raise ValueError(
-                        "published_event_sequence_reader_port_duplicated:%s:%s:%s"
-                        % (lane_code, reader_code, port_no)
-                    )
-                seen_steps.add(ref)
-                order = len(runtime_steps) + 1
-                if order == 1 and duration != 0.0:
-                    raise ValueError("published_event_sequence_first_duration_invalid:%s:%s" % (lane_code, event_type))
-                if order > 1 and duration <= 0.0:
-                    raise ValueError("published_event_sequence_duration_invalid:%s:%s" % (lane_code, event_type))
-                runtime_steps.append({
-                    "reader_code": reader_code,
-                    "port_no": port_no,
-                    "duration_from_previous_seconds": duration,
-                })
-            if runtime_steps and len(runtime_steps) < 2:
-                raise ValueError("published_event_sequence_insufficient:%s:%s" % (lane_code, event_type))
-            runtime_sequences[event_type] = runtime_steps
-        if not any(runtime_sequences.values()):
-            raise ValueError("published_lane_event_sequence_missing:%s" % lane_code)
+        runtime_sequence.sort(key=lambda row: (row["sequence"], row["reader_code"], row["port_no"]))
+        if len(runtime_sequence) < 2:
+            raise ValueError("published_antenna_sequence_insufficient:%s" % lane_code)
+        if [row["sequence"] for row in runtime_sequence] != list(range(1, len(runtime_sequence) + 1)):
+            raise ValueError("published_antenna_sequence_order_invalid:%s" % lane_code)
+        if float(runtime_sequence[0]["duration_from_previous_seconds"] or 0.0) != 0.0:
+            raise ValueError("published_antenna_sequence_first_duration_invalid:%s" % lane_code)
+        if any(float(row["duration_from_previous_seconds"] or 0.0) <= 0.0 for row in runtime_sequence[1:]):
+            raise ValueError("published_antenna_sequence_duration_invalid:%s" % lane_code)
 
         source_readers = lane.get("readers") or []
         if not isinstance(source_readers, list):
@@ -658,7 +614,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     port_no = int(port.get("port_no") or 0)
                 except (TypeError, ValueError) as exc:
                     raise ValueError("published_reader_port_invalid:%s" % reader_code) from exc
-                if port_no < 1 or port_no > 16:
+                if not 1 <= port_no <= 16:
                     raise ValueError("published_reader_port_invalid:%s:%s" % (reader_code, port_no))
                 declared_port_numbers.add(port_no)
             expected_ports = ports_by_reader.get(reader_code, set())
@@ -671,11 +627,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 tid_length = int(reader_parameters.get("tid_length") or 0)
             except (TypeError, ValueError) as exc:
                 raise ValueError("published_reader_parameters_invalid:%s" % reader_code) from exc
-            if (
-                power_dbm < 0 or power_dbm > 40
-                or read_interval_ms <= 0 or read_interval_ms > 60000
-                or tid_start_address < 0 or tid_length <= 0
-            ):
+            if not 0 <= power_dbm <= 40 or not 1 <= read_interval_ms <= 60000 or tid_start_address < 0 or tid_length <= 0:
                 raise ValueError("published_reader_parameters_out_of_range:%s" % reader_code)
             readers.append({
                 "technical_code": reader_code,
@@ -693,7 +645,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
 
         missing_readers = sorted(set(ports_by_reader) - reader_codes)
         if missing_readers:
-            raise ValueError("published_timeline_reader_missing:%s" % ",".join(missing_readers))
+            raise ValueError("published_sequence_reader_missing:%s" % ",".join(missing_readers))
 
         tolerance = lane.get("timing_tolerance") or {}
         if not isinstance(tolerance, dict):
@@ -703,8 +655,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "lane_name": str(lane.get("lane_name") or lane_code).strip(),
             "server_code": server_code,
             "controller_code": controller_code,
-            "reader_port_timeline": runtime_timeline,
-            "event_sequences": runtime_sequences,
+            "readers": readers,
+            "antenna_sequence": runtime_sequence,
             "timing_tolerance": {
                 "type": str(tolerance.get("type") or "percent").strip().lower(),
                 "value": float(tolerance.get("value") or 0.0),
@@ -713,6 +665,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
 
     @api.model
     def _published_gatekeeper_projection(self, edge):
+        """Build Edge projection from contextual Lane mappings only."""
         edge_code = str(edge.edge_server_code or "").strip().upper()
         if not edge_code:
             raise ValueError("edge_server_code_missing")
@@ -721,23 +674,20 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         areas = Area.search([
             ("published_payload_json", "!=", False),
             ("published_edge_server_codes", "ilike", edge_code),
-        ], order="code,id").filtered(
-            lambda area: area.is_published_for_edge(edge_code)
-        )
+        ], order="code,id").filtered(lambda area: area.is_published_for_edge(edge_code))
 
         area_payloads = []
         branch_ids = set()
         referenced_codes = set()
         expected_types = {}
-        controller_map = {}
-        reader_owner = {}
 
         def register_identity(code, device_type):
-            previous_type = expected_types.get(code)
+            normalized = str(code or "").strip().upper()
+            previous_type = expected_types.get(normalized)
             if previous_type and previous_type != device_type:
-                raise ValueError("published_device_role_conflict:%s" % code)
-            expected_types[code] = device_type
-            referenced_codes.add(code)
+                raise ValueError("published_device_role_conflict:%s" % normalized)
+            expected_types[normalized] = device_type
+            referenced_codes.add(normalized)
 
         for area in areas:
             payload = self._published_parking_payload_for_edge(area, edge_code)
@@ -748,36 +698,14 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             branch_ids.add(area.branch_id.id)
             runtime_lanes = []
             for lane in payload.get("lanes") or []:
-                runtime_lane, readers, server_code, controller_code = (
-                    self._runtime_lane_projection(lane)
-                )
+                runtime_lane, readers, server_code, controller_code = self._runtime_lane_projection(lane)
                 if server_code != edge_code:
                     raise ValueError("published_server_does_not_match_edge:%s" % server_code)
                 runtime_lanes.append(runtime_lane)
                 register_identity(server_code, "SERVER")
                 register_identity(controller_code, "CONTROLLER")
-                controller = controller_map.setdefault(controller_code, {
-                    "controller_code": controller_code,
-                    "controller_name": controller_code,
-                    "server_code": server_code,
-                    "active": True,
-                    "devices": {},
-                })
-                if controller["server_code"] != server_code:
-                    raise ValueError("controller_published_on_multiple_servers:%s" % controller_code)
-                for reader_payload in readers:
-                    reader_code = reader_payload["technical_code"]
-                    register_identity(reader_code, "RFID_READER")
-                    owner = reader_owner.get(reader_code)
-                    if owner and owner != controller_code:
-                        raise ValueError("reader_published_on_multiple_controllers:%s" % reader_code)
-                    reader_owner[reader_code] = controller_code
-                    previous = controller["devices"].get(reader_code)
-                    if previous and previous != reader_payload:
-                        raise ValueError(
-                            "reader_published_with_conflicting_configuration:%s" % reader_code
-                        )
-                    controller["devices"][reader_code] = reader_payload
+                for reader in readers:
+                    register_identity(reader["technical_code"], "RFID_READER")
             area_payloads.append({
                 "parking_area_code": payload["parking_area_code"],
                 "parking_area_name": payload["parking_area_name"],
@@ -800,48 +728,23 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         missing = sorted(referenced_codes - set(identity_by_code))
         if missing:
             raise ValueError("published_device_identity_missing:%s" % ",".join(missing))
-        inactive = sorted(
-            code for code, record in identity_by_code.items() if not record.active
-        )
+        inactive = sorted(code for code, record in identity_by_code.items() if not record.active)
         if inactive:
             raise ValueError("published_device_identity_inactive:%s" % ",".join(inactive))
-        type_mismatches = []
+        mismatches = []
         for code in referenced_codes:
-            actual_type = str(
-                identity_by_code[code].device_type_code or "UNKNOWN"
-            ).strip().upper()
-            if actual_type != expected_types[code]:
-                type_mismatches.append(
-                    "%s:%s:%s" % (code, expected_types[code], actual_type)
-                )
-        type_mismatches.sort()
-        if type_mismatches:
-            raise ValueError(
-                "published_device_identity_type_mismatch:%s"
-                % ",".join(type_mismatches)
-            )
-
-        for controller_code, controller in controller_map.items():
-            identity = identity_by_code[controller_code]
-            controller["controller_name"] = identity.name or identity.technical_code
-            controller["devices"] = sorted(
-                controller["devices"].values(),
-                key=lambda row: (
-                    row.get("serial_number") or "",
-                    row.get("technical_code") or "",
-                ),
-            )
+            actual = str(identity_by_code[code].device_type_code or "UNKNOWN").strip().upper()
+            if actual != expected_types[code]:
+                mismatches.append("%s:%s:%s" % (code, expected_types[code], actual))
+        if mismatches:
+            raise ValueError("published_device_identity_type_mismatch:%s" % ",".join(sorted(mismatches)))
 
         branches = self.env["nsp.branch"].sudo().browse(sorted(branch_ids))
         type_order = {"SERVER": 1, "CONTROLLER": 2, "RFID_READER": 3}
         whitelist_payload = [
             record._prepare_sync_payload()
             for record in identities.sorted(
-                key=lambda row: (
-                    type_order.get(row.device_type_code, 9),
-                    row.technical_code or "",
-                    row.id,
-                )
+                key=lambda row: (type_order.get(row.device_type_code, 9), row.technical_code or "", row.id)
             )
         ]
         return {
@@ -850,13 +753,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 "branch_name": branch.name,
                 "timezone": branch.timezone or "Asia/Ho_Chi_Minh",
                 "active": branch.status == "active",
-            } for branch in branches.sorted(
-                key=lambda row: (row.code or "", row.id)
-            )],
-            "controllers": sorted(
-                controller_map.values(),
-                key=lambda row: row["controller_code"],
-            ),
+            } for branch in branches.sorted(key=lambda row: (row.code or "", row.id))],
             "parking_areas": area_payloads,
             "device_whitelist": whitelist_payload,
         }
@@ -1575,7 +1472,10 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
 
         Device = self.env["nsp.device"].sudo()
         devices = Device.search([("serial_number", "in", list(serials))]) if serials else Device.browse()
-        device_by_key = {(record.controller_id.id, record.serial_number): record for record in devices if record.controller_id}
+        device_by_serial = {
+            str(record.serial_number or "").strip().upper(): record
+            for record in devices if record.serial_number
+        }
 
         Vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False)
         vehicles = Vehicle.search([
@@ -1596,7 +1496,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "controller_by_code": controller_by_code,
             "area_by_code": area_by_code,
             "lane_by_key": lane_by_key,
-            "device_by_key": device_by_key,
+            "device_by_serial": device_by_serial,
             "vehicle_by_code": {record.vehicle_code: record for record in vehicles},
             "user_by_code": {record.user_code: record for record in users},
             "borrow_by_code": {record.borrow_code: record for record in borrows},
@@ -1683,11 +1583,10 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 ("controller_id", "=", controller_code),
             ], limit=1)
         # A retry of an already accepted immutable UID must remain idempotent.
-        # For new records, the immutable published Layout revision is the route
-        # authority; the mutable Controller relation may already have changed.
+        # Server/Controller/Reader are independent identities; the immutable
+        # published Lane mapping is the only authority for Edge routing.
         if (
             controller
-            and controller.edge_server_id != edge_server
             and not existing_transaction
             and not self._parking_transaction_matches_published_route(
                 edge_server, item, cache
@@ -1713,14 +1612,12 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     ("controller_id", "=", controller.id),
                     ("code", "=", lane_code),
                 ], limit=1)
-        if controller:
-            if use_cache:
-                device = cache["device_by_key"].get((controller.id, serial_number)) or device
-            else:
-                device = self.env["nsp.device"].sudo().search([
-                    ("controller_id", "=", controller.id),
-                    ("serial_number", "=", serial_number),
-                ], limit=1)
+        if use_cache:
+            device = cache["device_by_serial"].get(serial_number) or device
+        else:
+            device = self.env["nsp.device"].sudo().search([
+                ("serial_number", "=", serial_number),
+            ], limit=1)
         event_time = self._safe_datetime_value(item.get("event_time"), default_now=False)
         if not event_time:
             raise ValueError("event_time is required")
@@ -1902,7 +1799,6 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         controller = (cache.get("controller_by_code") or {}).get(controller_code)
         if (
             controller
-            and controller.edge_server_id != edge_server
             and not self._parking_transaction_matches_published_route(
                 edge_server, item, cache
             )

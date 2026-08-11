@@ -1,0 +1,663 @@
+
+/* Odoo field widgets default to inline-block. Device Tree is a layout surface,
+   so its field wrapper and root must always consume the available form width. */
+.o_field_widget.o_nsp_device_tree_field {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
+.nsp-device-tree {
+    --nsp-tree-border: #E5E7EB;
+    --nsp-tree-text: #111827;
+    --nsp-tree-muted: #6B7280;
+    --nsp-tree-primary: #2563EB;
+    --nsp-tree-primary-soft: #EFF6FF;
+    --nsp-tree-green: #16A34A;
+    --nsp-tree-red: #DC2626;
+    --nsp-tree-gray: #9CA3AF;
+
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(280px, 34%) minmax(0, 66%);
+    min-height: 520px;
+    max-height: 620px;
+    border: 1px solid var(--nsp-tree-border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: #fff;
+    color: var(--nsp-tree-text);
+
+    &__tree-panel,
+    &__config-panel {
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    &__tree-panel {
+        border-right: 1px solid var(--nsp-tree-border);
+        background: #fff;
+    }
+
+    &__tree-header {
+        flex: 0 0 auto;
+        padding: 16px;
+        border-bottom: 1px solid var(--nsp-tree-border);
+
+        h3 { margin: 0; font-size: 15px; font-weight: 700; }
+        p { margin: 3px 0 0; font-size: 11px; color: var(--nsp-tree-muted); }
+    }
+
+    &__search {
+        position: relative;
+        margin-top: 12px;
+
+        i {
+            position: absolute;
+            left: 11px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--nsp-tree-gray);
+            pointer-events: none;
+        }
+
+        input {
+            width: 100%;
+            height: 36px;
+            padding: 0 12px 0 34px;
+            border: 1px solid var(--nsp-tree-border);
+            border-radius: 8px;
+            outline: none;
+            background: #fff;
+            color: var(--nsp-tree-text);
+            font-size: 12px;
+
+            &:focus {
+                border-color: #93C5FD;
+                box-shadow: 0 0 0 3px #DBEAFE;
+            }
+        }
+    }
+
+    &__tree-scroll,
+    &__config-scroll {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+    }
+
+    &__tree-scroll { padding: 9px 8px 14px; }
+
+    &__row {
+        position: relative;
+        width: 100%;
+        min-height: 38px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 8px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--nsp-tree-text);
+        text-align: left;
+
+        &:hover { background: #F9FAFB; }
+
+        &--reader.is-selected {
+            background: var(--nsp-tree-primary-soft);
+            border-color: #BFDBFE;
+            box-shadow: inset 3px 0 0 var(--nsp-tree-primary);
+        }
+    }
+
+    &__children {
+        position: relative;
+        margin-left: 17px;
+        padding-left: 12px;
+        border-left: 1px solid var(--nsp-tree-border);
+    }
+
+    &__chevron {
+        width: 16px;
+        flex: 0 0 16px;
+        text-align: center;
+        color: var(--nsp-tree-muted);
+        font-size: 10px;
+    }
+
+    &__icon,
+    &__reader-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--nsp-tree-border);
+        background: #fff;
+        color: #475569;
+    }
+
+    &__icon {
+        width: 26px;
+        height: 26px;
+        flex: 0 0 26px;
+        border-radius: 7px;
+    }
+
+    &__name {
+        min-width: 0;
+        flex: 1 1 auto;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+        font-weight: 600;
+    }
+
+    &__reader-copy {
+        min-width: 0;
+        flex: 1 1 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+    }
+
+    &__reader-status,
+    &__operational {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        flex: 0 0 auto;
+        font-size: 11px;
+        color: var(--nsp-tree-muted);
+    }
+
+    &__dot {
+        width: 8px;
+        height: 8px;
+        flex: 0 0 8px;
+        border-radius: 50%;
+        background: var(--nsp-tree-gray);
+
+        &.is-online { background: var(--nsp-tree-green); }
+        &.is-offline { background: var(--nsp-tree-red); }
+        &.is-unknown { background: var(--nsp-tree-gray); }
+    }
+
+    &__config-panel { background: #F9FAFB; }
+
+    &__config-header {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 16px 18px;
+        border-bottom: 1px solid var(--nsp-tree-border);
+        background: #fff;
+    }
+
+    &__config-identity {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 11px;
+    }
+
+    &__reader-icon {
+        width: 38px;
+        height: 38px;
+        flex: 0 0 38px;
+        border-radius: 9px;
+        font-size: 16px;
+    }
+
+    &__title-line {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+
+        h3 { margin: 0; font-size: 16px; font-weight: 700; }
+    }
+
+    &__operational {
+        font-weight: 600;
+        &.is-online { color: #15803D; }
+        &.is-offline { color: #B91C1C; }
+        &.is-unknown { color: var(--nsp-tree-muted); }
+    }
+
+    &__breadcrumb {
+        max-width: 620px;
+        margin-top: 4px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--nsp-tree-muted);
+        font-size: 11px;
+    }
+
+    &__actions {
+        flex: 0 0 auto;
+        display: flex;
+        gap: 8px;
+    }
+
+    &__config-scroll { padding: 18px; }
+
+    &__section-head {
+        padding: 13px 14px;
+        border: 1px solid var(--nsp-tree-border);
+        border-bottom: 0;
+        border-radius: 9px 9px 0 0;
+        background: #fff;
+
+        h4 { margin: 0; font-size: 13px; font-weight: 700; }
+        p { margin: 3px 0 0; color: var(--nsp-tree-muted); font-size: 11px; }
+    }
+
+    &__fields {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        border: 1px solid var(--nsp-tree-border);
+        border-radius: 0 0 9px 9px;
+        overflow: hidden;
+        background: #fff;
+    }
+
+    &__field {
+        min-height: 78px;
+        padding: 13px 14px;
+        border-bottom: 1px solid var(--nsp-tree-border);
+
+        &:nth-child(odd) { border-right: 1px solid var(--nsp-tree-border); }
+        &--full { grid-column: 1 / -1; border-right: 0 !important; }
+
+        label {
+            display: block;
+            margin-bottom: 7px;
+            color: var(--nsp-tree-muted);
+            font-size: 11px;
+            font-weight: 600;
+        }
+    }
+
+    &__value {
+        min-height: 34px;
+        display: flex;
+        align-items: center;
+        font-size: 12px;
+        font-weight: 600;
+    }
+
+    &__input-wrap {
+        position: relative;
+        display: flex;
+        align-items: center;
+
+        input { padding-right: 58px; font-size: 12px; }
+        span {
+            position: absolute;
+            right: 11px;
+            color: var(--nsp-tree-muted);
+            font-size: 10px;
+            pointer-events: none;
+        }
+    }
+
+    &__meta {
+        margin-top: 12px;
+        display: flex;
+        gap: 18px;
+        flex-wrap: wrap;
+        padding: 11px 13px;
+        border: 1px solid var(--nsp-tree-border);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--nsp-tree-muted);
+        font-size: 11px;
+
+        strong { margin-left: 5px; color: var(--nsp-tree-text); }
+    }
+
+    &__empty,
+    &__config-empty {
+        height: 100%;
+        min-height: 260px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        padding: 24px;
+        text-align: center;
+        color: var(--nsp-tree-muted);
+
+        i { font-size: 24px; color: var(--nsp-tree-gray); }
+        strong, h3 { margin: 0; color: var(--nsp-tree-text); font-size: 13px; }
+        span, p { margin: 0; max-width: 320px; font-size: 11px; }
+    }
+}
+
+@media (max-width: 992px) {
+    .nsp-device-tree {
+        grid-template-columns: 1fr;
+        max-height: none;
+
+        &__tree-panel {
+            max-height: 360px;
+            border-right: 0;
+            border-bottom: 1px solid var(--nsp-tree-border);
+        }
+
+        &__config-panel { min-height: 430px; }
+    }
+}
+
+@media (max-width: 640px) {
+    .nsp-device-tree {
+        &__fields { grid-template-columns: 1fr; }
+        &__field:nth-child(odd) { border-right: 0; }
+        &__config-header { align-items: flex-start; }
+    }
+}
+
+/* Tree-native CRUD: the tree is the only visible mapping editor. */
+.nsp-device-tree {
+    &__tree-title-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+    }
+
+    &__row--group {
+        padding-right: 6px;
+    }
+
+    &__group-main,
+    &__reader-main {
+        min-width: 0;
+        flex: 1 1 auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        text-align: left;
+    }
+
+    &__row-actions {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 2px;
+    }
+
+    &__icon-action {
+        width: 28px;
+        height: 28px;
+        flex: 0 0 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        color: #64748B;
+
+        &:hover {
+            background: #F1F5F9;
+            color: var(--nsp-tree-primary);
+        }
+
+        &.is-danger:hover {
+            background: #FEF2F2;
+            color: var(--nsp-tree-red);
+        }
+    }
+}
+
+.nsp-device-mapping-dialog {
+    padding: 4px 2px;
+
+    &__hint {
+        margin: 0 0 14px;
+        color: #6B7280;
+        font-size: 12px;
+        line-height: 1.5;
+    }
+
+    &__fields {
+        display: grid;
+        gap: 14px;
+
+        label > span {
+            display: block;
+            margin-bottom: 6px;
+            color: #374151;
+            font-size: 12px;
+            font-weight: 650;
+        }
+    }
+}
+
+/* Parking Lane Antenna Sequence: editor left, live preview right. */
+.o_nsp_parking_lane_form {
+    .nsp-parking-sequence-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.2fr) minmax(300px, .8fr);
+        gap: 24px;
+        align-items: start;
+    }
+
+    .nsp-parking-sequence-grid__editor,
+    .nsp-parking-sequence-grid__preview {
+        min-width: 0;
+    }
+
+    .nsp-parking-sequence-grid__preview {
+        min-height: 330px;
+        padding-left: 24px;
+        border-left: 1px solid #E5E7EB;
+    }
+
+    .nsp-parking-sequence-grid__preview-head {
+        margin-bottom: 16px;
+
+        h4 {
+            margin: 0 0 4px;
+            color: #111827;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        p {
+            margin: 0;
+            color: #6B7280;
+            font-size: 11px;
+            line-height: 1.45;
+        }
+    }
+
+    .nsp-lane-preview {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: 100%;
+    }
+
+    .nsp-lane-preview__card {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        width: 100%;
+        min-height: 60px;
+        padding: 11px 13px;
+        border: 1px solid #E5E7EB;
+        border-radius: 9px;
+        background: #fff;
+    }
+
+    .nsp-lane-preview__index {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        flex: 0 0 28px;
+        border-radius: 50%;
+        background: #2563EB;
+        color: #fff;
+        font-size: 12px;
+        font-weight: 800;
+    }
+
+    .nsp-lane-preview__body {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+
+        strong {
+            overflow: hidden;
+            color: #111827;
+            font-size: 12px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        span {
+            color: #6B7280;
+            font-size: 11px;
+        }
+    }
+
+    .nsp-lane-preview__connector {
+        min-height: 50px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .nsp-lane-preview__duration {
+        padding: 3px 8px;
+        border: 1px solid #E5E7EB;
+        border-radius: 999px;
+        background: #F9FAFB;
+        color: #4B5563;
+        font-size: 10px;
+        font-weight: 650;
+    }
+
+    .nsp-lane-preview__arrow {
+        margin-top: 4px;
+        color: #9CA3AF;
+        font-size: 14px;
+    }
+
+    .nsp-lane-preview__empty {
+        min-height: 220px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        border: 1px dashed #D1D5DB;
+        border-radius: 9px;
+        color: #6B7280;
+        text-align: center;
+        font-size: 11px;
+    }
+}
+
+@media (max-width: 1100px) {
+    .o_nsp_parking_lane_form .nsp-parking-sequence-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .o_nsp_parking_lane_form .nsp-parking-sequence-grid__preview {
+        padding-top: 18px;
+        padding-left: 0;
+        border-top: 1px solid #E5E7EB;
+        border-left: 0;
+    }
+}
+
+
+/* Explicit Reader Configuration view/edit mode. */
+.nsp-device-tree {
+    &__section-title-line {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    &__mode-badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 22px;
+        padding: 2px 8px;
+        border: 1px solid var(--nsp-tree-border);
+        border-radius: 999px;
+        background: #F9FAFB;
+        color: var(--nsp-tree-muted);
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 1;
+
+        &.is-edit {
+            border-color: #BFDBFE;
+            background: var(--nsp-tree-primary-soft);
+            color: var(--nsp-tree-primary);
+        }
+    }
+
+    &__edit-button {
+        white-space: nowrap;
+    }
+}
+
+/* Hierarchy-native actions: add/edit/remove are attached to the node they affect. */
+.nsp-device-tree {
+    &__add-node {
+        width: 100%;
+        min-height: 34px;
+        margin: 0 0 6px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border: 1px dashed #CBD5E1;
+        border-radius: 8px;
+        background: #fff;
+        color: var(--nsp-tree-primary);
+        font-size: 12px;
+        font-weight: 600;
+        text-align: left;
+
+        &:hover {
+            background: var(--nsp-tree-primary-soft);
+            border-color: #93C5FD;
+        }
+    }
+
+    &__row--group > &__group-main {
+        min-width: 0;
+    }
+
+    &__row--group > &__row-actions {
+        margin-left: auto;
+    }
+}
