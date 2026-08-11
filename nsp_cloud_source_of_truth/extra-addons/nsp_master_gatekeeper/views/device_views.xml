@@ -7,7 +7,6 @@
             <search string="Readers">
                 <field name="name"/>
                 <field name="serial_number"/>
-                <field name="connection_type"/>
                 <filter string="Online" name="online" domain="[('status','=','online')]"/>
                 <filter string="Offline" name="offline" domain="[('status','=','offline')]"/>
                 <filter string="Degraded" name="degraded" domain="[('status','=','degraded')]"/>
@@ -24,14 +23,10 @@
         <field name="model">nsp.device</field>
         <field name="arch" type="xml">
             <list string="Readers" create="0" edit="1" delete="0">
-                <field name="status" widget="badge" decoration-success="status == 'online'" decoration-danger="status == 'offline'" decoration-warning="status == 'degraded'"/>
+                <field name="status" string="Status" widget="badge" decoration-success="status == 'online'" decoration-danger="status == 'offline'" decoration-warning="status == 'degraded'"/>
                 <field name="name" string="Reader" decoration-bf="1"/>
-                <field name="serial_number" string="Master Serial" readonly="1"/>
-                <field name="runtime_detected_serial_number" string="Detected SDK Serial" readonly="1" optional="show"/>
-                <field name="connection_type" string="Physical Connection" optional="show"/>
-                <field name="last_seen" readonly="1" optional="show"/>
-                <field name="firmware_version" readonly="1" optional="hide"/>
-                <field name="antennas" string="Antennas" readonly="1"/>
+                <field name="serial_number" string="Serial" readonly="1"/>
+                <field name="last_seen" string="Last Seen" readonly="1"/>
             </list>
         </field>
     </record>
@@ -52,9 +47,7 @@
                     <group>
                         <group string="Device Declaration">
                             <field name="serial_number" string="Master Serial" readonly="1"/>
-                            <field name="runtime_detected_serial_number" string="Detected SDK Serial" readonly="1"/>
-                            <field name="connection_type" string="Physical Connection" widget="nsp_grouped_connection"/>
-                        </group>
+                            </group>
                         <group string="Runtime Status">
                             <field name="status" widget="badge" readonly="1" decoration-success="status == 'online'" decoration-danger="status == 'offline'" decoration-warning="status == 'degraded'"/>
                             <field name="last_seen" readonly="1"/>
@@ -68,25 +61,7 @@
                         <field name="tid_addr" string="TID Start Address (Words)"/>
                         <field name="tid_len" string="TID Length (Words)"/>
                     </group>
-                    <notebook>
-                        <page name="antennas" string="Antennas">
-                            <div class="alert alert-info" role="alert">
-                                Antennas are physical ports owned by this Reader. Reader power applies to all ports; movement timing is configured separately in Parking Layout.
-                            </div>
-                            <div class="text-muted mb-2">
-                                Use Add a line to add physical Antennas while creating or editing this Reader.
-                            </div>
-                            <field name="antennas_ids" context="{'default_device_id': id}">
-                                <list string="Antennas" create="0" edit="1" delete="0">
-                                    <control>
-                                        <create string="Add a line"/>
-                                    </control>
-                                    <field name="antenna_no" string="Antenna No"/>
-                                </list>
-                            </field>
-                        </page>
-                    </notebook>
-                </sheet>
+                    </sheet>
             </form>
         </field>
     </record>
@@ -107,7 +82,6 @@
                 <field name="status" widget="badge" decoration-success="status == 'online'" decoration-danger="status == 'offline'" decoration-warning="status == 'degraded'"/>
                 <field name="name" string="Reader"/>
                 <field name="serial_number" string="Master Serial"/>
-                <field name="runtime_detected_serial_number" string="Detected SDK Serial"/>
                 <field name="last_seen"/>
                 <field name="firmware_version"/>
                 <field name="runtime_power_dbm" string="Reader Power (dBm)"/>

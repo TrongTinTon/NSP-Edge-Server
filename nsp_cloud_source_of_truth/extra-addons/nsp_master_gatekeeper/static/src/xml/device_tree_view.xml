@@ -3,20 +3,6 @@
     <t t-name="nsp_master_gatekeeper.DeviceTreeView">
         <div class="nsp-device-tree">
             <aside class="nsp-device-tree__tree-panel">
-                <div class="nsp-device-tree__tree-header">
-                    <div class="nsp-device-tree__tree-title-row">
-                        <div>
-                            <h3>NSP Tree View</h3>
-                            <p>Server → Controller → Reader</p>
-                        </div>
-                    </div>
-
-                    <div class="nsp-device-tree__search">
-                        <i class="fa fa-search" aria-hidden="true"/>
-                        <input type="search" placeholder="Search..." t-att-value="state.query" t-on-input="onSearchInput"/>
-                    </div>
-                </div>
-
                 <div class="nsp-device-tree__tree-scroll">
                     <button t-if="canAddServer"
                             type="button" class="nsp-device-tree__add-node" t-on-click="addServer">
@@ -156,8 +142,6 @@
                             </div>
                         </div>
                         <div class="nsp-device-tree__fields">
-                            <div class="nsp-device-tree__field"><label>Server Name</label><div class="nsp-device-tree__value" t-esc="selectedEntry.server.name"/></div>
-                            <div class="nsp-device-tree__field"><label>Controller Name</label><div class="nsp-device-tree__value" t-esc="selectedEntry.controller.name"/></div>
                             <div class="nsp-device-tree__field"><label>Reader Name</label><div class="nsp-device-tree__value" t-esc="selectedEntry.reader.name"/></div>
                             <div class="nsp-device-tree__field"><label>Serial</label><div class="nsp-device-tree__value" t-esc="selectedEntry.reader.serial"/></div>
                             <div class="nsp-device-tree__field">

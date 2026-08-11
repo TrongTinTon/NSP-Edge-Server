@@ -21,6 +21,18 @@ class TestDeviceTreeUiContract(TransactionCase):
         self.assertNotIn("controller_id", self.env["nsp.device"]._fields)
         self.assertNotIn("edge_server_id", self.env["nsp.device"]._fields)
 
+
+    def test_reader_master_drops_obsolete_runtime_connection_and_antenna_fields(self):
+        Reader = self.env["nsp.device"]
+        for field_name in (
+            "runtime_detected_serial_number",
+            "connection_type",
+            "antennas",
+            "antennas_ids",
+            "antenna_numbers",
+        ):
+            self.assertNotIn(field_name, Reader._fields)
+
     def test_lane_calibration_form_uses_tree_as_visible_device_editor(self):
         view = self.env.ref("nsp_master_gatekeeper.view_nsp_measurement_session_form")
         self.assertIn('widget="nsp_device_tree_view"', view.arch_db)
@@ -141,7 +153,7 @@ def test_device_selectors_enforce_whitelist_and_no_duplicates():
 
 def test_sync_payload_separates_master_devices_from_flat_topology():
     sync = _read("models/lane_calibration/calibration_sync.py")
-    assert '"schema_version": 3' in sync
+    assert '"schema_version": 4' in sync
     assert '"devices": {' in sync
     assert '"topology": {"nodes": topology}' in sync
     assert '"node_id": node.id' in sync
@@ -195,3 +207,74 @@ def test_legacy_calibration_scope_models_are_not_runtime_dependencies():
         "reader_line_ids",
     ):
         assert legacy not in text
+
+
+def test_lane_calibration_reader_information_hides_redundant_tree_ancestors():
+    xml = _read("static/src/xml/device_tree_view.xml")
+    assert "Reader Information" in xml
+    assert "<label>Server Name</label>" not in xml
+    assert "<label>Controller Name</label>" not in xml
+    assert "<label>Reader Name</label>" in xml
+    assert "<label>Serial</label>" in xml
+
+
+def test_detection_timeline_tag_column_is_optional():
+    session_view = _read("views/measurement_session_views.xml")
+    event_view = _read("views/measurement_event_views.xml")
+    expected = '<field name="tid" string="Tag" optional="show"/>'
+    assert expected in session_view
+    assert expected in event_view
+
+
+def test_reader_list_keeps_only_status_reader_serial_last_seen():
+    view = _read("views/device_views.xml")
+    start = view.index('<record id="nsp_device_view_list"')
+    end = view.index('<record id="nsp_device_view_form"')
+    reader_list = view[start:end]
+
+    assert '<field name="status" string="Status"' in reader_list
+    assert '<field name="name" string="Reader"' in reader_list
+    assert '<field name="serial_number" string="Serial"' in reader_list
+    assert '<field name="last_seen" string="Last Seen"' in reader_list
+
+    assert "runtime_detected_serial_number" not in reader_list
+    assert "connection_type" not in reader_list
+    assert "firmware_version" not in reader_list
+    assert "antennas" not in reader_list
+
+
+def test_device_tree_header_and_search_are_removed():
+    xml = _read("static/src/xml/device_tree_view.xml")
+    js = _read("static/src/js/device_tree_view.js")
+    scss = _read("static/src/scss/device_tree_view.scss")
+    assert "nsp-device-tree__tree-header" not in xml
+    assert "nsp-device-tree__search" not in xml
+    assert "NSP Tree View" not in xml
+    assert "onSearchInput" not in js
+    assert "state.query" not in js
+    assert "_filterTree" not in js
+    assert "&__tree-header" not in scss
+    assert "&__search" not in scss
+
+
+def test_reader_sync_contract_drops_obsolete_reader_fields():
+    device = _read("models/device.py")
+    calibration_sync = _read("models/lane_calibration/calibration_sync.py")
+    sync_api = _read("models/sync_api_service.py")
+    parking = _read("models/parking_config.py")
+
+    for obsolete in (
+        "runtime_detected_serial_number",
+        "connection_type",
+        "antennas_ids",
+        "antenna_numbers",
+        "_antenna_config_payload",
+    ):
+        assert obsolete not in device
+
+    assert '"schema_version": 4' in calibration_sync
+    assert '"physical_connection"' not in calibration_sync
+    assert '"physical_connection"' not in parking
+    assert '"detected_serial_number"' not in sync_api
+    assert 'values["runtime_detected_serial_number"]' not in sync_api
+    assert 'raise ValueError("reader_serial_mismatch")' in sync_api

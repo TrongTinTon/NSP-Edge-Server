@@ -28,16 +28,6 @@ class Device(models.Model):
         index=True,
         help="Physical Reader serial number. It must be globally unique in NSP.",
     )
-    runtime_detected_serial_number = fields.Char(
-        string="Detected SDK Serial",
-        readonly=True,
-        copy=False,
-        index=True,
-        help=(
-            "Latest physical Reader serial reported by Edge from the Reader SDK. "
-            "This runtime observation does not change the Cloud master Serial."
-        ),
-    )
     device_code = fields.Char(
         string="Device Code", required=True, readonly=True, copy=False, index=True,
         default=lambda self: new_management_code("DEV"),
@@ -77,18 +67,6 @@ class Device(models.Model):
         copy=False,
     )
 
-    # Physical connection inventory. The Odoo field widget groups options as Wired / Wireless.
-    connection_type = fields.Selection([
-        ("usb", "USB"),
-        ("rs232", "RS-232"),
-        ("rs485", "RS-485"),
-        ("ethernet", "Ethernet (RJ45)"),
-        ("wiegand", "Wiegand"),
-        ("bluetooth", "Bluetooth"),
-        ("wifi", "Wi-Fi"),
-        ("cellular", "4G/5G"),
-    ], string="Physical Connection", index=True)
-
     # Operation profile sent to Controller. These values are promoted from an
     # approved Measurement Session and are intentionally not edited on Reader UI.
     power_dbm = fields.Integer(
@@ -100,19 +78,6 @@ class Device(models.Model):
     read_interval_ms = fields.Integer(string="Read Interval ms", default=200)
     tid_addr = fields.Integer(string="TID Start Address (Words)", default=2, help="Start offset in 16-bit WORD units.")
     tid_len = fields.Integer(string="TID Length (Words)", default=4, help="Read length in 16-bit WORD units; 1 WORD equals 2 bytes.")
-
-    antennas = fields.Integer(string="Antennas", compute="_compute_antenna_count")
-    antennas_ids = fields.One2many(
-        "nsp.device.antenna",
-        "device_id",
-        string="Antennas",
-    )
-    antenna_numbers = fields.Char(
-        string="Antenna Nos.",
-        compute="_compute_antenna_numbers",
-        inverse="_inverse_antenna_numbers",
-        help="Comma-separated antenna numbers or ranges, for example: 1,2,3,4 or 1-4.",
-    )
 
     _sql_constraints = [
         ("serial_number_unique", "unique(serial_number)", "Reader Serial must be unique."),
@@ -197,11 +162,9 @@ class Device(models.Model):
     @api.model_create_multi
     def create(self, vals_list):
         prepared = []
-        antenna_inputs = []
         serials = set()
         for source in vals_list:
             vals = dict(source)
-            antenna_inputs.append(vals.pop("antenna_numbers", None))
             serial = self._normalize_serial(vals.get("serial_number"))
             if serial:
                 if serial in serials:
@@ -220,15 +183,10 @@ class Device(models.Model):
         if existing:
             self._raise_serial_conflict(existing.serial_number, existing)
 
-        records = super().create(prepared)
-        for record, antenna_input in zip(records, antenna_inputs):
-            if antenna_input is not None:
-                record._apply_antenna_numbers(antenna_input)
-        return records
+        return super().create(prepared)
 
     def write(self, vals):
         values = dict(vals)
-        antenna_input = values.pop("antenna_numbers", None)
         if "serial_number" in values:
             serial = self._normalize_serial(values.get("serial_number"))
             if serial:
@@ -242,119 +200,13 @@ class Device(models.Model):
             values["name"] = str(values.get("name") or "").strip() or "RFID Reader"
         if "device_code" in values:
             values["device_code"] = self._normalize_code(values.get("device_code"))
-        result = super().write(values)
-        if antenna_input is not None:
-            for record in self:
-                record._apply_antenna_numbers(antenna_input)
-        return result
+        return super().write(values)
 
     @api.constrains("serial_number", "device_code")
     def _check_declaration(self):
         for reader in self:
             if not self._normalize_code(reader.device_code):
                 raise ValidationError(_("Device Code is required."))
-
-    @api.depends("antennas_ids")
-    def _compute_antenna_count(self):
-        for record in self:
-            record.antennas = len(record.antennas_ids)
-
-    @api.depends("antennas_ids.antenna_no")
-    def _compute_antenna_numbers(self):
-        for record in self:
-            numbers = sorted(set(record.antennas_ids.mapped("antenna_no")))
-            record.antenna_numbers = ",".join(str(number) for number in numbers)
-
-    @api.model
-    def _parse_antenna_numbers(self, value):
-        """Parse compact Antenna input without storing a duplicate representation.
-
-        Accepted examples: ``1,2,3,4``, ``1 2 3 4``, ``1-4`` and
-        ``1,3-5``. The physical Antenna rows remain the source of truth.
-        """
-        raw = str(value or "").strip()
-        if not raw:
-            return []
-
-        normalized = raw.replace(";", ",").replace(" ", ",")
-        numbers = set()
-        for token in (part.strip() for part in normalized.split(",")):
-            if not token:
-                continue
-            if "-" in token:
-                pieces = [part.strip() for part in token.split("-", 1)]
-                if len(pieces) != 2 or not all(piece.isdigit() for piece in pieces):
-                    raise ValidationError(_(
-                        "Invalid Antenna range '%s'. Use values such as 1,2,3,4 or 1-4."
-                    ) % token)
-                start, end = (int(piece) for piece in pieces)
-                if start <= 0 or end <= 0 or end < start:
-                    raise ValidationError(_(
-                        "Invalid Antenna range '%s'. Antenna numbers must be positive and ascending."
-                    ) % token)
-                numbers.update(range(start, end + 1))
-            else:
-                if not token.isdigit() or int(token) <= 0:
-                    raise ValidationError(_(
-                        "Invalid Antenna number '%s'. Use positive whole numbers."
-                    ) % token)
-                numbers.add(int(token))
-
-        if len(numbers) > 64:
-            raise ValidationError(_("A Reader cannot declare more than 64 Antennas."))
-        return sorted(numbers)
-
-    def _inverse_antenna_numbers(self):
-        for record in self:
-            record._apply_antenna_numbers(record.antenna_numbers)
-
-    def _apply_antenna_numbers(self, value):
-        """Reconcile physical Antenna rows from compact inline Reader input."""
-        Antenna = self.env["nsp.device.antenna"]
-        for record in self:
-            record.ensure_one()
-            desired = set(record._parse_antenna_numbers(value))
-            existing_by_number = {
-                int(antenna.antenna_no): antenna
-                for antenna in record.antennas_ids
-            }
-
-            stale = record.antennas_ids.filtered(
-                lambda antenna: int(antenna.antenna_no) not in desired
-            )
-            if stale:
-                stale.unlink()
-
-            missing = sorted(desired - set(existing_by_number))
-            if missing:
-                Antenna.create([
-                    {"device_id": record.id, "antenna_no": number}
-                    for number in missing
-                ])
-        return True
-
-    def _antenna_config_payload(self, include_identity=False):
-        self.ensure_one()
-        antennas = self.antennas_ids
-        if "active" in antennas._fields:
-            antennas = antennas.filtered("active")
-        if "cloud_removed" in antennas._fields:
-            antennas = antennas.filtered(lambda antenna: not antenna.cloud_removed)
-        if "whitelist_id" in antennas._fields:
-            antennas = antennas.filtered(
-                lambda antenna: antenna.whitelist_id and antenna.whitelist_id.active
-            )
-        result = []
-        for antenna in antennas.sorted(key=lambda item: (item.antenna_no, item.id)):
-            item = {"antenna_no": int(antenna.antenna_no)}
-            if include_identity:
-                item.update({
-                    "technical_code": antenna.technical_code or "",
-                    "serial_number": antenna.serial_number or False,
-                    "name": antenna.whitelist_id.name if antenna.whitelist_id else antenna.display_name,
-                })
-            result.append(item)
-        return result
 
     def _build_config_payload(self):
         """Return technical Reader configuration for the Controller."""
@@ -367,7 +219,6 @@ class Device(models.Model):
                 "tid_start_address": int(self.tid_addr or 0),
                 "tid_length": int(self.tid_len or 0),
             },
-            "antennas": self._antenna_config_payload(include_identity=False),
         }
 
     def _build_edge_config_payload(self):
@@ -377,8 +228,6 @@ class Device(models.Model):
         payload.update({
             "technical_code": self.device_code or "",
             "reader_name": self.name or self.serial_number or "RFID Reader",
-            "physical_connection": self.connection_type or False,
-            "antennas": self._antenna_config_payload(include_identity=True),
         })
         return payload
 

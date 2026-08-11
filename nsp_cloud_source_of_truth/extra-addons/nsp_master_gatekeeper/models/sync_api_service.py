@@ -280,7 +280,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         if not isinstance(item, dict):
             raise ValueError("invalid_payload")
         allowed_fields = {
-            "reader_code", "serial_number", "detected_serial_number", "status",
+            "reader_code", "serial_number", "status",
             "last_seen_at", "last_detection_at", "last_detection_port_no",
             "firmware_version", "power_dbm", "read_interval_ms",
         }
@@ -299,6 +299,9 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             raise ValueError("reader_not_managed_by_runtime")
         if not device.active:
             raise ValueError("device_inactive")
+        master_serial = str(device.serial_number or "").strip().upper()
+        if master_serial and serial_number != master_serial:
+            raise ValueError("reader_serial_mismatch")
 
         status = str(item.get("status") or "offline").strip().lower()
         if status not in ("online", "offline", "degraded"):
@@ -318,13 +321,6 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         elif status == "online":
             values["last_seen"] = fields.Datetime.now()
 
-        detected_serial = str(
-            item.get("detected_serial_number") or ""
-        ).strip().upper()
-        if not detected_serial and serial_number != str(device.serial_number or "").strip().upper():
-            detected_serial = serial_number
-        if detected_serial:
-            values["runtime_detected_serial_number"] = detected_serial
         if last_detection_at:
             values["runtime_last_detection_at"] = last_detection_at
         if item.get("last_detection_port_no") not in (None, ""):
@@ -636,7 +632,6 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 "technical_code": reader_code,
                 "serial_number": serial_number,
                 "reader_name": str(reader.get("reader_name") or serial_number).strip(),
-                "physical_connection": reader.get("physical_connection") or False,
                 "reader_parameters": {
                     "power_dbm": power_dbm,
                     "read_interval_ms": read_interval_ms,

@@ -2,7 +2,7 @@
  'summary': 'Cloud source of truth, published runtime snapshots and Edge result mirrors for NSP Gatekeeper',
  'description': 'Cloud-only Gatekeeper master data, topology, measurement management and business history '
                 'mirrors.',
- 'version': '19.0.13.17.0',
+ 'version': '19.0.13.19.0',
  'sequence': 20,
  'author': 'BKU Team',
  'category': 'Services',
@@ -44,8 +44,6 @@
                                    'nsp_master_gatekeeper/static/src/xml/lane_sequence_preview.xml',
                                    'nsp_master_gatekeeper/static/src/js/lane_sequence_preview.js',
                                    'nsp_master_gatekeeper/static/src/xml/measurement_reader_dialog.xml',
-                                   'nsp_master_gatekeeper/static/src/xml/grouped_connection_field.xml',
-                                   'nsp_master_gatekeeper/static/src/js/grouped_connection_field.js',
             'nsp_master_gatekeeper/static/src/js/lane_calibration_form.js',
                                    'nsp_master_gatekeeper/static/src/js/parking_live_monitor.js',
                                    'nsp_master_gatekeeper/static/src/xml/parking_live_monitor.xml',

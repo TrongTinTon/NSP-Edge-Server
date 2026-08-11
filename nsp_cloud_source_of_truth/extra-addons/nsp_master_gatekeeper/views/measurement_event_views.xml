@@ -25,7 +25,7 @@
         <field name="arch" type="xml">
             <list string="Detection Timeline" create="0" edit="0" delete="0" default_order="read_at asc, read_at_ms asc, id asc">
                 <field name="timeline_timestamp" string="Timestamp"/>
-                <field name="tid" string="Tag"/>
+                <field name="tid" string="Tag" optional="show"/>
                 <field name="rssi_dbm" string="RSSI"/>
                 <field name="timeline_reader" string="Reader"/>
                 <field name="port_no" string="Port"/>

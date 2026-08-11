@@ -51,7 +51,6 @@ export class NspDeviceTreeView extends Component {
         this.removeParkingReaderRecord = removeRecord;
 
         this.state = useState({
-            query: "",
             selectedKey: null,
             expanded: {},
             editing: false,
@@ -435,7 +434,7 @@ export class NspDeviceTreeView extends Component {
                 readers: this.entries,
             });
         }
-        return this._filterTree([server]);
+        return [server];
     }
 
     _calibrationTree() {
@@ -456,32 +455,6 @@ export class NspDeviceTreeView extends Component {
                 });
             return { ...server, controllers };
         });
-        return this._filterTree(result);
-    }
-
-    _filterTree(tree) {
-        const query = this.state.query.trim().toLowerCase();
-        if (!query) {
-            return tree;
-        }
-        const result = [];
-        for (const server of tree) {
-            const serverMatch = String(server.name || "").toLowerCase().includes(query);
-            const controllers = [];
-            for (const controller of server.controllers || []) {
-                const controllerMatch = String(controller.name || "").toLowerCase().includes(query);
-                const readers = (controller.readers || []).filter((entry) => {
-                    const text = [entry.reader.name, entry.reader.serial].join(" ").toLowerCase();
-                    return serverMatch || controllerMatch || text.includes(query);
-                });
-                if (serverMatch || controllerMatch || readers.length) {
-                    controllers.push({ ...controller, readers });
-                }
-            }
-            if (serverMatch || controllers.length) {
-                result.push({ ...server, controllers });
-            }
-        }
         return result;
     }
 
@@ -542,10 +515,6 @@ export class NspDeviceTreeView extends Component {
         this.state.draft = {};
         this.state.errors = {};
         this.cancelPortEdit();
-    }
-
-    onSearchInput(ev) {
-        this.state.query = ev.target.value || "";
     }
 
     _openMasterSearch({ title, resModel, domain, fields, labelField, onSelected }) {

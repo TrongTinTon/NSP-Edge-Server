@@ -84,7 +84,6 @@ class NspMeasurementSessionSync(models.Model):
                     "id": device_id,
                     "name": reader.name or reader.serial_number or "",
                     "serial_number": reader.serial_number or "",
-                    "physical_connection": reader.connection_type or False,
                     "status": reader.status or "",
                 }
                 readers.append(reader_data)
@@ -110,7 +109,7 @@ class NspMeasurementSessionSync(models.Model):
             if self.target_line_ids else False
         )
         return {
-            "schema_version": 3,
+            "schema_version": 4,
             "snapshot_id": "%s-R%s" % (self.measurement_code, int(self.revision or 1)),
             "lane_calibration_code": self.measurement_code,
             "status": self.status,
@@ -281,7 +280,6 @@ class NspMeasurementSessionSync(models.Model):
                 "status": reader.status or "offline",
                 "last_seen": fields.Datetime.to_string(reader.last_seen) if reader.last_seen else None,
                 "firmware_version": reader.firmware_version or "",
-                "connection_type": reader.connection_type or "",
                 "configured_power_dbm": int(node.power_dbm or 0),
                 "configured_read_interval_ms": int(node.read_interval_ms or 0),
                 "ports": [

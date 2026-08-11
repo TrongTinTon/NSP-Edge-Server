@@ -249,7 +249,6 @@ class NspParkingArea(models.Model):
                     "technical_code": reader.device_code or "",
                     "serial_number": reader.serial_number or "",
                     "reader_name": reader.name or reader.serial_number or "",
-                    "physical_connection": reader.connection_type or False,
                     "reader_parameters": {
                         "power_dbm": int(config.power_dbm or 0),
                         "read_interval_ms": int(config.read_interval_ms or 200),
@@ -354,7 +353,7 @@ class NspParkingArea(models.Model):
                 raise ValidationError(_("Published Lane Readers must be an array."))
             allowed_reader = {
                 "technical_code", "serial_number", "reader_name",
-                "physical_connection", "reader_parameters", "ports",
+                "reader_parameters", "ports",
             }
             for reader in readers:
                 if not isinstance(reader, dict):

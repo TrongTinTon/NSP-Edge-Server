@@ -114,7 +114,7 @@ class DeviceAntenna(models.Model):
             device_id = self.env.context.get("default_device_id")
             device = self.env["nsp.device"].browse(int(device_id)).exists() if device_id else self.env["nsp.device"]
             if device:
-                existing_numbers = device.antennas_ids.mapped("antenna_no")
+                existing_numbers = self.search([("device_id", "=", device.id)]).mapped("antenna_no")
                 values["antenna_no"] = max(existing_numbers or [0]) + 1
         return values
 
