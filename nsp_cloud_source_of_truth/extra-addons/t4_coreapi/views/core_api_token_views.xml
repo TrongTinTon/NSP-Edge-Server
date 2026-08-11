@@ -12,7 +12,6 @@
                 <separator/>
                 <filter string="Application" name="group_application" context="{'group_by': 'application_id'}"/>
                 <filter string="Status" name="group_state" context="{'group_by': 'token_state'}"/>
-                <filter string="Traffic Status" name="group_traffic" context="{'group_by': 'traffic_status'}"/>
             </search>
         </field>
     </record>
@@ -21,13 +20,12 @@
         <field name="name">core.api.token.list</field>
         <field name="model">core.api.token</field>
         <field name="arch" type="xml">
-            <list decoration-muted="token_state == 'revoked'" decoration-danger="traffic_status == 'suspicious' and token_state == 'active'">
+            <list decoration-muted="token_state == 'revoked'">
                 <field name="application_name"/>
                 <field name="token_kind" widget="badge"/>
                 <field name="subject_model" optional="hide"/>
                 <field name="subject_record_id" optional="hide"/>
                 <field name="token_state" widget="badge" decoration-success="token_state == 'active'" decoration-muted="token_state == 'revoked'"/>
-                <field name="traffic_status" widget="badge" decoration-success="traffic_status == 'normal'" decoration-warning="traffic_status == 'elevated'" decoration-danger="traffic_status == 'suspicious'"/>
                 <field name="last_used_at" optional="show"/>
                 <field name="last_used_ip" optional="show"/>
                 <field name="expiration_date" optional="show"/>

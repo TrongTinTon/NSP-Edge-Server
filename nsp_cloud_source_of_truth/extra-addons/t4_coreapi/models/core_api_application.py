@@ -70,25 +70,15 @@ class CoreApiApplication(models.Model):
     token_count = fields.Integer(compute='_compute_token_count')
     has_active_token = fields.Boolean(
         string='Has Active Token',
-        compute='_compute_traffic_status',
+        compute='_compute_traffic_metrics',
     )
     api_requests_per_minute = fields.Integer(
         string='Aggregate API Requests (last min)',
-        compute='_compute_traffic_status',
+        compute='_compute_traffic_metrics',
     )
     auth_requests_per_minute = fields.Integer(
         string='Aggregate Auth Requests (last min)',
-        compute='_compute_traffic_status',
-    )
-    traffic_status = fields.Selection(
-        [
-            ('normal', 'Normal'),
-            ('elevated', 'Elevated'),
-            ('suspicious', 'Suspicious'),
-        ],
-        string='Traffic Status',
-        compute='_compute_traffic_status',
-        help='Based on request volume in the last minute versus configured rate limits.',
+        compute='_compute_traffic_metrics',
     )
     credentials_pending = fields.Boolean(
         string='Credentials Not Yet Viewed',
@@ -109,11 +99,6 @@ class CoreApiApplication(models.Model):
         'application_id',
         string='Gateway Routes',
         help='All API routes owned by this application.',
-    )
-    rate_limit_per_minute = fields.Integer(
-        string='API Rate Limit per Token (/min)',
-        default=60,
-        help='Maximum API calls per minute for each independently issued access token. 0 = unlimited.',
     )
     allowed_ips = fields.Text(
         string='Allowed IPs',
@@ -240,53 +225,35 @@ class CoreApiApplication(models.Model):
 
     @api.model
     def _traffic_snapshot(self, application):
-        """Return one-minute aggregate counts and status for the busiest token."""
+        """Return one-minute aggregate API/auth counts for observability only."""
         if not application.id:
-            return 0, 0, 'normal', False
+            return 0, 0, False
 
         cutoff = fields.Datetime.subtract(fields.Datetime.now(), minutes=1)
         self.env.cr.execute(
             """
-            WITH recent AS (
-                SELECT event_type, token_id
-                  FROM core_api_log
-                 WHERE application_id = %s
-                   AND create_date >= %s
-            ), token_counts AS (
-                SELECT token_id, COUNT(*) AS request_count
-                  FROM recent
-                 WHERE event_type = 'api' AND token_id IS NOT NULL
-                 GROUP BY token_id
-            )
             SELECT
                 COUNT(*) FILTER (WHERE event_type = 'api')::integer,
-                COUNT(*) FILTER (WHERE event_type = 'auth')::integer,
-                COALESCE((SELECT MAX(request_count) FROM token_counts), 0)::integer
-              FROM recent
+                COUNT(*) FILTER (WHERE event_type = 'auth')::integer
+              FROM core_api_log
+             WHERE application_id = %s
+               AND create_date >= %s
             """,
             [application.id, cutoff],
         )
-        api_count, auth_count, max_token_count = self.env.cr.fetchone() or (0, 0, 0)
+        api_count, auth_count = self.env.cr.fetchone() or (0, 0)
         has_token = bool(self.env['core.api.token'].sudo().search_count([
             ('application_id', '=', application.id),
             '|', ('active', '=', True), ('refresh_token_hash', '!=', False),
         ]))
-        limit = application.rate_limit_per_minute or 0
-        if limit and max_token_count >= limit:
-            status = 'suspicious'
-        elif limit and max_token_count >= max(1, int(limit * 0.8)):
-            status = 'elevated'
-        else:
-            status = 'normal'
-        return api_count, auth_count, status, has_token
+        return api_count, auth_count, has_token
 
-    def _compute_traffic_status(self):
-        """Compute live request rates and traffic health for each application."""
+    def _compute_traffic_metrics(self):
+        """Compute live request counters without applying any request limit."""
         for rec in self:
-            api_count, auth_count, status, has_token = self._traffic_snapshot(rec)
+            api_count, auth_count, has_token = self._traffic_snapshot(rec)
             rec.api_requests_per_minute = api_count
             rec.auth_requests_per_minute = auth_count
-            rec.traffic_status = status
             rec.has_active_token = has_token
 
     @api.model_create_multi
@@ -478,13 +445,6 @@ class CoreApiApplication(models.Model):
                 _('IP address %(ip)s is not allowed for application "%(app)s".',
                   ip=ip_address, app=self.name)
             )
-        return True
-
-    def check_api_rate_limit(self, token):
-        """Enforce the configured API limit for one access token."""
-        self.ensure_one()
-        from odoo.addons.t4_coreapi.utils.security import check_token_api_rate_limit
-        check_token_api_rate_limit(self, token)
         return True
 
     @api.model

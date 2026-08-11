@@ -2,7 +2,7 @@
 
 import re
 
-from werkzeug.exceptions import HTTPException, TooManyRequests, Unauthorized
+from werkzeug.exceptions import HTTPException, Unauthorized
 
 from odoo import models
 from odoo.exceptions import AccessError, UserError, ValidationError
@@ -46,7 +46,7 @@ class IrHttp(models.AbstractModel):
 
     @classmethod
     def _auth_method_core_api(cls):
-        """Validate bearer token, IP, and rate limits before API controllers run."""
+        """Validate bearer token and source IP before API controllers run."""
         token = cls._extract_bearer_token()
         if not token:
             raise Unauthorized(
@@ -62,30 +62,45 @@ class IrHttp(models.AbstractModel):
             )
 
         ip = get_client_ip()
-        try:
-            application.check_ip_allowed(ip)
-            application.check_api_rate_limit(token_rec)
-        except Exception as e:
-            if 'rate limit' in str(e).lower():
-                raise TooManyRequests(str(e)) from e
-            raise
+        application.check_ip_allowed(ip)
 
+        # Mặc định sử dụng Public User
         request_user_id = request.env.ref('base.public_user').id
+        
         if token_rec.token_kind == 'mobile':
-            if token_rec.subject_model != 'res.users' or not token_rec.subject_record_id:
+            if not token_rec.subject_model or not token_rec.subject_record_id:
                 raise Unauthorized(
-                    'Mobile token has no valid Odoo User binding.',
+                    'Mobile token has no valid subject binding.',
                     www_authenticate='Bearer realm="Core API"',
                 )
-            subject_user = request.env['res.users'].sudo().browse(
-                token_rec.subject_record_id
-            ).exists()
-            if not subject_user or not subject_user.active:
+
+            # Xử lý linh hoạt cho nhiều Model khác nhau
+            if token_rec.subject_model == 'res.users':
+                subject_user = request.env['res.users'].sudo().browse(
+                    token_rec.subject_record_id
+                ).exists()
+                if not subject_user or not subject_user.active:
+                    raise Unauthorized(
+                        'Odoo User is inactive or no longer available.',
+                        www_authenticate='Bearer realm="Core API"',
+                    )
+                request_user_id = subject_user.id
+                
+            elif token_rec.subject_model == 'nsp.user':
+                subject_user = request.env['nsp.user'].sudo().browse(
+                    token_rec.subject_record_id
+                ).exists()
+                if not subject_user or not subject_user.active:
+                    raise Unauthorized(
+                        'NSP User is inactive or no longer available.',
+                        www_authenticate='Bearer realm="Core API"',
+                    )
+                # nsp.user không dùng quyền của hệ thống nội bộ, giữ nguyên public_user
+            else:
                 raise Unauthorized(
-                    'Odoo User is inactive or no longer available.',
+                    f'Unsupported subject model: {token_rec.subject_model}',
                     www_authenticate='Bearer realm="Core API"',
                 )
-            request_user_id = subject_user.id
 
         request.update_env(user=request_user_id, su=False)
         request.update_context(
@@ -99,7 +114,6 @@ class IrHttp(models.AbstractModel):
             core_api_device_uid=token_rec.device_uid,
         )
         request.session.can_save = False
-
     @classmethod
     def _handle_error(cls, exception):
         """Return JSON error bodies for Core API gateway routes."""

@@ -37,7 +37,6 @@ class CoreApiToken(models.Model):
     application_name = fields.Char(related='application_id.name', store=True)
     client_id = fields.Char(related='application_id.client_id', store=True, index=True)
     application_state = fields.Selection(related='application_id.state', readonly=True)
-    traffic_status = fields.Selection(related='application_id.traffic_status', readonly=True)
     active = fields.Boolean(default=True)
     token_state = fields.Selection(
         [('active', 'Active'), ('revoked', 'Revoked')],

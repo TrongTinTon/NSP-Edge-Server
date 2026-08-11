@@ -4,14 +4,14 @@ import json
 import logging
 import time
 
-from werkzeug.exceptions import BadRequest, TooManyRequests, Unauthorized
+from werkzeug.exceptions import BadRequest, Unauthorized
 
 from odoo import http
 from odoo.http import request
 
 from odoo.addons.t4_coreapi.utils.response import auth_success_response
 from odoo.addons.t4_coreapi.utils.routing import AUTH_REFRESH_PATH, AUTH_TOKEN_PATH
-from odoo.addons.t4_coreapi.utils.security import check_ip_auth_rate_limit, get_client_ip
+from odoo.addons.t4_coreapi.utils.security import get_client_ip
 
 _logger = logging.getLogger(__name__)
 
@@ -44,11 +44,6 @@ class CoreApiAuthController(http.Controller):
     @http.route(AUTH_TOKEN_PATH, type='http', auth='none', methods=['POST'], csrf=False, save_session=False)
     def issue_token(self, **kw):
         """First login: client sends only client_id and client_secret."""
-        try:
-            check_ip_auth_rate_limit(request.env, get_client_ip())
-        except Exception as exc:
-            raise TooManyRequests(str(exc)) from exc
-
         data = self._parse_json_object()
         self._require_exact_fields(data, {'client_id', 'client_secret'})
         client_id = (data.get('client_id') or '').strip()
@@ -79,11 +74,6 @@ class CoreApiAuthController(http.Controller):
     @http.route(AUTH_REFRESH_PATH, type='http', auth='none', methods=['POST'], csrf=False, save_session=False)
     def refresh_token(self, **kw):
         """Rotate a refresh token without resending shared client credentials."""
-        try:
-            check_ip_auth_rate_limit(request.env, get_client_ip())
-        except Exception as exc:
-            raise TooManyRequests(str(exc)) from exc
-
         data = self._parse_json_object()
         self._require_exact_fields(data, {'refresh_token'})
         plaintext = data.get('refresh_token') or ''

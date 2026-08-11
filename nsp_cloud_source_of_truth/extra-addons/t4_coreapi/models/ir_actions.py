@@ -54,17 +54,24 @@ class IrActionsCoreApi(models.Model):
         ctx = self.env.context
 
         run_env = self.env
-        if (
-            ctx.get('core_api_token_kind') == 'mobile'
-            and ctx.get('core_api_subject_model') == 'res.users'
-            and ctx.get('core_api_subject_id')
-        ):
-            subject_user = self.env['res.users'].sudo().browse(
-                int(ctx['core_api_subject_id'])
-            ).exists()
-            if not subject_user or not subject_user.active:
-                raise ValueError('Mobile token Odoo User is inactive or unavailable.')
-            run_env = self.env(user=subject_user.id, su=False)
+        if ctx.get('core_api_token_kind') == 'mobile' and ctx.get('core_api_subject_id'):
+            subject_model = ctx.get('core_api_subject_model')
+            
+            if subject_model == 'res.users':
+                subject_user = self.env['res.users'].sudo().browse(
+                    int(ctx['core_api_subject_id'])
+                ).exists()
+                if not subject_user or not subject_user.active:
+                    raise ValueError('Mobile token Odoo User is inactive or unavailable.')
+                run_env = self.env(user=subject_user.id, su=False)
+                
+            elif subject_model == 'nsp.user':
+                subject_user = self.env['nsp.user'].sudo().browse(
+                    int(ctx['core_api_subject_id'])
+                ).exists()
+                if not subject_user or not subject_user.active:
+                    raise ValueError('Mobile token NSP User is inactive or unavailable.')
+                # nsp.user tự quản lý quyền trong các file API qua hàm _mobile_context()
 
         if self.model_id.model not in run_env:
             raise ValueError(f'Model {self.model_id.model} not found.')

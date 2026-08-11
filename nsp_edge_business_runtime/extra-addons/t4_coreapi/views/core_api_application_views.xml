@@ -24,9 +24,7 @@
                 <field name="domain_id"/>
                 <field name="client_id"/>
                 <field name="state" widget="badge" decoration-success="state == 'active'" decoration-muted="state == 'inactive'"/>
-                <field name="traffic_status" widget="badge" decoration-success="traffic_status == 'normal'" decoration-warning="traffic_status == 'elevated'" decoration-danger="traffic_status == 'suspicious'"/>
                 <field name="api_requests_per_minute"/>
-                <field name="rate_limit_per_minute" optional="hide"/>
                 <field name="has_active_token" column_invisible="1"/>
             </list>
         </field>
@@ -47,13 +45,9 @@
                 </header>
                 <sheet>
                     <widget name="web_ribbon" title="Inactive" bg_color="text-bg-danger" invisible="state == 'active'"/>
-                    <widget name="web_ribbon" title="Suspicious Traffic" bg_color="text-bg-warning" invisible="traffic_status != 'suspicious'"/>
                     <div class="alert alert-info" role="alert" invisible="id">
                         Client ID and Client Secret are generated automatically when you save.
                         Authorized Core API managers can view them again from View Credentials.
-                    </div>
-                    <div class="alert alert-warning mb-3" role="alert" invisible="traffic_status != 'suspicious'">
-                        Request rate exceeded the configured limit. Excess requests are rejected. Review active tokens and revoke a suspicious token, or revoke all tokens when the shared Application credential is compromised.
                     </div>
                     <div class="oe_button_box" name="button_box">
                         <button name="action_view_tokens" type="object" class="oe_stat_button" icon="fa-key" invisible="not id">
@@ -73,9 +67,7 @@
                             <field name="refresh_token_ttl_days"/>
                         </group>
                         <group string="Application Status">
-                            <field name="traffic_status" widget="badge" decoration-success="traffic_status == 'normal'" decoration-warning="traffic_status == 'elevated'" decoration-danger="traffic_status == 'suspicious'"/>
-                            <field name="api_requests_per_minute" readonly="1"/>
-                            <field name="rate_limit_per_minute" readonly="1"/>
+                                        <field name="api_requests_per_minute" readonly="1"/>
                             <field name="auth_requests_per_minute" readonly="1" string="Auth Requests (last min)"/>
                             <field name="has_active_token" invisible="1"/>
                             <field name="credentials_pending" invisible="1"/>
@@ -161,12 +153,6 @@
 
                         <page string="Security" name="security">
                             <group>
-                                <group string="Rate Limits">
-                                    <field name="rate_limit_per_minute"/>
-                                    <div class="text-muted" colspan="2">
-                                        API limits apply independently to each access token. Authentication is throttled per source IP.
-                                    </div>
-                                </group>
                                 <group>
                                     <field name="allowed_ips" placeholder="203.0.113.10&#10;198.51.100.0/24"/>
                                 </group>

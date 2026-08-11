@@ -40,7 +40,8 @@ or expand Core API permissions.
 - independent bearer access tokens
 - route-path authorization
 - API domains and versions
-- IP allowlists and rate limits
+- IP allowlists
+- unlimited authenticated API request throughput (no request throttling)
 - request audit logs
 - endpoint actions and route generation
 

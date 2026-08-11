@@ -2,7 +2,6 @@
 
 import ipaddress
 
-from odoo.exceptions import AccessError
 from odoo.http import request
 
 
@@ -45,41 +44,3 @@ def check_ip_allowed(allowed_ips_text, ip_address):
         except ValueError:
             continue
     return False
-
-
-def check_rate_limit(env, domain_extra, limit, error_message):
-    """Raise AccessError when recent log count exceeds the configured limit."""
-    if not limit:
-        return True
-    count = env['core.api.log'].sudo().count_recent(domain_extra, minutes=1)
-    if count >= limit:
-        raise AccessError(error_message)
-    return True
-
-
-def check_token_api_rate_limit(application, token):
-    """Enforce the Application policy independently for each access token."""
-    application.ensure_one()
-    token.ensure_one()
-    check_rate_limit(
-        application.env,
-        [('token_id', '=', token.id), ('event_type', '=', 'api')],
-        application.rate_limit_per_minute,
-        f'API rate limit exceeded for this access token ({application.rate_limit_per_minute}/min).',
-    )
-
-
-def check_ip_auth_rate_limit(env, ip_address, limit=None):
-    """Enforce authentication throttling per source IP, not per shared Application."""
-    if limit is None:
-        limit = int(env['ir.config_parameter'].sudo().get_param(
-            't4_coreapi.auth_rate_limit_per_ip', '300',
-        ))
-    if not ip_address or not limit:
-        return True
-    check_rate_limit(
-        env,
-        [('ip_address', '=', ip_address), ('event_type', '=', 'auth'), ('route', 'in', ['/auth/token', '/auth/refresh', '/v1/mobile/auth/login', '/v1/mobile/auth/refresh', '/v1/mobile/auth/logout'])],
-        limit,
-        f'Too many authentication attempts from IP {ip_address}. Try again later.',
-    )

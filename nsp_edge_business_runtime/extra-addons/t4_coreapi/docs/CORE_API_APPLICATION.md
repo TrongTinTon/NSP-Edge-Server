@@ -15,7 +15,9 @@ Authorization is determined by:
 - the Application identified by the access token;
 - the active Route Path assigned to that Application;
 - the HTTP method allowed by the route;
-- Application active state, IP allowlist, and rate limits.
+- Application active state and IP allowlist.
+
+Core API does not impose request-rate limits on authenticated API, token, or refresh requests.
 
 Controller Code, Edge Server Code, and similar payload values are validated by the
 business endpoint after Core API authorization. They do not choose an Application or
