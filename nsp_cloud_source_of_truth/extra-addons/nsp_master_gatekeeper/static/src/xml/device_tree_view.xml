@@ -10,6 +10,7 @@
                             <p>Server → Controller → Reader</p>
                         </div>
                     </div>
+
                     <div class="nsp-device-tree__search">
                         <i class="fa fa-search" aria-hidden="true"/>
                         <input type="search" placeholder="Search..." t-att-value="state.query" t-on-input="onSearchInput"/>
@@ -17,10 +18,11 @@
                 </div>
 
                 <div class="nsp-device-tree__tree-scroll">
-                    <button t-if="canAddServer" type="button" class="nsp-device-tree__add-node"
-                            t-on-click="addServer">
+                    <button t-if="canAddServer"
+                            type="button" class="nsp-device-tree__add-node" t-on-click="addServer">
                         <i class="fa fa-plus"/> <span>Add Server</span>
                     </button>
+
                     <t t-if="tree.length">
                         <t t-foreach="tree" t-as="server" t-key="server.key">
                             <div class="nsp-device-tree__node nsp-device-tree__node--server">
@@ -33,14 +35,18 @@
                                         <span t-att-class="'nsp-device-tree__dot is-' + server.status"/>
                                     </button>
                                     <div t-if="editable" class="nsp-device-tree__row-actions">
-                                        <button t-if="canAddController(server)" type="button" class="nsp-device-tree__icon-action"
-                                                title="Add Controller" t-on-click="() => this.addController(server)"><i class="fa fa-plus"/></button>
+                                        <button t-if="canAddController(server)"
+                                                type="button" class="nsp-device-tree__icon-action"
+                                                title="Add Controller" t-on-click="() => this.addController(server)">
+                                            <i class="fa fa-plus"/>
+                                        </button>
                                         <button type="button" class="nsp-device-tree__icon-action" title="Edit Server"
                                                 t-on-click="() => this.editServer(server)"><i class="fa fa-pencil"/></button>
                                         <button type="button" class="nsp-device-tree__icon-action is-danger" title="Remove Server"
                                                 t-on-click="() => this.deleteServer(server)"><i class="fa fa-trash"/></button>
                                     </div>
                                 </div>
+
                                 <div t-if="isExpanded(server.key)" class="nsp-device-tree__children">
                                     <t t-foreach="server.controllers" t-as="controller" t-key="controller.key">
                                         <div class="nsp-device-tree__node nsp-device-tree__node--controller">
@@ -53,14 +59,17 @@
                                                     <span t-att-class="'nsp-device-tree__dot is-' + controller.status"/>
                                                 </button>
                                                 <div t-if="editable" class="nsp-device-tree__row-actions">
-                                                    <button type="button" class="nsp-device-tree__icon-action" title="Add Reader"
-                                                            t-on-click="() => this.addReader(server, controller)"><i class="fa fa-plus"/></button>
+                                                    <button type="button" class="nsp-device-tree__icon-action"
+                                                            title="Add Reader" t-on-click="() => this.addReader(server, controller)">
+                                                        <i class="fa fa-plus"/>
+                                                    </button>
                                                     <button type="button" class="nsp-device-tree__icon-action" title="Edit Controller"
                                                             t-on-click="() => this.editController(server, controller)"><i class="fa fa-pencil"/></button>
                                                     <button type="button" class="nsp-device-tree__icon-action is-danger" title="Remove Controller"
                                                             t-on-click="() => this.deleteController(server, controller)"><i class="fa fa-trash"/></button>
                                                 </div>
                                             </div>
+
                                             <div t-if="isExpanded(controller.key)" class="nsp-device-tree__children">
                                                 <t t-foreach="controller.readers" t-as="entry" t-key="entry.key">
                                                     <div t-att-class="'nsp-device-tree__row nsp-device-tree__row--reader ' + (selectedEntry &amp;&amp; selectedEntry.key === entry.key ? 'is-selected' : '')">
@@ -90,7 +99,15 @@
                             </div>
                         </t>
                     </t>
-                    <div t-else="" class="nsp-device-tree__empty">
+
+                    <div t-if="mode === 'lane_calibration' &amp;&amp; !tree.length"
+                         class="nsp-device-tree__empty">
+                        <i class="fa fa-sitemap"/>
+                        <strong>No Device Tree mapping</strong>
+                        <span>Add a Server to start building the hierarchy.</span>
+                    </div>
+                    <div t-if="mode === 'parking_lane' &amp;&amp; !tree.length"
+                         class="nsp-device-tree__empty">
                         <i class="fa fa-sitemap"/>
                         <strong>No Device Tree mapping</strong>
                         <span>Add a Server to start building the hierarchy.</span>
@@ -167,39 +184,29 @@
                                 <div class="nsp-device-tree__ports-head">
                                     <label>Antennas / Ports</label>
                                     <button t-if="mode === 'lane_calibration' &amp;&amp; editable"
-                                            type="button" class="btn btn-sm btn-outline-primary"
-                                            t-on-click="addPort">
+                                            type="button" class="btn btn-sm btn-outline-primary" t-on-click="addPort">
                                         <i class="fa fa-plus me-1"/> Add Port
                                     </button>
                                 </div>
                                 <t t-if="mode === 'lane_calibration'">
                                     <div class="nsp-device-tree__ports-list">
-                                        <div t-foreach="selectedPorts" t-as="port" t-key="port.key"
-                                             class="nsp-device-tree__port-row">
+                                        <div t-foreach="selectedPorts" t-as="port" t-key="port.key" class="nsp-device-tree__port-row">
                                             <t t-if="state.portEditingKey === port.key">
                                                 <div class="nsp-device-tree__port-edit">
                                                     <span>P</span>
-                                                    <input type="number" min="1" max="16"
-                                                           class="form-control form-control-sm"
-                                                           t-att-value="state.portDraft"
-                                                           t-on-input="onPortInput"/>
-                                                    <button type="button" class="btn btn-sm btn-primary"
-                                                            t-on-click="() => this.savePort(port)">Save</button>
-                                                    <button type="button" class="btn btn-sm btn-secondary"
-                                                            t-on-click="cancelPortEdit">Cancel</button>
+                                                    <input type="number" min="1" max="16" class="form-control form-control-sm"
+                                                           t-att-value="state.portDraft" t-on-input="onPortInput"/>
+                                                    <button type="button" class="btn btn-sm btn-primary" t-on-click="() => this.savePort(port)">Save</button>
+                                                    <button type="button" class="btn btn-sm btn-secondary" t-on-click="cancelPortEdit">Cancel</button>
                                                 </div>
                                             </t>
                                             <t t-else="">
                                                 <span class="nsp-device-tree__port-chip">P<t t-esc="port.portNo"/></span>
                                                 <div t-if="editable" class="nsp-device-tree__port-actions">
-                                                    <button type="button" class="nsp-device-tree__icon-action"
-                                                            title="Edit Port" t-on-click="() => this.startPortEdit(port)">
-                                                        <i class="fa fa-pencil"/>
-                                                    </button>
-                                                    <button type="button" class="nsp-device-tree__icon-action is-danger"
-                                                            title="Remove Port" t-on-click="() => this.deletePort(port)">
-                                                        <i class="fa fa-trash"/>
-                                                    </button>
+                                                    <button type="button" class="nsp-device-tree__icon-action" title="Edit Port"
+                                                            t-on-click="() => this.startPortEdit(port)"><i class="fa fa-pencil"/></button>
+                                                    <button type="button" class="nsp-device-tree__icon-action is-danger" title="Remove Port"
+                                                            t-on-click="() => this.deletePort(port)"><i class="fa fa-trash"/></button>
                                                 </div>
                                             </t>
                                         </div>

@@ -42,13 +42,16 @@ class NspMeasurementSessionTimeline(models.Model):
 
     def _build_detection_steps(self, events):
         self.ensure_one()
-        readers_by_serial = {
-            (line.reader_id.serial_number or "").strip().upper(): {
-                "controller_code": line.controller_id.controller_id or "",
-                "reader_name": line.reader_id.name or line.reader_id.serial_number or "",
+        readers_by_serial = {}
+        for node in self._reader_nodes():
+            controller_node = node.parent_id if node.parent_id.device_type == "controller" else False
+            readers_by_serial[(node.reader_id.serial_number or "").strip().upper()] = {
+                "controller_code": (
+                    controller_node.controller_id.controller_id or ""
+                    if controller_node and controller_node.controller_id else ""
+                ),
+                "reader_name": node.reader_id.name or node.reader_id.serial_number or "",
             }
-            for line in self.reader_line_ids
-        }
         event_values = []
         for event in events:
             event_values.append({
@@ -133,10 +136,10 @@ class NspMeasurementSessionTimeline(models.Model):
                 raise ValidationError(_(
                     "A Detection Timeline row is no longer available. Refresh and try again."
                 ))
-            reader_line = self._measurement_line_for_serial(step.get("serial_number"))
-            if not reader_line:
+            reader_node = self._measurement_node_for_serial(step.get("serial_number"))
+            if not reader_node:
                 raise ValidationError(_("A detection does not belong to the current Infrastructure Scope."))
-            reader = reader_line.reader_id
+            reader = reader_node.reader_id
             port_no = int(step.get("port_no") or 0)
             point_key = (reader.id, port_no)
 
@@ -148,8 +151,19 @@ class NspMeasurementSessionTimeline(models.Model):
                 continue
 
             point_keys.add(point_key)
-            controller_ids.add(reader_line.controller_id.id)
-            edge_ids.add(reader_line.edge_server_id.id)
+            controller_node = reader_node.parent_id
+            server_node = controller_node.parent_id if controller_node else False
+            if (
+                not controller_node
+                or controller_node.device_type != "controller"
+                or not controller_node.controller_id
+                or not server_node
+                or server_node.device_type != "server"
+                or not server_node.server_id
+            ):
+                raise ValidationError(_("A detection belongs to an unassigned Device Tree Reader."))
+            controller_ids.add(controller_node.controller_id.id)
+            edge_ids.add(server_node.server_id.id)
             current_seconds = self._event_seconds(event)
             duration = 0.0 if previous_seconds is None else max(abs(current_seconds - previous_seconds), 0.001)
             previous_seconds = current_seconds
@@ -164,10 +178,10 @@ class NspMeasurementSessionTimeline(models.Model):
                 "observed_at": event.read_at,
                 "observed_at_ms": int(event.read_at_ms or 0),
                 "duration_from_previous": duration,
-                "reader_power_dbm": int(reader_line.reader_power_dbm or 0),
-                "read_interval_ms": int(reader_line.read_interval_ms or 200),
-                "tid_start_address": int(reader_line.reader_tid_addr or 0),
-                "tid_length": int(reader_line.reader_tid_len or 4),
+                "reader_power_dbm": int(reader_node.power_dbm or 0),
+                "read_interval_ms": int(reader_node.read_interval_ms or 200),
+                "tid_start_address": int(reader_node.tid_addr or 0),
+                "tid_length": int(reader_node.tid_len or 4),
             })
 
         if len(selected) < 2:
@@ -209,14 +223,15 @@ class NspMeasurementSessionTimeline(models.Model):
         # infrastructure scope. The Antenna Sequence is seeded from observed
         # Detection Timeline order and remains editable inside that calibrated scope.
         reader_defaults = {}
-        for reader_line in self.reader_line_ids:
-            reader_defaults[reader_line.reader_id.id] = {
-                "reader_id": reader_line.reader_id.id,
-                "reader_power_dbm": int(reader_line.reader_power_dbm or 0),
-                "read_interval_ms": int(reader_line.read_interval_ms or 200),
-                "tid_start_address": int(reader_line.reader_tid_addr or 0),
-                "tid_length": int(reader_line.reader_tid_len or 4),
+        for reader_node in self._reader_nodes():
+            reader_defaults[reader_node.reader_id.id] = {
+                "reader_id": reader_node.reader_id.id,
+                "reader_power_dbm": int(reader_node.power_dbm or 0),
+                "read_interval_ms": int(reader_node.read_interval_ms or 200),
+                "tid_start_address": int(reader_node.tid_addr or 0),
+                "tid_length": int(reader_node.tid_len or 4),
             }
+
 
         wizard = self.env["nsp.lane.setup.wizard"].create({
             "source_scope": "calibration",
@@ -300,10 +315,10 @@ class NspMeasurementSessionCalibrationResult(models.Model):
         self.ensure_one()
         serial = str(event.serial_number or "").strip().upper()
         port_no = int(event.port_no or 0)
-        for reader_line in self.reader_line_ids:
-            if str(reader_line.reader_id.serial_number or "").strip().upper() != serial:
+        for reader_node in self._reader_nodes():
+            if str(reader_node.reader_id.serial_number or "").strip().upper() != serial:
                 continue
-            reader_port = reader_line.reader_port_ids.filtered(
+            reader_port = reader_node.reader_port_ids.filtered(
                 lambda row: int(row.port_no or 0) == port_no
             )[:1]
             if reader_port:
@@ -328,15 +343,15 @@ class NspMeasurementSessionCalibrationResult(models.Model):
                 continue
             current = {
                 "reader_port_id": reader_port.id,
-                "reader_line_id": reader_port.reader_line_id.id,
-                "reader_id": reader_port.reader_line_id.reader_id.id,
-                "reader_serial_number": reader_port.reader_line_id.reader_id.serial_number or "",
-                "reader_code": reader_port.reader_line_id.reader_id.device_code or "",
+                "reader_node_id": reader_port.reader_node_id.id,
+                "reader_id": reader_port.reader_node_id.reader_id.id,
+                "reader_serial_number": reader_port.reader_node_id.reader_id.serial_number or "",
+                "reader_code": reader_port.reader_node_id.reader_id.device_code or "",
                 "port_no": int(reader_port.port_no or 0),
                 "point_key": "%s:%s" % (
-                    reader_port.reader_line_id.reader_id.device_code
-                    or reader_port.reader_line_id.reader_id.serial_number
-                    or reader_port.reader_line_id.reader_id.id,
+                    reader_port.reader_node_id.reader_id.device_code
+                    or reader_port.reader_node_id.reader_id.serial_number
+                    or reader_port.reader_node_id.reader_id.id,
                     int(reader_port.port_no or 0),
                 ),
                 "first_seconds": _event_seconds(event),
@@ -567,7 +582,7 @@ class NspMeasurementPassStep(models.Model):
     pass_id = fields.Many2one("nsp.measurement.pass", required=True, ondelete="cascade", index=True)
     sequence = fields.Integer(required=True)
     reader_port_id = fields.Many2one("nsp.measurement.reader.port", required=True, ondelete="restrict")
-    reader_id = fields.Many2one(related="reader_port_id.reader_line_id.reader_id", store=True, readonly=True)
+    reader_id = fields.Many2one(related="reader_port_id.reader_node_id.reader_id", store=True, readonly=True)
     port_no = fields.Integer(related="reader_port_id.port_no", store=True, readonly=True)
     first_read_at = fields.Datetime(required=True)
     first_read_at_ms = fields.Integer(default=0)
@@ -683,7 +698,7 @@ class NspMeasurementResultLine(models.Model):
     result_id = fields.Many2one("nsp.measurement.result", required=True, ondelete="cascade", index=True)
     sequence = fields.Integer(required=True)
     reader_port_id = fields.Many2one("nsp.measurement.reader.port", required=True, ondelete="restrict")
-    reader_id = fields.Many2one(related="reader_port_id.reader_line_id.reader_id", store=True, readonly=True)
+    reader_id = fields.Many2one(related="reader_port_id.reader_node_id.reader_id", store=True, readonly=True)
     port_no = fields.Integer(related="reader_port_id.port_no", store=True, readonly=True)
     duration_standard = fields.Float(digits=(8, 3), default=0.0)
     duration_min = fields.Float(digits=(8, 3))

@@ -450,30 +450,6 @@
     }
 }
 
-.nsp-device-mapping-dialog {
-    padding: 4px 2px;
-
-    &__hint {
-        margin: 0 0 14px;
-        color: #6B7280;
-        font-size: 12px;
-        line-height: 1.5;
-    }
-
-    &__fields {
-        display: grid;
-        gap: 14px;
-
-        label > span {
-            display: block;
-            margin-bottom: 6px;
-            color: #374151;
-            font-size: 12px;
-            font-weight: 650;
-        }
-    }
-}
-
 /* Parking Lane Antenna Sequence: editor left, live preview right. */
 .o_nsp_parking_lane_form {
     .nsp-parking-sequence-grid {

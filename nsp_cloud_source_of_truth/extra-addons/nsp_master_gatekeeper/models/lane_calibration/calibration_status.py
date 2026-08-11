@@ -141,22 +141,82 @@ class NspMeasurementSessionStatus(models.Model):
         return True
 
     def _require_ready_configuration(self):
+        """Release gate for a complete Server -> Controller -> Reader Tree.
+
+        Draft persistence deliberately does not call this validator.  Multiple
+        Servers, Controllers and Readers are supported; every selected node must
+        participate in one valid topology before Release.
+        """
         self.ensure_one()
-        missing = []
         if len(self.target_line_ids) != 1:
-            missing.append(_("exactly one raw Calibration Tag"))
-        if not self.reader_line_ids:
-            missing.append(_("Readers"))
+            raise ValidationError(_("Release requires exactly one raw Calibration Tag."))
+
+        server_nodes = self._server_nodes()
+        controller_nodes = self._controller_nodes()
+        reader_nodes = self._reader_nodes()
+        missing = []
+        if not server_nodes:
+            missing.append(_("Server"))
+        if not controller_nodes:
+            missing.append(_("Controller"))
+        if not reader_nodes:
+            missing.append(_("Reader"))
         if missing:
             raise ValidationError(
                 _("Missing Lane Calibration configuration: %s") % ", ".join(missing)
             )
-        missing_ports = self.reader_line_ids.filtered(lambda line: not line.reader_port_ids)
-        if missing_ports:
-            names = ", ".join(missing_ports.mapped("reader_id.display_name"))
+
+        invalid_servers = server_nodes.filtered(lambda node: bool(node.parent_id))
+        if invalid_servers:
             raise ValidationError(
-                _("Select at least one Reader Port for each RFID Reader. Missing: %s") % names
+                _("Server nodes must be roots of the Device Tree: %s")
+                % ", ".join(invalid_servers.mapped("device_name"))
             )
+
+        unassigned_controllers = controller_nodes.filtered(
+            lambda node: not node.parent_id or node.parent_id.device_type != "server"
+        )
+        if unassigned_controllers:
+            raise ValidationError(
+                _("Assign every Controller to a Server before Release. Missing: %s")
+                % ", ".join(unassigned_controllers.mapped("device_name"))
+            )
+
+        unassigned_readers = reader_nodes.filtered(
+            lambda node: not node.parent_id or node.parent_id.device_type != "controller"
+        )
+        if unassigned_readers:
+            raise ValidationError(
+                _("Assign every Reader to a Controller before Release. Missing: %s")
+                % ", ".join(unassigned_readers.mapped("device_name"))
+            )
+
+        servers_without_controllers = server_nodes.filtered(
+            lambda server: not controller_nodes.filtered(lambda node: node.parent_id == server)
+        )
+        if servers_without_controllers:
+            raise ValidationError(
+                _("Add at least one Controller under every Server. Missing: %s")
+                % ", ".join(servers_without_controllers.mapped("device_name"))
+            )
+
+        controllers_without_readers = controller_nodes.filtered(
+            lambda controller: not reader_nodes.filtered(lambda node: node.parent_id == controller)
+        )
+        if controllers_without_readers:
+            raise ValidationError(
+                _("Add at least one Reader under every Controller. Missing: %s")
+                % ", ".join(controllers_without_readers.mapped("device_name"))
+            )
+
+        missing_ports = reader_nodes.filtered(lambda node: not node.reader_port_ids)
+        if missing_ports:
+            raise ValidationError(
+                _("Select at least one Reader Port for each RFID Reader. Missing: %s")
+                % ", ".join(missing_ports.mapped("device_name"))
+            )
+
+        # Re-run identity/data-integrity checks after topology completeness passes.
         self._validate_measurement_scope()
         return True
 
@@ -237,35 +297,35 @@ class NspMeasurementSessionStatus(models.Model):
         if reader_settings not in (None, False, ""):
             if not isinstance(reader_settings, list):
                 raise ValidationError(_("Reader settings must be a list."))
-            line_by_id = {line.id: line for line in self.reader_line_ids}
+            node_by_id = {node.id: node for node in self._reader_nodes()}
             seen = set()
             updates_by_values = {}
             for item in reader_settings:
                 if not isinstance(item, dict):
                     raise ValidationError(_("Invalid Reader settings."))
                 try:
-                    line_id = int(item.get("reader_line_id") or 0)
+                    node_id = int(item.get("reader_node_id") or 0)
                     power = int(item.get("power_dbm"))
                     interval = int(item.get("read_interval_ms"))
                 except (TypeError, ValueError) as exc:
                     raise ValidationError(_("Invalid Reader settings.")) from exc
-                line = line_by_id.get(line_id)
-                if not line or line_id in seen:
+                node = node_by_id.get(node_id)
+                if not node or node_id in seen:
                     raise ValidationError(_(
                         "Reader settings do not match this Lane Calibration."
                     ))
-                seen.add(line_id)
-                updates_by_values.setdefault((power, interval), self.env[line._name].browse())
-                updates_by_values[(power, interval)] |= line
-            for (power, interval), lines in updates_by_values.items():
-                lines.with_context(measurement_sync=True).write({
-                    "reader_power_dbm": power,
+                seen.add(node_id)
+                updates_by_values.setdefault((power, interval), self.env[node._name].browse())
+                updates_by_values[(power, interval)] |= node
+            for (power, interval), nodes in updates_by_values.items():
+                nodes.with_context(measurement_sync=True).write({
+                    "power_dbm": power,
                     "read_interval_ms": interval,
                 })
         return self._release_new_revision("ready")
 
-    def action_apply_reader_settings(self, reader_line_id, power_dbm, read_interval_ms):
-        """Apply one Reader configuration and release a new shared revision."""
+    def action_apply_reader_settings(self, reader_node_id, power_dbm, read_interval_ms):
+        """Apply one contextual Reader-node configuration and release a new revision."""
         self.ensure_one()
         self._check_public_action_access("write")
         if self.status not in CalibrationStatusPolicy.REVISION_SOURCES["ready"]:
@@ -273,16 +333,16 @@ class NspMeasurementSessionStatus(models.Model):
                 "Reader settings can be applied only while running, completed, or failed."
             ))
         try:
-            line_id = int(reader_line_id or 0)
+            node_id = int(reader_node_id or 0)
             power = int(power_dbm)
             interval = int(read_interval_ms)
         except (TypeError, ValueError) as exc:
             raise ValidationError(_("Invalid Reader settings.")) from exc
-        line = self.reader_line_ids.filtered(lambda item: item.id == line_id)[:1]
-        if not line:
+        node = self._reader_nodes().filtered(lambda item: item.id == node_id)[:1]
+        if not node:
             raise ValidationError(_("Reader does not belong to this Lane Calibration."))
-        line.with_context(measurement_sync=True).write({
-            "reader_power_dbm": power,
+        node.with_context(measurement_sync=True).write({
+            "power_dbm": power,
             "read_interval_ms": interval,
         })
         self._require_ready_configuration()
@@ -300,15 +360,15 @@ class NspMeasurementSessionStatus(models.Model):
         self._require_ready_configuration()
 
         readers_by_settings = {}
-        for line in self.reader_line_ids:
+        for node in self._reader_nodes():
             values = (
-                int(line.reader_power_dbm or 0),
-                int(line.read_interval_ms or 200),
+                int(node.power_dbm or 0),
+                int(node.read_interval_ms or 200),
             )
-            readers_by_settings.setdefault(values, self.env[line.reader_id._name].browse())
-            readers_by_settings[values] |= line.reader_id
+            readers_by_settings.setdefault(values, self.env[node.reader_id._name].browse())
+            readers_by_settings[values] |= node.reader_id
         for (power, interval), readers in readers_by_settings.items():
-            # Scope and ownership were validated on the selected Reader lines above.
+            # Device-node scope and contextual Reader settings were validated above.
             readers.sudo().write({
                 "power_dbm": power,
                 "read_interval_ms": interval,

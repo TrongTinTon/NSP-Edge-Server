@@ -215,16 +215,19 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 # Lane Controller + Reader is an explicit runtime association,
                 # not a permanent Reader ownership relation.
 
-        ReaderLine = self.env["nsp.measurement.reader.line"].sudo()
-        calibration_lines = ReaderLine.search([
-            ("edge_server_id", "=", edge_server.id),
+        DeviceNode = self.env["nsp.measurement.device.node"].sudo()
+        calibration_readers = DeviceNode.search([
+            ("device_type", "=", "reader"),
+            ("parent_id.device_type", "=", "controller"),
+            ("parent_id.parent_id.device_type", "=", "server"),
+            ("parent_id.parent_id.server_id", "=", edge_server.id),
             ("session_id.status", "in", ["ready", "running"]),
         ])
-        for line in calibration_lines:
+        for node in calibration_readers:
             register_reader(
-                line.controller_id.controller_id,
-                line.reader_id.device_code,
-                device=line.reader_id,
+                node.parent_id.controller_id.controller_id,
+                node.reader_id.device_code,
+                device=node.reader_id,
             )
 
         controllers = Controller.search([
@@ -993,8 +996,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
 
     @api.model
     def _measurement_session_in_local_scope(self, session, edge_server):
-        return bool(session.reader_line_ids.filtered(
-            lambda line: line.edge_server_id == edge_server
+        return bool(session._server_nodes().filtered(
+            lambda node: node.server_id == edge_server
         ))
 
     @api.model
@@ -1064,7 +1067,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             Session = self.env["nsp.measurement.session"].sudo()
             records = Session.search([
                 ("status", "in", ("ready", "running")),
-                ("reader_line_ids.edge_server_id", "=", edge_server.id),
+                ("device_node_ids.server_id", "=", edge_server.id),
             ], order="measurement_code,id")
             return self._ok({
                 "items": [self._measurement_config_payload(session, edge_server=edge_server) for session in records],
@@ -1099,12 +1102,12 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             port_no = 0
         if port_no <= 0:
             raise ValueError("reader_port_not_found")
-        reader_line = session._measurement_line_for_serial(serial_number)
+        reader_node = session._measurement_node_for_serial(serial_number)
         if allowed_reader_ports is None:
             allowed_reader_ports = session._allowed_reader_port_pairs()
         if (serial_number, port_no) not in allowed_reader_ports:
             raise ValueError("reader_port_not_found")
-        if not reader_line:
+        if not reader_node:
             raise ValueError("reader_not_in_scope")
         read_at = self._measurement_datetime(item.get("read_at"), required=True)
         read_at_ms = self._measurement_millisecond(item.get("read_at"))
@@ -1119,8 +1122,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             try:
                 revision = int(item.get("revision"))
                 fallback_power = (
-                    reader_line.reader_power_dbm
-                    if reader_line
+                    reader_node.power_dbm
+                    if reader_node
                     else session._reader_power_for_serial(serial_number)
                 )
                 power_dbm = int(
@@ -1129,8 +1132,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     else fallback_power
                 )
                 fallback_interval = (
-                    reader_line.read_interval_ms
-                    if reader_line
+                    reader_node.read_interval_ms
+                    if reader_node
                     else session._reader_interval_for_serial(serial_number)
                 )
                 read_interval_ms = int(
@@ -1142,8 +1145,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 raise ValueError("invalid_measurement_snapshot") from exc
         else:
             revision = int(session.revision or 1)
-            power_dbm = int(reader_line.reader_power_dbm or 0)
-            read_interval_ms = int(reader_line.read_interval_ms or 0)
+            power_dbm = int(reader_node.power_dbm or 0)
+            read_interval_ms = int(reader_node.read_interval_ms or 0)
         if (
             revision <= 0
             or power_dbm < 0

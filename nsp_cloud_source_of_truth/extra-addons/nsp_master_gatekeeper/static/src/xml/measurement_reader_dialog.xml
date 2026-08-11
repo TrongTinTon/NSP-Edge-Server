@@ -1,21 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <templates xml:space="preserve">
     <!--
-        Odoo's X2Many dialog owns the save callback that validates and attaches
-        a virtual one2many child to its parent form. A form footer button with
-        special="save" bypasses that callback and therefore does not add the
-        child record to its one2many parent. Keep the native callback, hide
-        Save & New, and use one concise Save action for supported NSP dialogs.
+        Parking Lane still uses Odoo's native x2many dialog lifecycle. Lane
+        Calibration Device Tree no longer uses x2many dialogs; it persists
+        contextual device nodes directly through ORM.
     -->
     <t t-name="nsp_master_gatekeeper.MeasurementReaderDialogButtons"
        t-inherit="web.X2ManyFieldDialogDefaultButtons"
        t-inherit-mode="extension">
         <xpath expr="//t[@t-if='canCreate']/button[contains(@class, 'o_form_button_save_new')]" position="attributes">
-            <attribute name="t-if">record.resModel !== 'nsp.measurement.reader.line' &amp;&amp; record.resModel !== 'nsp.parking.lane'</attribute>
+            <attribute name="t-if">record.resModel !== 'nsp.parking.lane'</attribute>
         </xpath>
         <xpath expr="//t[@t-if='canCreate']/button[contains(@class, 'o_form_button_save') and not(contains(@class, 'o_form_button_save_new'))]" position="replace">
             <button class="btn btn-primary o_form_button_save" t-on-click="save" data-hotkey="c">
-                <t t-if="record.resModel === 'nsp.measurement.reader.line' || record.resModel === 'nsp.parking.lane'">Save</t>
+                <t t-if="record.resModel === 'nsp.parking.lane'">Save</t>
                 <t t-else="">Save &amp; Close</t>
             </button>
         </xpath>

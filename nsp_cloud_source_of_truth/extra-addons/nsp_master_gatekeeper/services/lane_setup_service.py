@@ -145,14 +145,16 @@ class LaneSetupService:
                 _("Lane Calibration scope requires a Calibration session.")
             )
         wizard.session_id.exists().check_access("read")
-        calibration_edges = wizard.session_id.reader_line_ids.mapped("edge_server_id")
-        calibration_controllers = wizard.session_id.reader_line_ids.mapped("controller_id")
-        if (
-            wizard.edge_server_id not in calibration_edges
-            or wizard.controller_id not in calibration_controllers
-        ):
+        server_node = wizard.session_id._server_nodes().filtered(
+            lambda node: node.server_id == wizard.edge_server_id
+        )[:1]
+        controller_node = wizard.session_id._controller_nodes().filtered(
+            lambda node: node.controller_id == wizard.controller_id
+            and node.parent_id == server_node
+        )[:1]
+        if not server_node or not controller_node:
             raise ValidationError(_(
-                "Lane Setup opened from Lane Calibration must use that Calibration's Server and Controller."
+                "Lane Setup opened from Lane Calibration must use one Server/Controller branch from that Calibration Tree."
             ))
         allowed_pairs = wizard._allowed_reader_port_pairs()
         outside_pairs = [

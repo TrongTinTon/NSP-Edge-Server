@@ -5,8 +5,8 @@ import { ConfirmationDialog } from "@web/core/confirmation_dialog/confirmation_d
 import { registry } from "@web/core/registry";
 import { useService } from "@web/core/utils/hooks";
 import { useX2ManyCrud } from "@web/views/fields/relational_utils";
-import { SelectCreateDialog } from "@web/views/view_dialogs/select_create_dialog";
 import { standardFieldProps } from "@web/views/fields/standard_field_props";
+import { SelectCreateDialog } from "@web/views/view_dialogs/select_create_dialog";
 
 const STATUS_ONLINE = new Set(["online"]);
 const STATUS_OFFLINE = new Set(["offline", "error", "block", "revoked"]);
@@ -14,10 +14,10 @@ const STATUS_DEGRADED = new Set(["degraded"]);
 
 function many2oneId(value) {
     if (Array.isArray(value)) {
-        return value[0] || false;
+        return Number(value[0] || 0) || false;
     }
     if (value && typeof value === "object") {
-        return value.id || value.resId || false;
+        return Number(value.id || value.resId || 0) || false;
     }
     return Number(value || 0) || false;
 }
@@ -44,13 +44,12 @@ export class NspDeviceTreeView extends Component {
         this.notification = useService("notification");
         this.dialog = useService("dialog");
         this.orm = useService("orm");
-        const { removeRecord } = useX2ManyCrud(() => this.deviceList, false);
-        this.removeDeviceRecord = removeRecord;
-        const { removeRecord: removePortRecord } = useX2ManyCrud(
-            () => this.selectedPortList,
-            false
-        );
-        this.removePortRecord = removePortRecord;
+
+        // Parking Lane still owns an editable x2many. Lane Calibration does not:
+        // its Device Tree is persisted directly through nsp.measurement.device.node.
+        const { removeRecord } = useX2ManyCrud(() => this.parkingReaderList, false);
+        this.removeParkingReaderRecord = removeRecord;
+
         this.state = useState({
             query: "",
             selectedKey: null,
@@ -65,10 +64,16 @@ export class NspDeviceTreeView extends Component {
             portError: "",
             runtimeStatus: {},
             masterMeta: {},
+            calibrationNodes: [],
+            calibrationPorts: [],
+            calibrationLoaded: false,
         });
         this.statusRefreshTimer = null;
 
         onMounted(async () => {
+            if (this.mode === "lane_calibration") {
+                await this.refreshCalibrationTree();
+            }
             await this.refreshOperationalStatuses();
             this.statusRefreshTimer = setInterval(() => {
                 this.refreshOperationalStatuses();
@@ -95,114 +100,20 @@ export class NspDeviceTreeView extends Component {
     }
 
     get editable() {
-        // device_tree_anchor is a computed presentation field, so Odoo correctly
-        // exposes the anchor itself as readonly.  That readonly flag must not be
-        // used as the business edit policy for the Tree.  Editing is owned by the
-        // parent record state instead.
         const data = this.props.record?.data || {};
         if (this.mode === "parking_lane") {
-            // A new Lane opened from Parking Layout may not have resolved the
-            // related parking_area_state yet. Treat an unresolved state as
-            // editable; persisted non-draft layouts remain locked.
             return !data.parking_area_state || data.parking_area_state === "draft";
         }
         if (this.mode === "lane_calibration") {
-            return !data.status || data.status === "draft";
+            return Boolean(data.device_configuration_editable);
         }
         return false;
     }
 
-    get deviceList() {
-        const data = this.props.record?.data || {};
-        if (this.mode === "parking_lane") {
-            return data.reader_config_ids;
-        }
-        if (this.mode === "lane_calibration") {
-            return data.reader_line_ids;
-        }
-        return null;
-    }
-
-    get entries() {
-        if (this.mode === "parking_lane") {
-            return this._parkingLaneEntries();
-        }
-        if (this.mode === "lane_calibration") {
-            return this._calibrationEntries();
-        }
-        return [];
-    }
-
-    _parkingLaneEntries() {
-        const data = this.props.record?.data || {};
-        const lines = data.reader_config_ids?.records || [];
-        const server = {
-            id: many2oneId(data.edge_server_id) || "server",
-            // Always render the human master name, never a technical/code based display_name.
-            name: this._masterName("server", many2oneId(data.edge_server_id), data.edge_server_name || many2oneLabel(data.edge_server_id, "Server")),
-            status: this._statusFor("server", many2oneId(data.edge_server_id), data.edge_server_status),
-        };
-        const controller = {
-            id: many2oneId(data.controller_id) || "controller",
-            name: this._masterName("controller", many2oneId(data.controller_id), data.controller_name || many2oneLabel(data.controller_id, "Controller")),
-            status: this._statusFor("controller", many2oneId(data.controller_id), data.controller_status),
-        };
-        return lines.map((line, index) => {
-            const lineData = line.data || {};
-            return {
-                key: `lane-reader-${line.resId || line.id || index}`,
-                record: line,
-                server,
-                controller,
-                reader: {
-                    id: many2oneId(lineData.reader_id) || `reader-${index}`,
-                    name: this._masterName("reader", many2oneId(lineData.reader_id), lineData.reader_name || many2oneLabel(lineData.reader_id, "Reader")),
-                    serial: this._masterSerial(many2oneId(lineData.reader_id), lineData.reader_serial_number || "—"),
-                    status: this._statusFor("reader", many2oneId(lineData.reader_id), lineData.reader_status),
-                },
-                ports: lineData.port_summary || "—",
-                values: {
-                    power: Number(lineData.power_dbm || 0),
-                    interval: Number(lineData.read_interval_ms || 0),
-                    tidStart: Number(lineData.tid_start_address || 0),
-                    tidLength: Number(lineData.tid_length || 0),
-                },
-            };
-        });
-    }
-
-    _calibrationEntries() {
-        const lines = this.props.record?.data?.reader_line_ids?.records || [];
-        return lines.map((line, index) => {
-            const data = line.data || {};
-            return {
-                key: `cal-reader-${line.resId || line.id || index}`,
-                record: line,
-                server: {
-                    id: many2oneId(data.edge_server_id) || `server-${index}`,
-                    name: this._masterName("server", many2oneId(data.edge_server_id), data.edge_server_name || many2oneLabel(data.edge_server_id, "Server")),
-                    status: this._statusFor("server", many2oneId(data.edge_server_id), data.edge_server_status),
-                },
-                controller: {
-                    id: many2oneId(data.controller_id) || `controller-${index}`,
-                    name: this._masterName("controller", many2oneId(data.controller_id), data.controller_name || many2oneLabel(data.controller_id, "Controller")),
-                    status: this._statusFor("controller", many2oneId(data.controller_id), data.controller_status),
-                },
-                reader: {
-                    id: many2oneId(data.reader_id) || `reader-${index}`,
-                    name: this._masterName("reader", many2oneId(data.reader_id), data.reader_name || many2oneLabel(data.reader_id, "Reader")),
-                    serial: this._masterSerial(many2oneId(data.reader_id), data.serial_number || "—"),
-                    status: this._statusFor("reader", many2oneId(data.reader_id), data.reader_status),
-                },
-                ports: data.port_numbers || "—",
-                values: {
-                    power: Number(data.reader_power_dbm || 0),
-                    interval: Number(data.read_interval_ms || 0),
-                    tidStart: Number(data.reader_tid_addr || 0),
-                    tidLength: Number(data.reader_tid_len || 0),
-                },
-            };
-        });
+    get parkingReaderList() {
+        return this.mode === "parking_lane"
+            ? this.props.record?.data?.reader_config_ids || null
+            : null;
     }
 
     _status(value) {
@@ -231,96 +142,11 @@ export class NspDeviceTreeView extends Component {
     }
 
     _masterName(kind, id, fallback) {
-        const meta = this._masterMeta(kind, id);
-        return meta.name || fallback;
+        return this._masterMeta(kind, id).name || fallback;
     }
 
     _masterSerial(id, fallback) {
-        const meta = this._masterMeta("reader", id);
-        return meta.serial || fallback;
-    }
-
-    async refreshOperationalStatuses() {
-        const serverIds = new Set();
-        const controllerIds = new Set();
-        const readerIds = new Set();
-
-        const parentData = this.props.record?.data || {};
-        const parentServerId = many2oneId(parentData.edge_server_id);
-        const parentControllerId = many2oneId(parentData.controller_id);
-        if (parentServerId) {
-            serverIds.add(parentServerId);
-        }
-        if (parentControllerId) {
-            controllerIds.add(parentControllerId);
-        }
-
-        for (const entry of this.entries) {
-            const serverId = Number(entry.server?.id || 0);
-            const controllerId = Number(entry.controller?.id || 0);
-            const readerId = Number(entry.reader?.id || 0);
-            if (serverId) {
-                serverIds.add(serverId);
-            }
-            if (controllerId) {
-                controllerIds.add(controllerId);
-            }
-            if (readerId) {
-                readerIds.add(readerId);
-            }
-        }
-
-        const queries = [];
-        if (serverIds.size) {
-            queries.push(
-                this.orm.read("nsp.edge.server", [...serverIds], ["name", "status"])
-                    .then((rows) => ["server", rows])
-            );
-        }
-        if (controllerIds.size) {
-            queries.push(
-                this.orm.read("nsp.controller", [...controllerIds], ["controller_name", "status"])
-                    .then((rows) => ["controller", rows])
-            );
-        }
-        if (readerIds.size) {
-            queries.push(
-                this.orm.read("nsp.device", [...readerIds], ["name", "serial_number", "status"])
-                    .then((rows) => ["reader", rows])
-            );
-        }
-        if (!queries.length) {
-            return;
-        }
-
-        try {
-            const nextStatus = { ...this.state.runtimeStatus };
-            const nextMeta = { ...this.state.masterMeta };
-            const results = await Promise.all(queries);
-            for (const [kind, rows] of results) {
-                for (const row of rows || []) {
-                    if (!row?.id) {
-                        continue;
-                    }
-                    const key = `${kind}:${row.id}`;
-                    nextStatus[key] = row.status || "unknown";
-                    if (kind === "server") {
-                        nextMeta[key] = { name: row.name || `Server ${row.id}` };
-                    } else if (kind === "controller") {
-                        nextMeta[key] = { name: row.controller_name || `Controller ${row.id}` };
-                    } else if (kind === "reader") {
-                        nextMeta[key] = {
-                            name: row.name || row.serial_number || `Reader ${row.id}`,
-                            serial: row.serial_number || "—",
-                        };
-                    }
-                }
-            }
-            this.state.runtimeStatus = nextStatus;
-            this.state.masterMeta = nextMeta;
-        } catch {
-            // Keep the last known form status when a transient refresh fails.
-        }
+        return this._masterMeta("reader", id).serial || fallback;
     }
 
     statusLabel(status) {
@@ -336,80 +162,325 @@ export class NspDeviceTreeView extends Component {
         return "Unknown";
     }
 
-    get tree() {
-        const query = this.state.query.trim().toLowerCase();
-        const groups = new Map();
+    async _calibrationSessionId({ createIfMissing = false } = {}) {
+        let sessionId = Number(this.props.record?.resId || 0);
+        if (sessionId || !createIfMissing) {
+            return sessionId;
+        }
+        const saved = await this.props.record.save();
+        sessionId = Number(this.props.record?.resId || 0);
+        if (!saved || !sessionId) {
+            throw new Error("Save the Lane Calibration before adding Device Configuration.");
+        }
+        return sessionId;
+    }
 
-        // Parking Lane stores one contextual Server and Controller on the Lane.
-        // Keep those nodes visible even before the first Reader is added so the
-        // hierarchy can be built directly from the Tree View.
+    async refreshCalibrationTree() {
+        if (this.mode !== "lane_calibration") {
+            return;
+        }
+        const sessionId = await this._calibrationSessionId();
+        if (!sessionId) {
+            this.state.calibrationNodes = [];
+            this.state.calibrationPorts = [];
+            this.state.calibrationLoaded = true;
+            return;
+        }
+        try {
+            const nodes = await this.orm.searchRead(
+                "nsp.measurement.device.node",
+                [["session_id", "=", sessionId]],
+                [
+                    "device_type",
+                    "parent_id",
+                    "sequence",
+                    "server_id",
+                    "controller_id",
+                    "reader_id",
+                    "device_name",
+                    "device_status",
+                    "serial_number",
+                    "port_numbers",
+                    "power_dbm",
+                    "read_interval_ms",
+                    "tid_addr",
+                    "tid_len",
+                ],
+                { order: "sequence,id" }
+            );
+            const nodeIds = nodes.map((node) => Number(node.id)).filter(Boolean);
+            const ports = nodeIds.length
+                ? await this.orm.searchRead(
+                    "nsp.measurement.reader.port",
+                    [["reader_node_id", "in", nodeIds]],
+                    ["reader_node_id", "port_no", "sequence"],
+                    { order: "sequence,port_no,id" }
+                )
+                : [];
+            this.state.calibrationNodes = nodes;
+            this.state.calibrationPorts = ports;
+            this.state.calibrationLoaded = true;
+        } catch (error) {
+            this.notification.add(error?.message || "Unable to load Device Tree.", {
+                title: "Device Tree",
+                type: "danger",
+            });
+        }
+    }
+
+    get calibrationNodes() {
+        return this.state.calibrationNodes || [];
+    }
+
+    _calibrationNode(nodeId) {
+        const numericId = Number(nodeId || 0);
+        return this.calibrationNodes.find((node) => Number(node.id) === numericId) || null;
+    }
+
+    _nodeMasterId(node) {
+        if (!node) {
+            return false;
+        }
+        if (node.device_type === "server") {
+            return many2oneId(node.server_id);
+        }
+        if (node.device_type === "controller") {
+            return many2oneId(node.controller_id);
+        }
+        if (node.device_type === "reader") {
+            return many2oneId(node.reader_id);
+        }
+        return false;
+    }
+
+    _nodeView(node) {
+        if (!node) {
+            return null;
+        }
+        const type = node.device_type;
+        const id = this._nodeMasterId(node);
+        const labelFallback = node.device_name || many2oneLabel(
+            type === "server" ? node.server_id : type === "controller" ? node.controller_id : node.reader_id,
+            type === "server" ? "Server" : type === "controller" ? "Controller" : "Reader"
+        );
+        return {
+            key: `cal-node-${node.id}`,
+            nodeId: Number(node.id),
+            parentNodeId: many2oneId(node.parent_id),
+            type,
+            id,
+            name: this._masterName(type, id, labelFallback),
+            status: this._statusFor(type, id, node.device_status),
+            serial: type === "reader"
+                ? this._masterSerial(id, node.serial_number || "—")
+                : "",
+            raw: node,
+        };
+    }
+
+    _portsForReaderNode(nodeId) {
+        const numericId = Number(nodeId || 0);
+        return (this.state.calibrationPorts || [])
+            .filter((port) => many2oneId(port.reader_node_id) === numericId)
+            .map((port) => ({
+                key: `port-${port.id}`,
+                id: Number(port.id),
+                portNo: Number(port.port_no || 0),
+                sequence: Number(port.sequence || 10),
+            }))
+            .filter((port) => port.portNo > 0)
+            .sort((a, b) => a.portNo - b.portNo || a.id - b.id);
+    }
+
+    _entryForReaderNode(readerNode) {
+        const reader = this._nodeView(readerNode);
+        if (!reader) {
+            return null;
+        }
+        const parent = this._calibrationNode(reader.parentNodeId);
+        const controllerNode = parent?.device_type === "controller" ? parent : null;
+        const controller = controllerNode ? this._nodeView(controllerNode) : {
+            key: "unassigned-controller",
+            nodeId: false,
+            id: false,
+            name: "Unassigned Controller",
+            status: "unknown",
+        };
+        const grandparent = controllerNode ? this._calibrationNode(many2oneId(controllerNode.parent_id)) : null;
+        const serverNode = grandparent?.device_type === "server" ? grandparent : null;
+        const server = serverNode ? this._nodeView(serverNode) : {
+            key: "unassigned-server",
+            nodeId: false,
+            id: false,
+            name: "Unassigned Server",
+            status: "unknown",
+        };
+        return {
+            key: reader.key,
+            nodeId: reader.nodeId,
+            rawNode: readerNode,
+            server,
+            controller,
+            reader,
+            ports: readerNode.port_numbers || "—",
+            values: {
+                power: Number(readerNode.power_dbm || 0),
+                interval: Number(readerNode.read_interval_ms || 0),
+                tidStart: Number(readerNode.tid_addr || 0),
+                tidLength: Number(readerNode.tid_len || 0),
+            },
+        };
+    }
+
+    _parkingLaneEntries() {
+        const data = this.props.record?.data || {};
+        const lines = data.reader_config_ids?.records || [];
+        const serverId = many2oneId(data.edge_server_id);
+        const controllerId = many2oneId(data.controller_id);
+        const server = {
+            key: `server-${serverId || "unassigned"}`,
+            id: serverId,
+            name: this._masterName(
+                "server",
+                serverId,
+                data.edge_server_name || many2oneLabel(data.edge_server_id, "Server")
+            ),
+            status: this._statusFor("server", serverId, data.edge_server_status),
+        };
+        const controller = {
+            key: `${server.key}-controller-${controllerId || "unassigned"}`,
+            id: controllerId,
+            name: this._masterName(
+                "controller",
+                controllerId,
+                data.controller_name || many2oneLabel(data.controller_id, "Controller")
+            ),
+            status: this._statusFor("controller", controllerId, data.controller_status),
+        };
+        return lines.map((line, index) => {
+            const lineData = line.data || {};
+            const readerId = many2oneId(lineData.reader_id);
+            return {
+                key: `lane-reader-${line.resId || line.id || index}`,
+                record: line,
+                server,
+                controller,
+                reader: {
+                    key: `lane-reader-master-${readerId || index}`,
+                    id: readerId,
+                    name: this._masterName(
+                        "reader",
+                        readerId,
+                        lineData.reader_name || many2oneLabel(lineData.reader_id, "Reader")
+                    ),
+                    serial: this._masterSerial(readerId, lineData.reader_serial_number || "—"),
+                    status: this._statusFor("reader", readerId, lineData.reader_status),
+                },
+                ports: lineData.port_summary || "—",
+                values: {
+                    power: Number(lineData.power_dbm || 0),
+                    interval: Number(lineData.read_interval_ms || 0),
+                    tidStart: Number(lineData.tid_start_address || 0),
+                    tidLength: Number(lineData.tid_length || 0),
+                },
+            };
+        });
+    }
+
+    get entries() {
         if (this.mode === "parking_lane") {
-            const data = this.props.record?.data || {};
-            const serverId = many2oneId(data.edge_server_id);
-            const controllerId = many2oneId(data.controller_id);
-            if (serverId) {
-                const server = {
-                    key: `server-${serverId}`,
-                    id: serverId,
-                    name: this._masterName("server", many2oneId(data.edge_server_id), data.edge_server_name || many2oneLabel(data.edge_server_id, "Server")),
-                    status: this._statusFor("server", many2oneId(data.edge_server_id), data.edge_server_status),
-                    controllers: new Map(),
-                };
-                groups.set(server.key, server);
-                if (controllerId) {
-                    const controllerKey = `${server.key}-controller-${controllerId}`;
-                    server.controllers.set(controllerKey, {
-                        key: controllerKey,
-                        id: controllerId,
-                        name: this._masterName("controller", many2oneId(data.controller_id), data.controller_name || many2oneLabel(data.controller_id, "Controller")),
-                        status: this._statusFor("controller", many2oneId(data.controller_id), data.controller_status),
-                        readers: [],
-                    });
+            return this._parkingLaneEntries();
+        }
+        if (this.mode === "lane_calibration") {
+            return this.calibrationNodes
+                .filter((node) => node.device_type === "reader")
+                .map((node) => this._entryForReaderNode(node))
+                .filter(Boolean);
+        }
+        return [];
+    }
+
+    get tree() {
+        if (this.mode === "parking_lane") {
+            return this._parkingTree();
+        }
+        if (this.mode === "lane_calibration") {
+            return this._calibrationTree();
+        }
+        return [];
+    }
+
+    _parkingTree() {
+        const data = this.props.record?.data || {};
+        const serverId = many2oneId(data.edge_server_id);
+        if (!serverId) {
+            return [];
+        }
+        const server = {
+            key: `server-${serverId}`,
+            nodeId: false,
+            id: serverId,
+            name: this._masterName("server", serverId, data.edge_server_name || many2oneLabel(data.edge_server_id, "Server")),
+            status: this._statusFor("server", serverId, data.edge_server_status),
+            controllers: [],
+        };
+        const controllerId = many2oneId(data.controller_id);
+        if (controllerId) {
+            server.controllers.push({
+                key: `${server.key}-controller-${controllerId}`,
+                nodeId: false,
+                id: controllerId,
+                name: this._masterName("controller", controllerId, data.controller_name || many2oneLabel(data.controller_id, "Controller")),
+                status: this._statusFor("controller", controllerId, data.controller_status),
+                readers: this.entries,
+            });
+        }
+        return this._filterTree([server]);
+    }
+
+    _calibrationTree() {
+        const serverNodes = this.calibrationNodes.filter((node) => node.device_type === "server");
+        const controllerNodes = this.calibrationNodes.filter((node) => node.device_type === "controller");
+        const readerNodes = this.calibrationNodes.filter((node) => node.device_type === "reader");
+
+        const result = serverNodes.map((serverNode) => {
+            const server = this._nodeView(serverNode);
+            const controllers = controllerNodes
+                .filter((controllerNode) => many2oneId(controllerNode.parent_id) === server.nodeId)
+                .map((controllerNode) => {
+                    const controller = this._nodeView(controllerNode);
+                    const readers = readerNodes
+                        .filter((readerNode) => many2oneId(readerNode.parent_id) === controller.nodeId)
+                        .map((readerNode) => this._entryForReaderNode(readerNode));
+                    return { ...controller, readers };
+                });
+            return { ...server, controllers };
+        });
+        return this._filterTree(result);
+    }
+
+    _filterTree(tree) {
+        const query = this.state.query.trim().toLowerCase();
+        if (!query) {
+            return tree;
+        }
+        const result = [];
+        for (const server of tree) {
+            const serverMatch = String(server.name || "").toLowerCase().includes(query);
+            const controllers = [];
+            for (const controller of server.controllers || []) {
+                const controllerMatch = String(controller.name || "").toLowerCase().includes(query);
+                const readers = (controller.readers || []).filter((entry) => {
+                    const text = [entry.reader.name, entry.reader.serial].join(" ").toLowerCase();
+                    return serverMatch || controllerMatch || text.includes(query);
+                });
+                if (serverMatch || controllerMatch || readers.length) {
+                    controllers.push({ ...controller, readers });
                 }
             }
-        }
-
-        for (const entry of this.entries) {
-            const haystack = [entry.server.name, entry.controller.name, entry.reader.name, entry.reader.serial]
-                .join(" ")
-                .toLowerCase();
-            if (query && !haystack.includes(query)) {
-                continue;
+            if (serverMatch || controllers.length) {
+                result.push({ ...server, controllers });
             }
-            const serverKey = `server-${entry.server.id}`;
-            if (!groups.has(serverKey)) {
-                groups.set(serverKey, {
-                    key: serverKey,
-                    ...entry.server,
-                    controllers: new Map(),
-                });
-            }
-            const server = groups.get(serverKey);
-            const controllerKey = `${serverKey}-controller-${entry.controller.id}`;
-            if (!server.controllers.has(controllerKey)) {
-                server.controllers.set(controllerKey, {
-                    key: controllerKey,
-                    ...entry.controller,
-                    readers: [],
-                });
-            }
-            server.controllers.get(controllerKey).readers.push(entry);
-        }
-
-        let result = [...groups.values()].map((server) => ({
-            ...server,
-            controllers: [...server.controllers.values()],
-        }));
-        if (query) {
-            result = result.filter((server) => {
-                const serverMatch = server.name.toLowerCase().includes(query);
-                const controllers = server.controllers.filter((controller) => {
-                    const controllerMatch = controller.name.toLowerCase().includes(query);
-                    return controllerMatch || controller.readers.length || serverMatch;
-                });
-                server.controllers = controllers;
-                return serverMatch || controllers.length;
-            });
         }
         return result;
     }
@@ -419,9 +490,7 @@ export class NspDeviceTreeView extends Component {
             return false;
         }
         if (this.mode === "lane_calibration") {
-            // One Lane Calibration owns exactly one contextual Server. Additional
-            // Controllers and Readers are added below the existing Server node.
-            return this.entries.length === 0;
+            return true;
         }
         return !many2oneId(this.props.record?.data?.edge_server_id);
     }
@@ -437,27 +506,16 @@ export class NspDeviceTreeView extends Component {
     }
 
     get selectedEntry() {
-        const entries = this.entries;
-        return entries.find((entry) => entry.key === this.state.selectedKey) || entries[0] || null;
-    }
-
-    get selectedPortList() {
-        if (this.mode !== "lane_calibration") {
-            return null;
-        }
-        return this.selectedEntry?.record?.data?.reader_port_ids || null;
+        return this.entries.find((entry) => entry.key === this.state.selectedKey)
+            || this.entries[0]
+            || null;
     }
 
     get selectedPorts() {
-        const records = this.selectedPortList?.records || [];
-        return records
-            .map((record, index) => ({
-                key: `port-${record.resId || record.id || index}`,
-                record,
-                portNo: Number(record.data?.port_no || 0),
-            }))
-            .filter((port) => port.portNo > 0)
-            .sort((a, b) => a.portNo - b.portNo);
+        if (this.mode !== "lane_calibration" || !this.selectedEntry?.nodeId) {
+            return [];
+        }
+        return this._portsForReaderNode(this.selectedEntry.nodeId);
     }
 
     get breadcrumb() {
@@ -490,7 +548,7 @@ export class NspDeviceTreeView extends Component {
         this.state.query = ev.target.value || "";
     }
 
-    _openMasterSearch({ title, resModel, domain = [["active", "=", true]], fields, labelField, onSelected }) {
+    _openMasterSearch({ title, resModel, domain, fields, labelField, onSelected }) {
         this.dialog.add(SelectCreateDialog, {
             title,
             resModel,
@@ -513,61 +571,98 @@ export class NspDeviceTreeView extends Component {
                 if (!row) {
                     throw new Error(`The selected ${title.toLowerCase()} is no longer available.`);
                 }
-                const selection = {
+                await onSelected({
                     id: row.id,
                     name: row[labelField] || row.name || `Record ${row.id}`,
-                };
-                await onSelected(selection, row);
+                }, row);
             },
         });
     }
 
-    _openServerSearch({ title, onSelected }) {
+    _masterDomain(deviceType, excludeIds = []) {
+        const code = {
+            server: "SERVER",
+            controller: "CONTROLLER",
+            reader: "RFID_READER",
+        }[deviceType];
+        const domain = [
+            ["active", "=", true],
+            ["whitelist_id", "!=", false],
+            ["whitelist_id.active", "=", true],
+            ["whitelist_id.device_type_code", "=", code],
+        ];
+        if (excludeIds.length) {
+            domain.push(["id", "not in", excludeIds]);
+        }
+        return domain;
+    }
+
+    _existingMasterIds(deviceType, exceptNodeId = false) {
+        if (this.mode !== "lane_calibration") {
+            return [];
+        }
+        return this.calibrationNodes
+            .filter((node) => node.device_type === deviceType && Number(node.id) !== Number(exceptNodeId || 0))
+            .map((node) => this._nodeMasterId(node))
+            .filter(Boolean);
+    }
+
+    _openServerSearch({ title, onSelected, exceptNodeId = false }) {
         this._openMasterSearch({
             title,
             resModel: "nsp.edge.server",
-            domain: [
-                ["active", "=", true],
-                ["whitelist_id", "!=", false],
-                ["whitelist_id.active", "=", true],
-                ["whitelist_id.device_type_code", "=", "SERVER"],
-            ],
+            domain: this._masterDomain("server", this._existingMasterIds("server", exceptNodeId)),
             fields: ["name", "status"],
             labelField: "name",
             onSelected,
         });
     }
 
-    _openControllerSearch({ title, onSelected }) {
+    _openControllerSearch({ title, onSelected, exceptNodeId = false }) {
         this._openMasterSearch({
             title,
             resModel: "nsp.controller",
-            domain: [
-                ["active", "=", true],
-                ["whitelist_id", "!=", false],
-                ["whitelist_id.active", "=", true],
-                ["whitelist_id.device_type_code", "=", "CONTROLLER"],
-            ],
+            domain: this._masterDomain("controller", this._existingMasterIds("controller", exceptNodeId)),
             fields: ["controller_name", "status"],
             labelField: "controller_name",
             onSelected,
         });
     }
 
-    _openReaderSearch({ title, onSelected }) {
+    _openReaderSearch({ title, onSelected, exceptNodeId = false }) {
         this._openMasterSearch({
             title,
             resModel: "nsp.device",
-            domain: [
-                ["active", "=", true],
-                ["whitelist_id", "!=", false],
-                ["whitelist_id.active", "=", true],
-                ["whitelist_id.device_type_code", "=", "RFID_READER"],
-            ],
+            domain: this._masterDomain("reader", this._existingMasterIds("reader", exceptNodeId)),
             fields: ["name", "serial_number", "status"],
             labelField: "name",
             onSelected,
         });
+    }
+
+    async _createCalibrationNode(deviceType, masterId, parentNodeId = false) {
+        const sessionId = await this._calibrationSessionId({ createIfMissing: true });
+        const fieldName = {
+            server: "server_id",
+            controller: "controller_id",
+            reader: "reader_id",
+        }[deviceType];
+        if (!fieldName) {
+            throw new Error("Unsupported Device Tree node type.");
+        }
+        const result = await this.orm.create("nsp.measurement.device.node", [{
+            session_id: sessionId,
+            device_type: deviceType,
+            [fieldName]: Number(masterId),
+            parent_id: Number(parentNodeId || 0) || false,
+        }]);
+        const nodeId = Number(Array.isArray(result) ? result[0] : result || 0);
+        if (!nodeId) {
+            throw new Error(`Unable to persist ${deviceType} node.`);
+        }
+        await this.refreshCalibrationTree();
+        await this.refreshOperationalStatuses();
+        return nodeId;
     }
 
     async addServer() {
@@ -581,63 +676,17 @@ export class NspDeviceTreeView extends Component {
                     await this.props.record.update({ edge_server_id: toMany2one(server) });
                     return;
                 }
-                // Calibration lines store the contextual Server/Controller/Reader
-                // association. Build the branch through three native Odoo search
-                // dialogs rather than a custom combined selector.
-                this._openControllerSearch({
-                    title: `Add Controller to ${server.name}`,
-                    onSelected: (controller) => this._openReaderSearch({
-                        title: `Add Reader to ${controller.name}`,
-                        onSelected: (reader) => this._createMapping({ server, controller, reader }),
-                    }),
-                });
+                const nodeId = await this._createCalibrationNode("server", server.id);
+                this.state.expanded = { ...this.state.expanded, [`cal-node-${nodeId}`]: true };
             },
         });
     }
 
-    async editServer(server) {
-        if (!server || !this.editable) {
+    async addController(server = null) {
+        if (!this.editable || !server) {
             return;
         }
-        this._openServerSearch({
-            title: "Edit Server",
-            onSelected: async (selection) => {
-                if (this.mode === "parking_lane") {
-                    await this.props.record.update({ edge_server_id: toMany2one(selection) });
-                    return;
-                }
-                const records = this.entries
-                    .filter((entry) => Number(entry.server.id) === Number(server.id))
-                    .map((entry) => entry.record);
-                await Promise.all(records.map((record) => record.update({ edge_server_id: toMany2one(selection) })));
-            },
-        });
-    }
-
-    deleteServer(server) {
-        if (!server || !this.editable) {
-            return;
-        }
-        this.dialog.add(ConfirmationDialog, {
-            title: "Remove Server",
-            body: `Remove ${server.name} and its contextual Controller/Reader mappings from this Device Tree?`,
-            confirmLabel: "Remove",
-            confirm: async () => {
-                const records = this.entries
-                    .filter((entry) => Number(entry.server.id) === Number(server.id))
-                    .map((entry) => entry.record);
-                await Promise.all(records.map((record) => this.removeDeviceRecord(record)));
-                if (this.mode === "parking_lane") {
-                    await this.props.record.update({ edge_server_id: false, controller_id: false });
-                }
-                this.state.selectedKey = null;
-                this.cancelEdit();
-            },
-        });
-    }
-
-    async addController(server) {
-        if (!this.canAddController(server)) {
+        if (this.mode === "lane_calibration" && !server.nodeId) {
             return;
         }
         this._openControllerSearch({
@@ -647,10 +696,72 @@ export class NspDeviceTreeView extends Component {
                     await this.props.record.update({ controller_id: toMany2one(controller) });
                     return;
                 }
-                this._openReaderSearch({
-                    title: `Add Reader to ${controller.name}`,
-                    onSelected: (reader) => this._createMapping({ server, controller, reader }),
+                await this._createCalibrationNode("controller", controller.id, server.nodeId);
+                this.state.expanded = { ...this.state.expanded, [server.key]: true };
+            },
+        });
+    }
+
+    async addReader(server = null, controller = null) {
+        if (!this.editable || !controller) {
+            return;
+        }
+        if (this.mode === "lane_calibration" && !controller.nodeId) {
+            return;
+        }
+        if (this.mode === "parking_lane" && (!server || !this.parkingReaderList)) {
+            return;
+        }
+        this._openReaderSearch({
+            title: "Add Reader",
+            onSelected: async (reader) => {
+                if (this.mode === "lane_calibration") {
+                    const nodeId = await this._createCalibrationNode("reader", reader.id, controller.nodeId);
+                    this.state.expanded = { ...this.state.expanded, [controller.key]: true };
+                    this.state.selectedKey = `cal-node-${nodeId}`;
+                    return;
+                }
+                await this._createParkingReader({ server, controller, reader });
+            },
+        });
+    }
+
+    async _createParkingReader({ server, controller, reader }) {
+        const list = this.parkingReaderList;
+        if (!list) {
+            return;
+        }
+        await this.props.record.update({
+            edge_server_id: toMany2one(server),
+            controller_id: toMany2one(controller),
+        });
+        const line = await list.addNewRecord({
+            context: list.context || {},
+            mode: "edit",
+            position: "bottom",
+        });
+        await line.update({ reader_id: toMany2one(reader) });
+        this.state.selectedKey = `lane-reader-${line.resId || line.id}`;
+        await this.refreshOperationalStatuses();
+    }
+
+    async editServer(server) {
+        if (!server || !this.editable) {
+            return;
+        }
+        this._openServerSearch({
+            title: "Edit Server",
+            exceptNodeId: server.nodeId,
+            onSelected: async (selection) => {
+                if (this.mode === "parking_lane") {
+                    await this.props.record.update({ edge_server_id: toMany2one(selection) });
+                    return;
+                }
+                await this.orm.write("nsp.measurement.device.node", [server.nodeId], {
+                    server_id: selection.id,
                 });
+                await this.refreshCalibrationTree();
+                await this.refreshOperationalStatuses();
             },
         });
     }
@@ -661,50 +772,18 @@ export class NspDeviceTreeView extends Component {
         }
         this._openControllerSearch({
             title: "Edit Controller",
+            exceptNodeId: controller.nodeId,
             onSelected: async (selection) => {
                 if (this.mode === "parking_lane") {
                     await this.props.record.update({ controller_id: toMany2one(selection) });
                     return;
                 }
-                const records = this.entries
-                    .filter((entry) => Number(entry.server.id) === Number(server.id)
-                        && Number(entry.controller.id) === Number(controller.id))
-                    .map((entry) => entry.record);
-                await Promise.all(records.map((record) => record.update({ controller_id: toMany2one(selection) })));
+                await this.orm.write("nsp.measurement.device.node", [controller.nodeId], {
+                    controller_id: selection.id,
+                });
+                await this.refreshCalibrationTree();
+                await this.refreshOperationalStatuses();
             },
-        });
-    }
-
-    deleteController(server, controller) {
-        if (!controller || !this.editable) {
-            return;
-        }
-        this.dialog.add(ConfirmationDialog, {
-            title: "Remove Controller",
-            body: `Remove ${controller.name} and its Reader mappings from this Device Tree?`,
-            confirmLabel: "Remove",
-            confirm: async () => {
-                const records = this.entries
-                    .filter((entry) => Number(entry.server.id) === Number(server.id)
-                        && Number(entry.controller.id) === Number(controller.id))
-                    .map((entry) => entry.record);
-                await Promise.all(records.map((record) => this.removeDeviceRecord(record)));
-                if (this.mode === "parking_lane") {
-                    await this.props.record.update({ controller_id: false });
-                }
-                this.state.selectedKey = null;
-                this.cancelEdit();
-            },
-        });
-    }
-
-    async addReader(server, controller) {
-        if (!this.editable || !this.deviceList || !server || !controller) {
-            return;
-        }
-        this._openReaderSearch({
-            title: "Add Reader",
-            onSelected: (reader) => this._createMapping({ server, controller, reader }),
         });
     }
 
@@ -714,46 +793,69 @@ export class NspDeviceTreeView extends Component {
         }
         this._openReaderSearch({
             title: "Edit Reader",
+            exceptNodeId: entry.nodeId,
             onSelected: async (reader) => {
-                await entry.record.update({ reader_id: toMany2one(reader) });
-                this.state.configState = "Modified";
-                const updatedEntry = this.entries.find((candidate) => candidate.key === entry.key);
-                if (this.state.editing && updatedEntry) {
-                    this.state.draft = { ...updatedEntry.values };
+                if (this.mode === "parking_lane") {
+                    await entry.record.update({ reader_id: toMany2one(reader) });
+                    await this.refreshOperationalStatuses();
+                    return;
                 }
+                await this.orm.write("nsp.measurement.device.node", [entry.nodeId], {
+                    reader_id: reader.id,
+                });
+                await this.refreshCalibrationTree();
                 await this.refreshOperationalStatuses();
+                this.state.configState = "Modified";
             },
         });
     }
 
-    async _createMapping({ server, controller, reader }) {
-        const list = this.deviceList;
-        if (!list) {
+    deleteServer(server) {
+        if (!server || !this.editable) {
             return;
         }
-        if (this.mode === "parking_lane") {
-            await this.props.record.update({
-                edge_server_id: toMany2one(server),
-                controller_id: toMany2one(controller),
-            });
-        }
-        const line = await list.addNewRecord({
-            context: list.context || {},
-            mode: "edit",
-            position: "bottom",
+        const body = `Remove ${server.name} and its contextual child mappings from this Device Tree?`;
+        this.dialog.add(ConfirmationDialog, {
+            title: "Remove Server",
+            body,
+            confirmLabel: "Remove",
+            confirm: async () => {
+                if (this.mode === "lane_calibration") {
+                    await this.orm.unlink("nsp.measurement.device.node", [server.nodeId]);
+                    await this.refreshCalibrationTree();
+                    this._clearSelectionIfMissing();
+                } else {
+                    const records = this.entries.map((entry) => entry.record);
+                    await Promise.all(records.map((record) => this.removeParkingReaderRecord(record)));
+                    await this.props.record.update({ edge_server_id: false, controller_id: false });
+                    this.state.selectedKey = null;
+                }
+            },
         });
-        const values = this.mode === "parking_lane"
-            ? { reader_id: toMany2one(reader) }
-            : {
-                edge_server_id: toMany2one(server),
-                controller_id: toMany2one(controller),
-                reader_id: toMany2one(reader),
-            };
-        await line.update(values);
-        await this.refreshOperationalStatuses();
-        this.state.selectedKey = this.mode === "parking_lane"
-            ? `lane-reader-${line.resId || line.id}`
-            : `cal-reader-${line.resId || line.id}`;
+    }
+
+    deleteController(server, controller) {
+        if (!controller || !this.editable) {
+            return;
+        }
+        const body = `Remove ${controller.name} and its contextual Reader mappings from this Device Tree?`;
+        this.dialog.add(ConfirmationDialog, {
+            title: "Remove Controller",
+            body,
+            confirmLabel: "Remove",
+            confirm: async () => {
+                if (this.mode === "lane_calibration") {
+                    await this.orm.unlink("nsp.measurement.device.node", [controller.nodeId]);
+                    await this.refreshCalibrationTree();
+                    this._clearSelectionIfMissing();
+                } else {
+                    const records = this.entries.map((entry) => entry.record);
+                    await Promise.all(records.map((record) => this.removeParkingReaderRecord(record)));
+                    await this.props.record.update({ controller_id: false });
+                    this.state.selectedKey = null;
+                }
+            },
+        });
     }
 
     deleteMapping(entry) {
@@ -765,21 +867,27 @@ export class NspDeviceTreeView extends Component {
             body: `Remove ${entry.reader.name} from this Device Tree?`,
             confirmLabel: "Remove",
             confirm: async () => {
-                await this.removeDeviceRecord(entry.record);
+                if (this.mode === "lane_calibration") {
+                    await this.orm.unlink("nsp.measurement.device.node", [entry.nodeId]);
+                    await this.refreshCalibrationTree();
+                } else {
+                    await this.removeParkingReaderRecord(entry.record);
+                }
                 this.state.selectedKey = null;
-                this.state.editing = false;
-                this.state.draft = {};
-                this.state.errors = {};
+                this.cancelEdit();
             },
         });
     }
 
-    async addPort() {
-        if (this.mode !== "lane_calibration" || !this.editable) {
-            return;
+    _clearSelectionIfMissing() {
+        if (this.state.selectedKey && !this.entries.some((entry) => entry.key === this.state.selectedKey)) {
+            this.state.selectedKey = null;
+            this.cancelEdit();
         }
-        const list = this.selectedPortList;
-        if (!list) {
+    }
+
+    async addPort() {
+        if (this.mode !== "lane_calibration" || !this.editable || !this.selectedEntry?.nodeId) {
             return;
         }
         const used = new Set(this.selectedPorts.map((port) => port.portNo));
@@ -794,15 +902,11 @@ export class NspDeviceTreeView extends Component {
             });
             return;
         }
-        const portRecord = await list.addNewRecord({
-            context: list.context || {},
-            mode: "edit",
-            position: "bottom",
-        });
-        await portRecord.update({ port_no: nextPort });
-        if (list.leaveEditMode) {
-            await list.leaveEditMode();
-        }
+        await this.orm.create("nsp.measurement.reader.port", [{
+            reader_node_id: this.selectedEntry.nodeId,
+            port_no: nextPort,
+        }]);
+        await this.refreshCalibrationTree();
         this.state.configState = "Modified";
     }
 
@@ -835,11 +939,12 @@ export class NspDeviceTreeView extends Component {
             this.state.portError = "Port must be an integer from 1 to 16.";
             return;
         }
-        if (this.selectedPorts.some((item) => item.key !== port.key && item.portNo === value)) {
+        if (this.selectedPorts.some((item) => item.id !== port.id && item.portNo === value)) {
             this.state.portError = `P${value} is already configured for this Reader.`;
             return;
         }
-        await port.record.update({ port_no: value });
+        await this.orm.write("nsp.measurement.reader.port", [port.id], { port_no: value });
+        await this.refreshCalibrationTree();
         this.cancelPortEdit();
         this.state.configState = "Modified";
     }
@@ -853,7 +958,8 @@ export class NspDeviceTreeView extends Component {
             body: `Remove P${port.portNo} from ${this.selectedEntry?.reader?.name || "this Reader"}?`,
             confirmLabel: "Remove",
             confirm: async () => {
-                await this.removePortRecord(port.record);
+                await this.orm.unlink("nsp.measurement.reader.port", [port.id]);
+                await this.refreshCalibrationTree();
                 this.cancelPortEdit();
                 this.state.configState = "Modified";
             },
@@ -924,186 +1030,39 @@ export class NspDeviceTreeView extends Component {
             };
         }
         return {
-            reader_power_dbm: Number(draft.power),
+            power_dbm: Number(draft.power),
             read_interval_ms: Number(draft.interval),
-            reader_tid_addr: Number(draft.tidStart),
-            reader_tid_len: Number(draft.tidLength),
+            tid_addr: Number(draft.tidStart),
+            tid_len: Number(draft.tidLength),
         };
-    }
-
-    _sameNumberList(left, right) {
-        const a = [...left].map(Number).sort((x, y) => x - y);
-        const b = [...right].map(Number).sort((x, y) => x - y);
-        return a.length === b.length && a.every((value, index) => value === b[index]);
     }
 
     async _persistCalibrationConfiguration(entry, values) {
-        const identity = {
-            serverId: Number(entry.server.id || 0),
-            controllerId: Number(entry.controller.id || 0),
-            readerId: Number(entry.reader.id || 0),
-        };
-        if (!identity.serverId || !identity.controllerId || !identity.readerId) {
-            throw new Error("Server, Controller and Reader are required before saving.");
+        const sessionId = await this._calibrationSessionId();
+        const nodeId = Number(entry?.nodeId || 0);
+        if (!sessionId || !nodeId) {
+            throw new Error("Reader node must be persisted before its configuration can be saved.");
         }
-        const identityValues = {
-            edge_server_id: identity.serverId,
-            controller_id: identity.controllerId,
-            reader_id: identity.readerId,
-        };
-        const portNumbers = this.selectedPorts.map((port) => Number(port.portNo));
-        if (!portNumbers.length) {
-            throw new Error("At least one Reader Port is required.");
-        }
-
-        const initialLineId = Number(entry.record.resId || 0);
-        const traceId = `MS-${Date.now()}-${initialLineId || "NEW"}`;
-        console.info(`[NSP MANUAL SAVE][CLICK] trace_id=${traceId}`, {
-            mode: this.mode,
-            calibrationId: Number(this.props.record?.resId || 0),
-            lineId: initialLineId,
-            identity: identityValues,
-            values,
-            portNumbers,
-        });
-
-        let lineId = initialLineId;
-        let canonical;
-        if (!lineId) {
-            let sessionId = Number(this.props.record?.resId || 0);
-            if (!sessionId) {
-                const parentSaved = await this.props.record.save();
-                sessionId = Number(this.props.record?.resId || 0);
-                if (!parentSaved || !sessionId) {
-                    throw new Error("Save the Lane Calibration before adding Reader configuration.");
-                }
-                // Parent save may already have materialized the virtual line. Prefer it
-                // if present to avoid creating the same Reader mapping twice.
-                const materialized = this.entries.find((candidate) =>
-                    Number(candidate.server.id || 0) === identity.serverId
-                    && Number(candidate.controller.id || 0) === identity.controllerId
-                    && Number(candidate.reader.id || 0) === identity.readerId
-                    && Number(candidate.record.resId || 0) > 0
-                );
-                if (materialized) {
-                    lineId = Number(materialized.record.resId);
-                }
+        const canonical = await this.orm.call(
+            "nsp.measurement.session",
+            "action_save_device_configuration",
+            [[sessionId]],
+            {
+                node_id: nodeId,
+                values,
+                port_numbers: this.selectedPorts.map((port) => Number(port.portNo)),
             }
-
-            if (!lineId) {
-                canonical = await this.orm.call(
-                    "nsp.measurement.reader.line",
-                    "action_create_device_configuration",
-                    [],
-                    {
-                        session_id: sessionId,
-                        values,
-                        port_numbers: portNumbers,
-                        identity: identityValues,
-                        trace_id: traceId,
-                    }
-                );
-                console.info(`[NSP MANUAL SAVE][CREATE RESPONSE] trace_id=${traceId}`, canonical);
-                lineId = Number(canonical?.id || 0);
-            }
-        }
-
-        if (lineId && !canonical) {
-            canonical = await this.orm.call(
-                "nsp.measurement.reader.line",
-                "action_save_device_configuration",
-                [[lineId]],
-                {
-                    values,
-                    port_numbers: portNumbers,
-                    identity: identityValues,
-                    trace_id: traceId,
-                }
-            );
-            console.info(`[NSP MANUAL SAVE][WRITE RESPONSE] trace_id=${traceId}`, canonical);
-        }
-        if (!canonical || Number(canonical.id || 0) !== lineId || !lineId) {
-            throw new Error("The server did not confirm the Reader configuration save.");
-        }
-
-        // Read back every persisted part, including the edited infrastructure identity.
-        console.info(`[NSP MANUAL SAVE][READBACK START] trace_id=${traceId}`, { lineId });
-        const rows = await this.orm.read(
-            "nsp.measurement.reader.line",
-            [lineId],
-            [
-                "edge_server_id",
-                "controller_id",
-                "reader_id",
-                "reader_power_dbm",
-                "read_interval_ms",
-                "reader_tid_addr",
-                "reader_tid_len",
-                "reader_port_ids",
-            ]
         );
-        const row = rows[0];
-        if (!row) {
-            throw new Error("The saved Reader configuration could not be read back.");
+        if (!canonical || Number(canonical.id || 0) !== nodeId) {
+            throw new Error("The Reader configuration save was not confirmed.");
         }
-        const portRows = await this.orm.read(
-            "nsp.measurement.reader.port",
-            (row.reader_port_ids || []).map(Number),
-            ["port_no"]
-        );
-        const savedPorts = portRows.map((port) => Number(port.port_no));
-        console.info(`[NSP MANUAL SAVE][READBACK] trace_id=${traceId}`, {
-            row,
-            portRows,
-            savedPorts,
-        });
-        const persistedMany2oneId = (value) => Array.isArray(value) ? Number(value[0] || 0) : Number(value || 0);
-        const identityMatch =
-            persistedMany2oneId(row.edge_server_id) === identity.serverId
-            && persistedMany2oneId(row.controller_id) === identity.controllerId
-            && persistedMany2oneId(row.reader_id) === identity.readerId;
-        const scalarMatch =
-            Number(row.reader_power_dbm) === Number(values.reader_power_dbm)
-            && Number(row.read_interval_ms) === Number(values.read_interval_ms)
-            && Number(row.reader_tid_addr) === Number(values.reader_tid_addr)
-            && Number(row.reader_tid_len) === Number(values.reader_tid_len);
-        const portsMatch = this._sameNumberList(savedPorts, portNumbers);
-        console.info(`[NSP MANUAL SAVE][VERIFY] trace_id=${traceId}`, {
-            identityMatch,
-            scalarMatch,
-            portsMatch,
-            expected: { identity: identityValues, values, portNumbers },
-            actual: { row, savedPorts },
-        });
-        if (!identityMatch || !scalarMatch || !portsMatch) {
-            console.error(`[NSP MANUAL SAVE][VERIFY FAILED] trace_id=${traceId}`, {
-                identityMatch, scalarMatch, portsMatch, row, savedPorts,
-            });
-            throw new Error(`Database verification failed after saving Reader configuration. trace_id=${traceId}`);
-        }
-
-        // Reload the parent relation so the UI is rebuilt exclusively from persisted DB
-        // values.  Restore selection using the stable database id returned by the server.
-        if (this.props.record?.load) {
-            await this.props.record.load();
-        }
-        const currentEntry = this.entries.find(
-            (candidate) => Number(candidate.record.resId || 0) === lineId
-        );
-        if (!currentEntry) {
-            throw new Error("Reader configuration was saved but could not be restored in Device Configuration.");
-        }
-        this.state.selectedKey = currentEntry.key;
-        console.info(`[NSP MANUAL SAVE][DONE] trace_id=${traceId}`, {
-            lineId,
-            selectedKey: currentEntry.key,
-        });
+        await this.refreshCalibrationTree();
         return true;
     }
 
     async saveConfiguration() {
         const entry = this.selectedEntry;
-        if (!entry || !this._validateDraft() || this.state.saving) {
+        if (!entry || this.state.saving || !this._validateDraft()) {
             return;
         }
         this.state.saving = true;
@@ -1113,8 +1072,6 @@ export class NspDeviceTreeView extends Component {
             if (this.mode === "lane_calibration") {
                 await this._persistCalibrationConfiguration(entry, values);
             } else {
-                // Parking Lane keeps the normal relational-form lifecycle because
-                // its Reader configuration is owned by the Parking Lane draft.
                 const wasPersisted = Boolean(entry.record.resId);
                 await entry.record.update(values);
                 const saved = wasPersisted
@@ -1124,39 +1081,107 @@ export class NspDeviceTreeView extends Component {
                     throw new Error("The Reader configuration save was rejected.");
                 }
             }
-
             await this.refreshOperationalStatuses();
             this.state.editing = false;
             this.state.configState = "Saved";
             this.state.draft = {};
             this.state.errors = {};
-            this.notification.add("Reader configuration saved and verified in the database.", {
+            this.notification.add("Reader configuration saved.", {
                 title: "Configuration saved",
                 type: "success",
             });
         } catch (error) {
-            console.error("[NSP MANUAL SAVE][UI ERROR] Reader configuration save failed", {
-                error,
-                mode: this.mode,
-                calibrationId: Number(this.props.record?.resId || 0),
-                selectedKey: this.state.selectedKey,
-                entryResId: Number(entry?.record?.resId || 0),
-                values,
-                ports: this.selectedPorts.map((port) => Number(port.portNo)),
-            });
             this.state.configState = "Save failed";
-            this.notification.add(
-                error?.message || "Unable to update Reader configuration.",
-                {
-                    title: "Configuration error",
-                    type: "danger",
-                }
-            );
+            this.notification.add(error?.message || "Unable to update Reader configuration.", {
+                title: "Configuration error",
+                type: "danger",
+            });
         } finally {
             this.state.saving = false;
         }
     }
 
+    async refreshOperationalStatuses() {
+        const serverIds = new Set();
+        const controllerIds = new Set();
+        const readerIds = new Set();
+        const data = this.props.record?.data || {};
+
+        if (this.mode === "parking_lane") {
+            const serverId = many2oneId(data.edge_server_id);
+            const controllerId = many2oneId(data.controller_id);
+            if (serverId) {
+                serverIds.add(serverId);
+            }
+            if (controllerId) {
+                controllerIds.add(controllerId);
+            }
+            for (const entry of this._parkingLaneEntries()) {
+                if (entry.reader.id) {
+                    readerIds.add(Number(entry.reader.id));
+                }
+            }
+        } else if (this.mode === "lane_calibration") {
+            for (const node of this.calibrationNodes) {
+                const id = this._nodeMasterId(node);
+                if (!id) {
+                    continue;
+                }
+                if (node.device_type === "server") {
+                    serverIds.add(id);
+                } else if (node.device_type === "controller") {
+                    controllerIds.add(id);
+                } else if (node.device_type === "reader") {
+                    readerIds.add(id);
+                }
+            }
+        }
+
+        const queries = [];
+        if (serverIds.size) {
+            queries.push(this.orm.read("nsp.edge.server", [...serverIds], ["name", "status"])
+                .then((rows) => ["server", rows]));
+        }
+        if (controllerIds.size) {
+            queries.push(this.orm.read("nsp.controller", [...controllerIds], ["controller_name", "status"])
+                .then((rows) => ["controller", rows]));
+        }
+        if (readerIds.size) {
+            queries.push(this.orm.read("nsp.device", [...readerIds], ["name", "serial_number", "status"])
+                .then((rows) => ["reader", rows]));
+        }
+        if (!queries.length) {
+            return;
+        }
+
+        try {
+            const nextStatus = { ...this.state.runtimeStatus };
+            const nextMeta = { ...this.state.masterMeta };
+            for (const [kind, rows] of await Promise.all(queries)) {
+                for (const row of rows || []) {
+                    if (!row?.id) {
+                        continue;
+                    }
+                    const key = `${kind}:${row.id}`;
+                    nextStatus[key] = row.status || "unknown";
+                    if (kind === "server") {
+                        nextMeta[key] = { name: row.name || `Server ${row.id}` };
+                    } else if (kind === "controller") {
+                        nextMeta[key] = { name: row.controller_name || `Controller ${row.id}` };
+                    } else {
+                        nextMeta[key] = {
+                            name: row.name || row.serial_number || `Reader ${row.id}`,
+                            serial: row.serial_number || "—",
+                        };
+                    }
+                }
+            }
+            this.state.runtimeStatus = nextStatus;
+            this.state.masterMeta = nextMeta;
+        } catch {
+            // Keep the last known status if a transient refresh fails.
+        }
+    }
 }
 
 registry.category("fields").add("nsp_device_tree_view", {

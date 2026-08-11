@@ -102,8 +102,8 @@ class NspLaneSetupWizard(models.TransientModel):
     @api.depends(
         "source_scope",
         "session_id",
-        "session_id.reader_line_ids.reader_id",
-        "session_id.reader_line_ids.reader_id.active",
+        "session_id.device_node_ids.reader_id",
+        "session_id.device_node_ids.reader_id.active",
     )
     def _compute_available_reader_ids(self):
         """Resolve Reader scope without making Reader a Lane Controller child.
@@ -116,7 +116,7 @@ class NspLaneSetupWizard(models.TransientModel):
         active_readers = self.env["nsp.device"].search([("active", "=", True)])
         for wizard in self:
             if wizard.source_scope == "calibration" and wizard.session_id:
-                wizard.available_reader_ids = wizard.session_id.reader_line_ids.mapped(
+                wizard.available_reader_ids = wizard.session_id._reader_nodes().mapped(
                     "reader_id"
                 ).filtered("active")
                 continue
@@ -130,10 +130,10 @@ class NspLaneSetupWizard(models.TransientModel):
         if not self.session_id:
             return set()
         return {
-            (line.reader_id.id, int(port.port_no or 0))
-            for line in self.session_id.reader_line_ids
-            for port in line.reader_port_ids
-            if line.reader_id and int(port.port_no or 0) > 0
+            (node.reader_id.id, int(port.port_no or 0))
+            for node in self.session_id._reader_nodes()
+            for port in node.reader_port_ids
+            if node.reader_id and int(port.port_no or 0) > 0
         }
 
     def _switch_section(self, section):

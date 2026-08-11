@@ -98,8 +98,8 @@ class NspMeasurementEvent(models.Model):
         "read_at",
         "read_at_ms",
         "serial_number",
-        "session_id.reader_line_ids.reader_id.name",
-        "session_id.reader_line_ids.reader_id.serial_number",
+        "session_id.device_node_ids.reader_id.name",
+        "session_id.device_node_ids.reader_id.serial_number",
     )
     def _compute_timeline_display(self):
         for event in self:
@@ -119,11 +119,11 @@ class NspMeasurementEvent(models.Model):
 
         reader_name_by_key = {}
         for session in persisted.mapped("session_id"):
-            for line in session.reader_line_ids:
-                serial = str(line.reader_id.serial_number or "").strip().upper()
+            for node in session._reader_nodes():
+                serial = str(node.reader_id.serial_number or "").strip().upper()
                 if serial:
                     reader_name_by_key[(session.id, serial)] = (
-                        line.reader_id.name or line.reader_id.serial_number or serial
+                        node.reader_id.name or node.reader_id.serial_number or serial
                     )
 
         all_events = self.search(

@@ -7,53 +7,125 @@ from .calibration_status import CalibrationStatusPolicy
 class NspMeasurementSessionSync(models.Model):
     _inherit = "nsp.measurement.session"
 
-    def _calibration_sync_payload(self, edge_server=False):
-        """Serialize the Lane Calibration runtime configuration for Edge."""
+    def _node_device_id(self, node):
         self.ensure_one()
-        lines = self.reader_line_ids
-        if edge_server:
-            lines = lines.filtered(lambda line: line.edge_server_id == edge_server)
+        if node.device_type == "server":
+            return node.server_id.edge_server_code or ""
+        if node.device_type == "controller":
+            return node.controller_id.controller_id or ""
+        if node.device_type == "reader":
+            return node.reader_id.device_code or node.reader_id.serial_number or ""
+        return ""
+
+    def _sync_nodes(self, edge_server=False):
+        """Return all nodes or one released Server branch for Edge-specific sync."""
+        self.ensure_one()
+        nodes = self.device_node_ids
+        if not edge_server:
+            return nodes
+        roots = nodes.filtered(
+            lambda node: node.device_type == "server" and node.server_id == edge_server
+        )
+        if not roots:
+            return nodes.browse()
+        selected = roots
+        frontier = roots
+        while frontier:
+            children = nodes.filtered(lambda node: node.parent_id in frontier)
+            if not children:
+                break
+            selected |= children
+            frontier = children
+        return selected
+
+    def _calibration_sync_payload(self, edge_server=False):
+        """Serialize a flat released Device Tree snapshot for Edge.
+
+        Master identity and contextual topology are intentionally separate: each
+        topology row carries ``node_id``, ``device_id`` and ``parent_node_id``.
+        """
+        self.ensure_one()
+        nodes = self._sync_nodes(edge_server=edge_server).sorted(
+            key=lambda node: (node.sequence, node.id)
+        )
+        node_ids = set(nodes.ids)
+
+        servers = []
+        controllers = []
         readers = []
-        for line in lines.sorted(
-            key=lambda item: (
-                item.edge_server_id.edge_server_code or "",
-                item.controller_id.controller_id or "",
-                item.reader_id.serial_number or "",
-                item.id,
-            )
-        ):
-            readers.append({
-                "server_code": line.edge_server_id.edge_server_code or "",
-                "controller_code": line.controller_id.controller_id or "",
-                "controller_name": line.controller_id.controller_name or "",
-                "technical_code": line.reader_id.device_code or "",
-                "serial_number": line.reader_id.serial_number or "",
-                "reader_name": line.reader_id.name or line.reader_id.serial_number or "",
-                "physical_connection": line.reader_id.connection_type or False,
-                "reader_parameters": {
-                    "power_dbm": int(line.reader_power_dbm or 0),
-                    "read_interval_ms": int(line.read_interval_ms or 200),
-                    "tid_start_address": int(line.reader_tid_addr or 0),
-                    "tid_length": int(line.reader_tid_len or 0),
-                },
-                "ports": [
-                    {"port_no": int(port.port_no or 0)}
-                    for port in line.reader_port_ids.sorted(key=lambda port: (port.port_no, port.id))
-                ],
-            })
-        calibration_tag = {"tid": self.target_line_ids[:1].tid or ""} if self.target_line_ids else False
+        topology = []
+        for node in nodes:
+            parent_node_id = node.parent_id.id if node.parent_id.id in node_ids else None
+            device_id = self._node_device_id(node)
+            row = {
+                "node_id": node.id,
+                "device_type": node.device_type,
+                "device_id": device_id,
+                "parent_node_id": parent_node_id,
+                "sequence": int(node.sequence or 10),
+            }
+            if node.device_type == "server":
+                server = node.server_id
+                servers.append({
+                    "id": device_id,
+                    "name": server.name or "",
+                    "status": server.status or "",
+                })
+            elif node.device_type == "controller":
+                controller = node.controller_id
+                controllers.append({
+                    "id": device_id,
+                    "name": controller.controller_name or "",
+                    "status": controller.status or "",
+                })
+            elif node.device_type == "reader":
+                reader = node.reader_id
+                reader_data = {
+                    "id": device_id,
+                    "name": reader.name or reader.serial_number or "",
+                    "serial_number": reader.serial_number or "",
+                    "physical_connection": reader.connection_type or False,
+                    "status": reader.status or "",
+                }
+                readers.append(reader_data)
+                row["configuration"] = {
+                    "power_dbm": int(node.power_dbm or 0),
+                    "read_interval_ms": int(node.read_interval_ms or 200),
+                    "tid_addr": int(node.tid_addr or 0),
+                    "tid_len": int(node.tid_len or 0),
+                }
+                row["ports"] = [
+                    {
+                        "port_no": int(port.port_no or 0),
+                        "sequence": int(port.sequence or 10),
+                    }
+                    for port in node.reader_port_ids.sorted(
+                        key=lambda port: (port.sequence, port.port_no, port.id)
+                    )
+                ]
+            topology.append(row)
+
+        calibration_tag = (
+            {"tid": self.target_line_ids[:1].tid or ""}
+            if self.target_line_ids else False
+        )
         return {
-            "schema_version": 2,
+            "schema_version": 3,
+            "snapshot_id": "%s-R%s" % (self.measurement_code, int(self.revision or 1)),
             "lane_calibration_code": self.measurement_code,
             "status": self.status,
             "desired_state": "running" if self.status in ("ready", "running") else "stopped",
             "revision": int(self.revision or 1),
             "calibration_tag": calibration_tag,
-            "readers": readers,
+            "devices": {
+                "servers": servers,
+                "controllers": controllers,
+                "readers": readers,
+            },
+            "topology": {"nodes": topology},
         }
 
     def _target_coverage(self):
-        """Return raw calibration-tag detection coverage for the current revision."""
         self.ensure_one()
         targets = self.target_line_ids.sorted(key=lambda line: (line.tid or "", line.id))
         rows = self.env["nsp.measurement.event"].sudo()._read_group(
@@ -71,14 +143,14 @@ class NspMeasurementSessionSync(models.Model):
             for tid, count, first_read, last_read in rows
         }
         result = []
-        for line in targets:
-            data = stats.get(line.tid, {})
-            read_count = int(data.get("read_count") or 0)
+        for target in targets:
+            data = stats.get(target.tid, {})
+            count = int(data.get("read_count") or 0)
             result.append({
-                "id": line.id,
-                "tid": line.tid or "",
-                "detected": bool(read_count),
-                "read_count": read_count,
+                "id": target.id,
+                "tid": target.tid or "",
+                "detected": bool(count),
+                "read_count": count,
                 "first_read_at": fields.Datetime.to_string(data.get("first_read_at"))
                 if data.get("first_read_at") else None,
                 "last_read_at": fields.Datetime.to_string(data.get("last_read_at"))
@@ -97,6 +169,7 @@ class NspMeasurementSessionSync(models.Model):
         if not session:
             return {"found": False}
         session.check_access("read")
+
         events = self.env["nsp.measurement.event"].search(
             [("session_id", "=", session.id), ("revision", "=", session.revision)],
             order="read_at asc, read_at_ms asc, id asc",
@@ -105,49 +178,46 @@ class NspMeasurementSessionSync(models.Model):
         steps = session._build_detection_steps(events)
         tags = session._target_coverage()
         detected_tag_count = sum(1 for tag in tags if tag["detected"])
+
         controllers = []
-        for controller in session.reader_line_ids.mapped("controller_id").sorted(
-            key=lambda item: ((item.controller_id or ""), item.id)
+        for node in session._controller_nodes().sorted(
+            key=lambda item: (item.controller_id.controller_id or "", item.id)
         ):
-            edge_code = ""
-            edge_status = ""
-            line = session.reader_line_ids.filtered(lambda row: row.controller_id == controller)[:1]
-            if line and line.edge_server_id:
-                edge_code = line.edge_server_id.edge_server_code or ""
-                edge_status = line.edge_server_id.status or ""
+            server_node = node.parent_id if node.parent_id.device_type == "server" else False
             controllers.append({
-                "id": controller.id,
-                "code": controller.controller_id or "",
-                "name": controller.controller_name or "",
-                "edge_server_code": edge_code,
-                "edge_status": edge_status,
+                "node_id": node.id,
+                "id": node.controller_id.id,
+                "code": node.controller_id.controller_id or "",
+                "name": node.controller_id.controller_name or "",
+                "server_node_id": server_node.id if server_node else False,
+                "edge_server_code": server_node.server_id.edge_server_code if server_node else "",
+                "edge_status": server_node.server_id.status if server_node else "",
             })
+
         readers = []
-        for line in session.reader_line_ids.sorted(
-            key=lambda item: (
-                (item.controller_id.controller_id or ""),
-                (item.reader_id.name or ""),
-                (item.reader_id.serial_number or ""),
-                item.id,
-            )
+        for node in session._reader_nodes().sorted(
+            key=lambda item: (item.reader_id.name or "", item.reader_id.serial_number or "", item.id)
         ):
-            reader = line.reader_id
-            controller = line.controller_id
+            reader = node.reader_id
+            controller_node = node.parent_id if node.parent_id.device_type == "controller" else False
+            controller = controller_node.controller_id if controller_node else self.env["nsp.controller"]
             readers.append({
-                "reader_line_id": line.id,
+                "reader_node_id": node.id,
                 "id": reader.id,
                 "name": reader.name or reader.serial_number or "",
                 "serial_number": reader.serial_number or "",
-                "controller_code": controller.controller_id or "",
-                "controller_name": controller.controller_name or "",
+                "controller_node_id": controller_node.id if controller_node else False,
+                "controller_code": (controller.controller_id or "") if controller else "",
+                "controller_name": (controller.controller_name or "") if controller else "",
                 "status": reader.status or "",
                 "runtime_power_dbm": int(reader.runtime_power_dbm or 0),
                 "runtime_read_interval_ms": int(reader.runtime_read_interval_ms or 0),
-                "reader_power_dbm": int(line.reader_power_dbm or 0),
-                "read_interval_ms": int(line.read_interval_ms or 0),
+                "power_dbm": int(node.power_dbm or 0),
+                "read_interval_ms": int(node.read_interval_ms or 0),
                 "firmware_version": reader.firmware_version or "",
-                "ports": sorted(line.reader_port_ids.mapped("port_no")),
+                "ports": sorted(node.reader_port_ids.mapped("port_no")),
             })
+
         return {
             "found": True,
             "session_id": session.id,
@@ -164,12 +234,12 @@ class NspMeasurementSessionSync(models.Model):
             "coverage_percent": round((detected_tag_count * 100.0 / len(tags)), 1) if tags else 0.0,
             "readers": readers,
             "reader_count": len(readers),
-            "reader_online_count": sum(1 for reader in readers if reader.get("status") in ("online", "degraded")),
-            "reader_offline_count": sum(1 for reader in readers if reader.get("status") == "offline"),
+            "reader_online_count": sum(1 for row in readers if row.get("status") in ("online", "degraded")),
+            "reader_offline_count": sum(1 for row in readers if row.get("status") == "offline"),
             "configured_reader_port_count": len({
-                (reader["serial_number"], int(port_no or 0))
-                for reader in readers
-                for port_no in reader.get("ports", [])
+                (row["serial_number"], int(port_no or 0))
+                for row in readers
+                for port_no in row.get("ports", [])
             }),
             "started_at": fields.Datetime.to_string(session.started_at) if session.started_at else None,
             "ended_at": fields.Datetime.to_string(session.ended_at) if session.ended_at else None,
@@ -191,14 +261,7 @@ class NspMeasurementSessionSync(models.Model):
 
     @api.model
     def get_infrastructure_scope_snapshot(self, session_id):
-        """Return the Lane Calibration infrastructure topology and live health.
-
-        Configuration ownership comes from ``nsp.measurement.reader.line``.
-        Runtime health comes from the Edge Server, Controller and Reader
-        heartbeat mirrors.  RFID activity is derived only from raw calibration
-        observations for the current revision; it is not an Antenna health
-        assertion.
-        """
+        """Return Tree topology plus runtime health; Draft can include unassigned nodes."""
         try:
             record_id = int(session_id or 0)
         except (TypeError, ValueError):
@@ -208,359 +271,80 @@ class NspMeasurementSessionSync(models.Model):
             return {"found": False}
         session.check_access("read")
 
-        now = fields.Datetime.now()
-        parameter = self.env["ir.config_parameter"].sudo().get_param(
-            "nsp_master_gatekeeper.lane_calibration_reader_silent_after_sec",
-            "60",
-        )
-        try:
-            silent_after_sec = int(parameter or "60")
-        except (TypeError, ValueError):
-            silent_after_sec = 60
-        silent_after_sec = min(max(silent_after_sec, 15), 3600)
-
-        lines = session.reader_line_ids.sorted(
-            key=lambda line: (
-                line.edge_server_id.edge_server_code or "",
-                line.controller_id.controller_id or "",
-                line.reader_id.name or "",
-                line.reader_id.serial_number or "",
-                line.id,
-            )
-        )
-        # The dialog polls every two seconds. Aggregate in PostgreSQL instead
-        # of materializing every raw observation into the ORM cache.
-        self.env.cr.execute(
-            """
-            SELECT UPPER(BTRIM(serial_number)) AS serial_number,
-                   port_no,
-                   COUNT(*) AS detection_count,
-                   MIN(read_at) AS first_detection,
-                   MAX(read_at) AS last_detection
-              FROM nsp_measurement_event
-             WHERE session_id = %s
-               AND revision = %s
-             GROUP BY UPPER(BTRIM(serial_number)), port_no
-            """,
-            (session.id, int(session.revision or 1)),
-        )
-        port_stats = {
-            (str(serial or "").strip().upper(), int(port_no or 0)): {
-                "count": int(detection_count or 0),
-                "first_detection": first_detection,
-                "last_detection": last_detection,
-            }
-            for serial, port_no, detection_count, first_detection, last_detection
-            in self.env.cr.fetchall()
-            if serial and int(port_no or 0) > 0
-        }
-
-        connection_labels = dict(
-            self.env["nsp.device"]._fields["connection_type"].selection
-        )
-        edge_map = {}
-        warnings = []
-        readers_flat = []
-        active_runtime = session.status in ("ready", "running")
-
-        def _dt(value):
-            return fields.Datetime.to_string(value) if value else None
-
-        def _seconds_since(value):
-            if not value:
-                return None
-            parsed = fields.Datetime.to_datetime(value)
-            return max(0, int((now - parsed).total_seconds())) if parsed else None
-
-        def _warning(severity, code, message, happened_at=None, reader_line_id=False):
-            warnings.append({
-                "severity": severity,
-                "code": code,
-                "message": message,
-                "happened_at": _dt(happened_at) if happened_at else None,
-                "reader_line_id": int(reader_line_id or 0),
-            })
-
-        for line in lines:
-            edge = line.edge_server_id
-            controller = line.controller_id
-            reader = line.reader_id
-            edge_node = edge_map.setdefault(edge.id, {
-                "id": edge.id,
-                "code": edge.edge_server_code or "",
-                "name": edge.name or edge.edge_server_code or "Edge Server",
-                "status": edge.status or "offline",
-                "last_heartbeat": _dt(edge.timestamp),
-                "controllers": {},
-            })
-            controller_node = edge_node["controllers"].setdefault(controller.id, {
-                "id": controller.id,
-                "code": controller.controller_id or "",
-                "name": controller.controller_name or controller.controller_id or "Controller",
-                "status": controller.status or "offline",
-                "last_heartbeat": _dt(controller.timestamp),
-                "runtime_mode": "Lane Calibration" if active_runtime else "Inactive",
-                "readers": [],
-            })
-
-            serial_aliases = {
-                str(value or "").strip().upper()
-                for value in (reader.serial_number, reader.runtime_detected_serial_number)
-                if str(value or "").strip()
-            }
-            configured_ports = sorted(set(line.reader_port_ids.mapped("port_no")))
-            observed_ports = sorted({
-                port_no for event_serial, port_no in port_stats
-                if event_serial in serial_aliases
-            })
-            status_last_detection = reader.runtime_last_detection_at
-            if (
-                status_last_detection
-                and session.started_at
-                and status_last_detection < session.started_at
-            ):
-                # Do not reuse a detection from a previous runtime session.
-                status_last_detection = False
-            status_last_port = int(reader.runtime_last_detection_port_no or 0)
-            all_ports = sorted(
-                set(configured_ports)
-                | set(observed_ports)
-                | ({status_last_port} if status_last_port > 0 else set())
-            )
-            ports = []
-            reader_detection_count = 0
-            reader_last_detection = None
-            silent_port_count = 0
-            for port_no in all_ports:
-                matching_stats = [
-                    port_stats.get((serial_alias, port_no), {})
-                    for serial_alias in serial_aliases
-                    if port_stats.get((serial_alias, port_no))
-                ]
-                detection_count = sum(int(item.get("count") or 0) for item in matching_stats)
-                first_values = [item.get("first_detection") for item in matching_stats if item.get("first_detection")]
-                last_values = [item.get("last_detection") for item in matching_stats if item.get("last_detection")]
-                first_detection = min(first_values) if first_values else None
-                last_detection = max(last_values) if last_values else None
-                if (
-                    status_last_detection
-                    and status_last_port == port_no
-                    and (not last_detection or status_last_detection > last_detection)
-                ):
-                    # edge/status can arrive before the raw event forwarding retry.
-                    last_detection = status_last_detection
-                reader_detection_count += detection_count
-                if last_detection and (
-                    not reader_last_detection or last_detection > reader_last_detection
-                ):
-                    reader_last_detection = last_detection
-                configured = port_no in configured_ports
-                last_age = _seconds_since(last_detection)
-                if last_detection and (last_age is None or last_age <= silent_after_sec):
-                    activity = "active"
-                elif configured and active_runtime and reader.status in ("online", "degraded"):
-                    activity = "silent"
-                    silent_port_count += 1
-                elif detection_count:
-                    activity = "historical"
-                else:
-                    activity = "unknown"
-                ports.append({
-                    "port_no": port_no,
-                    "configured": configured,
-                    "activity": activity,
-                    "detection_count": detection_count,
-                    "first_detection": _dt(first_detection),
-                    "last_detection": _dt(last_detection),
-                })
-                if not configured and detection_count:
-                    _warning(
-                        "warning",
-                        "port_outside_scope",
-                        _("Reader %(reader)s reported Port %(port)s outside the configured Infrastructure Scope.") % {
-                            "reader": reader.display_name,
-                            "port": port_no,
-                        },
-                        last_detection,
-                        line.id,
-                    )
-
-            if (
-                status_last_detection
-                and (not reader_last_detection or status_last_detection > reader_last_detection)
-            ):
-                reader_last_detection = status_last_detection
-            last_detection_age = _seconds_since(reader_last_detection)
-            if reader.status == "offline" and reader_last_detection and (
-                last_detection_age is None or last_detection_age <= silent_after_sec
-            ):
-                # A fresh data-plane detection is stronger evidence than a delayed
-                # status mirror.  edge/status will reconcile the persisted status.
-                activity_status = "active"
-            elif reader.status == "offline":
-                activity_status = "offline"
-            elif reader.status == "degraded":
-                activity_status = "degraded"
-            elif reader.status == "online" and reader_last_detection and (
-                last_detection_age is None or last_detection_age <= silent_after_sec
-            ):
-                activity_status = "active"
-            elif reader.status == "online" and active_runtime:
-                activity_status = "silent"
-            elif reader.status == "online":
-                activity_status = "connected"
-            else:
-                activity_status = "unknown"
-
-            effective_reader_status = reader.status or "offline"
-            if activity_status == "active" and effective_reader_status == "offline":
-                effective_reader_status = "online"
-
-            reader_node = {
-                "reader_line_id": line.id,
+        def _reader_payload(node):
+            reader = node.reader_id
+            return {
+                "reader_node_id": node.id,
                 "id": reader.id,
                 "name": reader.name or reader.serial_number or "RFID Reader",
                 "serial_number": reader.serial_number or "",
-                "detected_serial_number": reader.runtime_detected_serial_number or "",
-                "status": effective_reader_status,
-                "activity_status": activity_status,
-                "last_seen": _dt(reader.last_seen),
-                "last_detection": _dt(reader_last_detection),
-                "detection_count": reader_detection_count,
+                "status": reader.status or "offline",
+                "last_seen": fields.Datetime.to_string(reader.last_seen) if reader.last_seen else None,
                 "firmware_version": reader.firmware_version or "",
                 "connection_type": reader.connection_type or "",
-                "connection_label": connection_labels.get(reader.connection_type, "") if reader.connection_type else "",
-                "runtime_power_dbm": int(reader.runtime_power_dbm or 0),
-                "runtime_read_interval_ms": int(reader.runtime_read_interval_ms or 0),
-                "configured_power_dbm": int(line.reader_power_dbm or 0),
-                "configured_read_interval_ms": int(line.read_interval_ms or 0),
-                "ports": ports,
+                "configured_power_dbm": int(node.power_dbm or 0),
+                "configured_read_interval_ms": int(node.read_interval_ms or 0),
+                "ports": [
+                    {"port_no": int(port.port_no or 0)}
+                    for port in node.reader_port_ids.sorted(key=lambda row: (row.port_no, row.id))
+                ],
             }
-            controller_node["readers"].append(reader_node)
-            readers_flat.append(reader_node)
 
-            if edge.status != "online":
-                _warning(
-                    "danger" if edge.status in ("error", "revoked", "block") else "warning",
-                    "edge_not_online",
-                    _("Edge Server %(edge)s is %(status)s.") % {
-                        "edge": edge.display_name,
-                        "status": edge.status or "offline",
-                    },
-                    edge.timestamp,
-                )
-            if controller.status != "online":
-                _warning(
-                    "danger" if controller.status in ("error", "revoked", "block") else "warning",
-                    "controller_not_online",
-                    _("Controller %(controller)s is %(status)s.") % {
-                        "controller": controller.display_name,
-                        "status": controller.status or "offline",
-                    },
-                    controller.timestamp,
-                )
-            if effective_reader_status == "offline":
-                _warning(
-                    "danger",
-                    "reader_offline",
-                    _("Reader %(reader)s is offline.") % {"reader": reader.display_name},
-                    reader.last_seen,
-                    line.id,
-                )
-            elif effective_reader_status == "degraded":
-                _warning(
-                    "warning",
-                    "reader_degraded",
-                    _("Reader %(reader)s reported a degraded runtime state.") % {
-                        "reader": reader.display_name,
-                    },
-                    reader.last_seen,
-                    line.id,
-                )
-            if effective_reader_status in ("online", "degraded") and not reader.firmware_version:
-                _warning(
-                    "info",
-                    "firmware_unknown",
-                    _("Reader %(reader)s is connected but firmware information is unavailable.") % {
-                        "reader": reader.display_name,
-                    },
-                    reader.last_seen,
-                    line.id,
-                )
-            if active_runtime and effective_reader_status in ("online", "degraded") and not reader_last_detection:
-                _warning(
-                    "warning",
-                    "reader_no_detection",
-                    _("Reader %(reader)s is connected but has not produced a detection in this calibration.") % {
-                        "reader": reader.display_name,
-                    },
-                    reader.last_seen,
-                    line.id,
-                )
-            elif active_runtime and effective_reader_status in ("online", "degraded") and (
-                last_detection_age is not None and last_detection_age > silent_after_sec
-            ):
-                _warning(
-                    "warning",
-                    "reader_silent",
-                    _("Reader %(reader)s has not produced a detection in the last %(seconds)s seconds.") % {
-                        "reader": reader.display_name,
-                        "seconds": silent_after_sec,
-                    },
-                    reader_last_detection,
-                    line.id,
-                )
-            if silent_port_count:
-                for port in ports:
-                    if port["activity"] == "silent":
-                        _warning(
-                            "warning",
-                            "port_silent",
-                            _("Reader %(reader)s Port %(port)s has not produced a recent detection.") % {
-                                "reader": reader.display_name,
-                                "port": port["port_no"],
-                            },
-                            fields.Datetime.to_datetime(port["last_detection"]) if port["last_detection"] else reader.last_seen,
-                            line.id,
-                        )
-
+        controller_nodes = session._controller_nodes()
+        reader_nodes = session._reader_nodes()
         edges = []
-        for edge in sorted(edge_map.values(), key=lambda item: (item["code"], item["id"])):
-            controllers = list(edge.pop("controllers").values())
-            controllers.sort(key=lambda item: (item["code"], item["id"]))
-            for controller in controllers:
-                controller["readers"].sort(
-                    key=lambda item: (item["name"], item["serial_number"], item["reader_line_id"])
-                )
-            edge["controllers"] = controllers
-            edges.append(edge)
+        for server_node in session._server_nodes().sorted(
+            key=lambda node: (node.server_id.edge_server_code or "", node.id)
+        ):
+            server = server_node.server_id
+            controllers = []
+            for controller_node in controller_nodes.filtered(
+                lambda node: node.parent_id == server_node
+            ).sorted(key=lambda node: (node.controller_id.controller_id or "", node.id)):
+                controller = controller_node.controller_id
+                controllers.append({
+                    "node_id": controller_node.id,
+                    "id": controller.id,
+                    "code": controller.controller_id or "",
+                    "name": controller.controller_name or "",
+                    "status": controller.status or "offline",
+                    "readers": [
+                        _reader_payload(reader_node)
+                        for reader_node in reader_nodes.filtered(
+                            lambda node: node.parent_id == controller_node
+                        ).sorted(key=lambda node: (node.reader_id.name or "", node.id))
+                    ],
+                })
+            edges.append({
+                "node_id": server_node.id,
+                "id": server.id,
+                "code": server.edge_server_code or "",
+                "name": server.name or "",
+                "status": server.status or "offline",
+                "controllers": controllers,
+            })
 
-        # The same Edge/Controller warning can occur once per Reader line.
-        unique_warnings = []
-        seen_warning_keys = set()
-        for warning in warnings:
-            key = (
-                warning["severity"], warning["code"], warning["message"],
-                warning.get("reader_line_id") or 0,
-            )
-            if key in seen_warning_keys:
-                continue
-            seen_warning_keys.add(key)
-            unique_warnings.append(warning)
-
-        edge_nodes = [edge for edge in edges]
-        controller_nodes = [
-            controller for edge in edges for controller in edge["controllers"]
-        ]
-        reader_total = len(readers_flat)
-        active_count = sum(1 for item in readers_flat if item["activity_status"] == "active")
-        silent_count = sum(1 for item in readers_flat if item["activity_status"] == "silent")
-        offline_count = sum(1 for item in readers_flat if item["activity_status"] == "offline")
-        degraded_count = sum(1 for item in readers_flat if item["activity_status"] == "degraded")
-        connected_count = sum(
-            1 for item in readers_flat
-            if item["status"] in ("online", "degraded")
+        unassigned_controllers = controller_nodes.filtered(
+            lambda node: not node.parent_id or node.parent_id.device_type != "server"
         )
+        unassigned_readers = reader_nodes.filtered(
+            lambda node: not node.parent_id or node.parent_id.device_type != "controller"
+        )
+        warnings = []
+        for node in unassigned_controllers:
+            warnings.append({
+                "severity": "warning",
+                "code": "controller_unassigned",
+                "message": _("Controller %s is not assigned to a Server.") % node.device_name,
+                "node_id": node.id,
+            })
+        for node in unassigned_readers:
+            warnings.append({
+                "severity": "warning",
+                "code": "reader_unassigned",
+                "message": _("Reader %s is not assigned to a Controller.") % node.device_name,
+                "node_id": node.id,
+            })
 
         return {
             "found": True,
@@ -569,24 +353,32 @@ class NspMeasurementSessionSync(models.Model):
             "revision": int(session.revision or 1),
             "status": session.status,
             "editable": session.status == "draft",
-            "runtime_active": active_runtime,
-            "silent_after_sec": silent_after_sec,
-            "server_time": fields.Datetime.to_string(now),
+            "server_time": fields.Datetime.to_string(fields.Datetime.now()),
             "summary": {
-                "edge_total": len(edge_nodes),
-                "edge_online": sum(1 for item in edge_nodes if item["status"] == "online"),
+                "edge_total": len(session._server_nodes()),
+                "edge_online": len(session._server_nodes().filtered(lambda node: node.server_id.status == "online")),
                 "controller_total": len(controller_nodes),
-                "controller_online": sum(1 for item in controller_nodes if item["status"] == "online"),
-                "reader_total": reader_total,
-                "reader_connected": connected_count,
-                "reader_active": active_count,
-                "reader_silent": silent_count,
-                "reader_offline": offline_count,
-                "reader_degraded": degraded_count,
+                "controller_online": len(controller_nodes.filtered(lambda node: node.controller_id.status == "online")),
+                "reader_total": len(reader_nodes),
+                "reader_connected": len(reader_nodes.filtered(lambda node: node.reader_id.status in ("online", "degraded"))),
+                "reader_offline": len(reader_nodes.filtered(lambda node: node.reader_id.status == "offline")),
+                "unassigned_controller_total": len(unassigned_controllers),
+                "unassigned_reader_total": len(unassigned_readers),
             },
             "edges": edges,
-            "readers": readers_flat,
-            "warnings": unique_warnings,
+            "unassigned_controllers": [
+                {
+                    "node_id": node.id,
+                    "id": node.controller_id.id,
+                    "code": node.controller_id.controller_id or "",
+                    "name": node.device_name,
+                    "status": node.controller_id.status or "offline",
+                }
+                for node in unassigned_controllers
+            ],
+            "unassigned_readers": [_reader_payload(node) for node in unassigned_readers],
+            "readers": [_reader_payload(node) for node in reader_nodes],
+            "warnings": warnings,
         }
 
     def _apply_runtime_status(self, status, occurred_at=False, message=False, revision=False):

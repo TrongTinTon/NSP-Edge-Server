@@ -28,12 +28,12 @@ def _new_measurement_code():
 
 
 class NspMeasurementSession(models.Model):
-    """Measurement plan shared by Cloud, Edge and one-or-more Controllers.
+    """Lane Calibration aggregate owned by Cloud.
 
-    The Session owns exactly one arbitrary raw Calibration TID and a list of Reader lines.
-    Reader ownership determines Controller scope; therefore Controller is not stored
-    again on the Session. Each Edge receives only Reader lines belonging to it and
-    each physical Controller pulls only its own Reader subset.
+    Device inventory is contextualized by ``nsp.measurement.device.node``. Server,
+    Controller and Reader master records remain independent; ``parent_id`` on a node
+    is the only Server -> Controller -> Reader relationship inside this calibration.
+    Draft may be incomplete. Release validates topology and runtime completeness.
     """
 
     _name = "nsp.measurement.session"
@@ -57,14 +57,23 @@ class NspMeasurementSession(models.Model):
     )
     target_count = fields.Integer(string="Calibration Tags", compute="_compute_scope_counts")
     target_tag_count = fields.Integer(string="Calibration Tags", compute="_compute_scope_counts")
-    reader_line_ids = fields.One2many(
-        "nsp.measurement.reader.line",
+    device_node_ids = fields.One2many(
+        "nsp.measurement.device.node",
         "session_id",
-        string="Readers",
-        copy=True,
+        string="Device Tree Nodes",
+        copy=False,
+        help=(
+            "Contextual Server, Controller and Reader nodes selected for this Lane "
+            "Calibration. Topology is represented only by each node parent_id."
+        ),
     )
     device_tree_anchor = fields.Boolean(
         string="NSP Device Tree", compute="_compute_device_tree_anchor",
+    )
+    device_configuration_editable = fields.Boolean(
+        string="Device Configuration Editable",
+        compute="_compute_device_configuration_editable",
+        readonly=True,
     )
     reader_count = fields.Integer(compute="_compute_scope_counts")
     controller_ids = fields.Many2many(
@@ -129,10 +138,24 @@ class NspMeasurementSession(models.Model):
         ),
     ]
 
-    @api.depends("reader_line_ids", "reader_line_ids.reader_id")
+    @api.depends("device_node_ids", "device_node_ids.device_type")
     def _compute_device_tree_anchor(self):
         for session in self:
             session.device_tree_anchor = True
+
+    @api.depends("status")
+    def _compute_device_configuration_editable(self):
+        """Expose the real aggregate write policy to the custom Device Tree.
+
+        The presentation anchor is a computed readonly Boolean, so OWL cannot infer
+        business editability from the field's readonly prop.  Device Configuration
+        belongs to the Lane Calibration aggregate: it is editable only for a Draft
+        session that the current user can actually write.
+        """
+        for session in self:
+            session.device_configuration_editable = bool(
+                session.status == "draft" and session.has_access("write")
+            )
 
     def _deployment_role(self):
         # Deployment ownership is defined by the installed Gatekeeper module.
@@ -144,14 +167,26 @@ class NspMeasurementSession(models.Model):
             session.live_dashboard = True
             session.is_cloud_deployment = is_cloud
 
-    @api.depends("reader_line_ids", "reader_line_ids.controller_id", "target_line_ids")
+    @api.depends(
+        "device_node_ids",
+        "device_node_ids.device_type",
+        "device_node_ids.controller_id",
+        "device_node_ids.reader_id",
+        "target_line_ids",
+    )
     def _compute_scope_counts(self):
         Controller = self.env["nsp.controller"]
         for session in self:
-            controllers = session.reader_line_ids.mapped("controller_id")
+            controller_nodes = session.device_node_ids.filtered(
+                lambda node: node.device_type == "controller" and node.controller_id
+            )
+            reader_nodes = session.device_node_ids.filtered(
+                lambda node: node.device_type == "reader" and node.reader_id
+            )
+            controllers = controller_nodes.mapped("controller_id")
             session.controller_ids = controllers if controllers else Controller.browse()
-            session.controller_count = len(controllers)
-            session.reader_count = len(session.reader_line_ids)
+            session.controller_count = len(controller_nodes)
+            session.reader_count = len(reader_nodes)
             session.target_count = len(session.target_line_ids)
             session.target_tag_count = len(session.target_line_ids.filtered("tid"))
 
@@ -189,14 +224,71 @@ class NspMeasurementSession(models.Model):
         records._validate_measurement_scope()
         return records
 
-    @api.constrains("reader_line_ids", "target_line_ids")
+    @api.constrains("device_node_ids", "target_line_ids")
     def _check_scope_constraint(self):
         self._validate_measurement_scope()
 
     def _validate_measurement_scope(self):
+        # Draft validation covers only record identity/data integrity. Completeness and
+        # Server -> Controller -> Reader topology are validated only by Release.
         self._validate_calibration_tag_scope()
-        self._validate_reader_scope()
+        self._validate_device_node_scope()
         return True
+
+    def action_save_device_configuration(self, node_id=None, values=None, port_numbers=None):
+        """Atomically persist one Reader node configuration while the Session is Draft."""
+        self.ensure_one()
+        self.check_access("write")
+        if self.status != "draft":
+            raise ValidationError(
+                _("Device Configuration can be changed only while Lane Calibration is Draft.")
+            )
+
+        node = self.env["nsp.measurement.device.node"].browse(int(node_id or 0)).exists()
+        if not node or node.session_id != self or node.device_type != "reader":
+            raise ValidationError(_("Reader node does not belong to this Lane Calibration."))
+
+        source = dict(values or {})
+        allowed = {"power_dbm", "read_interval_ms", "tid_addr", "tid_len"}
+        unknown = sorted(set(source) - allowed)
+        if unknown:
+            raise ValidationError(
+                _("Unsupported Reader configuration fields: %s") % ", ".join(unknown)
+            )
+        normalized = {field_name: int(value) for field_name, value in source.items()}
+
+        try:
+            requested_ports = sorted(int(value) for value in (port_numbers or []))
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(_("Reader Ports must be integer values from 1 to 16.")) from exc
+        if len(requested_ports) != len(set(requested_ports)):
+            raise ValidationError(_("Reader Port must be unique per RFID Reader."))
+        if any(port_no < 1 or port_no > 16 for port_no in requested_ports):
+            raise ValidationError(_("Reader Port must be an integer from 1 to 16."))
+
+        current_by_no = {int(port.port_no): port for port in node.reader_port_ids}
+        commands = [
+            (2, port.id, 0)
+            for port_no, port in current_by_no.items()
+            if port_no not in requested_ports
+        ]
+        commands.extend(
+            (0, 0, {"port_no": port_no})
+            for port_no in requested_ports
+            if port_no not in current_by_no
+        )
+        if commands:
+            normalized["reader_port_ids"] = commands
+
+        node.write(normalized)
+        return {
+            "id": node.id,
+            "power_dbm": int(node.power_dbm or 0),
+            "read_interval_ms": int(node.read_interval_ms or 0),
+            "tid_addr": int(node.tid_addr or 0),
+            "tid_len": int(node.tid_len or 0),
+            "port_numbers": sorted(int(port.port_no) for port in node.reader_port_ids),
+        }
 
     def action_ready(self):
         return self._set_ready()
@@ -348,89 +440,6 @@ class NspMeasurementSession(models.Model):
         """Deprecated compatibility alias. Removal target: NSP 20.0."""
         self.ensure_one()
         return self.action_open_calibration_tag_coverage()
-
-    def action_open_infrastructure_card(self):
-        self.ensure_one()
-        self.check_access("read")
-        editable = self.status == "draft"
-        list_xmlid = (
-            "nsp_master_gatekeeper.view_nsp_measurement_reader_line_scope_edit_list"
-            if editable
-            else "nsp_master_gatekeeper.view_nsp_measurement_reader_line_scope_list"
-        )
-        views = [(list_xmlid, "list")]
-        if editable:
-            views.append(("nsp_master_gatekeeper.view_nsp_measurement_reader_line_form", "form"))
-        return self._popup_action(
-            _("Infrastructure Scope"),
-            "nsp.measurement.reader.line",
-            views,
-            [("session_id", "=", self.id)],
-            {
-                "default_session_id": self.id,
-                "create": editable,
-                "edit": editable,
-                "delete": editable,
-                "form_view_ref": "nsp_master_gatekeeper.view_nsp_measurement_reader_line_form",
-            },
-        )
-
-    def action_open_infrastructure_reader(self, reader_line_id=False):
-        """Open one Infrastructure Scope Reader Assembly in an Odoo 19 dialog."""
-        self.ensure_one()
-        self.check_access("read")
-        try:
-            line_id = int(reader_line_id or 0)
-        except (TypeError, ValueError) as exc:
-            raise ValidationError(_("Invalid Reader Assembly.")) from exc
-        line = self.env["nsp.measurement.reader.line"]
-        if line_id:
-            line = line.browse(line_id).exists()
-            if not line or line.session_id != self:
-                raise ValidationError(_("Reader Assembly does not belong to this Lane Calibration."))
-        if self.status != "draft" and not line:
-            raise ValidationError(_("Infrastructure Scope can be changed only while Lane Calibration is Draft."))
-
-        form_view = self.env.ref(
-            "nsp_master_gatekeeper.view_nsp_measurement_reader_line_form"
-        )
-        return {
-            "type": "ir.actions.act_window",
-            "name": _("Reader Assembly") if line else _("New Reader Assembly"),
-            "res_model": "nsp.measurement.reader.line",
-            "res_id": line.id if line else False,
-            "view_mode": "form",
-            "views": [(form_view.id, "form")],
-            "target": "new",
-            "context": {
-                **dict(self.env.context),
-                "active_model": self._name,
-                "active_id": self.id,
-                "active_ids": self.ids,
-                "default_session_id": self.id,
-                "default_reader_port_ids": [(0, 0, {"port_no": 1})],
-                "form_view_initial_mode": "edit" if self.status == "draft" else "readonly",
-                "create": self.status == "draft",
-                "edit": self.status == "draft",
-                "delete": self.status == "draft",
-            },
-        }
-
-    def action_remove_infrastructure_reader(self, reader_line_id):
-        """Remove one scoped Reader Assembly after ownership and state checks."""
-        self.ensure_one()
-        self.check_access("write")
-        if self.status != "draft":
-            raise ValidationError(_("Infrastructure Scope can be changed only while Lane Calibration is Draft."))
-        try:
-            line_id = int(reader_line_id or 0)
-        except (TypeError, ValueError) as exc:
-            raise ValidationError(_("Invalid Reader Assembly.")) from exc
-        line = self.env["nsp.measurement.reader.line"].browse(line_id).exists()
-        if not line or line.session_id != self:
-            raise ValidationError(_("Reader Assembly does not belong to this Lane Calibration."))
-        line.unlink()
-        return True
 
     def action_open_apply_configuration(self, selected_event_ids=None):
         """Deprecated compatibility alias. Use Lane Setup. Removal target: NSP 20.0."""
