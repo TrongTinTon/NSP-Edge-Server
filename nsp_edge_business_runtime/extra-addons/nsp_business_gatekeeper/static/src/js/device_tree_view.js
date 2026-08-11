@@ -1,7 +1,8 @@
 /** @odoo-module **/
 
-import { Component, useState } from "@odoo/owl";
+import { Component, onMounted, useState } from "@odoo/owl";
 import { registry } from "@web/core/registry";
+import { useService } from "@web/core/utils/hooks";
 import { standardFieldProps } from "@web/views/fields/standard_field_props";
 
 const STATUS_ONLINE = new Set(["online"]);
@@ -33,10 +34,64 @@ export class NspDeviceTreeView extends Component {
     static props = { ...standardFieldProps };
 
     setup() {
+        this.orm = useService("orm");
         this.state = useState({
             selectedKey: null,
             expanded: {},
+            calibrationNodes: [],
+            calibrationLoaded: false,
+            calibrationLoadError: false,
         });
+
+        onMounted(async () => {
+            if (this.mode === "lane_calibration") {
+                await this.refreshCalibrationTree();
+            }
+        });
+    }
+
+    async refreshCalibrationTree() {
+        if (this.mode !== "lane_calibration") {
+            return;
+        }
+        const sessionId = Number(this.props.record?.resId || 0);
+        if (!sessionId) {
+            this.state.calibrationNodes = [];
+            this.state.calibrationLoaded = true;
+            this.state.calibrationLoadError = false;
+            return;
+        }
+        try {
+            this.state.calibrationNodes = await this.orm.searchRead(
+                "nsp.measurement.device.node",
+                [["session_id", "=", sessionId]],
+                [
+                    "source_node_id",
+                    "device_type",
+                    "parent_id",
+                    "sequence",
+                    "server_id",
+                    "controller_id",
+                    "reader_id",
+                    "device_name",
+                    "device_status",
+                    "serial_number",
+                    "port_numbers",
+                    "power_dbm",
+                    "read_interval_ms",
+                    "tid_addr",
+                    "tid_len",
+                ],
+                { order: "sequence,id" }
+            );
+            this.state.calibrationLoadError = false;
+        } catch (error) {
+            console.error("Unable to load Lane Calibration Device Configuration", error);
+            this.state.calibrationNodes = [];
+            this.state.calibrationLoadError = true;
+        } finally {
+            this.state.calibrationLoaded = true;
+        }
     }
 
     get mode() {
@@ -114,41 +169,40 @@ export class NspDeviceTreeView extends Component {
     }
 
     _calibrationEntries() {
-        const records = this.props.record?.data?.device_node_ids?.records || [];
-        const byNodeId = new Map();
-        for (const record of records) {
-            const nodeId = Number(record.resId || record.id || 0);
-            if (nodeId) {
-                byNodeId.set(nodeId, record);
-            }
-        }
+        const records = this.state.calibrationNodes || [];
+        const byNodeId = new Map(
+            records
+                .map((row) => [Number(row.id || 0), row])
+                .filter(([nodeId]) => Boolean(nodeId))
+        );
         const entries = [];
-        for (const record of records) {
-            const row = record.data || {};
+        for (const row of records) {
             if (row.device_type !== "reader") {
                 continue;
             }
-            const controllerRecord = byNodeId.get(many2oneId(row.parent_id));
-            const controllerRow = controllerRecord?.data || {};
-            const serverRecord = byNodeId.get(many2oneId(controllerRow.parent_id));
-            const serverRow = serverRecord?.data || {};
+            const controllerRow = byNodeId.get(many2oneId(row.parent_id)) || {};
+            const serverRow = byNodeId.get(many2oneId(controllerRow.parent_id)) || {};
             if (controllerRow.device_type !== "controller" || serverRow.device_type !== "server") {
                 continue;
             }
             const index = entries.length;
             entries.push({
-                key: `cal-reader-${record.resId || record.id || index}`,
+                key: `cal-reader-${row.id || index}`,
+                nodeId: Number(row.id || 0),
                 server: {
+                    nodeId: Number(serverRow.id || 0),
                     id: many2oneId(serverRow.server_id) || `server-${index}`,
                     name: serverRow.device_name || many2oneLabel(serverRow.server_id, "Server"),
                     status: this._status(serverRow.device_status),
                 },
                 controller: {
+                    nodeId: Number(controllerRow.id || 0),
                     id: many2oneId(controllerRow.controller_id) || `controller-${index}`,
                     name: controllerRow.device_name || many2oneLabel(controllerRow.controller_id, "Controller"),
                     status: this._status(controllerRow.device_status),
                 },
                 reader: {
+                    nodeId: Number(row.id || 0),
                     id: many2oneId(row.reader_id) || `reader-${index}`,
                     name: row.device_name || many2oneLabel(row.reader_id, "Reader"),
                     serial: row.serial_number || "—",
@@ -178,6 +232,56 @@ export class NspDeviceTreeView extends Component {
 
     get tree() {
         const groups = new Map();
+        if (this.mode === "lane_calibration") {
+            const records = this.state.calibrationNodes || [];
+            const byNodeId = new Map(
+                records
+                    .map((row) => [Number(row.id || 0), row])
+                    .filter(([nodeId]) => Boolean(nodeId))
+            );
+
+            for (const row of records.filter((node) => node.device_type === "server")) {
+                const serverId = many2oneId(row.server_id) || Number(row.id || 0);
+                const serverKey = `server-${serverId}`;
+                groups.set(serverKey, {
+                    key: serverKey,
+                    nodeId: Number(row.id || 0),
+                    id: serverId,
+                    name: row.device_name || many2oneLabel(row.server_id, "Server"),
+                    status: this._status(row.device_status),
+                    controllers: new Map(),
+                });
+            }
+
+            for (const row of records.filter((node) => node.device_type === "controller")) {
+                const serverRow = byNodeId.get(many2oneId(row.parent_id));
+                if (!serverRow || serverRow.device_type !== "server") {
+                    continue;
+                }
+                const serverId = many2oneId(serverRow.server_id) || Number(serverRow.id || 0);
+                const serverKey = `server-${serverId}`;
+                if (!groups.has(serverKey)) {
+                    groups.set(serverKey, {
+                        key: serverKey,
+                        nodeId: Number(serverRow.id || 0),
+                        id: serverId,
+                        name: serverRow.device_name || many2oneLabel(serverRow.server_id, "Server"),
+                        status: this._status(serverRow.device_status),
+                        controllers: new Map(),
+                    });
+                }
+                const controllerId = many2oneId(row.controller_id) || Number(row.id || 0);
+                const controllerKey = `${serverKey}-controller-${controllerId}`;
+                groups.get(serverKey).controllers.set(controllerKey, {
+                    key: controllerKey,
+                    nodeId: Number(row.id || 0),
+                    id: controllerId,
+                    name: row.device_name || many2oneLabel(row.controller_id, "Controller"),
+                    status: this._status(row.device_status),
+                    readers: [],
+                });
+            }
+        }
         if (this.mode === "parking_lane") {
             const data = this.props.record?.data || {};
             const serverId = many2oneId(data.edge_server_id);

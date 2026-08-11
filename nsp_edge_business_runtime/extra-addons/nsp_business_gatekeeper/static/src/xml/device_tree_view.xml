@@ -46,6 +46,8 @@
                             </div>
                         </t>
                     </t>
+                    <div t-elif="mode === 'lane_calibration' &amp;&amp; !state.calibrationLoaded" class="nsp-device-tree__empty">Loading Device Configuration...</div>
+                    <div t-elif="mode === 'lane_calibration' &amp;&amp; state.calibrationLoadError" class="nsp-device-tree__empty">Unable to load Device Configuration.</div>
                     <div t-else="" class="nsp-device-tree__empty">No Device Configuration.</div>
                 </div>
             </aside>
