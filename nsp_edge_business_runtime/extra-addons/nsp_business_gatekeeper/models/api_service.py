@@ -446,11 +446,13 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             ("parking_area_id.state", "in", ["operational", "maintenance", "blocked"]),
         ])
         devices |= lanes.mapped("timeline_line_ids.reader_id")
-        calibration_lines = self.env["nsp.measurement.reader.line"].sudo().search([
-            ("controller_id", "=", controller.id),
+        calibration_nodes = self.env["nsp.measurement.device.node"].sudo().search([
+            ("device_type", "=", "reader"),
+            ("parent_id.device_type", "=", "controller"),
+            ("parent_id.controller_id", "=", controller.id),
             ("session_id.status", "in", ["ready", "running"]),
         ])
-        devices |= calibration_lines.mapped("reader_id")
+        devices |= calibration_nodes.mapped("reader_id")
         devices = devices.filtered(lambda rec: rec.active and not rec.cloud_removed).sorted(
             key=lambda rec: (rec.serial_number or "", rec.id)
         )
@@ -553,17 +555,21 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
 
     @api.model
     def _measurement_config_payload(self, session, controller=False):
-        lines = session.reader_line_ids
+        nodes = session._reader_nodes()
         if controller:
-            lines = lines.filtered(lambda line: line.controller_id == controller)
+            nodes = nodes.filtered(
+                lambda node: node.parent_id
+                and node.parent_id.device_type == "controller"
+                and node.parent_id.controller_id == controller
+            )
         readers = []
-        for line in lines.sorted(
+        for node in nodes.sorted(
             key=lambda item: ((item.reader_id.serial_number or ""), item.id)
         ):
             readers.append({
-                "serial_number": line.reader_id.serial_number or "",
-                "power_dbm": int(line.reader_power_dbm or 0),
-                "read_interval_ms": int(line.read_interval_ms or 200),
+                "serial_number": node.reader_id.serial_number or "",
+                "power_dbm": int(node.power_dbm or 0),
+                "read_interval_ms": int(node.read_interval_ms or 200),
             })
         return {
             "lane_calibration_code": session.measurement_code,
@@ -734,12 +740,12 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             if current_code:
                 session = Session.search([
                     ("measurement_code", "=", current_code),
-                    ("reader_line_ids.controller_id", "=", controller.id),
+                    ("device_node_ids.parent_id.controller_id", "=", controller.id),
                     ("status", "in", ["ready", "running"]),
                 ], limit=1)
             if not session:
                 session = Session.search([
-                    ("reader_line_ids.controller_id", "=", controller.id),
+                    ("device_node_ids.parent_id.controller_id", "=", controller.id),
                     ("status", "in", ["ready", "running"]),
                 ], order="id desc", limit=1)
             if not session:
@@ -790,7 +796,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             port_no = 0
         if port_no < 1 or port_no > 16:
             raise ValueError("reader_port_not_found")
-        reader_line = session._measurement_line_for_serial(serial_number)
+        reader_node = session._measurement_node_for_serial(serial_number)
         if allow_historical_scope:
             reader = self.env["nsp.device"].sudo().search([
                 ("serial_number", "=", serial_number),
@@ -802,7 +808,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 allowed_reader_ports = session._allowed_reader_port_pairs()
             if (serial_number, port_no) not in allowed_reader_ports:
                 raise ValueError("reader_port_not_found")
-            if not reader_line:
+            if not reader_node:
                 raise ValueError("reader_not_in_scope")
         read_at = self._measurement_datetime(item.get("read_at"), required=True)
         read_at_ms = self._measurement_millisecond(item.get("read_at"))
@@ -817,8 +823,8 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             try:
                 revision = int(item.get("revision"))
                 fallback_power = (
-                    reader_line.reader_power_dbm
-                    if reader_line
+                    reader_node.power_dbm
+                    if reader_node
                     else session._reader_power_for_serial(serial_number)
                 )
                 power_dbm = int(
@@ -827,8 +833,8 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                     else fallback_power
                 )
                 fallback_interval = (
-                    reader_line.read_interval_ms
-                    if reader_line
+                    reader_node.read_interval_ms
+                    if reader_node
                     else session._reader_interval_for_serial(serial_number)
                 )
                 read_interval_ms = int(
@@ -840,8 +846,8 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 raise ValueError("invalid_measurement_snapshot") from exc
         else:
             revision = int(session.revision or 1)
-            power_dbm = int(reader_line.reader_power_dbm or 0)
-            read_interval_ms = int(reader_line.read_interval_ms or 0)
+            power_dbm = int(reader_node.power_dbm or 0)
+            read_interval_ms = int(reader_node.read_interval_ms or 0)
         if (
             revision <= 0
             or power_dbm < 0
@@ -898,11 +904,15 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         """Store only selected RFID targets, idempotently, with bounded queries."""
         Event = self.env["nsp.measurement.event"].sudo()
         if controller:
-            lines = session.reader_line_ids.filtered(lambda line: line.controller_id == controller)
+            nodes = session._reader_nodes().filtered(
+                lambda node: node.parent_id
+                and node.parent_id.device_type == "controller"
+                and node.parent_id.controller_id == controller
+            )
             allowed_reader_ports = {
-                ((line.reader_id.serial_number or "").strip().upper(), int(port.port_no or 0))
-                for line in lines
-                for port in line.reader_port_ids
+                ((node.reader_id.serial_number or "").strip().upper(), int(port.port_no or 0))
+                for node in nodes
+                for port in node.reader_port_ids
             }
         else:
             allowed_reader_ports = session._allowed_reader_port_pairs()
@@ -1166,7 +1176,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             )
             self._measurement_require_fields(data, ["lane_calibration_code", "events"])
             session = self._measurement_session(data.get("lane_calibration_code"))
-            if controller not in session.reader_line_ids.mapped("controller_id"):
+            if controller not in session._controller_nodes().mapped("controller_id"):
                 raise ValueError("controller_not_in_scope")
             items = data.get("events")
             if not isinstance(items, list) or not items or len(items) > 100:
@@ -1257,7 +1267,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 data, ["lane_calibration_code", "status", "revision", "occurred_at"]
             )
             session = self._measurement_session(data.get("lane_calibration_code"))
-            if controller not in session.reader_line_ids.mapped("controller_id"):
+            if controller not in session._controller_nodes().mapped("controller_id"):
                 raise ValueError("controller_not_in_scope")
             occurred_at = self._measurement_datetime(
                 data.get("occurred_at"), required=True

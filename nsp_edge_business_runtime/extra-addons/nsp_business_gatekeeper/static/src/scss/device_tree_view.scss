@@ -43,45 +43,7 @@
         background: #fff;
     }
 
-    &__tree-header {
-        flex: 0 0 auto;
-        padding: 16px;
-        border-bottom: 1px solid var(--nsp-tree-border);
 
-        h3 { margin: 0; font-size: 15px; font-weight: 700; }
-        p { margin: 3px 0 0; font-size: 11px; color: var(--nsp-tree-muted); }
-    }
-
-    &__search {
-        position: relative;
-        margin-top: 12px;
-
-        i {
-            position: absolute;
-            left: 11px;
-            top: 50%;
-            transform: translateY(-50%);
-            color: var(--nsp-tree-gray);
-            pointer-events: none;
-        }
-
-        input {
-            width: 100%;
-            height: 36px;
-            padding: 0 12px 0 34px;
-            border: 1px solid var(--nsp-tree-border);
-            border-radius: 8px;
-            outline: none;
-            background: #fff;
-            color: var(--nsp-tree-text);
-            font-size: 12px;
-
-            &:focus {
-                border-color: #93C5FD;
-                box-shadow: 0 0 0 3px #DBEAFE;
-            }
-        }
-    }
 
     &__tree-scroll,
     &__config-scroll {
@@ -372,12 +334,6 @@
 
 /* Tree-native CRUD: the tree is the only visible mapping editor. */
 .nsp-device-tree {
-    &__tree-title-row {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 10px;
-    }
 
     &__row--group {
         padding-right: 6px;

@@ -9,7 +9,6 @@
                 <field name="serial_number"/>
                 <field name="device_code"/>
                 <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                <field name="connection_type"/>
                 <filter string="Online" name="online" domain="[('status','=','online')]"/>
                 <filter string="Offline" name="offline" domain="[('status','=','offline')]"/>
                 <filter string="Degraded" name="degraded" domain="[('status','=','degraded')]"/>
@@ -27,15 +26,11 @@
         <field name="model">nsp.device</field>
         <field name="arch" type="xml">
             <list string="Readers" create="0" edit="0" delete="0">
-                <field name="status" widget="badge" decoration-success="status == 'online'" decoration-danger="status == 'offline'" decoration-warning="status == 'degraded'"/>
+                <field name="status" string="Status" widget="badge" decoration-success="status == 'online'" decoration-danger="status == 'offline'" decoration-warning="status == 'degraded'"/>
                 <field name="name" string="Reader" decoration-bf="1"/>
                 <field name="serial_number" string="Serial"/>
-                <field name="device_code" string="Technical Code" optional="hide"/>
-                <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                <field name="connection_type" string="Physical Connection" optional="show"/>
-                <field name="last_seen" readonly="1" optional="show"/>
-                <field name="firmware_version" readonly="1" optional="hide"/>
-                </list>
+                <field name="last_seen" string="Last Seen" readonly="1"/>
+            </list>
         </field>
     </record>
 
@@ -56,7 +51,6 @@
                         <group string="Device Declaration">
                             <field name="serial_number" string="Serial"/>
                             <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                            <field name="connection_type" string="Physical Connection" widget="nsp_grouped_connection"/>
                             <field name="device_code" string="Technical Code" readonly="1" widget="CopyClipboardChar" groups="nsp_core.group_nsp_it_parking"/>
                         </group>
                         <group string="Runtime Status">
@@ -90,16 +84,10 @@
         <field name="model">nsp.device</field>
         <field name="arch" type="xml">
             <list string="Reader Runtime Status" create="0" edit="0" delete="0">
-                <field name="status" widget="badge" decoration-success="status == 'online'" decoration-danger="status == 'offline'" decoration-warning="status == 'degraded'"/>
+                <field name="status" string="Status" widget="badge" decoration-success="status == 'online'" decoration-danger="status == 'offline'" decoration-warning="status == 'degraded'"/>
                 <field name="name" string="Reader"/>
-                <field name="serial_number"/>
-                <field name="controller_id" options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                <field name="device_code" string="Technical Code" optional="hide"/>
-                <field name="last_seen"/>
-                <field name="firmware_version"/>
-                <field name="runtime_power_dbm" string="Reader Power (dBm)"/>
-                <field name="runtime_read_interval_ms" string="Read Interval ms"/>
-
+                <field name="serial_number" string="Serial"/>
+                <field name="last_seen" string="Last Seen"/>
             </list>
         </field>
     </record>

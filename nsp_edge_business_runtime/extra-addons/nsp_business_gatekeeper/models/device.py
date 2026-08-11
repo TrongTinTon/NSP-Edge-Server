@@ -72,18 +72,6 @@ class Device(models.Model):
     active = fields.Boolean(default=True, index=True)
     cloud_removed = fields.Boolean(default=False, readonly=True, index=True, copy=False)
 
-    # Physical connection inventory. The Odoo field widget groups options as Wired / Wireless.
-    connection_type = fields.Selection([
-        ("usb", "USB"),
-        ("rs232", "RS-232"),
-        ("rs485", "RS-485"),
-        ("ethernet", "Ethernet (RJ45)"),
-        ("wiegand", "Wiegand"),
-        ("bluetooth", "Bluetooth"),
-        ("wifi", "Wi-Fi"),
-        ("cellular", "4G/5G"),
-    ], string="Physical Connection", index=True)
-
     # Operation profile sent to Controller. These values are promoted from an
     # approved Measurement Session and are intentionally not edited on Reader UI.
     power_dbm = fields.Integer(
@@ -204,17 +192,17 @@ class Device(models.Model):
                 ("lane_id.parking_area_id.state", "in", ["operational", "maintenance"]),
             ])
             port_numbers.update(int(value) for value in rows.mapped("port_no") if int(value or 0) > 0)
-        ReaderLine = self.env["nsp.measurement.reader.line"].sudo()
-        if "reader_port_ids" in ReaderLine._fields:
-            lines = ReaderLine.search([
-                ("reader_id", "=", self.id),
-                ("session_id.status", "in", ["ready", "running"]),
-            ])
-            port_numbers.update(
-                int(value)
-                for value in lines.mapped("reader_port_ids.port_no")
-                if int(value or 0) > 0
-            )
+        DeviceNode = self.env["nsp.measurement.device.node"].sudo()
+        nodes = DeviceNode.search([
+            ("device_type", "=", "reader"),
+            ("reader_id", "=", self.id),
+            ("session_id.status", "in", ["ready", "running"]),
+        ])
+        port_numbers.update(
+            int(value)
+            for value in nodes.mapped("reader_port_ids.port_no")
+            if int(value or 0) > 0
+        )
         return sorted(port_numbers)
 
     def _reported_port_numbers(self):
@@ -260,7 +248,6 @@ class Device(models.Model):
         payload.update({
             "technical_code": self.device_code or "",
             "reader_name": self.name or self.serial_number or "RFID Reader",
-            "physical_connection": self.connection_type or False,
         })
         return payload
 

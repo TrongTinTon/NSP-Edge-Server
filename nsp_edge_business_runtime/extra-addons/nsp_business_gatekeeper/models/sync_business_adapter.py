@@ -57,12 +57,14 @@ class NspSyncBusinessAdapter(models.Model):
         for lane in lanes:
             register(lane.controller_id, lane.timeline_line_ids.mapped("reader_id"))
 
-        ReaderLine = self.env["nsp.measurement.reader.line"].sudo()
-        calibration_lines = ReaderLine.search([
+        DeviceNode = self.env["nsp.measurement.device.node"].sudo()
+        calibration_nodes = DeviceNode.search([
+            ("device_type", "=", "reader"),
             ("session_id.status", "in", ["ready", "running"]),
         ])
-        for line in calibration_lines:
-            register(line.controller_id, line.reader_id)
+        for node in calibration_nodes:
+            controller_node = node.parent_id if node.parent_id.device_type == "controller" else False
+            register(controller_node.controller_id if controller_node else False, node.reader_id)
 
         return controllers.sorted(
             key=lambda record: (record.controller_id or "", record.id)
@@ -127,10 +129,6 @@ class NspSyncBusinessAdapter(models.Model):
                 item = {
                     "reader_code": device.device_code or "",
                     "serial_number": expected_serial,
-                    "detected_serial_number": (
-                        observation.serial_number
-                        if observation and observation.serial_number != expected_serial else ""
-                    ),
                     "status": observed_status,
                     "last_seen_at": self._dt(effective_last_seen) if effective_last_seen else False,
                     "last_detection_at": (
@@ -785,38 +783,40 @@ class NspSyncBusinessAdapter(models.Model):
         return borrow
 
     def _apply_lane_calibration(self, item):
+        """Apply the released Cloud Lane Calibration schema v4 snapshot.
+
+        Cloud master identities and contextual topology are intentionally separate.
+        Edge mirrors the released Tree with ``nsp.measurement.device.node`` and
+        never reconstructs Lane Calibration scope from Reader ownership fields.
+        """
         self.ensure_one()
         if not isinstance(item, dict):
             raise UserError(_("Lane Calibration item must be an object."))
-        unsupported_outer = set(item) - {
-            "schema_version", "lane_calibration_code", "status", "desired_state", "revision",
-            "calibration_tag", "readers",
+        allowed_outer = {
+            "schema_version", "snapshot_id", "lane_calibration_code", "status",
+            "desired_state", "revision", "calibration_tag", "devices", "topology",
         }
+        unsupported_outer = set(item) - allowed_outer
         if unsupported_outer:
             raise UserError(
                 _("Unsupported Lane Calibration field(s): %s")
                 % ", ".join(sorted(unsupported_outer))
             )
-        if int(item.get("schema_version") or 0) != 2:
-            raise UserError(_("Lane Calibration schema_version 2 is required."))
+        if int(item.get("schema_version") or 0) != 4:
+            raise UserError(_("Lane Calibration schema_version 4 is required."))
 
         code = str(item.get("lane_calibration_code") or "").strip().upper()
-        calibration_payload = item.get("calibration_tag")
-        reader_payloads = item.get("readers")
         if not code:
             raise UserError(_("Calibration Code is required."))
+        calibration_payload = item.get("calibration_tag")
         if not isinstance(calibration_payload, dict) or set(calibration_payload) - {"tid"}:
             raise UserError(_("Lane Calibration requires one calibration_tag object containing only TID."))
-        if not isinstance(reader_payloads, list) or not reader_payloads:
-            raise UserError(_("Lane Calibration must contain at least one RFID Reader assembly."))
-
         try:
             calibration_tid = normalize_raw_tid(calibration_payload.get("tid"))
         except ValueError as exc:
             raise UserError(_("Calibration Tag TID is invalid.")) from exc
         if not calibration_tid:
             raise UserError(_("Calibration Tag TID is required."))
-
 
         status = str(item.get("status") or "ready").strip().lower()
         if status not in ("ready", "running", "completed", "applied", "failed", "cancelled"):
@@ -828,21 +828,18 @@ class NspSyncBusinessAdapter(models.Model):
         if revision <= 0:
             raise UserError(_("Invalid Lane Calibration revision."))
 
-        Session = self.env["nsp.measurement.session"].sudo().with_context(measurement_sync=True)
-        session = Session.search([("measurement_code", "=", code)], limit=1)
-        if session and revision < max(int(session.revision or 1), 1):
-            _logger.warning(
-                "Ignored stale Lane Calibration snapshot: code=%s incoming_revision=%s current_revision=%s",
-                code,
-                revision,
-                session.revision,
-            )
-            return session
+        devices = item.get("devices")
+        topology = item.get("topology")
+        if not isinstance(devices, dict) or set(devices) - {"servers", "controllers", "readers"}:
+            raise UserError(_("Lane Calibration devices payload is invalid."))
+        if not isinstance(topology, dict) or set(topology) - {"nodes"}:
+            raise UserError(_("Lane Calibration topology payload is invalid."))
+        node_payloads = topology.get("nodes")
+        if not isinstance(node_payloads, list) or not node_payloads:
+            raise UserError(_("Lane Calibration topology must contain Device Nodes."))
 
-        target_commands = [(0, 0, {"tid": calibration_tid})]
-
-        normalized_readers = []
         identity_rows = {}
+        device_meta = {"server": {}, "controller": {}, "reader": {}}
 
         def register_identity(values):
             identity_code = values["technical_code"]
@@ -854,101 +851,135 @@ class NspSyncBusinessAdapter(models.Model):
                 raise UserError(_("Device identity %s is used with conflicting roles or serials.") % identity_code)
             identity_rows[identity_code] = values
 
-        seen_reader_codes = set()
-        seen_serials = set()
-        for payload in reader_payloads:
-            if not isinstance(payload, dict):
-                raise UserError(_("Reader assembly must be an object."))
-            unsupported = set(payload) - {
-                "server_code", "controller_code", "controller_name", "technical_code",
-                "serial_number", "reader_name", "physical_connection", "reader_parameters", "ports",
-            }
+        list_contract = {
+            "server": ("servers", {"id", "name", "status"}, "SERVER", "Server"),
+            "controller": ("controllers", {"id", "name", "status"}, "CONTROLLER", "Controller"),
+            "reader": ("readers", {"id", "name", "serial_number", "status"}, "RFID_READER", "RFID Reader"),
+        }
+        for device_type, (key, allowed, whitelist_type, label) in list_contract.items():
+            rows = devices.get(key) or []
+            if not isinstance(rows, list):
+                raise UserError(_("Lane Calibration %(device)s devices must be an array.") % {"device": label})
+            for row in rows:
+                if not isinstance(row, dict) or set(row) - allowed:
+                    raise UserError(_("Invalid Lane Calibration %s device payload.") % label)
+                device_code = str(row.get("id") or "").strip().upper()
+                if not device_code or device_code in device_meta[device_type]:
+                    raise UserError(_("Lane Calibration %s identity is missing or duplicated.") % label)
+                serial = str(row.get("serial_number") or "").strip().upper() if device_type == "reader" else False
+                if device_type == "reader" and not serial:
+                    raise UserError(_("Lane Calibration Reader Serial is required."))
+                meta = {
+                    "code": device_code,
+                    "name": str(row.get("name") or serial or device_code).strip(),
+                    "serial_number": serial,
+                    "status": str(row.get("status") or "").strip().lower(),
+                }
+                device_meta[device_type][device_code] = meta
+                register_identity({
+                    "technical_code": device_code,
+                    "name": meta["name"],
+                    "device_type_code": whitelist_type,
+                    "device_type_name": label,
+                    "serial_number": serial,
+                    "active": True,
+                })
+
+        normalized_nodes = []
+        by_source_id = {}
+        seen_device = {"server": set(), "controller": set(), "reader": set()}
+        for row in node_payloads:
+            if not isinstance(row, dict):
+                raise UserError(_("Lane Calibration topology node must be an object."))
+            device_type = str(row.get("device_type") or "").strip().lower()
+            if device_type not in ("server", "controller", "reader"):
+                raise UserError(_("Lane Calibration topology contains an invalid device_type."))
+            allowed = {"node_id", "device_type", "device_id", "parent_node_id", "sequence"}
+            if device_type == "reader":
+                allowed |= {"configuration", "ports"}
+            unsupported = set(row) - allowed
             if unsupported:
-                raise UserError(
-                    _("Unsupported Reader assembly field(s): %s")
-                    % ", ".join(sorted(unsupported))
-                )
-            server_code = str(payload.get("server_code") or "").strip().upper()
-            controller_code = str(payload.get("controller_code") or "").strip().upper()
-            reader_code = str(payload.get("technical_code") or "").strip().upper()
-            serial = str(payload.get("serial_number") or "").strip().upper()
-            if not server_code or not controller_code or not reader_code or not serial:
-                raise UserError(_("Every Reader assembly requires Server, Controller, Reader Code and Serial Number."))
-            if reader_code in seen_reader_codes or serial in seen_serials:
-                raise UserError(_("RFID Reader is duplicated in Lane Calibration."))
-            seen_reader_codes.add(reader_code)
-            seen_serials.add(serial)
-
-            parameters = payload.get("reader_parameters") or {}
-            if not isinstance(parameters, dict) or set(parameters) - {
-                "power_dbm", "read_interval_ms", "tid_start_address", "tid_length",
-            }:
-                raise UserError(_("Invalid Reader Parameters payload."))
+                raise UserError(_("Unsupported Lane Calibration topology field(s): %s") % ", ".join(sorted(unsupported)))
+            source_id = str(row.get("node_id") or "").strip()
+            device_code = str(row.get("device_id") or "").strip().upper()
+            parent_source_id = str(row.get("parent_node_id") or "").strip() or False
+            if not source_id or source_id in by_source_id:
+                raise UserError(_("Lane Calibration node_id is missing or duplicated."))
+            if device_code not in device_meta[device_type]:
+                raise UserError(_("Lane Calibration topology references an unknown %s device.") % device_type)
+            if device_code in seen_device[device_type]:
+                raise UserError(_("Lane Calibration topology duplicates device %s.") % device_code)
+            seen_device[device_type].add(device_code)
             try:
-                power = int(parameters.get("power_dbm") if parameters.get("power_dbm") is not None else 30)
-                interval = int(parameters.get("read_interval_ms") or 200)
-                tid_addr = int(parameters.get("tid_start_address") or 0)
-                tid_len = int(parameters.get("tid_length") or 0)
+                sequence = int(row.get("sequence") or 10)
             except (TypeError, ValueError) as exc:
-                raise UserError(_("Invalid Reader Parameters.")) from exc
-            if power < 0 or power > 40 or interval <= 0 or interval > 60000 or tid_addr < 0 or tid_len <= 0:
-                raise UserError(_("Reader Parameters are outside the supported range."))
-
-            ports = payload.get("ports") or []
-            if not isinstance(ports, list) or not ports:
-                raise UserError(_("RFID Reader %s must contain at least one Reader Port.") % serial)
-            port_numbers = []
-            seen_ports = set()
-            for port in ports:
-                if not isinstance(port, dict) or set(port) - {"port_no"}:
-                    raise UserError(_("Reader Port payload contains unsupported fields."))
+                raise UserError(_("Lane Calibration node sequence is invalid.")) from exc
+            normalized = {
+                "source_node_id": source_id,
+                "device_type": device_type,
+                "device_code": device_code,
+                "parent_source_node_id": parent_source_id,
+                "sequence": sequence,
+            }
+            if device_type == "reader":
+                config = row.get("configuration") or {}
+                if not isinstance(config, dict) or set(config) - {"power_dbm", "read_interval_ms", "tid_addr", "tid_len"}:
+                    raise UserError(_("Invalid Lane Calibration Reader configuration."))
                 try:
-                    port_no = int(port.get("port_no") or 0)
+                    power = int(config.get("power_dbm") if config.get("power_dbm") is not None else 30)
+                    interval = int(config.get("read_interval_ms") or 200)
+                    tid_addr = int(config.get("tid_addr") or 0)
+                    tid_len = int(config.get("tid_len") or 0)
                 except (TypeError, ValueError) as exc:
-                    raise UserError(_("Reader Port No. must be an integer.")) from exc
-                if port_no < 1 or port_no > 16 or port_no in seen_ports:
-                    raise UserError(_("Reader Port must be unique and between 1 and 16."))
-                seen_ports.add(port_no)
-                port_numbers.append(port_no)
+                    raise UserError(_("Invalid Lane Calibration Reader configuration.")) from exc
+                if power < 0 or power > 40 or interval <= 0 or interval > 60000 or tid_addr < 0 or tid_len <= 0:
+                    raise UserError(_("Lane Calibration Reader configuration is outside the supported range."))
+                ports = row.get("ports") or []
+                if not isinstance(ports, list) or not ports:
+                    raise UserError(_("Every Lane Calibration Reader requires at least one Reader Port."))
+                port_rows, seen_ports = [], set()
+                for port in ports:
+                    if not isinstance(port, dict) or set(port) - {"port_no", "sequence"}:
+                        raise UserError(_("Invalid Lane Calibration Reader Port payload."))
+                    try:
+                        port_no = int(port.get("port_no") or 0)
+                        port_sequence = int(port.get("sequence") or 10)
+                    except (TypeError, ValueError) as exc:
+                        raise UserError(_("Lane Calibration Reader Port is invalid.")) from exc
+                    if port_no < 1 or port_no > 16 or port_no in seen_ports:
+                        raise UserError(_("Reader Port must be unique and between 1 and 16."))
+                    seen_ports.add(port_no)
+                    port_rows.append({"port_no": port_no, "sequence": port_sequence})
+                normalized.update({
+                    "power_dbm": power,
+                    "read_interval_ms": interval,
+                    "tid_addr": tid_addr,
+                    "tid_len": tid_len,
+                    "ports": sorted(port_rows, key=lambda value: (value["sequence"], value["port_no"])),
+                })
+            normalized_nodes.append(normalized)
+            by_source_id[source_id] = normalized
 
-            register_identity({
-                "technical_code": server_code,
-                "name": server_code,
-                "device_type_code": "SERVER",
-                "device_type_name": "Server",
-                "serial_number": False,
-                "active": True,
-            })
-            register_identity({
-                "technical_code": controller_code,
-                "name": str(payload.get("controller_name") or controller_code).strip(),
-                "device_type_code": "CONTROLLER",
-                "device_type_name": "Controller",
-                "serial_number": False,
-                "active": True,
-            })
-            register_identity({
-                "technical_code": reader_code,
-                "name": str(payload.get("reader_name") or serial).strip(),
-                "device_type_code": "RFID_READER",
-                "device_type_name": "RFID Reader",
-                "serial_number": serial,
-                "active": True,
-            })
-            normalized_readers.append({
-                "server_code": server_code,
-                "controller_code": controller_code,
-                "controller_name": str(payload.get("controller_name") or controller_code).strip(),
-                "reader_code": reader_code,
-                "reader_name": str(payload.get("reader_name") or serial).strip(),
-                "serial_number": serial,
-                "physical_connection": payload.get("physical_connection") or False,
-                "power_dbm": power,
-                "read_interval_ms": interval,
-                "tid_start_address": tid_addr,
-                "tid_length": tid_len,
-                "ports": sorted(port_numbers),
-            })
+        # Validate the released parent graph before mutating Edge.
+        for node in normalized_nodes:
+            parent = by_source_id.get(node["parent_source_node_id"]) if node["parent_source_node_id"] else None
+            if node["device_type"] == "server":
+                if parent:
+                    raise UserError(_("Lane Calibration Server node must be a Tree root."))
+            elif node["device_type"] == "controller":
+                if not parent or parent["device_type"] != "server":
+                    raise UserError(_("Lane Calibration Controller node must belong to a Server node."))
+            elif not parent or parent["device_type"] != "controller":
+                raise UserError(_("Lane Calibration Reader node must belong to a Controller node."))
+
+        Session = self.env["nsp.measurement.session"].sudo().with_context(measurement_sync=True)
+        session = Session.search([("measurement_code", "=", code)], limit=1)
+        if session and revision < max(int(session.revision or 1), 1):
+            _logger.warning(
+                "Ignored stale Lane Calibration snapshot: code=%s incoming_revision=%s current_revision=%s",
+                code, revision, session.revision,
+            )
+            return session
 
         identity_list = list(identity_rows.values())
         identity_cache = self._prepare_apply_cache("device_whitelist", identity_list)
@@ -969,103 +1000,81 @@ class NspSyncBusinessAdapter(models.Model):
         reader_by_code = {row.device_code: row for row in Device.search([])}
         reader_by_serial = {row.serial_number: row for row in Device.search([])}
 
-        line_commands = []
-        for row in normalized_readers:
-            server_identity = whitelist_by_code.get(row["server_code"])
-            controller_identity = whitelist_by_code.get(row["controller_code"])
-            reader_identity = whitelist_by_code.get(row["reader_code"])
-            if not server_identity or server_identity.device_type_code != "SERVER":
+        runtime_by_code = {"server": {}, "controller": {}, "reader": {}}
+        # Servers first.
+        for code_value, meta in device_meta["server"].items():
+            identity = whitelist_by_code.get(code_value)
+            if not identity or identity.device_type_code != "SERVER":
                 raise UserError(_("Lane Calibration Server identity is missing or invalid."))
-            if not controller_identity or controller_identity.device_type_code != "CONTROLLER":
+            record = edge_by_code.get(code_value)
+            vals = {"name": meta["name"] or code_value, "whitelist_id": identity.id, "active": True, "cloud_removed": False}
+            if record:
+                self._write_changed(record, vals)
+            else:
+                record = Edge.create({"edge_server_code": code_value, **vals})
+                edge_by_code[code_value] = record
+            runtime_by_code["server"][code_value] = record
+
+        # Controller runtime ownership is derived from the released topology.
+        controller_parent_code = {}
+        for node in normalized_nodes:
+            if node["device_type"] == "controller":
+                parent = by_source_id[node["parent_source_node_id"]]
+                controller_parent_code[node["device_code"]] = parent["device_code"]
+        for code_value, meta in device_meta["controller"].items():
+            identity = whitelist_by_code.get(code_value)
+            if not identity or identity.device_type_code != "CONTROLLER":
                 raise UserError(_("Lane Calibration Controller identity is missing or invalid."))
-            if not reader_identity or reader_identity.device_type_code != "RFID_READER":
+            edge = runtime_by_code["server"].get(controller_parent_code.get(code_value))
+            if not edge:
+                raise UserError(_("Lane Calibration Controller has no released Server parent."))
+            record = controller_by_code.get(code_value)
+            vals = {"controller_name": meta["name"] or code_value, "edge_server_id": edge.id, "whitelist_id": identity.id, "active": True, "cloud_removed": False}
+            if record:
+                self._write_changed(record, vals)
+            else:
+                record = Controller.create({"controller_id": code_value, **vals})
+                controller_by_code[code_value] = record
+            runtime_by_code["controller"][code_value] = record
+
+        reader_parent_code = {}
+        for node in normalized_nodes:
+            if node["device_type"] == "reader":
+                parent = by_source_id[node["parent_source_node_id"]]
+                reader_parent_code[node["device_code"]] = parent["device_code"]
+        for code_value, meta in device_meta["reader"].items():
+            identity = whitelist_by_code.get(code_value)
+            if not identity or identity.device_type_code != "RFID_READER":
                 raise UserError(_("Lane Calibration Reader identity is missing or invalid."))
-            edge = edge_by_code.get(row["server_code"])
-            edge_vals = {
-                "name": server_identity.name or row["server_code"],
-                "whitelist_id": server_identity.id,
-                "active": True,
-                "cloud_removed": False,
-            }
-            if edge:
-                self._write_changed(edge, edge_vals)
-            else:
-                edge = Edge.create({"edge_server_code": row["server_code"], **edge_vals})
-                edge_by_code[row["server_code"]] = edge
-
-            controller = controller_by_code.get(row["controller_code"])
-            controller_vals = {
-                "controller_name": row["controller_name"],
-                "edge_server_id": edge.id,
-                "whitelist_id": controller_identity.id,
-                "active": True,
-                "cloud_removed": False,
-            }
-            if controller:
-                self._write_changed(controller, controller_vals)
-            else:
-                controller = Controller.create({"controller_id": row["controller_code"], **controller_vals})
-                controller_by_code[row["controller_code"]] = controller
-
-            reader_by_code_match = reader_by_code.get(row["reader_code"])
-            reader_by_serial_match = reader_by_serial.get(row["serial_number"])
-            if (
-                reader_by_code_match
-                and reader_by_serial_match
-                and reader_by_code_match != reader_by_serial_match
-            ):
-                raise UserError(_(
-                    "Lane Calibration Reader identity is duplicated on Edge: "
-                    "Reader Code %(code)s and Serial %(serial)s belong to different records."
-                ) % {
-                    "code": row["reader_code"],
-                    "serial": row["serial_number"],
-                })
-
-            # Cloud is the source of truth. Device Code is the stable management
-            # identity; Serial Number is the physical SDK identity and may be
-            # corrected on Cloud. A one-sided match updates the same Edge record
-            # instead of rejecting the released snapshot.
-            reader = reader_by_code_match or reader_by_serial_match
-            reader_vals = {
-                "name": row["reader_name"],
-                "serial_number": row["serial_number"],
-                "device_code": row["reader_code"],
+            controller = runtime_by_code["controller"].get(reader_parent_code.get(code_value))
+            if not controller:
+                raise UserError(_("Lane Calibration Reader has no released Controller parent."))
+            by_code = reader_by_code.get(code_value)
+            by_serial = reader_by_serial.get(meta["serial_number"])
+            if by_code and by_serial and by_code != by_serial:
+                raise UserError(_("Lane Calibration Reader Code and Serial belong to different Edge records."))
+            record = by_code or by_serial
+            vals = {
+                "name": meta["name"],
+                "serial_number": meta["serial_number"],
+                "device_code": code_value,
                 "controller_id": controller.id,
-                "connection_type": row["physical_connection"],
-                "power_dbm": row["power_dbm"],
-                "read_interval_ms": row["read_interval_ms"],
-                "tid_addr": row["tid_start_address"],
-                "tid_len": row["tid_length"],
-                "whitelist_id": reader_identity.id,
+                "whitelist_id": identity.id,
                 "active": True,
                 "cloud_removed": False,
             }
-            if reader:
-                previous_code = reader.device_code
-                previous_serial = reader.serial_number
-                self._write_changed(reader, reader_vals)
-                if previous_code and previous_code != row["reader_code"]:
-                    if reader_by_code.get(previous_code) == reader:
-                        reader_by_code.pop(previous_code, None)
-                if previous_serial and previous_serial != row["serial_number"]:
-                    if reader_by_serial.get(previous_serial) == reader:
-                        reader_by_serial.pop(previous_serial, None)
+            if record:
+                previous_code, previous_serial = record.device_code, record.serial_number
+                self._write_changed(record, vals)
+                if previous_code and previous_code != code_value and reader_by_code.get(previous_code) == record:
+                    reader_by_code.pop(previous_code, None)
+                if previous_serial and previous_serial != meta["serial_number"] and reader_by_serial.get(previous_serial) == record:
+                    reader_by_serial.pop(previous_serial, None)
             else:
-                reader = Device.create(reader_vals)
-            reader_by_code[row["reader_code"]] = reader
-            reader_by_serial[row["serial_number"]] = reader
-
-            line_commands.append((0, 0, {
-                "edge_server_id": edge.id,
-                "controller_id": controller.id,
-                "reader_id": reader.id,
-                "reader_power_dbm": row["power_dbm"],
-                "read_interval_ms": row["read_interval_ms"],
-                "reader_tid_addr": row["tid_start_address"],
-                "reader_tid_len": row["tid_length"],
-                "reader_port_ids": [(0, 0, {"port_no": port_no}) for port_no in row["ports"]],
-            }))
+                record = Device.create(vals)
+            reader_by_code[code_value] = record
+            reader_by_serial[meta["serial_number"]] = record
+            runtime_by_code["reader"][code_value] = record
 
         effective_status = status
         reset_lifecycle = False
@@ -1074,8 +1083,6 @@ class NspSyncBusinessAdapter(models.Model):
             if revision > current_revision:
                 reset_lifecycle = True
             else:
-                # A Cloud pull can overlap the Edge runtime transition. Never let
-                # a same-revision snapshot move the Edge state backwards.
                 stale_snapshot_targets = {
                     "running": {"draft", "ready"},
                     "completed": {"draft", "ready", "running"},
@@ -1090,19 +1097,47 @@ class NspSyncBusinessAdapter(models.Model):
             "measurement_code": code,
             "revision": revision,
             "status": effective_status,
-            "target_line_ids": [(5, 0, 0)] + target_commands,
-            "reader_line_ids": [(5, 0, 0)] + line_commands,
+            "target_line_ids": [(5, 0, 0), (0, 0, {"tid": calibration_tid})],
         }
         if reset_lifecycle:
-            values.update({
-                "started_at": False,
-                "ended_at": False,
-                "applied_at": False,
-            })
+            values.update({"started_at": False, "ended_at": False, "applied_at": False})
         if session:
             session.write(values)
         else:
             session = Session.create(values)
+
+        # Replace the contextual projection atomically for this released revision.
+        session.device_node_ids.filtered(lambda node: not node.parent_id).unlink()
+        Node = self.env["nsp.measurement.device.node"].sudo().with_context(measurement_sync=True)
+        local_by_source = {}
+        for device_type in ("server", "controller", "reader"):
+            for node in [value for value in normalized_nodes if value["device_type"] == device_type]:
+                vals = {
+                    "session_id": session.id,
+                    "source_node_id": node["source_node_id"],
+                    "device_type": device_type,
+                    "sequence": node["sequence"],
+                }
+                if device_type == "server":
+                    vals["server_id"] = runtime_by_code["server"][node["device_code"]].id
+                elif device_type == "controller":
+                    vals.update({
+                        "controller_id": runtime_by_code["controller"][node["device_code"]].id,
+                        "parent_id": local_by_source[node["parent_source_node_id"]].id,
+                    })
+                else:
+                    vals.update({
+                        "reader_id": runtime_by_code["reader"][node["device_code"]].id,
+                        "parent_id": local_by_source[node["parent_source_node_id"]].id,
+                        "power_dbm": node["power_dbm"],
+                        "read_interval_ms": node["read_interval_ms"],
+                        "tid_addr": node["tid_addr"],
+                        "tid_len": node["tid_len"],
+                        "reader_port_ids": [(0, 0, port) for port in node["ports"]],
+                    })
+                local_by_source[node["source_node_id"]] = Node.create(vals)
+
+        session._require_ready_configuration()
         if effective_status == "applied":
             self._acknowledge_configured_status_records(session)
         return session

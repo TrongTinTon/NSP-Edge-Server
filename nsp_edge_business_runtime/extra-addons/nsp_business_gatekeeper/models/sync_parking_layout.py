@@ -149,7 +149,7 @@ class NspSyncJobParkingLayout(models.Model):
                     raise UserError(_("Lane Reader Configuration must contain objects."))
                 unsupported_reader = set(reader_item) - {
                     "technical_code", "serial_number", "reader_name",
-                    "physical_connection", "reader_parameters", "ports",
+                    "reader_parameters", "ports",
                 }
                 if unsupported_reader:
                     raise UserError(
@@ -538,7 +538,7 @@ class NspSyncJobParkingLayout(models.Model):
                         raise UserError(_("RFID Reader payload must contain objects."))
                     unsupported_reader = set(reader_item) - {
                         "technical_code", "serial_number", "reader_name",
-                        "physical_connection", "reader_parameters", "ports",
+                        "reader_parameters", "ports",
                     }
                     if unsupported_reader:
                         raise UserError(
@@ -622,7 +622,6 @@ class NspSyncJobParkingLayout(models.Model):
                         "name": reader_item.get("reader_name") or serial,
                         "serial_number": serial,
                         "controller_id": controller.id,
-                        "connection_type": reader_item.get("physical_connection") or False,
                         "power_dbm": power,
                         "read_interval_ms": interval,
                         "tid_addr": tid_addr,

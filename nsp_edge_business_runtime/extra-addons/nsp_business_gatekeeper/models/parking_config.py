@@ -600,7 +600,6 @@ class NspParkingLane(models.Model):
                 "technical_code": row.reader_id.device_code or "",
                 "serial_number": row.reader_id.serial_number or "",
                 "reader_name": row.reader_id.name or row.reader_id.serial_number or "",
-                "physical_connection": row.reader_id.connection_type or False,
                 "reader_parameters": {
                     "power_dbm": int(config.power_dbm or 0),
                     "read_interval_ms": int(config.read_interval_ms or 200),

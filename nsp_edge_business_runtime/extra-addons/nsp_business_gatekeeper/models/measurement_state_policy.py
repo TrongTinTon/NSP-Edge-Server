@@ -137,34 +137,34 @@ class NspMeasurementSessionStatePolicy(models.Model):
         if reader_settings not in (None, False, ""):
             if not isinstance(reader_settings, list):
                 raise ValidationError(_("Reader settings must be a list."))
-            line_by_id = {line.id: line for line in self.reader_line_ids}
+            node_by_id = {node.id: node for node in self._reader_nodes()}
             seen = set()
             updates_by_values = {}
             for item in reader_settings:
                 if not isinstance(item, dict):
                     raise ValidationError(_("Invalid Reader settings."))
                 try:
-                    line_id = int(item.get("reader_line_id") or 0)
+                    node_id = int(item.get("reader_node_id") or item.get("reader_line_id") or 0)
                     power = int(item.get("power_dbm"))
                     interval = int(item.get("read_interval_ms"))
                 except (TypeError, ValueError) as exc:
                     raise ValidationError(_("Invalid Reader settings.")) from exc
-                line = line_by_id.get(line_id)
-                if not line or line_id in seen:
+                node = node_by_id.get(node_id)
+                if not node or node_id in seen:
                     raise ValidationError(_(
                         "Reader settings do not match this Lane Calibration."
                     ))
-                seen.add(line_id)
-                updates_by_values.setdefault((power, interval), self.env[line._name].browse())
-                updates_by_values[(power, interval)] |= line
+                seen.add(node_id)
+                updates_by_values.setdefault((power, interval), self.env[node._name].browse())
+                updates_by_values[(power, interval)] |= node
             for (power, interval), lines in updates_by_values.items():
                 lines.with_context(measurement_sync=True).write({
-                    "reader_power_dbm": power,
+                    "power_dbm": power,
                     "read_interval_ms": interval,
                 })
         return self._release_new_revision("ready")
 
-    def action_apply_reader_settings(self, reader_line_id, power_dbm, read_interval_ms):
+    def action_apply_reader_settings(self, reader_node_id, power_dbm, read_interval_ms):
         """Apply one Reader configuration and release a new shared revision."""
         self.ensure_one()
         self._check_public_action_access("write")
@@ -173,16 +173,16 @@ class NspMeasurementSessionStatePolicy(models.Model):
                 "Reader settings can be applied only while running, completed, or failed."
             ))
         try:
-            line_id = int(reader_line_id or 0)
+            node_id = int(reader_node_id or 0)
             power = int(power_dbm)
             interval = int(read_interval_ms)
         except (TypeError, ValueError) as exc:
             raise ValidationError(_("Invalid Reader settings.")) from exc
-        line = self.reader_line_ids.filtered(lambda item: item.id == line_id)[:1]
-        if not line:
+        node = self._reader_nodes().filtered(lambda item: item.id == node_id)[:1]
+        if not node:
             raise ValidationError(_("Reader does not belong to this Lane Calibration."))
-        line.with_context(measurement_sync=True).write({
-            "reader_power_dbm": power,
+        node.with_context(measurement_sync=True).write({
+            "power_dbm": power,
             "read_interval_ms": interval,
         })
         self._require_ready_configuration()
@@ -200,13 +200,13 @@ class NspMeasurementSessionStatePolicy(models.Model):
         self._require_ready_configuration()
 
         readers_by_settings = {}
-        for line in self.reader_line_ids:
+        for node in self._reader_nodes():
             values = (
-                int(line.reader_power_dbm or 0),
-                int(line.read_interval_ms or 200),
+                int(node.power_dbm or 0),
+                int(node.read_interval_ms or 200),
             )
-            readers_by_settings.setdefault(values, self.env[line.reader_id._name].browse())
-            readers_by_settings[values] |= line.reader_id
+            readers_by_settings.setdefault(values, self.env[node.reader_id._name].browse())
+            readers_by_settings[values] |= node.reader_id
         for (power, interval), readers in readers_by_settings.items():
             # Scope and ownership were validated on the selected Reader lines above.
             readers.sudo().write({
