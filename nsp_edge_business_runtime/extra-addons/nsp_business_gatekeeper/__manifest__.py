@@ -2,7 +2,7 @@
  'summary': 'Edge parking business runtime and Controller integration',
  'description': 'Edge-only Gatekeeper runtime. Owns Controllers, Readers, Reader Ports, RFID '
                 'runtime assignments, parking processing and measurement runtime.',
- 'version': '19.0.10.22.0',
+ 'version': '19.0.10.23.0',
  'sequence': 20,
  'author': 'BKU Team',
  'category': 'Services',

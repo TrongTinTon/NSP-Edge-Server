@@ -570,6 +570,8 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 "serial_number": node.reader_id.serial_number or "",
                 "power_dbm": int(node.power_dbm or 0),
                 "read_interval_ms": int(node.read_interval_ms or 200),
+                "tid_start_address": int(node.tid_addr or 0),
+                "tid_length": int(node.tid_len or 4),
             })
         return {
             "lane_calibration_code": session.measurement_code,
@@ -961,20 +963,6 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                             "status": "rejected",
                             "error_code": "lane_calibration_revision_ahead",
                             "message": "lane_calibration_revision_ahead",
-                        }
-                        continue
-                    if (
-                        int(values["power_dbm"] or 0)
-                        != int(session._reader_power_for_serial(values["serial_number"]) or 0)
-                        or int(values["read_interval_ms"] or 0)
-                        != int(session._reader_interval_for_serial(values["serial_number"]) or 0)
-                    ):
-                        results[index] = {
-                            "index": index,
-                            "record_key": key,
-                            "status": "ignored",
-                            "error_code": "lane_calibration_settings_mismatch",
-                            "message": "Lane Calibration Reader settings snapshot does not match current revision",
                         }
                         continue
                 prepared.append((index, key, values))
