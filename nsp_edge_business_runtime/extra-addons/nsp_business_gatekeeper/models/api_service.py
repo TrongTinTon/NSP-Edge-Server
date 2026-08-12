@@ -1196,7 +1196,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         The Controller only reports physical detections. One batch may contain
         detections from multiple Reader ports physically observed by that Controller.
         Edge validates, suppresses repeated reads, groups detections, and creates
-        Parking Transactions internally. The Controller receives only one minimal
+        Parking Logs internally. The Controller receives only one minimal
         acknowledgement for an accepted batch.
         """
         data = self._payload()
@@ -1310,31 +1310,43 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         assignments = RuntimeAssignment.search([
             ("tid", "in", list(tids)),
         ]) if tids else RuntimeAssignment.browse()
-        assignment_by_tid = {
-            assignment.tid: assignment
-            for assignment in assignments
-            if (assignment.user_id and assignment.user_id.active)
-            or (assignment.vehicle_id and assignment.vehicle_id.active)
-        }
-        accepted = [
-            (payload, assignment_by_tid[payload["tid"]])
+        # Do not filter inactive/unresolved assignments out of the transport batch.
+        # Edge must persist every syntactically valid physical observation first,
+        # then record resolution failures in Detection Logs instead of silently
+        # ACKing and dropping them.
+        assignment_by_tid = {assignment.tid: assignment for assignment in assignments}
+        batch = [
+            (payload, assignment_by_tid.get(payload["tid"], RuntimeAssignment.browse()))
             for payload in normalized
-            if payload["tid"] in assignment_by_tid
         ]
 
-        if accepted:
-            try:
+        try:
+            ingest_result = (
                 self.env["nsp.parking.detection.event"].sudo().ingest_controller_detections(
-                    controller, accepted
+                    controller, batch
                 )
-            except Exception as exc:
-                _logger.exception(
-                    "Parking detection batch failed: controller=%s count=%s",
-                    controller.controller_id, len(accepted),
-                )
-                return self._error(
-                    str(exc), 500, error_code="parking_detection_failed"
-                )
+                if batch else {
+                    "received": 0,
+                    "candidate_records_created": 0,
+                    "error_records_created": 0,
+                    "duplicates": 0,
+                    "persisted": 0,
+                }
+            )
+        except Exception as exc:
+            _logger.exception(
+                "Parking detection batch persistence failed: controller=%s count=%s",
+                controller.controller_id, len(batch),
+            )
+            return self._error(
+                str(exc), 500, error_code="parking_detection_failed"
+            )
 
-        return {"status_code": 200, "status": "success", "message": "OK", "data": {}}
+        return self._ok(
+            {
+                "controller_code": controller.controller_id,
+                **ingest_result,
+            },
+            message="Parking detections accepted and persisted on Edge.",
+        )
 

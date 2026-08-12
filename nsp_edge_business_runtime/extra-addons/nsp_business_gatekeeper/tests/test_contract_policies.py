@@ -112,17 +112,37 @@ class TestGatekeeperContractPolicies(TransactionCase):
 
     def test_parking_runtime_history_keeps_master_and_context_identity(self):
         Detection = self.env["nsp.parking.detection.event"]
-        Transaction = self.env["nsp.parking.transaction"]
+        ParkingLog = self.env["nsp.parking.log"]
         self.assertEqual(Detection._fields["lane_id"].comodel_name, "nsp.parking.lane")
         self.assertEqual(
             Detection._fields["layout_lane_id"].comodel_name,
             "nsp.parking.layout.lane",
         )
-        self.assertEqual(Transaction._fields["lane_id"].comodel_name, "nsp.parking.lane")
+        self.assertEqual(ParkingLog._fields["lane_id"].comodel_name, "nsp.parking.lane")
         self.assertEqual(
-            Transaction._fields["layout_lane_id"].comodel_name,
+            ParkingLog._fields["layout_lane_id"].comodel_name,
             "nsp.parking.layout.lane",
         )
+        self.assertEqual(
+            Detection._fields["parking_log_id"].comodel_name,
+            "nsp.parking.log",
+        )
+        self.assertFalse(ParkingLog._log_access)
+        for required in (
+            "log_uid", "event_time", "event_type", "decision", "reason_code",
+            "parking_area_id", "layout_lane_id", "lane_id", "layout_revision",
+            "vehicle_id", "vehicle_tid", "user_id", "user_tid", "borrow_id",
+        ):
+            self.assertIn(required, ParkingLog._fields)
+        for redundant_snapshot in (
+            "controller_id", "controller_code", "lane_code", "parking_area_code",
+            "sequence_path", "observed_duration_seconds", "allowed_duration_seconds",
+            "reader_id", "serial_number", "port_no", "primary_detection_id",
+            "vehicle_code", "license_plate", "user_code", "observed_user_codes",
+            "observed_user_tids", "borrow_code", "transaction_uid", "status",
+            "error_code", "error_message", "reason_message",
+        ):
+            self.assertNotIn(redundant_snapshot, ParkingLog._fields)
 
     def test_controller_identity_has_no_persisted_topology_ownership(self):
         Controller = self.env["nsp.controller"]

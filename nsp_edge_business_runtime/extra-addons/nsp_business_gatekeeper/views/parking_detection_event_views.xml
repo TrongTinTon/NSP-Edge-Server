@@ -4,11 +4,13 @@
         <field name="name">nsp.parking.detection.event.search</field>
         <field name="model">nsp.parking.detection.event</field>
         <field name="arch" type="xml">
-            <search>
+            <search string="Detection Logs">
                 <field name="event_uid"/>
+                <field name="controller_id"/>
+                <field name="serial_number"/>
                 <field name="tid"/>
-                <field name="user_id"/>
                 <field name="vehicle_id"/>
+                <field name="user_id"/>
                 <field name="layout_lane_id"/>
                 <field name="lane_id"/>
                 <field name="layout_revision"/>
@@ -16,15 +18,26 @@
                 <field name="port_no"/>
                 <field name="state"/>
                 <field name="error_code"/>
-                <field name="transaction_id"/>
+                <field name="parking_log_id"/>
+
                 <filter string="Pending" name="pending" domain="[('state','=','pending')]"/>
                 <filter string="Processed" name="processed" domain="[('state','=','processed')]"/>
                 <filter string="Errors" name="error" domain="[('state','=','error')]"/>
-                <filter string="Vehicle Tags" name="vehicle_tags" domain="[('vehicle_id','!=',False)]"/>
-                <filter string="Employee Tags" name="employee_tags" domain="[('user_id','!=',False)]"/>
+                <separator/>
+                <filter string="Vehicle RFID" name="vehicle_tags" domain="[('vehicle_id','!=',False)]"/>
+                <filter string="User RFID" name="user_tags" domain="[('user_id','!=',False)]"/>
+                <filter string="Unresolved RFID" name="unresolved_tags"
+                        domain="[('vehicle_id','=',False),('user_id','=',False)]"/>
+                <filter string="Linked to Parking Log" name="linked_parking_log"
+                        domain="[('parking_log_id','!=',False)]"/>
+                <filter string="Not Linked to Parking Log" name="unlinked_parking_log"
+                        domain="[('parking_log_id','=',False)]"/>
                 <separator/>
                 <filter string="Lane" name="group_lane" context="{'group_by':'lane_id'}"/>
+                <filter string="Lane Configuration" name="group_layout_lane" context="{'group_by':'layout_lane_id'}"/>
+                <filter string="Reader" name="group_reader" context="{'group_by':'reader_id'}"/>
                 <filter string="State" name="group_state" context="{'group_by':'state'}"/>
+                <filter string="Parking Log" name="group_parking_log" context="{'group_by':'parking_log_id'}"/>
             </search>
         </field>
     </record>
@@ -33,33 +46,81 @@
         <field name="name">nsp.parking.detection.event.list</field>
         <field name="model">nsp.parking.detection.event</field>
         <field name="arch" type="xml">
-            <list string="Parking Detection Events" create="0" edit="0" delete="0">
+            <list string="Detection Logs" create="0" edit="0" delete="0"
+                  decoration-danger="state == 'error'"
+                  decoration-warning="state == 'pending'">
                 <field name="detected_at"/>
-                <field name="layout_lane_id" optional="hide"/>
-                <field name="lane_id"/>
-                <field name="layout_revision" optional="show"/>
-                <field name="reader_id" optional="hide"/>
-                <field name="port_no" optional="hide"/>
+                <field name="controller_id" optional="show"/>
+                <field name="serial_number" optional="show"/>
+                <field name="reader_id" optional="show"/>
+                <field name="port_no"/>
+                <field name="lane_id" optional="show"/>
                 <field name="tid"/>
-                <field name="rssi_dbm" optional="hide"/>
+                <field name="rssi_dbm" optional="show"/>
                 <field name="vehicle_id" optional="show"/>
                 <field name="user_id" optional="show"/>
                 <field name="state" widget="badge"
                        decoration-success="state == 'processed'"
                        decoration-danger="state == 'error'"
                        decoration-warning="state == 'pending'"/>
+                <field name="parking_log_id" optional="show"/>
                 <field name="error_code" optional="show"/>
+                <field name="layout_lane_id" optional="hide"/>
+                <field name="layout_revision" optional="hide"/>
                 <field name="error_message" optional="hide"/>
-                <field name="transaction_id"/>
                 <field name="event_uid" optional="hide"/>
             </list>
         </field>
     </record>
 
+    <record id="view_nsp_parking_detection_event_form" model="ir.ui.view">
+        <field name="name">nsp.parking.detection.event.form</field>
+        <field name="model">nsp.parking.detection.event</field>
+        <field name="arch" type="xml">
+            <form string="Detection Log" create="0" edit="0" delete="0">
+                <sheet>
+                    <group>
+                        <group string="Detection">
+                            <field name="event_uid"/>
+                            <field name="detected_at"/>
+                            <field name="state" widget="badge"/>
+                            <field name="error_code"/>
+                            <field name="error_message"/>
+                        </group>
+                        <group string="Physical Observation">
+                            <field name="controller_id"/>
+                            <field name="serial_number"/>
+                            <field name="reader_id"/>
+                            <field name="port_no"/>
+                            <field name="tid"/>
+                            <field name="rssi_dbm"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Edge Resolution">
+                            <field name="layout_lane_id"/>
+                            <field name="lane_id"/>
+                            <field name="layout_revision"/>
+                        </group>
+                        <group string="Resolved Identity / Business Link">
+                            <field name="vehicle_id"/>
+                            <field name="user_id"/>
+                            <field name="parking_log_id"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
     <record id="action_nsp_parking_detection_event" model="ir.actions.act_window">
-        <field name="name">Parking Detection Events</field>
+        <field name="name">Detection Logs</field>
         <field name="res_model">nsp.parking.detection.event</field>
-        <field name="view_mode">list</field>
+        <field name="view_mode">list,form</field>
         <field name="search_view_id" ref="view_nsp_parking_detection_event_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">No Detection Logs found.</p>
+            <p>Detection Logs are short-lived technical RFID evidence received from Controllers and resolved by the Edge.</p>
+        </field>
     </record>
 </odoo>

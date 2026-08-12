@@ -174,90 +174,78 @@ class NspSyncBusinessAdapter(models.Model):
         }
 
     @api.model
-    def _serialize_parking_transaction(self, record):
-        decision = record.status if record.status in ("allowed", "denied") else "denied"
-        legacy_revision = int(
-            record.layout_revision
-            or (record.parking_area_id.published_revision if record.parking_area_id else 0)
-            or 0
-        )
-        legacy_sequence_path = record.sequence_path or (
-            record._sequence_path_for_lane(record.layout_lane_id, record.event_type)
-            if record.layout_lane_id and record.event_type else ""
-        )
-        legacy_allowed_duration = float(record.allowed_duration_seconds or 0.0)
-        if legacy_allowed_duration <= 0 and record.layout_lane_id and record.event_type:
-            legacy_allowed_duration = record._allowed_duration_for_lane(
-                record.layout_lane_id, record.event_type
+    def _serialize_parking_log_legacy(self, record):
+        """Serialize the lean Edge Parking Log to the existing Cloud route contract.
+
+        `parking_transaction` remains a transport-route compatibility name until
+        Cloud is upgraded. Redundant snapshot columns are deliberately not stored
+        on Edge; stable codes are resolved from referenced master/context records.
+        """
+        layout_lane = record.layout_lane_id
+        area = record.parking_area_id or (layout_lane.parking_area_id if layout_lane else False)
+        lane = record.lane_id or (layout_lane.lane_id if layout_lane else False)
+        controller = layout_lane.controller_id if layout_lane else self.env["nsp.controller"].browse()
+        sequence_rows = layout_lane.antenna_sequence_ids.sorted("sequence") if layout_lane else self.env["nsp.parking.layout.lane.sequence"].browse()
+        sequence_path = ">".join(
+            "%s:%s" % (
+                row.reader_id.device_code or row.reader_id.serial_number or row.reader_id.id,
+                int(row.port_no or 0),
             )
-        legacy_observed_duration = float(record.observed_duration_seconds or 0.0)
-        if legacy_observed_duration <= 0 and record.detection_event_ids:
-            vehicle_events = record.detection_event_ids.filtered("vehicle_id").sorted(
-                key=lambda event: (event.detected_at, event.id)
+            for row in sequence_rows
+        )
+        allowed_duration = sum(
+            layout_lane.allowed_duration_for_step(row.sequence)
+            for row in sequence_rows[1:]
+        ) if layout_lane else 0.0
+        last_step = sequence_rows[-1:]
+
+        # Source detections are intentionally short-lived. They are used only when
+        # still available; Cloud sync must not make long-term Parking Log storage
+        # depend on technical acquisition evidence.
+        vehicle_reads = record.source_detection_ids.filtered("vehicle_id").sorted(
+            key=lambda event: (event.detected_at, event.id)
+        )
+        observed_duration = 0.0
+        if len(vehicle_reads) >= 2:
+            observed_duration = max(
+                0.0,
+                (vehicle_reads[-1].detected_at - vehicle_reads[0].detected_at).total_seconds(),
             )
-            if vehicle_events:
-                legacy_observed_duration = max(
-                    0.0,
-                    (vehicle_events[-1].detected_at - vehicle_events[0].detected_at).total_seconds(),
-                )
-        observed_duration = max(0.0, float(legacy_observed_duration or 0.0))
-        allowed_duration = max(0.001, float(legacy_allowed_duration or 0.0))
-        if (
-            observed_duration > allowed_duration
-            and observed_duration <= allowed_duration + _DURATION_EPSILON_SECONDS
-        ):
-            observed_duration = allowed_duration
         payload = {
-            "record_key": record.transaction_uid,
-            "transaction_uid": record.transaction_uid,
-            "controller_code": str(
-                record.controller_code
-                or (record.controller_id.controller_id if record.controller_id else "")
-            ).strip().upper(),
-            "parking_area_code": str(
-                record.parking_area_code
-                or (record.parking_area_id.code if record.parking_area_id else "")
-            ).strip().upper(),
-            "lane_code": str(
-                record.lane_code or (record.lane_id.code if record.lane_id else "")
-            ).strip().upper(),
-            "layout_revision": legacy_revision,
-            "sequence_path": legacy_sequence_path,
-            "observed_duration_seconds": round(observed_duration, 6),
-            "allowed_duration_seconds": round(allowed_duration, 6),
-            "serial_number": record.serial_number or (record.reader_id.serial_number if record.reader_id else ""),
-            "port_no": int(record.port_no or 0),
+            "record_key": record.log_uid,
+            # External compatibility fields; internal Edge semantics are Parking Log.
+            "transaction_uid": record.log_uid,
+            "controller_code": str(controller.controller_id or "").strip().upper(),
+            "parking_area_code": str(area.code or "").strip().upper() if area else "",
+            "lane_code": str(lane.code or "").strip().upper() if lane else "",
+            "layout_revision": int(record.layout_revision or 0),
+            "sequence_path": sequence_path,
+            "observed_duration_seconds": round(max(0.0, observed_duration), 6),
+            "allowed_duration_seconds": round(max(0.001, float(allowed_duration or 0.0)), 6),
+            "serial_number": (last_step.reader_id.serial_number or "") if last_step else "",
+            "port_no": int(last_step.port_no or 0) if last_step else 0,
             "event_type": record.event_type,
             "event_time": self._dt(record.event_time),
             "vehicle_tid": record.vehicle_tid or "",
-            "vehicle_code": record.vehicle_code or (record.vehicle_id.vehicle_code if record.vehicle_id else ""),
-            "license_plate": record.license_plate or (record.vehicle_id.license_plate if record.vehicle_id else ""),
+            "vehicle_code": record.vehicle_id.vehicle_code if record.vehicle_id else "",
+            "license_plate": record.vehicle_id.license_plate if record.vehicle_id else "",
             "user_tid": record.user_tid or "",
-            "user_code": record.user_code or (record.user_id.user_code if record.user_id else ""),
-            "observed_user_tids": record.observed_user_tids or record.user_tid or "",
-            "observed_user_codes": record.observed_user_codes or record.user_code or (
-                record.user_id.user_code if record.user_id else ""
-            ),
-            "borrow_uid": record.borrow_code or (record.borrow_id.borrow_code if record.borrow_id else ""),
-            "decision": decision,
+            "user_code": record.user_id.user_code if record.user_id else "",
+            "observed_user_tids": record.user_tid or "",
+            "observed_user_codes": record.user_id.user_code if record.user_id else "",
+            "borrow_uid": record.borrow_id.borrow_code if record.borrow_id else "",
+            "decision": record.decision if record.decision in ("allowed", "denied") else "denied",
         }
-        if decision == "denied":
-            payload["decision_reason_code"] = record.error_code or "unknown"
-            if record.error_message:
-                payload["decision_message"] = record.error_message
+        if payload["decision"] == "denied":
+            payload["decision_reason_code"] = record.reason_code or "unknown"
         return payload
 
     def _push_cursor_domain(self):
         self.ensure_one()
-        if not self.last_push_at:
-            return []
-        return [
-            "|",
-            ("write_date", ">", self.last_push_at),
-            "&",
-            ("write_date", "=", self.last_push_at),
-            ("id", ">", int(self.last_push_record_id or 0)),
-        ]
+        # Parking Logs are immutable append-only rows. A monotonic database ID is
+        # therefore a smaller and more reliable cursor than write_date + ID.
+        last_id = int(self.last_push_record_id or 0)
+        return [("id", ">", last_id)] if last_id else []
 
     def _serialize_push_batch(self, kind):
         self.ensure_one()
@@ -270,21 +258,30 @@ class NspSyncBusinessAdapter(models.Model):
                 "has_more": False,
             }
         domain = self._push_cursor_domain()
-        if kind == "parking_transaction":
-            records = self.env["nsp.parking.transaction"].sudo().search(
+        if kind in ("parking_transaction", "parking_log"):
+            records = self.env["nsp.parking.log"].sudo().search(
                 domain,
-                order="write_date asc, id asc",
+                order="id asc",
                 limit=limit + 1,
             )
-            serializer = self._serialize_parking_transaction
+            serializer = self._serialize_parking_log_legacy
         else:
             raise UserError(_("Unsupported push route: %s") % self.route_suffix)
         has_more = len(records) > limit
         selected = records[:limit]
+        if kind in ("parking_transaction", "parking_log") and selected:
+            # Batch-prefetch all relations touched by the legacy transport serializer.
+            # This keeps Cloud push bounded to a handful of queries instead of N+1.
+            selected.mapped("layout_lane_id.antenna_sequence_ids.reader_id")
+            selected.mapped("source_detection_ids")
+            selected.mapped("vehicle_id")
+            selected.mapped("user_id")
+            selected.mapped("borrow_id")
         last = selected[-1:] if selected else selected
         return {
             "items": [serializer(record) for record in selected],
-            "cursor_at": last.write_date if last else self.last_push_at,
+            # cursor_at remains informational; cursor_id is the durable append cursor.
+            "cursor_at": fields.Datetime.now() if last else self.last_push_at,
             "cursor_id": last.id if last else self.last_push_record_id,
             "has_more": has_more,
         }
@@ -1280,7 +1277,7 @@ class NspSyncBusinessAdapter(models.Model):
             return False
         for field_name in (
             "record_key", "tid", "borrow_uid", "branch_code", "user_code",
-            "vehicle_code", "license_plate", "parking_area_code", "transaction_uid",
+            "vehicle_code", "license_plate", "parking_area_code", "log_uid", "transaction_uid",
             "lane_calibration_code", "event_uid", "serial_number", "code",
             "controller_code", "edge_server_code",
         ):

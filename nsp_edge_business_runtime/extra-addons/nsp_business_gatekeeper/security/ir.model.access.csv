@@ -15,8 +15,8 @@ access_nsp_parking_layout_lane_sequence_it,nsp.parking.layout.lane.sequence IT,n
 access_nsp_parking_layout_lane_sequence_operator,nsp.parking.layout.lane.sequence Operator,nsp_business_gatekeeper.model_nsp_parking_layout_lane_sequence,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_device_it,nsp.device IT,nsp_business_gatekeeper.model_nsp_device,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_device_operator,nsp.device Operator,nsp_business_gatekeeper.model_nsp_device,nsp_core.group_nsp_operator,1,0,0,0
-access_nsp_parking_transaction_it,nsp.parking.transaction IT,nsp_business_gatekeeper.model_nsp_parking_transaction,nsp_core.group_nsp_it_parking,1,0,0,0
-access_nsp_parking_transaction_operator,nsp.parking.transaction Operator,nsp_business_gatekeeper.model_nsp_parking_transaction,nsp_core.group_nsp_operator,1,0,0,0
+access_nsp_parking_log_it,nsp.parking.log IT,nsp_business_gatekeeper.model_nsp_parking_log,nsp_core.group_nsp_it_parking,1,0,0,0
+access_nsp_parking_log_operator,nsp.parking.log Operator,nsp_business_gatekeeper.model_nsp_parking_log,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_parking_detection_event_it,nsp.parking.detection.event IT,nsp_business_gatekeeper.model_nsp_parking_detection_event,nsp_core.group_nsp_it_parking,1,0,0,0
 access_nsp_parking_detection_event_operator,nsp.parking.detection.event Operator,nsp_business_gatekeeper.model_nsp_parking_detection_event,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_controller_it,nsp.controller IT,nsp_business_gatekeeper.model_nsp_controller,nsp_core.group_nsp_it_parking,1,1,1,1
