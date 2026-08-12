@@ -65,4 +65,62 @@ class TestGatekeeperContractPolicies(TransactionCase):
                 _PARKING_AREA_STATE_TRANSITIONS,
                 label="Parking Area",
             )
+    def test_lane_master_is_independent_from_parking_layout(self):
+        Lane = self.env["nsp.parking.lane"]
+        self.assertIn("branch_id", Lane._fields)
+        self.assertIn("layout_lane_ids", Lane._fields)
+        for forbidden in (
+            "parking_area_id", "edge_server_id", "controller_id",
+            "reader_config_ids", "antenna_sequence_ids",
+            "tolerance_type", "tolerance_value",
+        ):
+            self.assertNotIn(forbidden, Lane._fields)
+
+    def test_parking_layout_owns_contextual_lane_configuration(self):
+        Parking = self.env["nsp.parking.area"]
+        LayoutLane = self.env["nsp.parking.layout.lane"]
+        self.assertEqual(
+            Parking._fields["layout_lane_ids"].comodel_name,
+            "nsp.parking.layout.lane",
+        )
+        self.assertEqual(LayoutLane._fields["lane_id"].comodel_name, "nsp.parking.lane")
+        self.assertEqual(
+            LayoutLane._fields["parking_area_id"].comodel_name, "nsp.parking.area"
+        )
+        for contextual in (
+            "edge_server_id", "controller_id", "reader_config_ids",
+            "antenna_sequence_ids", "tolerance_type", "tolerance_value",
+        ):
+            self.assertIn(contextual, LayoutLane._fields)
+
+    def test_device_configuration_owns_reader_ports(self):
+        ReaderConfig = self.env["nsp.parking.layout.lane.reader.config"]
+        ReaderPort = self.env["nsp.parking.layout.lane.reader.port"]
+        Sequence = self.env["nsp.parking.layout.lane.sequence"]
+        self.assertEqual(
+            ReaderConfig._fields["port_ids"].comodel_name,
+            "nsp.parking.layout.lane.reader.port",
+        )
+        self.assertEqual(
+            ReaderPort._fields["layout_lane_id"].comodel_name,
+            "nsp.parking.layout.lane",
+        )
+        self.assertEqual(
+            Sequence._fields["layout_lane_id"].comodel_name,
+            "nsp.parking.layout.lane",
+        )
+
+    def test_parking_runtime_history_keeps_master_and_context_identity(self):
+        Detection = self.env["nsp.parking.detection.event"]
+        Transaction = self.env["nsp.parking.transaction"]
+        self.assertEqual(Detection._fields["lane_id"].comodel_name, "nsp.parking.lane")
+        self.assertEqual(
+            Detection._fields["layout_lane_id"].comodel_name,
+            "nsp.parking.layout.lane",
+        )
+        self.assertEqual(Transaction._fields["lane_id"].comodel_name, "nsp.parking.lane")
+        self.assertEqual(
+            Transaction._fields["layout_lane_id"].comodel_name,
+            "nsp.parking.layout.lane",
+        )
 

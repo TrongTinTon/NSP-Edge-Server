@@ -51,6 +51,11 @@ class ParkingTransaction(models.Model):
         ondelete="restrict", index=True,
     )
     controller_code = fields.Char(string="Controller Code", readonly=True, index=True)
+    layout_lane_id = fields.Many2one(
+        "nsp.parking.layout.lane", string="Lane Configuration",
+        ondelete="restrict", readonly=True, index=True,
+        help="Contextual Parking Layout Lane configuration used for this movement.",
+    )
     lane_id = fields.Many2one(
         "nsp.parking.lane", string="Lane", required=True,
         ondelete="restrict", index=True,
@@ -170,21 +175,46 @@ class ParkingTransaction(models.Model):
         ),
     ]
 
-    @api.constrains("controller_id", "parking_area_id", "lane_id", "reader_id", "port_no")
+    @api.constrains(
+        "controller_id", "parking_area_id", "layout_lane_id", "lane_id",
+        "reader_id", "port_no",
+    )
     def _check_reader_port_scope(self):
         for record in self:
-            if record.parking_area_id and record.lane_id.parking_area_id != record.parking_area_id:
-                raise ValidationError(_("Transaction Parking Area must match the Lane Parking Area."))
-            if record.lane_id.controller_id != record.controller_id:
-                raise ValidationError(_("Transaction Controller must match the Lane Controller."))
-            if record.reader_id.controller_id != record.controller_id:
-                raise ValidationError(_("Transaction Reader must belong to the Transaction Controller."))
-            allowed = {
-                (line.reader_id.id, int(line.port_no or 0))
-                for line in record.lane_id.timeline_line_ids
+            configuration = record.layout_lane_id
+            # Historical transactions created before the Lane Master refactor may
+            # not have a contextual reference. New runtime transactions always do.
+            if not configuration:
+                continue
+            if record.parking_area_id and configuration.parking_area_id != record.parking_area_id:
+                raise ValidationError(_(
+                    "Transaction Parking Area must match the Lane Configuration Parking Layout."
+                ))
+            if record.lane_id != configuration.lane_id:
+                raise ValidationError(_(
+                    "Transaction Lane must match the Lane Configuration Lane Master."
+                ))
+            if record.controller_id != configuration.controller_id:
+                raise ValidationError(_(
+                    "Transaction Controller must match the Lane Configuration Controller."
+                ))
+            configured_ports = {
+                (config.reader_id.id, int(port.port_no or 0))
+                for config in configuration.reader_config_ids
+                for port in config.port_ids
             }
-            if (record.reader_id.id, int(record.port_no or 0)) not in allowed:
-                raise ValidationError(_("Transaction Reader Port must exist in the Lane Timeline."))
+            if (record.reader_id.id, int(record.port_no or 0)) not in configured_ports:
+                raise ValidationError(_(
+                    "Transaction Reader Port must exist in the Lane Configuration Device Configuration."
+                ))
+            sequence_ports = {
+                (line.reader_id.id, int(line.port_no or 0))
+                for line in configuration.antenna_sequence_ids
+            }
+            if (record.reader_id.id, int(record.port_no or 0)) not in sequence_ports:
+                raise ValidationError(_(
+                    "Transaction Reader Port must exist in the Lane Configuration Antenna Sequence."
+                ))
 
     def init(self):
         self.env.cr.execute(
@@ -208,13 +238,16 @@ class ParkingTransaction(models.Model):
 
     @api.depends(
         "parking_area_id", "parking_area_id.name", "parking_area_code",
+        "layout_lane_id", "layout_lane_id.parking_area_id",
         "lane_id", "lane_id.display_name", "lane_id.name", "lane_code",
         "vehicle_id", "vehicle_id.display_name", "vehicle_id.license_plate",
         "license_plate", "vehicle_code", "vehicle_tid",
     )
     def _compute_display_values(self):
         for rec in self:
-            area = rec.parking_area_id or (rec.lane_id.parking_area_id if rec.lane_id else False)
+            area = rec.parking_area_id or (
+                rec.layout_lane_id.parking_area_id if rec.layout_lane_id else False
+            )
             rec.parking_area_display = (
                 area.name if area and area.name else rec.parking_area_code or "-"
             )
@@ -378,7 +411,7 @@ class ParkingTransaction(models.Model):
 
         if event_type == "check_out" and parking_area:
             previous_area = previous.parking_area_id or (
-                previous.lane_id.parking_area_id if previous.lane_id else False
+                previous.layout_lane_id.parking_area_id if previous.layout_lane_id else False
             )
             if previous_area and previous_area != parking_area:
                 return (
@@ -405,6 +438,8 @@ class ParkingTransaction(models.Model):
         if event_time:
             event_time = fields.Datetime.to_string(fields.Datetime.to_datetime(event_time))
         return {
+            "layout_lane_id": int(value("layout_lane_id") or 0),
+            "lane_id": int(value("lane_id") or 0),
             "controller_code": str(value("controller_code") or "").strip(),
             "lane_code": str(value("lane_code") or "").strip(),
             "parking_area_code": str(value("parking_area_code") or "").strip(),
@@ -431,23 +466,42 @@ class ParkingTransaction(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
+        layout_lane_ids = {int(vals.get("layout_lane_id") or 0) for vals in vals_list}
+        layout_lane_ids.discard(0)
+        configurations = self.env["nsp.parking.layout.lane"].browse(
+            list(layout_lane_ids)
+        ).exists()
+        if configurations:
+            configurations.check_access("read")
+        configuration_by_id = {row.id: row for row in configurations}
+
         lane_ids = {int(vals.get("lane_id") or 0) for vals in vals_list}
         lane_ids.discard(0)
-        # Respect the caller environment. Internal ingestion already enters
-        # this create path with its authenticated runtime scope.
         lanes = self.env["nsp.parking.lane"].browse(list(lane_ids)).exists()
         if lanes:
             lanes.check_access("read")
         lane_by_id = {lane.id: lane for lane in lanes}
+
         prepared = []
         for source in vals_list:
             vals = dict(source)
-            lane = lane_by_id.get(int(vals.get("lane_id") or 0))
-            if lane:
-                vals.setdefault("parking_area_id", lane.parking_area_id.id)
-                vals.setdefault("parking_area_code", lane.parking_area_id.code or "")
+            configuration = configuration_by_id.get(int(vals.get("layout_lane_id") or 0))
+            if configuration:
+                lane = configuration.lane_id
+                area = configuration.parking_area_id
+                vals.setdefault("lane_id", lane.id)
+                vals.setdefault("parking_area_id", area.id)
+                vals.setdefault("parking_area_code", area.code or "")
                 vals.setdefault("lane_code", lane.code or "")
-                vals.setdefault("controller_code", lane.controller_id.controller_id or "")
+                vals.setdefault("controller_id", configuration.controller_id.id)
+                vals.setdefault("controller_code", configuration.controller_id.controller_id or "")
+                vals.setdefault("layout_revision", int(area.published_revision or 0))
+            else:
+                # Compatibility only for immutable history / imported legacy rows.
+                # A Lane Master alone never implies a Parking Layout or Controller.
+                lane = lane_by_id.get(int(vals.get("lane_id") or 0))
+                if lane:
+                    vals.setdefault("lane_code", lane.code or "")
             prepared.append(vals)
         records = super().create(prepared)
         try:
@@ -519,7 +573,9 @@ class ParkingTransaction(models.Model):
     def _live_monitor_payload(self):
         """Serialize one final transaction for the customer-facing monitor."""
         self.ensure_one()
-        area = self.parking_area_id or (self.lane_id.parking_area_id if self.lane_id else False)
+        area = self.parking_area_id or (
+            self.layout_lane_id.parking_area_id if self.layout_lane_id else False
+        )
         vehicle = self.vehicle_id
         owner = vehicle.owner_id if vehicle else self.env["nsp.user"].browse()
         gate_user = self.user_id if self.event_type == "check_out" and self.user_id else owner
@@ -641,10 +697,15 @@ class ParkingTransaction(models.Model):
         if not detections:
             raise ValidationError(_("empty_detection_group"))
 
-        lane = detections[:1].lane_id
-        controller = lane.controller_id
-        if any(rec.lane_id != lane for rec in detections):
+        layout_lane = detections[:1].layout_lane_id
+        if not layout_lane:
+            raise ValidationError(_("missing_lane_configuration"))
+        lane = layout_lane.lane_id
+        controller = layout_lane.controller_id
+        if any(rec.layout_lane_id != layout_lane for rec in detections):
             raise ValidationError(_("mixed_detection_group"))
+        if any(rec.lane_id != lane for rec in detections):
+            raise ValidationError(_("mixed_lane_master_detection_group"))
 
         event_type = str(resolved_event_type or "").strip().lower()
         if event_type not in ("check_in", "check_out"):
@@ -667,7 +728,7 @@ class ParkingTransaction(models.Model):
                 (ordered_vehicle[-1].detected_at - ordered_vehicle[0].detected_at).total_seconds(),
             )
         if allowed_duration_seconds is False:
-            allowed_duration_seconds = self._allowed_duration_for_lane(lane, event_type)
+            allowed_duration_seconds = self._allowed_duration_for_lane(layout_lane, event_type)
         observed_duration_seconds = max(0.0, float(observed_duration_seconds or 0.0))
         allowed_duration_seconds = max(0.0, float(allowed_duration_seconds or 0.0))
         if allowed_duration_seconds <= 0:
@@ -683,7 +744,8 @@ class ParkingTransaction(models.Model):
         allowed_duration_seconds = round(allowed_duration_seconds, 6)
         vehicle_tid = vehicle_event.tid
         vehicle = vehicle_event.vehicle_id
-        layout_revision = int(lane.parking_area_id.published_revision or 0)
+        parking_area = layout_lane.parking_area_id
+        layout_revision = int(parking_area.published_revision or 0)
         detection_revisions = set(detections.mapped("layout_revision"))
         if layout_revision <= 0 or detection_revisions != {layout_revision}:
             raise ValidationError(_("parking_layout_revision_mismatch"))
@@ -712,7 +774,7 @@ class ParkingTransaction(models.Model):
                 user_tid = user_event.tid
 
         errors = []
-        if lane.parking_area_id.state != "operational":
+        if parking_area.state != "operational":
             errors.append(("parking_area_not_operational", _("Parking Area is not operational.")))
         if not vehicle:
             errors.append(("vehicle_not_found", _("Vehicle TID is not assigned to an active vehicle.")))
@@ -737,7 +799,7 @@ class ParkingTransaction(models.Model):
 
         continuity_action, continuity_code, continuity_message = (
             self._vehicle_continuity_decision(
-                vehicle, event_type, event_time, lane.parking_area_id
+                vehicle, event_type, event_time, parking_area
             )
         )
         if continuity_action == "ignore":
@@ -746,7 +808,7 @@ class ParkingTransaction(models.Model):
                 "lane=%s revision=%s reason=%s message=%s",
                 vehicle.id if vehicle else False,
                 event_type,
-                lane.id,
+                layout_lane.id,
                 layout_revision,
                 continuity_code or "invalid_sequence",
                 continuity_message or "",
@@ -773,12 +835,13 @@ class ParkingTransaction(models.Model):
             "event_type": event_type,
             "controller_id": controller.id,
             "controller_code": controller.controller_id or "",
-            "parking_area_id": lane.parking_area_id.id,
+            "parking_area_id": parking_area.id,
+            "layout_lane_id": layout_lane.id,
             "lane_id": lane.id,
             "lane_code": lane.code or "",
-            "parking_area_code": lane.parking_area_id.code or "",
+            "parking_area_code": parking_area.code or "",
             "layout_revision": layout_revision,
-            "sequence_path": self._sequence_path_for_lane(lane, event_type),
+            "sequence_path": self._sequence_path_for_lane(layout_lane, event_type),
             "observed_duration_seconds": observed_duration_seconds,
             "allowed_duration_seconds": allowed_duration_seconds,
             "reader_id": vehicle_event.reader_id.id,

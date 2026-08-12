@@ -248,6 +248,32 @@
         line-height: 1.45;
     }
 
+    .nsp-lane-setup__preview-body {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(150px, 200px);
+        gap: 18px;
+        align-items: start;
+    }
+
+    .nsp-lane-setup__preview-sequence,
+    .nsp-lane-setup__preview-illustration {
+        min-width: 0;
+    }
+
+    .nsp-lane-setup__preview-illustration {
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+    }
+
+    .nsp-lane-setup__preview-illustration img {
+        display: block;
+        width: 100%;
+        max-width: 200px;
+        height: auto;
+        object-fit: contain;
+    }
+
     .nsp-lane-preview {
         display: flex;
         flex-direction: column;
@@ -354,6 +380,22 @@
             padding-left: 0;
             border-top: 1px solid var(--nsp-lane-border);
             border-left: 0;
+        }
+
+        .nsp-lane-setup__preview-body {
+            grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+        }
+    }
+}
+
+@media (max-width: 720px) {
+    .o_nsp_lane_setup_form {
+        .nsp-lane-setup__preview-body {
+            grid-template-columns: 1fr;
+        }
+
+        .nsp-lane-setup__preview-illustration img {
+            max-width: 260px;
         }
     }
 }

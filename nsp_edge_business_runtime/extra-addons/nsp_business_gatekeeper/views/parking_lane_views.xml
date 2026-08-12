@@ -1,52 +1,124 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <odoo>
+  <!-- Stable Lane Master: identity only, never owns a Parking Layout or devices. -->
   <record id="view_nsp_parking_lane_list" model="ir.ui.view">
-    <field name="name">nsp.parking.lane.list</field>
+    <field name="name">nsp.parking.lane.master.list</field>
     <field name="model">nsp.parking.lane</field>
     <field name="arch" type="xml">
-      <list string="Lanes"
-            create="0" edit="0" delete="0"
-            decoration-success="configuration_state == 'ready'"
-            decoration-warning="configuration_state == 'incomplete'"
-            decoration-muted="configuration_state == 'disabled'">
-        <field name="parking_area_id" string="Layout"/>
+      <list string="Lanes" create="0" edit="0" delete="0" decoration-muted="not active">
         <field name="name" string="Lane" decoration-bf="1"/>
-        <field name="edge_server_id" string="Server"/>
-        <field name="controller_id" string="Controller"/>
-        <field name="sequence_point_count" string="Sequence Points" readonly="1"/>
-        <field name="reader_config_count" string="Readers" readonly="1" optional="show"/>
-        <field name="total_path_duration" string="Max Window (s)" readonly="1"/>
-        <field name="configuration_issue" string="Configuration" readonly="1" optional="show"/>
-        <field name="configuration_state" column_invisible="1"/>
-        <field name="parking_area_state" column_invisible="1"/>
+        <field name="code" string="Code"/>
+        <field name="branch_id" string="Branch"/>
+        <field name="layout_count" string="Parking Layouts"/>
         <field name="active" widget="boolean_toggle" readonly="1"/>
       </list>
     </field>
   </record>
 
   <record id="view_nsp_parking_lane_form" model="ir.ui.view">
-    <field name="name">nsp.parking.lane.form</field>
+    <field name="name">nsp.parking.lane.master.form</field>
     <field name="model">nsp.parking.lane</field>
     <field name="arch" type="xml">
-      <form string="Lane" class="o_nsp_parking_lane_form" create="0" edit="0" delete="0">
+      <form string="Lane" create="0" edit="0" delete="0">
         <sheet>
-          <field name="parking_area_state" invisible="1"/>
-          <field name="edge_server_id" invisible="1"/>
-          <field name="controller_id" invisible="1"/>
-          <field name="edge_server_status" invisible="1"/>
-          <field name="controller_status" invisible="1"/>
-
           <div class="oe_title">
-            <label for="name" string="Name"/>
+            <label for="name" string="Lane"/>
             <h1><field name="name" readonly="1"/></h1>
             <div class="text-muted"><field name="code" readonly="1" class="oe_inline"/></div>
           </div>
-
           <div class="alert alert-info" role="alert">
-            Read-only runtime projection synchronized from Cloud. Update and publish the Parking Layout on Cloud to change this Lane.
+            Lane Master is a stable Branch-scoped identity. Parking Layout, Server, Controller, Reader Configuration and Antenna Sequence belong to Lane Configuration, not to this master record.
+          </div>
+          <group>
+            <field name="branch_id" readonly="1"/>
+            <field name="active" readonly="1"/>
+            <field name="layout_count" string="Parking Layout References" readonly="1"/>
+          </group>
+          <separator string="Parking Layout References"/>
+          <field name="layout_lane_ids" readonly="1" nolabel="1">
+            <list create="0" edit="0" delete="0">
+              <field name="parking_area_id" string="Parking Layout"/>
+              <field name="edge_server_id" string="Server"/>
+              <field name="controller_id" string="Controller"/>
+              <field name="reader_config_count" string="Readers"/>
+              <field name="sequence_point_count" string="Sequence Points"/>
+              <field name="active"/>
+            </list>
+          </field>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="action_nsp_parking_lane" model="ir.actions.act_window">
+    <field name="name">Lanes</field>
+    <field name="res_model">nsp.parking.lane</field>
+    <field name="view_mode">list,form</field>
+    <field name="context">{'create': False, 'edit': False, 'delete': False}</field>
+  </record>
+
+  <!-- Contextual configuration: all runtime topology/settings live here. -->
+  <record id="view_nsp_parking_layout_lane_list" model="ir.ui.view">
+    <field name="name">nsp.parking.layout.lane.list</field>
+    <field name="model">nsp.parking.layout.lane</field>
+    <field name="arch" type="xml">
+      <list string="Lane Configurations" create="0" edit="0" delete="0"
+            decoration-success="configuration_state == 'ready'"
+            decoration-warning="configuration_state == 'incomplete'"
+            decoration-muted="configuration_state == 'disabled'">
+        <field name="parking_area_id" string="Parking Layout"/>
+        <field name="lane_id" string="Lane" decoration-bf="1"/>
+        <field name="edge_server_id" string="Server"/>
+        <field name="controller_id" string="Controller"/>
+        <field name="reader_config_count" string="Readers"/>
+        <field name="sequence_point_count" string="Sequence Points"/>
+        <field name="total_path_duration" string="Max Window (s)"/>
+        <field name="configuration_issue" string="Configuration" optional="show"/>
+        <field name="configuration_state" column_invisible="1"/>
+        <field name="active" widget="boolean_toggle" readonly="1"/>
+      </list>
+    </field>
+  </record>
+
+  <record id="view_nsp_parking_layout_lane_form" model="ir.ui.view">
+    <field name="name">nsp.parking.layout.lane.form</field>
+    <field name="model">nsp.parking.layout.lane</field>
+    <field name="arch" type="xml">
+      <form string="Lane Configuration" create="0" edit="0" delete="0" class="o_nsp_parking_lane_form">
+        <sheet>
+          <field name="parking_area_state" invisible="1"/>
+          <field name="edge_server_name" invisible="1"/>
+          <field name="edge_server_status" invisible="1"/>
+          <field name="controller_name" invisible="1"/>
+          <field name="controller_status" invisible="1"/>
+
+          <div class="oe_title">
+            <label for="lane_id" string="Lane"/>
+            <h1><field name="lane_id" readonly="1"/></h1>
           </div>
 
-          <!-- Keep projected Reader configuration loaded for the reusable read-only Tree widget. -->
+          <div class="alert alert-info" role="alert">
+            Read-only Lane Configuration synchronized from Cloud. Lane Master identity is independent; this record owns the runtime Server, Controller, Reader Configuration and Antenna Sequence for this Parking Layout.
+          </div>
+
+          <group>
+            <group string="Context">
+              <field name="parking_area_id" string="Parking Layout" readonly="1"/>
+              <field name="branch_id" readonly="1"/>
+              <field name="active" readonly="1"/>
+            </group>
+            <group string="Infrastructure">
+              <field name="edge_server_id" string="Server" readonly="1"/>
+              <field name="controller_id" string="Controller" readonly="1"/>
+              <field name="configuration_state" widget="badge" readonly="1"
+                     decoration-success="configuration_state == 'ready'"
+                     decoration-warning="configuration_state == 'incomplete'"
+                     decoration-muted="configuration_state == 'disabled'"/>
+              <field name="configuration_issue" readonly="1"/>
+            </group>
+          </group>
+
+          <!-- Loaded for the reusable read-only Device Configuration tree. -->
           <field name="reader_config_ids" invisible="1" readonly="1">
             <list create="0" edit="0" delete="0">
               <field name="reader_id"/>
@@ -62,11 +134,8 @@
           </field>
 
           <separator string="Device Configuration"/>
-          <field name="device_tree_anchor"
-                 nolabel="1"
-                 readonly="1"
-                 class="o_nsp_device_tree_field"
-                 widget="nsp_device_tree_view"/>
+          <field name="device_tree_anchor" nolabel="1" readonly="1"
+                 class="o_nsp_device_tree_field" widget="nsp_device_tree_view"/>
 
           <separator string="Antenna Sequence"/>
           <div class="nsp-parking-sequence-grid">
@@ -87,9 +156,7 @@
                 <h4>Sequence Preview</h4>
                 <p>Read-only preview of the published Reader/Antenna order and timing window.</p>
               </div>
-              <field name="antenna_sequence_preview_anchor"
-                     nolabel="1"
-                     readonly="1"
+              <field name="antenna_sequence_preview_anchor" nolabel="1" readonly="1"
                      widget="nsp_lane_sequence_preview"/>
             </aside>
           </div>
@@ -98,9 +165,9 @@
     </field>
   </record>
 
-  <record id="action_nsp_parking_lane" model="ir.actions.act_window">
-    <field name="name">Lanes</field>
-    <field name="res_model">nsp.parking.lane</field>
+  <record id="action_nsp_parking_layout_lane" model="ir.actions.act_window">
+    <field name="name">Lane Configurations</field>
+    <field name="res_model">nsp.parking.layout.lane</field>
     <field name="view_mode">list,form</field>
     <field name="context">{'create': False, 'edit': False, 'delete': False}</field>
   </record>

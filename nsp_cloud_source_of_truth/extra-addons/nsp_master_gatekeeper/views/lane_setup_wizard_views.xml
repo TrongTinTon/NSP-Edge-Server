@@ -131,9 +131,17 @@
                                             <h4>Sequence Preview</h4>
                                             <p>The same sequence identifies the Lane crossing. Vehicle parking state decides Check-in or Check-out.</p>
                                         </div>
-                                        <field name="sequence_preview_anchor"
-                                               nolabel="1"
-                                               widget="nsp_lane_sequence_preview"/>
+                                        <div class="nsp-lane-setup__preview-body">
+                                            <div class="nsp-lane-setup__preview-sequence">
+                                                <field name="sequence_preview_anchor"
+                                                       nolabel="1"
+                                                       widget="nsp_lane_sequence_preview"/>
+                                            </div>
+                                            <div class="nsp-lane-setup__preview-illustration" aria-label="Lane antenna sequence illustration">
+                                                <img src="/nsp_master_gatekeeper/static/src/img/antenna_sequence_preview_vehicle.svg"
+                                                     alt="Lane antenna sequence illustration"/>
+                                            </div>
+                                        </div>
                                     </aside>
                                 </div>
                             </section>

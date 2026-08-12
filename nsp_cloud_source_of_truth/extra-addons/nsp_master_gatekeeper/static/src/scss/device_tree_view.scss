@@ -425,6 +425,32 @@
         border-left: 1px solid #E5E7EB;
     }
 
+    .nsp-parking-sequence-grid__preview-body {
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) minmax(180px, .9fr);
+        gap: 18px;
+        align-items: start;
+    }
+
+    .nsp-parking-sequence-grid__preview-sequence,
+    .nsp-parking-sequence-grid__preview-illustration {
+        min-width: 0;
+    }
+
+    .nsp-parking-sequence-grid__preview-illustration {
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+    }
+
+    .nsp-parking-sequence-grid__preview-illustration img {
+        display: block;
+        width: 100%;
+        max-width: 280px;
+        height: auto;
+        object-fit: contain;
+    }
+
     .nsp-parking-sequence-grid__preview-head {
         margin-bottom: 16px;
 
@@ -544,6 +570,16 @@
         padding-left: 0;
         border-top: 1px solid #E5E7EB;
         border-left: 0;
+    }
+}
+
+@media (max-width: 760px) {
+    .o_nsp_parking_lane_form .nsp-parking-sequence-grid__preview-body {
+        grid-template-columns: 1fr;
+    }
+
+    .o_nsp_parking_lane_form .nsp-parking-sequence-grid__preview-illustration img {
+        max-width: 320px;
     }
 }
 

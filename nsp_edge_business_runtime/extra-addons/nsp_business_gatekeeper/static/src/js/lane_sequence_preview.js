@@ -19,7 +19,7 @@ export class NspLaneSequencePreview extends Component {
     static props = { ...standardFieldProps };
 
     get isParkingLane() {
-        return this.props.record?.resModel === "nsp.parking.lane";
+        return this.props.record?.resModel === "nsp.parking.layout.lane";
     }
 
     get points() {

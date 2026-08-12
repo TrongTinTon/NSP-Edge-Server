@@ -36,9 +36,14 @@ class ParkingDetectionEvent(models.Model):
         string="Detected At", required=True, index=True, readonly=True,
         help="UTC time reported by the Controller.",
     )
+    layout_lane_id = fields.Many2one(
+        "nsp.parking.layout.lane", string="Lane Configuration", required=True,
+        ondelete="restrict", readonly=True, index=True,
+    )
     lane_id = fields.Many2one(
         "nsp.parking.lane", string="Lane", required=True,
         ondelete="restrict", readonly=True, index=True,
+        help="Stable Lane Master identity captured with the contextual Lane Configuration.",
     )
     reader_id = fields.Many2one(
         "nsp.device", string="Reader", required=True,
@@ -79,6 +84,7 @@ class ParkingDetectionEvent(models.Model):
             ("layout_revision_superseded", "Layout Revision Superseded"),
             ("parking_area_not_operational", "Parking Area Not Operational"),
             ("sequence_timeout", "Sequence Timeout"),
+            ("vehicle_not_found", "Vehicle Not Found"),
             ("processing_error", "Processing Error"),
         ],
         string="Processing Error", readonly=True, copy=False, index=True,
@@ -91,9 +97,9 @@ class ParkingDetectionEvent(models.Model):
 
     _sql_constraints = [
         (
-            "event_uid_lane_unique",
-            "unique(event_uid, lane_id)",
-            "Detection UID must be unique per logical Lane.",
+            "event_uid_layout_lane_unique",
+            "unique(event_uid, layout_lane_id)",
+            "Detection UID must be unique per Lane Configuration.",
         ),
         (
             "parking_detection_port_range",
@@ -107,7 +113,7 @@ class ParkingDetectionEvent(models.Model):
             """
             DROP INDEX IF EXISTS nsp_parking_detection_pending_lane_idx;
             CREATE INDEX nsp_parking_detection_pending_lane_idx
-                ON nsp_parking_detection_event (lane_id, layout_revision, detected_at, id)
+                ON nsp_parking_detection_event (layout_lane_id, layout_revision, detected_at, id)
              WHERE state = 'pending' AND transaction_id IS NULL
             """
         )
@@ -116,7 +122,7 @@ class ParkingDetectionEvent(models.Model):
             DROP INDEX IF EXISTS nsp_parking_detection_sequence_idx;
             CREATE INDEX nsp_parking_detection_sequence_idx
                 ON nsp_parking_detection_event
-                   (lane_id, layout_revision, tid, reader_id, port_no, detected_at, id)
+                   (layout_lane_id, layout_revision, tid, reader_id, port_no, detected_at, id)
              WHERE state = 'pending' AND transaction_id IS NULL
             """
         )
@@ -127,6 +133,26 @@ class ParkingDetectionEvent(models.Model):
              WHERE state IN ('processed', 'error')
             """
         )
+
+    @api.constrains("layout_lane_id", "lane_id", "reader_id", "port_no")
+    def _check_lane_configuration_scope(self):
+        for event in self:
+            configuration = event.layout_lane_id
+            if not configuration:
+                continue
+            if event.lane_id != configuration.lane_id:
+                raise ValidationError(_(
+                    "Detection Lane Master must match the contextual Lane Configuration."
+                ))
+            configured_ports = {
+                (config.reader_id.id, int(port.port_no or 0))
+                for config in configuration.reader_config_ids
+                for port in config.port_ids
+            }
+            if (event.reader_id.id, int(event.port_no or 0)) not in configured_ports:
+                raise ValidationError(_(
+                    "Detection Reader Port is not declared in the Lane Configuration Device Configuration."
+                ))
 
     @api.model
     def _deployment_role(self):
@@ -157,6 +183,7 @@ class ParkingDetectionEvent(models.Model):
             detected_at = fields.Datetime.to_string(fields.Datetime.to_datetime(detected_at))
         return {
             "detected_at": detected_at or "",
+            "layout_lane_id": int(value("layout_lane_id") or 0),
             "lane_id": int(value("lane_id") or 0),
             "reader_id": int(value("reader_id") or 0),
             "port_no": int(value("port_no") or 0),
@@ -173,10 +200,10 @@ class ParkingDetectionEvent(models.Model):
         if not uid:
             raise ValidationError(_("missing_event_uid"))
         vals = dict(vals, event_uid=uid)
-        lane_id = int(vals.get("lane_id") or 0)
-        if not lane_id:
-            raise ValidationError(_("lane_id is required"))
-        domain = [("event_uid", "=", uid), ("lane_id", "=", lane_id)]
+        layout_lane_id = int(vals.get("layout_lane_id") or 0)
+        if not layout_lane_id:
+            raise ValidationError(_("layout_lane_id is required"))
+        domain = [("event_uid", "=", uid), ("layout_lane_id", "=", layout_lane_id)]
         existing = self.search(domain, limit=1)
         if existing:
             if self._business_values(existing) != self._business_values(vals):
@@ -221,12 +248,12 @@ class ParkingDetectionEvent(models.Model):
             str(device.serial_number or "").strip().upper(): device
             for device in devices
         }
-        timeline_rows = self.env["nsp.parking.lane.timeline"].sudo().search([
-            ("lane_id.active", "=", True),
-            ("lane_id.parking_area_id.state", "=", "operational"),
+        timeline_rows = self.env["nsp.parking.layout.lane.sequence"].sudo().search([
+            ("layout_lane_id.active", "=", True),
+            ("layout_lane_id.parking_area_id.state", "=", "operational"),
             ("reader_id", "in", devices.ids),
             ("port_no", "in", list({port for _serial, port in keys})),
-        ]) if devices else self.env["nsp.parking.lane.timeline"].browse()
+        ]) if devices else self.env["nsp.parking.layout.lane.sequence"].browse()
 
         lanes_by_key = {}
         for row in timeline_rows:
@@ -234,11 +261,11 @@ class ParkingDetectionEvent(models.Model):
                 str(row.reader_id.serial_number or "").strip().upper(),
                 int(row.port_no or 0),
             )
-            lanes_by_key.setdefault(key, set()).add(row.lane_id.id)
+            lanes_by_key.setdefault(key, set()).add(row.layout_lane_id.id)
 
         resolved = {}
         errors = {}
-        Lane = self.env["nsp.parking.lane"].sudo()
+        Lane = self.env["nsp.parking.layout.lane"].sudo()
         for key in keys:
             serial, port_no = key
             device = device_by_serial.get(serial)
@@ -312,7 +339,7 @@ class ParkingDetectionEvent(models.Model):
             raise ValidationError(_("no_reader_port_timeline"))
 
         records = self.browse()
-        new_lanes = self.env["nsp.parking.lane"].browse()
+        new_lanes = self.env["nsp.parking.layout.lane"].browse()
         for reader, lane, candidate_port_no in topologies:
             parking_area = lane.parking_area_id
             self._acquire_parking_area_runtime_lock(parking_area, shared=True)
@@ -324,7 +351,8 @@ class ParkingDetectionEvent(models.Model):
             vals = {
                 "event_uid": event_uid,
                 "detected_at": detected_at,
-                "lane_id": lane.id,
+                "layout_lane_id": lane.id,
+                "lane_id": lane.lane_id.id,
                 "reader_id": reader.id,
                 "port_no": candidate_port_no,
                 "tid": tid,
@@ -348,7 +376,7 @@ class ParkingDetectionEvent(models.Model):
             raise ValidationError(_("invalid_payload"))
 
         topology_cache, topology_errors = self._resolve_topology_batch(controller, detections)
-        touched_lanes = self.env["nsp.parking.lane"].browse()
+        touched_lanes = self.env["nsp.parking.layout.lane"].browse()
         for payload, assignment in detections:
             try:
                 port_no = int(payload.get("port_no") or 0)
@@ -385,7 +413,7 @@ class ParkingDetectionEvent(models.Model):
                 )
 
         ordered_lane_ids = self._pending_lane_ids_in_event_order(touched_lanes.ids)
-        for lane in self.env["nsp.parking.lane"].sudo().browse(ordered_lane_ids).exists():
+        for lane in self.env["nsp.parking.layout.lane"].sudo().browse(ordered_lane_ids).exists():
             # Cross-request movement is normal. Ingestion never expires incomplete
             # sequences; finalization belongs to the periodic pending-event job.
             self._process_pending_for_lane(lane, finalize_expired=False)
@@ -421,7 +449,7 @@ class ParkingDetectionEvent(models.Model):
         except (TypeError, ValueError):
             revision = 0
         domain = [
-            ("lane_id.parking_area_id", "=", parking_area.id),
+            ("layout_lane_id.parking_area_id", "=", parking_area.id),
             ("state", "=", "pending"),
             ("transaction_id", "=", False),
         ]
@@ -458,17 +486,17 @@ class ParkingDetectionEvent(models.Model):
         lane_filter = ""
         normalized_ids = [int(value) for value in (lane_ids or []) if int(value) > 0]
         if normalized_ids:
-            lane_filter = " AND lane_id = ANY(%s)"
+            lane_filter = " AND layout_lane_id = ANY(%s)"
             params.append(normalized_ids)
         self.env.cr.execute(
             f"""
-            SELECT lane_id
+            SELECT layout_lane_id
               FROM nsp_parking_detection_event
              WHERE state = 'pending'
                AND transaction_id IS NULL
                {lane_filter}
-             GROUP BY lane_id
-             ORDER BY MIN(detected_at) ASC, MIN(id) ASC, lane_id ASC
+             GROUP BY layout_lane_id
+             ORDER BY MIN(detected_at) ASC, MIN(id) ASC, layout_lane_id ASC
             """,
             params,
         )
@@ -477,7 +505,7 @@ class ParkingDetectionEvent(models.Model):
     @api.model
     def _pending_user_pool(self, lane):
         events = self.search([
-            ("lane_id", "=", lane.id),
+            ("layout_lane_id", "=", lane.id),
             ("state", "=", "pending"),
             ("transaction_id", "=", False),
             ("layout_revision", "=", int(lane.parking_area_id.published_revision or 0)),
@@ -537,7 +565,7 @@ class ParkingDetectionEvent(models.Model):
     def _expire_orphan_user_events(self, lane, now):
         cutoff = now - timedelta(seconds=self._lane_max_duration(lane))
         stale = self.search([
-            ("lane_id", "=", lane.id),
+            ("layout_lane_id", "=", lane.id),
             ("state", "=", "pending"),
             ("transaction_id", "=", False),
             ("layout_revision", "=", int(lane.parking_area_id.published_revision or 0)),
@@ -564,7 +592,7 @@ class ParkingDetectionEvent(models.Model):
         if len(rows) < 2:
             return []
         vehicle_events = self.search([
-            ("lane_id", "=", lane.id),
+            ("layout_lane_id", "=", lane.id),
             ("state", "=", "pending"),
             ("transaction_id", "=", False),
             ("layout_revision", "=", int(lane.parking_area_id.published_revision or 0)),
@@ -632,7 +660,7 @@ class ParkingDetectionEvent(models.Model):
     def _expire_stale_vehicle_events(self, lane, now):
         cutoff = now - timedelta(seconds=self._lane_max_duration(lane))
         stale = self.search([
-            ("lane_id", "=", lane.id),
+            ("layout_lane_id", "=", lane.id),
             ("state", "=", "pending"),
             ("transaction_id", "=", False),
             ("layout_revision", "=", int(lane.parking_area_id.published_revision or 0)),
@@ -746,7 +774,7 @@ class ParkingDetectionEvent(models.Model):
 
             window_start = match["end_at"] - timedelta(seconds=duration)
             recent = Transaction.search([
-                ("lane_id", "=", lane.id),
+                ("layout_lane_id", "=", lane.id),
                 ("layout_revision", "=", layout_revision),
                 ("event_type", "=", event_type),
                 ("vehicle_tid", "=", vehicle_tid),
@@ -839,7 +867,7 @@ class ParkingDetectionEvent(models.Model):
             return True
         now = fields.Datetime.now()
         lane_ids = self._pending_lane_ids_in_event_order()
-        Lane = self.env["nsp.parking.lane"].sudo()
+        Lane = self.env["nsp.parking.layout.lane"].sudo()
         for lane in Lane.browse(lane_ids).exists():
             self._process_pending_for_lane(lane, now=now)
         return True

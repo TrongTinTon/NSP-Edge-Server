@@ -129,9 +129,17 @@
                 <h4>Sequence Preview</h4>
                 <p>Live preview of the contextual Reader/Antenna order and timing window.</p>
               </div>
-              <field name="antenna_sequence_preview_anchor"
-                     nolabel="1"
-                     widget="nsp_lane_sequence_preview"/>
+              <div class="nsp-parking-sequence-grid__preview-body">
+                <div class="nsp-parking-sequence-grid__preview-sequence">
+                  <field name="antenna_sequence_preview_anchor"
+                         nolabel="1"
+                         widget="nsp_lane_sequence_preview"/>
+                </div>
+                <div class="nsp-parking-sequence-grid__preview-illustration" aria-label="Lane antenna sequence illustration">
+                  <img src="/nsp_master_gatekeeper/static/src/img/antenna_sequence_preview_vehicle.svg"
+                       alt="Lane antenna sequence illustration"/>
+                </div>
+              </div>
             </aside>
           </div>
         </sheet>

@@ -440,12 +440,12 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             )
         Device = self.env["nsp.device"].sudo()
         devices = Device.browse()
-        lanes = self.env["nsp.parking.lane"].sudo().search([
+        lane_configs = self.env["nsp.parking.layout.lane"].sudo().search([
             ("active", "=", True),
             ("controller_id", "=", controller.id),
             ("parking_area_id.state", "in", ["operational", "maintenance", "blocked"]),
         ])
-        devices |= lanes.mapped("timeline_line_ids.reader_id")
+        devices |= lane_configs.mapped("reader_config_ids.reader_id")
         calibration_nodes = self.env["nsp.measurement.device.node"].sudo().search([
             ("device_type", "=", "reader"),
             ("parent_id.device_type", "=", "controller"),
@@ -458,12 +458,16 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         )
 
         parking_layouts = []
-        for parking_area in lanes.mapped("parking_area_id").sorted(
+        for parking_area in lane_configs.mapped("parking_area_id").sorted(
             key=lambda rec: ((rec.code or "").casefold(), rec.id)
         ):
-            controller_lanes = lanes.filtered(
-                lambda lane: lane.parking_area_id == parking_area
-            ).sorted(key=lambda lane: ((lane.code or "").casefold(), lane.id))
+            controller_lane_configs = lane_configs.filtered(
+                lambda config: config.parking_area_id == parking_area
+            ).sorted(
+                key=lambda config: (
+                    (config.lane_id.code or "").casefold(), config.sequence, config.id
+                )
+            )
             parking_layouts.append({
                 "parking_area_code": parking_area.code or "",
                 "parking_area_name": parking_area.name or "",
@@ -471,10 +475,10 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 "published_revision": int(parking_area.published_revision or 0),
                 "lanes": [
                     {
-                        "lane_code": lane.code or "",
-                        "lane_name": lane.name or "",
+                        "lane_code": config.lane_id.code or "",
+                        "lane_name": config.lane_id.name or "",
                     }
-                    for lane in controller_lanes
+                    for config in controller_lane_configs
                 ],
             })
 

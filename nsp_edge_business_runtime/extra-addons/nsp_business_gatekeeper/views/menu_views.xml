@@ -13,6 +13,13 @@
               sequence="10"
               groups="nsp_core.group_nsp_it_parking"/>
 
+    <menuitem id="menu_nsp_parking_lane"
+              name="Lanes"
+              parent="nsp_core.menu_nsp_configuration"
+              action="action_nsp_parking_lane"
+              sequence="15"
+              groups="nsp_core.group_nsp_it_parking"/>
+
     <menuitem id="menu_nsp_measurement"
               name="Lane Calibration"
               parent="nsp_core.menu_nsp_configuration"

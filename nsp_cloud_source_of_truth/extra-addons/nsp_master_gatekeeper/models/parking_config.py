@@ -432,6 +432,32 @@ class NspParkingArea(models.Model):
             )
             valid_sequences.append((lane, sequence))
 
+        # One physical Reader can participate in multiple logical Lanes, but the
+        # Controller can apply only one physical Reader profile at a time. Ports
+        # may differ between Lane sequences; Power / Interval / TID settings and
+        # the contextual Server+Controller assembly must remain identical.
+        reader_profiles = {}
+        for lane, _sequence in valid_sequences:
+            for config in lane.reader_config_ids:
+                profile = (
+                    lane.edge_server_id.id,
+                    lane.controller_id.id,
+                    int(config.power_dbm or 0),
+                    int(config.read_interval_ms or 0),
+                    int(config.tid_start_address or 0),
+                    int(config.tid_length or 0),
+                )
+                previous = reader_profiles.get(config.reader_id.id)
+                if previous and previous[0] != profile:
+                    issues.append(_(
+                        "Reader %(reader)s is shared by multiple Lane Configurations with "
+                        "conflicting Server/Controller or Reader parameters. Shared logical "
+                        "Lanes may use different Antenna Sequences, but the physical Reader "
+                        "runtime profile must be identical."
+                    ) % {"reader": config.reader_id.display_name})
+                else:
+                    reader_profiles[config.reader_id.id] = (profile, lane)
+
         # Reader/Antenna points may be shared by multiple logical Lanes. The
         # complete ordered sequence, not an individual port, identifies a Lane.
         for index, (first_lane, first_sequence) in enumerate(valid_sequences):

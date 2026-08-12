@@ -184,14 +184,17 @@ class Device(models.Model):
     def _runtime_port_numbers(self):
         self.ensure_one()
         port_numbers = set()
-        Timeline = self.env["nsp.parking.lane.timeline"].sudo()
-        if "reader_id" in Timeline._fields:
-            rows = Timeline.search([
-                ("reader_id", "=", self.id),
-                ("lane_id.active", "=", True),
-                ("lane_id.parking_area_id.state", "in", ["operational", "maintenance"]),
-            ])
-            port_numbers.update(int(value) for value in rows.mapped("port_no") if int(value or 0) > 0)
+        # Device Configuration owns enabled Reader Ports. Antenna Sequence only
+        # references those ports and must never be the source of Reader membership.
+        ReaderPort = self.env["nsp.parking.layout.lane.reader.port"].sudo()
+        rows = ReaderPort.search([
+            ("reader_id", "=", self.id),
+            ("layout_lane_id.active", "=", True),
+            ("layout_lane_id.parking_area_id.state", "in", ["operational", "maintenance"]),
+        ])
+        port_numbers.update(
+            int(value) for value in rows.mapped("port_no") if int(value or 0) > 0
+        )
         DeviceNode = self.env["nsp.measurement.device.node"].sudo()
         nodes = DeviceNode.search([
             ("device_type", "=", "reader"),

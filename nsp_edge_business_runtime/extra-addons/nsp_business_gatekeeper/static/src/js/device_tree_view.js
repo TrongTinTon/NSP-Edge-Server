@@ -96,7 +96,7 @@ export class NspDeviceTreeView extends Component {
 
     get mode() {
         const model = this.props.record?.resModel;
-        if (model === "nsp.parking.lane") {
+        if (model === "nsp.parking.layout.lane") {
             return "parking_lane";
         }
         if (model === "nsp.measurement.session") {

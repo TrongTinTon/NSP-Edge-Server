@@ -651,17 +651,133 @@ class NspSyncJob(models.Model):
             "message": "Pushed %s record(s)." % len(items),
         }
 
+    def _parking_runtime_pull_record_key(self, data=False):
+        self.ensure_one()
+        revision = 0
+        if isinstance(data, dict):
+            try:
+                revision = int(data.get("revision") or 0)
+            except (TypeError, ValueError):
+                revision = 0
+        return "PARKING-RUNTIME:R%s" % revision if revision > 0 else "PARKING-RUNTIME:REQUEST"
+
+    def _mark_parking_runtime_pull_result(
+        self, status, message, request_payload=False, response=False, data=False,
+    ):
+        self.ensure_one()
+        return self.env["nsp.sync.record"].sudo().mark_result(
+            sync_job=self,
+            action_code=self.sync_action_code,
+            action_name=self.sync_action_name,
+            route_suffix=self.route_suffix,
+            record_key=self._parking_runtime_pull_record_key(data=data),
+            status=status,
+            message=message,
+            payload=request_payload,
+            response=response,
+            operation="pull",
+        )
+
     def run_pull_once(self):
         self.ensure_one()
-        request_payload = self._build_pull_payload()
-        data = self._json_or_error(
-            self._post_remote(self.sync_action_id, request_payload, timeout=120)
-        )
         kind = self._action_kind()
+        request_payload = self._build_pull_payload()
+        response = False
+        try:
+            response = self._post_remote(self.sync_action_id, request_payload, timeout=120)
+            data = self._json_or_error(response)
+        except Exception as exc:
+            if kind == "parking_runtime":
+                response_payload = False
+                if response:
+                    try:
+                        response_payload = response.json()
+                    except Exception:
+                        response_payload = {
+                            "http_status": getattr(response, "status_code", False),
+                            "body": getattr(response, "text", False),
+                        }
+                self._mark_parking_runtime_pull_result(
+                    "failed",
+                    "Parking Runtime snapshot request failed: %s" % exc,
+                    request_payload=request_payload,
+                    response=response_payload,
+                )
+            raise
 
         if kind == "parking_runtime":
-            result = self._apply_parking_runtime_snapshot(data, request_payload=request_payload)
-            return {"pulled": result["applied"], "failed": 0, "has_more": False, "message": "Parking Runtime snapshot revision %s applied; %s stale record(s) removed/archived." % (result["revision"], result["removed"])}
+            try:
+                result = self._apply_parking_runtime_snapshot(
+                    data, request_payload=request_payload
+                )
+            except Exception as exc:
+                self._mark_parking_runtime_pull_result(
+                    "failed",
+                    "Parking Runtime snapshot apply failed: %s" % exc,
+                    request_payload=request_payload,
+                    response=data,
+                    data=data,
+                )
+                raise
+            area_count = len(data.get("parking_areas") or [])
+            if result.get("stale"):
+                message = (
+                    "Parking Runtime snapshot revision %(incoming)s skipped as stale; "
+                    "Edge Sync Job is already at revision %(current)s and the local "
+                    "Parking projection matches Cloud; Cloud returned %(areas)s Parking Layout(s)."
+                    % {
+                        "incoming": result.get("revision"),
+                        "current": result.get("current_revision") or self.snapshot_revision,
+                        "areas": area_count,
+                    }
+                )
+            elif result.get("recovery_replay"):
+                message = (
+                    "Parking Runtime snapshot revision %(revision)s recovery-applied because "
+                    "the local Parking projection was missing/incomplete even though the "
+                    "previous Edge Sync Job revision was %(previous)s; verified %(areas)s "
+                    "Parking Layout(s), %(lanes)s Lane Configuration(s), %(readers)s Reader "
+                    "Configuration(s), %(points)s Sequence point(s)."
+                    % {
+                        "revision": result.get("revision"),
+                        "previous": result.get("previous_revision"),
+                        "areas": result.get("parking_area_count", area_count),
+                        "lanes": result.get("lane_count", 0),
+                        "readers": result.get("reader_config_count", 0),
+                        "points": result.get("sequence_point_count", 0),
+                    }
+                )
+            else:
+                message = (
+                    "Parking Runtime snapshot revision %(revision)s applied and verified; "
+                    "%(removed)s stale record(s) removed/archived; %(areas)s Parking Layout(s), "
+                    "%(lanes)s Lane Configuration(s), %(readers)s Reader Configuration(s), "
+                    "%(points)s Sequence point(s)."
+                    % {
+                        "revision": result.get("revision"),
+                        "removed": result.get("removed", 0),
+                        "areas": result.get("parking_area_count", area_count),
+                        "lanes": result.get("lane_count", 0),
+                        "readers": result.get("reader_config_count", 0),
+                        "points": result.get("sequence_point_count", 0),
+                    }
+                )
+            self._mark_parking_runtime_pull_result(
+                "synced",
+                message,
+                request_payload=request_payload,
+                response={
+                    **data,
+                    "edge_apply_result": result,
+                },
+                data=data,
+            )
+            return {
+                "pulled": result.get("applied", 0),
+                "failed": 0,
+                "has_more": False,
+                "message": message,
+            }
 
         if kind == "vehicle_config":
             records, removed = self._apply_vehicle_config_snapshot(
@@ -771,14 +887,29 @@ class NspSyncJob(models.Model):
 
     def action_run_now(self):
         self.run_once()
+        failed = self.filtered(lambda job: job.status == "failed")
+        if failed:
+            message = "; ".join(
+                "%s: %s" % (job.sync_action_name or job.route_suffix, job.last_message or _("Failed"))
+                for job in failed
+            )
+            notification_type = "danger"
+            sticky = True
+        else:
+            message = "; ".join(
+                "%s: %s" % (job.sync_action_name or job.route_suffix, job.last_message or _("Done"))
+                for job in self
+            ) or _("Sync Job completed.")
+            notification_type = "success"
+            sticky = False
         return {
             "type": "ir.actions.client",
             "tag": "display_notification",
             "params": {
                 "title": _("NSP Sync"),
-                "message": _("Sync Job completed. Check Status and Last Message."),
-                "type": "success",
-                "sticky": False,
+                "message": message,
+                "type": notification_type,
+                "sticky": sticky,
             },
         }
 

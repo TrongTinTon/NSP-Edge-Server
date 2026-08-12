@@ -49,13 +49,13 @@ class NspSyncBusinessAdapter(models.Model):
             )
             devices_by_controller[controller.id] = current | valid_devices
 
-        Lane = self.env["nsp.parking.lane"].sudo()
-        lanes = Lane.search([
+        LayoutLane = self.env["nsp.parking.layout.lane"].sudo()
+        lane_configs = LayoutLane.search([
             ("active", "=", True),
             ("parking_area_id.state", "in", ["operational", "maintenance", "blocked"]),
         ])
-        for lane in lanes:
-            register(lane.controller_id, lane.timeline_line_ids.mapped("reader_id"))
+        for config in lane_configs:
+            register(config.controller_id, config.reader_config_ids.mapped("reader_id"))
 
         DeviceNode = self.env["nsp.measurement.device.node"].sudo()
         calibration_nodes = DeviceNode.search([
@@ -183,13 +183,13 @@ class NspSyncBusinessAdapter(models.Model):
             or 0
         )
         legacy_sequence_path = record.sequence_path or (
-            record._sequence_path_for_lane(record.lane_id, record.event_type)
-            if record.lane_id and record.event_type else ""
+            record._sequence_path_for_lane(record.layout_lane_id, record.event_type)
+            if record.layout_lane_id and record.event_type else ""
         )
         legacy_allowed_duration = float(record.allowed_duration_seconds or 0.0)
-        if legacy_allowed_duration <= 0 and record.lane_id and record.event_type:
+        if legacy_allowed_duration <= 0 and record.layout_lane_id and record.event_type:
             legacy_allowed_duration = record._allowed_duration_for_lane(
-                record.lane_id, record.event_type
+                record.layout_lane_id, record.event_type
             )
         legacy_observed_duration = float(record.observed_duration_seconds or 0.0)
         if legacy_observed_duration <= 0 and record.detection_event_ids:
