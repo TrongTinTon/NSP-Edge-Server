@@ -60,6 +60,11 @@ class NspSyncJobParkingLayout(models.Model):
         else:
             parking = Parking.create(parking_values)
 
+        edges = self.env["nsp.edge.server"].sudo().with_context(active_test=False).search([])
+        edge_by_code = {
+            self._normalize_sync_code(record.edge_server_code): record for record in edges
+            if record.edge_server_code
+        }
         controllers = self.env["nsp.controller"].sudo().with_context(active_test=False).search([])
         controller_by_code = {
             self._normalize_sync_code(record.controller_id): record for record in controllers
@@ -104,15 +109,11 @@ class NspSyncJobParkingLayout(models.Model):
                     "Parking Lane Code, Server Code and Controller Code are required; Lane Code must be unique."
                 ))
             controller = controller_by_code.get(controller_code)
+            edge = edge_by_code.get(server_code)
             if not controller or not controller.active or controller.cloud_removed:
                 raise UserError(_("Controller %s is missing or inactive.") % controller_code)
-            if (
-                not controller.edge_server_id
-                or self._normalize_sync_code(controller.edge_server_id.edge_server_code) != server_code
-            ):
-                raise UserError(_(
-                    "Controller %(controller)s is not assembled under Server %(server)s."
-                ) % {"controller": controller_code, "server": server_code})
+            if not edge or not edge.active or edge.cloud_removed:
+                raise UserError(_("Server %s is missing or inactive.") % server_code)
 
             tolerance = lane_item.get("timing_tolerance") or {}
             if not isinstance(tolerance, dict) or set(tolerance) - {"type", "value"}:
@@ -146,8 +147,6 @@ class NspSyncJobParkingLayout(models.Model):
                 reader = reader_by_code.get(reader_code)
                 if not reader or not reader.active or reader.cloud_removed:
                     raise UserError(_("Published RFID Reader %s is missing or inactive on Edge.") % reader_code)
-                if reader.controller_id != controller:
-                    raise UserError(_("Every Lane Reader must belong to the Lane Controller."))
                 if serial and str(reader.serial_number or "").strip().upper() != serial:
                     raise UserError(_("Published RFID Reader serial does not match Edge identity: %s") % reader_code)
 
@@ -263,7 +262,7 @@ class NspSyncJobParkingLayout(models.Model):
             }
             layout_specs[lane_code] = {
                 "parking_area_id": parking.id,
-                "edge_server_id": controller.edge_server_id.id,
+                "edge_server_id": edge.id,
                 "controller_id": controller.id,
                 "tolerance_type": tolerance_type,
                 "tolerance_value": tolerance_value,
@@ -368,6 +367,32 @@ class NspSyncJobParkingLayout(models.Model):
             raise UserError(_(
                 "Operational Parking Layouts cannot share Reader/Antenna points: %s"
             ) % "; ".join(sorted(set(conflicts))))
+
+        # Physical identities stay independent, but the active runtime context must
+        # still be unambiguous: one Controller executes under one Server and one
+        # Reader is acquired by one Controller at a time. Reusing either identity
+        # across multiple logical Lanes under the SAME context is valid.
+        active_configs = self.env["nsp.parking.layout.lane"].sudo().search([
+            ("active", "=", True),
+            ("parking_area_id.state", "=", "operational"),
+        ])
+        servers_by_controller = {}
+        controllers_by_reader = {}
+        for configuration in active_configs:
+            controller_id = configuration.controller_id.id
+            server_ids = servers_by_controller.setdefault(controller_id, set())
+            server_ids.add(configuration.edge_server_id.id)
+            if len(server_ids) > 1:
+                raise UserError(_(
+                    "Controller %(controller)s is referenced under multiple Servers in active Parking Runtime."
+                ) % {"controller": configuration.controller_id.display_name})
+            for reader in configuration.reader_config_ids.mapped("reader_id"):
+                controller_ids = controllers_by_reader.setdefault(reader.id, set())
+                controller_ids.add(controller_id)
+                if len(controller_ids) > 1:
+                    raise UserError(_(
+                        "Reader %(reader)s is referenced by multiple Controllers in active Parking Runtime."
+                    ) % {"reader": reader.display_name})
 
         operational_areas = self.env["nsp.parking.area"].sudo().search([("state", "=", "operational")])
         for parking_area in operational_areas:
@@ -898,7 +923,6 @@ class NspSyncJobParkingLayout(models.Model):
                 identity = spec["identity"]
                 values = {
                     "controller_name": identity.name or controller_code,
-                    "edge_server_id": spec["edge"].id,
                     "active": bool(identity.active),
                     "cloud_removed": False,
                     "whitelist_id": identity.id,
@@ -950,11 +974,6 @@ class NspSyncJobParkingLayout(models.Model):
                     "name": spec["name"],
                     "serial_number": spec["serial"],
                     "device_code": reader_code,
-                    "controller_id": controller.id,
-                    "power_dbm": config["power_dbm"],
-                    "read_interval_ms": config["read_interval_ms"],
-                    "tid_addr": config["tid_start_address"],
-                    "tid_len": config["tid_length"],
                     "whitelist_id": spec["identity"].id,
                     "active": bool(spec["identity"].active),
                     "cloud_removed": False,

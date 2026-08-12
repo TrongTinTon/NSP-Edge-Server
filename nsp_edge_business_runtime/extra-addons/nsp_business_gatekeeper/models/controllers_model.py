@@ -58,11 +58,6 @@ class NspEdgeServer(models.Model):
         index=True,
         copy=False,
     )
-    controller_ids = fields.One2many(
-        "nsp.controller",
-        "edge_server_id",
-        string="Controllers",
-    )
 
     _sql_constraints = [
         (
@@ -124,13 +119,6 @@ class NspController(models.Model):
         default="NSP Gatekeeper Controller",
         tracking=True,
     )
-    edge_server_id = fields.Many2one(
-        "nsp.edge.server",
-        string="Edge Server",
-        required=False,
-        ondelete="restrict",
-        index=True,
-    )
     timestamp = fields.Datetime(
         string="Last Heartbeat",
         readonly=True,
@@ -151,11 +139,6 @@ class NspController(models.Model):
         index=True,
         tracking=True,
     )
-    device_ids = fields.One2many(
-        "nsp.device",
-        "controller_id",
-        string="Readers",
-    )
     reader_count = fields.Integer(compute="_compute_reader_counts")
 
     _sql_constraints = [
@@ -166,10 +149,34 @@ class NspController(models.Model):
         ),
     ]
 
-    @api.depends("device_ids")
+    def _runtime_reader_records(self):
+        """Readers referenced by active execution contexts for this Controller.
+
+        Controller and Reader are independent identities. This method derives the
+        current association from Parking Lane Configuration and Lane Calibration
+        context only; it never persists ownership on either master record.
+        """
+        self.ensure_one()
+        Device = self.env["nsp.device"].sudo()
+        readers = Device.browse()
+        reader_configs = self.env["nsp.parking.layout.lane.reader.config"].sudo().search([
+            ("layout_lane_id.controller_id", "=", self.id),
+            ("layout_lane_id.active", "=", True),
+            ("layout_lane_id.parking_area_id.state", "in", ["operational", "maintenance", "blocked"]),
+        ])
+        readers |= reader_configs.mapped("reader_id")
+        calibration_nodes = self.env["nsp.measurement.device.node"].sudo().search([
+            ("device_type", "=", "reader"),
+            ("parent_id.device_type", "=", "controller"),
+            ("parent_id.controller_id", "=", self.id),
+            ("session_id.status", "in", ["ready", "running"]),
+        ])
+        readers |= calibration_nodes.mapped("reader_id")
+        return readers.filtered(lambda row: row.active and not row.cloud_removed)
+
     def _compute_reader_counts(self):
         for record in self:
-            record.reader_count = len(record.device_ids)
+            record.reader_count = len(record._runtime_reader_records())
 
     def action_open_readers(self):
         self.ensure_one()
@@ -178,8 +185,8 @@ class NspController(models.Model):
             "nsp_business_gatekeeper.nsp_device_action"
         ).read()[0]
         action.update({
-            "domain": [("controller_id", "=", self.id)],
-            "context": {"default_controller_id": self.id},
+            "domain": [("id", "in", self._runtime_reader_records().ids)],
+            "context": {"create": False, "edit": False, "delete": False},
         })
         return action
 

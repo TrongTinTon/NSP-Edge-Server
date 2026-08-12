@@ -1,8 +1,8 @@
 {'name': 'NSP Business Gatekeeper',
  'summary': 'Edge parking business runtime and Controller integration',
- 'description': 'Edge-only Gatekeeper runtime. Owns Controllers, Readers, Reader Ports, RFID '
+ 'description': 'Edge-only Gatekeeper runtime. Keeps independent Server/Controller/Reader identities, contextual Reader Ports, RFID '
                 'runtime assignments, parking processing and measurement runtime.',
- 'version': '19.0.10.29.0',
+ 'version': '19.0.10.30.0',
  'sequence': 20,
  'author': 'BKU Team',
  'category': 'Services',

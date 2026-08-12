@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
+from datetime import timedelta
 
 from odoo import api, fields, models
 
@@ -148,6 +149,27 @@ class NspReaderObservation(models.Model):
             "serial_number": serial,
         })
         return self.sudo().create(values)
+
+
+    @api.model
+    def cron_mark_offline_observations(self):
+        """Expire physical observation liveness without mutating Reader Master."""
+        parameter = self.env["ir.config_parameter"].sudo().get_param(
+            "nsp_business_gatekeeper.reader_observation_timeout_sec", "120"
+        )
+        try:
+            timeout = max(int(parameter or 120), 30)
+        except (TypeError, ValueError):
+            timeout = 120
+        cutoff = fields.Datetime.now() - timedelta(seconds=timeout)
+        stale = self.sudo().search([
+            ("status", "!=", "offline"),
+            ("last_reported_at", "<", cutoff),
+            "|", ("last_detection_at", "=", False), ("last_detection_at", "<", cutoff),
+        ])
+        if stale:
+            stale.write({"status": "offline"})
+        return True
 
     def port_numbers(self):
         self.ensure_one()

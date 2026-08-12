@@ -522,12 +522,30 @@ class NspMeasurementSession(models.Model):
                 "edge_status": server_node.server_id.status if server_node and server_node.server_id else "",
             })
         readers = []
-        for node in session._reader_nodes().sorted(
+        reader_nodes = session._reader_nodes().sorted(
             key=lambda item: ((item.reader_id.name or ""), (item.reader_id.serial_number or ""), item.id)
-        ):
+        )
+        controller_ids = reader_nodes.mapped("parent_id.controller_id").ids
+        serials = [
+            str(value or "").strip().upper()
+            for value in reader_nodes.mapped("reader_id.serial_number") if value
+        ]
+        observations = self.env["nsp.reader.observation"].sudo().search([
+            ("controller_id", "in", controller_ids),
+            ("serial_number", "in", serials),
+        ]) if controller_ids and serials else self.env["nsp.reader.observation"].browse()
+        observation_by_key = {
+            (row.controller_id.id, str(row.serial_number or "").strip().upper()): row
+            for row in observations
+        }
+        for node in reader_nodes:
             reader = node.reader_id
             controller_node = node.parent_id if node.parent_id.device_type == "controller" else False
             controller = controller_node.controller_id if controller_node else self.env["nsp.controller"]
+            observation = observation_by_key.get((
+                controller.id if controller else 0,
+                str(reader.serial_number or "").strip().upper(),
+            ))
             readers.append({
                 "reader_node_id": node.id,
                 "id": reader.id,
@@ -535,12 +553,12 @@ class NspMeasurementSession(models.Model):
                 "serial_number": reader.serial_number or "",
                 "controller_code": controller.controller_id if controller else "",
                 "controller_name": controller.controller_name if controller else "",
-                "status": reader.status or "",
-                "runtime_power_dbm": int(reader.runtime_power_dbm or 0),
-                "runtime_read_interval_ms": int(reader.runtime_read_interval_ms or 0),
+                "status": observation.status if observation else "offline",
+                "runtime_power_dbm": int(observation.power_dbm or 0) if observation else 0,
+                "runtime_read_interval_ms": int(observation.read_interval_ms or 0) if observation else 0,
                 "reader_power_dbm": int(node.power_dbm or 0),
                 "read_interval_ms": int(node.read_interval_ms or 0),
-                "firmware_version": reader.firmware_version or "",
+                "firmware_version": observation.firmware_version or "" if observation else "",
                 "ports": sorted(node.reader_port_ids.mapped("port_no")),
             })
         return {

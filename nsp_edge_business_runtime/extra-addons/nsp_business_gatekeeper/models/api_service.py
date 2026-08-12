@@ -182,25 +182,15 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
 
     @api.model
     def _whitelisted_device_count(self, controller):
-        """Count configured Readers that are currently whitelisted in one query."""
+        """Count Reader identities referenced by this Controller runtime context."""
         if not controller:
             return 0
-        self.env.cr.execute(
-            """
-            SELECT COUNT(*)
-              FROM nsp_device AS device
-              JOIN nsp_device_whitelist AS whitelist
-                ON whitelist.serial_number = device.serial_number
-              JOIN nsp_device_type AS device_type
-                ON device_type.id = whitelist.device_type_id
-             WHERE device.controller_id = %s
-               AND whitelist.active = TRUE
-               AND device_type.code = 'RFID_READER'
-            """,
-            (controller.id,),
-        )
-        row = self.env.cr.fetchone()
-        return int(row[0] or 0) if row else 0
+        readers = controller._runtime_reader_records()
+        return len(readers.filtered(
+            lambda reader: reader.whitelist_id
+            and reader.whitelist_id.active
+            and reader.whitelist_id.device_type_code == "RFID_READER"
+        ))
 
     @api.model
     def _whitelisted_devices(self, devices):
@@ -426,6 +416,14 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
 
     @endpoint("NSP Controller Device Configuration Pull", route_path="controller/device-config/pull", methods="POST", code="nsp_controller_device_config_pull")
     def api_controller_device_config_pull(self):
+        """Return only physical Reader execution configuration to Controller.
+
+        Parking Layout, Lane, Antenna Sequence, Port filtering and business
+        direction are Edge-only. Controller receives only Reader identity plus one
+        Reader-level technical profile. It must forward every physical port_no
+        reported by the Reader SDK. Lane Calibration may temporarily override
+        Reader-level parameters, but no Parking business context is exposed.
+        """
         data = self._payload()
         controller, error = self._auth_controller(data)
         if error:
@@ -438,56 +436,35 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 error_code="invalid_payload",
                 details={"unsupported_fields": unsupported},
             )
-        Device = self.env["nsp.device"].sudo()
-        devices = Device.browse()
-        lane_configs = self.env["nsp.parking.layout.lane"].sudo().search([
-            ("active", "=", True),
-            ("controller_id", "=", controller.id),
-            ("parking_area_id.state", "in", ["operational", "maintenance", "blocked"]),
-        ])
-        devices |= lane_configs.mapped("reader_config_ids.reader_id")
-        calibration_nodes = self.env["nsp.measurement.device.node"].sudo().search([
-            ("device_type", "=", "reader"),
-            ("parent_id.device_type", "=", "controller"),
-            ("parent_id.controller_id", "=", controller.id),
-            ("session_id.status", "in", ["ready", "running"]),
-        ])
-        devices |= calibration_nodes.mapped("reader_id")
-        devices = devices.filtered(lambda rec: rec.active and not rec.cloud_removed).sorted(
-            key=lambda rec: (rec.serial_number or "", rec.id)
-        )
 
-        parking_layouts = []
-        for parking_area in lane_configs.mapped("parking_area_id").sorted(
-            key=lambda rec: ((rec.code or "").casefold(), rec.id)
-        ):
-            controller_lane_configs = lane_configs.filtered(
-                lambda config: config.parking_area_id == parking_area
-            ).sorted(
-                key=lambda config: (
-                    (config.lane_id.code or "").casefold(), config.sequence, config.id
-                )
+        devices = []
+        try:
+            readers = controller._runtime_reader_records().sorted(
+                key=lambda rec: (rec.serial_number or "", rec.device_code or "", rec.id)
             )
-            parking_layouts.append({
-                "parking_area_code": parking_area.code or "",
-                "parking_area_name": parking_area.name or "",
-                "state": parking_area.state or "",
-                "published_revision": int(parking_area.published_revision or 0),
-                "lanes": [
-                    {
-                        "lane_code": config.lane_id.code or "",
-                        "lane_name": config.lane_id.name or "",
-                    }
-                    for config in controller_lane_configs
-                ],
-            })
+            for reader in readers:
+                if not (reader.whitelist_id and reader.whitelist_id.active):
+                    continue
+                payload = reader.build_controller_config_payload(controller)
+                if payload:
+                    devices.append(payload)
+        except Exception as exc:
+            _logger.exception(
+                "Unable to build physical Reader configuration for Controller %s",
+                controller.controller_id,
+            )
+            return self._error(
+                str(exc),
+                409,
+                error_code="reader_runtime_config_conflict",
+                details={"controller_code": controller.controller_id},
+            )
 
         return self._ok({
             "controller_code": controller.controller_id,
-            "devices": [device._build_config_payload() for device in devices],
-            "parking_layouts": parking_layouts,
+            "devices": devices,
             "server_time": self._iso_datetime(fields.Datetime.now()),
-        }, message="Controller runtime configuration loaded.")
+        }, message="Controller physical Reader configuration loaded.")
 
     @api.model
     def _measurement_require_fields(self, data, required):
@@ -1285,7 +1262,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         """Accept a batch of raw TID detections from one authenticated Controller.
 
         The Controller only reports physical detections. One batch may contain
-        detections from multiple Reader ports owned by that Controller.
+        detections from multiple Reader ports physically observed by that Controller.
         Edge validates, suppresses repeated reads, groups detections, and creates
         Parking Transactions internally. The Controller receives only one minimal
         acknowledgement for an accepted batch.

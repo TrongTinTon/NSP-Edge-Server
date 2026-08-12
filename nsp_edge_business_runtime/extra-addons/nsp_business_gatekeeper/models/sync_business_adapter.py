@@ -126,6 +126,7 @@ class NspSyncBusinessAdapter(models.Model):
                     last_seen_candidates.append(observation.last_detection_at)
                 effective_last_seen = max(last_seen_candidates) if last_seen_candidates else False
 
+                runtime_profile = device.runtime_profile_for_controller(controller) or {}
                 item = {
                     "reader_code": device.device_code or "",
                     "serial_number": expected_serial,
@@ -142,16 +143,14 @@ class NspSyncBusinessAdapter(models.Model):
                         observation.firmware_version if observation else ""
                     ) or "",
                     "power_dbm": int(
-                        (observation.power_dbm if observation and observation.power_dbm is not None else None)
-                        or device.runtime_power_dbm
-                        or device.power_dbm
-                        or 0
+                        observation.power_dbm
+                        if observation and observation.power_dbm is not None
+                        else runtime_profile.get("power_dbm") or 0
                     ),
                     "read_interval_ms": int(
-                        (observation.read_interval_ms if observation and observation.read_interval_ms else 0)
-                        or device.runtime_read_interval_ms
-                        or device.read_interval_ms
-                        or 200
+                        observation.read_interval_ms
+                        if observation and observation.read_interval_ms
+                        else runtime_profile.get("read_interval_ms") or 200
                     ),
                 }
                 devices.append(item)
@@ -1029,7 +1028,7 @@ class NspSyncBusinessAdapter(models.Model):
             if not edge:
                 raise UserError(_("Lane Calibration Controller has no released Server parent."))
             record = controller_by_code.get(code_value)
-            vals = {"controller_name": meta["name"] or code_value, "edge_server_id": edge.id, "whitelist_id": identity.id, "active": True, "cloud_removed": False}
+            vals = {"controller_name": meta["name"] or code_value, "whitelist_id": identity.id, "active": True, "cloud_removed": False}
             if record:
                 self._write_changed(record, vals)
             else:
@@ -1058,7 +1057,6 @@ class NspSyncBusinessAdapter(models.Model):
                 "name": meta["name"],
                 "serial_number": meta["serial_number"],
                 "device_code": code_value,
-                "controller_id": controller.id,
                 "whitelist_id": identity.id,
                 "active": True,
                 "cloud_removed": False,

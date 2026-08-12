@@ -546,12 +546,6 @@ class NspParkingLayoutLane(models.Model):
                 issues.append(_("Server is missing"))
             if not controller:
                 issues.append(_("Controller is missing"))
-            elif (
-                controller.edge_server_id
-                and configuration.edge_server_id
-                and controller.edge_server_id != configuration.edge_server_id
-            ):
-                issues.append(_("Controller runtime Server does not match Lane Configuration"))
 
             sequence = configuration.antenna_sequence_ids.sorted(
                 lambda row: (row.sequence or 0, row.id)
@@ -572,8 +566,6 @@ class NspParkingLayoutLane(models.Model):
                 config.reader_id.id: config for config in configuration.reader_config_ids
             }
             for config in configuration.reader_config_ids:
-                if config.reader_id.controller_id != controller:
-                    issues.append(_("Configured Reader does not belong to the Lane Controller"))
                 if not config.port_ids:
                     issues.append(_("Configured Reader has no Reader Ports"))
             for point in sequence:
@@ -581,8 +573,6 @@ class NspParkingLayoutLane(models.Model):
                 if not config:
                     issues.append(_("Antenna Sequence Reader is missing Device Configuration"))
                     continue
-                if point.reader_id.controller_id != controller:
-                    issues.append(_("Sequence Reader does not belong to the Lane Controller"))
                 if int(point.port_no or 0) not in set(config.port_ids.mapped("port_no")):
                     issues.append(_("Antenna Sequence uses a Port not declared in Device Configuration"))
 
@@ -607,16 +597,6 @@ class NspParkingLayoutLane(models.Model):
                     "readers": ", ".join(missing.mapped("display_name")),
                 })
             configuration.reader_config_ids._validate_parameter_ranges()
-            wrong_controller = configuration.reader_config_ids.filtered(
-                lambda config: config.reader_id.controller_id != configuration.controller_id
-            )
-            if wrong_controller:
-                raise ValidationError(_(
-                    "Lane Configuration %(lane)s contains Reader(s) outside its Controller: %(readers)s"
-                ) % {
-                    "lane": configuration.display_name,
-                    "readers": ", ".join(wrong_controller.mapped("reader_id.display_name")),
-                })
             missing_ports = configuration.reader_config_ids.filtered(lambda config: not config.port_ids)
             if missing_ports:
                 raise ValidationError(_(
@@ -675,8 +655,6 @@ class NspParkingLayoutLane(models.Model):
             if len(keys) != len(set(keys)):
                 raise ValidationError(_("A Reader Port can appear only once in an Antenna Sequence."))
             for index, row in enumerate(sequence):
-                if row.reader_id.controller_id != controller:
-                    raise ValidationError(_("Every Sequence Reader must belong to the Lane Controller."))
                 if int(row.port_no or 0) < 1 or int(row.port_no or 0) > 16:
                     raise ValidationError(_("Antenna/Port must be an integer from 1 to 16."))
                 duration = float(row.duration_from_previous or 0.0)
@@ -752,7 +730,8 @@ class NspParkingLayoutLaneReaderConfig(models.Model):
         related="reader_id.serial_number", string="Serial", readonly=True,
     )
     reader_status = fields.Selection(
-        related="reader_id.status", string="Reader Status", readonly=True,
+        [("online", "Online"), ("offline", "Offline"), ("degraded", "Degraded")],
+        string="Reader Status", compute="_compute_reader_status", readonly=True,
     )
     power_dbm = fields.Integer(string="Power (dBm)", required=True)
     read_interval_ms = fields.Integer(string="Read Interval (ms)", required=True)
@@ -799,17 +778,16 @@ class NspParkingLayoutLaneReaderConfig(models.Model):
         ),
     ]
 
-    @api.constrains("layout_lane_id", "reader_id")
-    def _check_controller_scope(self):
+    def _compute_reader_status(self):
+        Observation = self.env["nsp.reader.observation"].sudo()
         for config in self:
-            if (
-                config.layout_lane_id
-                and config.reader_id
-                and config.reader_id.controller_id != config.layout_lane_id.controller_id
-            ):
-                raise ValidationError(_(
-                    "Configured Reader must belong to the Lane Configuration Controller."
-                ))
+            controller = config.layout_lane_id.controller_id
+            serial = str(config.reader_id.serial_number or "").strip().upper()
+            observation = Observation.search([
+                ("controller_id", "=", controller.id),
+                ("serial_number", "=", serial),
+            ], limit=1) if controller and serial else Observation.browse()
+            config.reader_status = observation.status if observation else "offline"
 
     @api.depends("port_ids.port_no")
     def _compute_port_summary(self):
@@ -924,8 +902,6 @@ class NspParkingLayoutLaneSequencePoint(models.Model):
     def _check_reader_port(self):
         for record in self:
             configuration = record.layout_lane_id
-            if record.reader_id.controller_id != configuration.controller_id:
-                raise ValidationError(_("Antenna Sequence Reader must belong to the Lane Controller."))
             configs = configuration.reader_config_ids.filtered(
                 lambda config: config.reader_id == record.reader_id
             )

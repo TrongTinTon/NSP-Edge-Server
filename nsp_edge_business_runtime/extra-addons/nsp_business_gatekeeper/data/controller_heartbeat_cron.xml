@@ -12,10 +12,10 @@
         </record>
 
         <record id="ir_cron_nsp_device_report_offline" model="ir.cron">
-            <field name="name">NSP Device Report Offline Check</field>
-            <field name="model_id" ref="nsp_business_gatekeeper.model_nsp_device"/>
+            <field name="name">NSP Reader Observation Offline Check</field>
+            <field name="model_id" ref="nsp_business_gatekeeper.model_nsp_reader_observation"/>
             <field name="state">code</field>
-            <field name="code">model.cron_mark_offline_devices()</field>
+            <field name="code">model.cron_mark_offline_observations()</field>
             <field name="interval_number">1</field>
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>

@@ -238,8 +238,9 @@ class ParkingDetectionEvent(models.Model):
             return {}, {}
 
         serials = {serial for serial, _port in keys}
+        # Reader identity is independent from Controller. Controller scope is
+        # resolved only through contextual Lane Configuration below.
         devices = self.env["nsp.device"].sudo().search([
-            ("controller_id", "=", controller.id),
             ("serial_number", "in", list(serials)),
             ("active", "=", True),
             ("cloud_removed", "=", False),
