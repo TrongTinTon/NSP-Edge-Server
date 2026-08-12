@@ -168,7 +168,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
     def _edge_runtime_status_scope(self, edge_server):
         """Build status scope from published contextual mappings.
 
-        Reader inventory has no Controller owner. Parking Lane and Lane
+        Reader inventory has no Controller owner. Lane Configuration and Lane
         Calibration mappings explicitly define which Controller may report each
         Reader in the current runtime context. Reader Code remains the stable
         management identity.
@@ -1483,12 +1483,15 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         areas = Area.search([("code", "in", list(area_codes))]) if area_codes else Area.browse()
         area_by_code = {record.code: record for record in areas}
 
-        Lane = self.env["nsp.parking.lane"].sudo().with_context(active_test=False)
-        lanes = Lane.search([("code", "in", list(lane_codes))]) if lane_codes else Lane.browse()
+        LayoutLane = self.env["nsp.parking.layout.lane"].sudo().with_context(active_test=False)
+        layout_lanes = LayoutLane.search([
+            ("parking_area_id.code", "in", list(area_codes)),
+            ("lane_id.code", "in", list(lane_codes)),
+        ]) if area_codes and lane_codes else LayoutLane.browse()
         lane_by_key = {
-            (record.controller_id.id, record.parking_area_id.code, record.code): record
-            for record in lanes
-            if record.controller_id and record.parking_area_id
+            (record.controller_id.id, record.parking_area_id.code, record.lane_id.code): record
+            for record in layout_lanes
+            if record.controller_id and record.parking_area_id and record.lane_id
         }
 
         Device = self.env["nsp.device"].sudo()
@@ -1622,17 +1625,23 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                 ("code", "=", parking_area_code),
             ], limit=1)
 
+        layout_lane = self.env["nsp.parking.layout.lane"].browse()
         lane = self.env["nsp.parking.lane"].browse()
         device = self.env["nsp.device"].browse()
         if controller and parking_area:
             if use_cache:
-                lane = cache["lane_by_key"].get((controller.id, parking_area_code, lane_code)) or lane
+                layout_lane = cache["lane_by_key"].get(
+                    (controller.id, parking_area_code, lane_code)
+                ) or layout_lane
             else:
-                lane = self.env["nsp.parking.lane"].sudo().with_context(active_test=False).search([
+                layout_lane = self.env["nsp.parking.layout.lane"].sudo().with_context(
+                    active_test=False
+                ).search([
                     ("parking_area_id", "=", parking_area.id),
                     ("controller_id", "=", controller.id),
-                    ("code", "=", lane_code),
+                    ("lane_id.code", "=", lane_code),
                 ], limit=1)
+            lane = layout_lane.lane_id if layout_lane else lane
         if use_cache:
             device = cache["device_by_serial"].get(serial_number) or device
         else:
@@ -1714,6 +1723,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "controller_code": controller_code,
             "parking_area_id": parking_area.id if parking_area else False,
             "parking_area_code": parking_area_code,
+            "layout_lane_id": layout_lane.id if layout_lane else False,
             "lane_id": lane.id if lane else False,
             "lane_code": lane_code,
             "layout_revision": layout_revision,

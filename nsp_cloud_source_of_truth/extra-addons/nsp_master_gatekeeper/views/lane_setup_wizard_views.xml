@@ -8,31 +8,39 @@
                 <sheet>
                     <field name="source_scope" invisible="1"/>
                     <field name="session_id" invisible="1"/>
-                    <field name="available_edge_server_ids" invisible="1"/>
-                    <field name="available_controller_ids" invisible="1"/>
                     <field name="available_reader_ids" invisible="1"/>
                     <field name="active_section" invisible="1"/>
+                    <field name="parking_area_branch_id" invisible="1"/>
+                    <field name="layout_lane_id" invisible="1"/>
                     <field name="sequence_preview_anchor" invisible="1"/>
+                    <field name="edge_server_id" invisible="1"/>
+                    <field name="controller_id" invisible="1"/>
 
-                    <div class="nsp-lane-setup__lane-row nsp-lane-setup__infrastructure-row">
-                        <span class="nsp-lane-setup__lane-label">Infrastructure</span>
-                        <div class="nsp-lane-setup__infrastructure-fields">
-                            <div class="nsp-lane-setup__infra-field">
-                                <label for="edge_server_id" string="Server"/>
-                                <field name="edge_server_id"
-                                       nolabel="1"
-                                       domain="[('id', 'in', available_edge_server_ids)]"
-                                       readonly="source_scope == 'calibration'"
-                                       options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                            </div>
-                            <div class="nsp-lane-setup__infra-field">
-                                <label for="controller_id" string="Controller"/>
-                                <field name="controller_id"
-                                       nolabel="1"
-                                       domain="[('id', 'in', available_controller_ids)]"
-                                       readonly="source_scope == 'calibration'"
-                                       options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"/>
-                            </div>
+                    <!-- Hydrate the transient Reader configuration collection for the
+                         reusable Device Tree.  The Tree is the only Device editor. -->
+                    <field name="device_line_ids" invisible="1">
+                        <list create="1" edit="1" delete="1">
+                            <field name="reader_id"/>
+                            <field name="reader_name"/>
+                            <field name="reader_serial_number"/>
+                            <field name="reader_status"/>
+                            <field name="port_summary"/>
+                            <field name="power_dbm"/>
+                            <field name="read_interval_ms"/>
+                            <field name="tid_start_address"/>
+                            <field name="tid_length"/>
+                        </list>
+                    </field>
+
+                    <div class="nsp-lane-setup__lane-row">
+                        <span class="nsp-lane-setup__lane-label">Parking Layout</span>
+                        <div class="nsp-lane-setup__lane-field">
+                            <field name="parking_area_id"
+                                   nolabel="1"
+                                   placeholder="Select a Draft Parking Layout..."
+                                   domain="[('state', '=', 'draft')]"
+                                   readonly="source_scope == 'parking_layout'"
+                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': False}"/>
                         </div>
                     </div>
 
@@ -41,9 +49,10 @@
                         <div class="nsp-lane-setup__lane-field">
                             <field name="lane_id"
                                    nolabel="1"
-                                   placeholder="Select or create a Lane..."
-                                   domain="[('active', '=', True), ('parking_area_id.state', '=', 'draft')]"
-                                   context="{'default_edge_server_id': edge_server_id, 'default_controller_id': controller_id}"
+                                   placeholder="Select or create an independent Lane..."
+                                   domain="[('active', '=', True), ('branch_id', '=', parking_area_branch_id)] if parking_area_branch_id else [('active', '=', True)]"
+                                   readonly="source_scope == 'parking_layout'"
+                                   context="{'default_branch_id': parking_area_branch_id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_parking_lane_form'}"
                                    options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"/>
                         </div>
                     </div>
@@ -82,21 +91,12 @@
                                      invisible="active_section != 'device'">
                                 <div class="nsp-lane-setup__content-header">
                                     <h3>Device Configuration</h3>
-                                    <p>Configure the Readers used by this physical Lane.</p>
+                                    <p>Use the same Server → Controller → Reader configuration structure as Lane Calibration.</p>
                                 </div>
-                                <field name="device_line_ids" nolabel="1" class="nsp-lane-setup__devices">
-                                    <list editable="bottom" create="1" delete="1">
-                                        <field name="reader_id"
-                                               string="Reader"
-                                               domain="[('active', '=', True)] if parent.source_scope == 'parking_layout' else [('id', 'in', parent.available_reader_ids)]"
-                                               options="{'no_create': True, 'no_open': True}"/>
-                                        <field name="port_summary" string="Antennas" readonly="1"/>
-                                        <field name="power_dbm" string="Power (dBm)"/>
-                                        <field name="read_interval_ms" string="Read Interval (ms)"/>
-                                        <field name="tid_start_address" string="TID Start" optional="hide"/>
-                                        <field name="tid_length" string="TID Length" optional="hide"/>
-                                    </list>
-                                </field>
+                                <field name="device_tree_anchor"
+                                       nolabel="1"
+                                       class="o_nsp_device_tree_field"
+                                       widget="nsp_device_tree_view"/>
                             </section>
 
                             <section class="nsp-lane-setup__content-section"

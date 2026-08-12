@@ -11,7 +11,7 @@ class TestAntennaSequenceOrder(TransactionCase):
         """The handle's sequence is UI ordering, not the published business index."""
         reader_1 = self.env["nsp.device"].create({"name": "Order Test Reader 1"})
         reader_2 = self.env["nsp.device"].create({"name": "Order Test Reader 2"})
-        lane = self.env["nsp.parking.lane"].new({
+        lane = self.env["nsp.parking.layout.lane"].new({
             "antenna_sequence_ids": [
                 (0, 0, {
                     "sequence": 10,

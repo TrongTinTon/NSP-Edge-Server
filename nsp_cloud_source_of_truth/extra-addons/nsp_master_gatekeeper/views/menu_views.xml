@@ -28,6 +28,13 @@
               sequence="30"
               groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking"/>
 
+    <menuitem id="menu_nsp_parking_lane_master"
+              name="Lanes"
+              parent="nsp_core.menu_nsp_master_data"
+              action="action_nsp_parking_lane"
+              sequence="35"
+              groups="nsp_core.group_nsp_it_parking"/>
+
     <!-- Device whitelist remains master data. Related reference records are created/edited from fields. -->
     <menuitem id="menu_nsp_device_whitelist"
               name="Device Whitelist"

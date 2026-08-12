@@ -20,7 +20,7 @@
                                         <span class="nsp-device-tree__name" t-esc="server.name"/>
                                         <span t-att-class="'nsp-device-tree__dot is-' + server.status"/>
                                     </button>
-                                    <div t-if="editable" class="nsp-device-tree__row-actions">
+                                    <div t-if="topologyEditable" class="nsp-device-tree__row-actions">
                                         <button t-if="canAddController(server)"
                                                 type="button" class="nsp-device-tree__icon-action"
                                                 title="Add Controller" t-on-click="() => this.addController(server)">
@@ -44,7 +44,7 @@
                                                     <span class="nsp-device-tree__name" t-esc="controller.name"/>
                                                     <span t-att-class="'nsp-device-tree__dot is-' + controller.status"/>
                                                 </button>
-                                                <div t-if="editable" class="nsp-device-tree__row-actions">
+                                                <div t-if="topologyEditable" class="nsp-device-tree__row-actions">
                                                     <button type="button" class="nsp-device-tree__icon-action"
                                                             title="Add Reader" t-on-click="() => this.addReader(server, controller)">
                                                         <i class="fa fa-plus"/>
@@ -70,7 +70,7 @@
                                                                 </span>
                                                             </span>
                                                         </button>
-                                                        <div t-if="editable" class="nsp-device-tree__row-actions">
+                                                        <div t-if="topologyEditable" class="nsp-device-tree__row-actions">
                                                             <button type="button" class="nsp-device-tree__icon-action" title="Edit Reader"
                                                                     t-on-click="() => this.editMapping(entry)"><i class="fa fa-pencil"/></button>
                                                             <button type="button" class="nsp-device-tree__icon-action is-danger" title="Remove Reader"
@@ -92,7 +92,7 @@
                         <strong>No Device Tree mapping</strong>
                         <span>Add a Server to start building the hierarchy.</span>
                     </div>
-                    <div t-if="mode === 'parking_lane' &amp;&amp; !tree.length"
+                    <div t-if="(mode === 'parking_lane' || mode === 'lane_setup') &amp;&amp; !tree.length"
                          class="nsp-device-tree__empty">
                         <i class="fa fa-sitemap"/>
                         <strong>No Device Tree mapping</strong>

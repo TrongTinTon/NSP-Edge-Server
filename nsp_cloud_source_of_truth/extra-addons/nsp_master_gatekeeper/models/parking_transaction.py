@@ -25,6 +25,10 @@ class ParkingTransaction(models.Model):
     controller_code = fields.Char(required=True, index=True)
     parking_area_id = fields.Many2one("nsp.parking.area", ondelete="set null", index=True)
     parking_area_code = fields.Char(required=True, index=True)
+    layout_lane_id = fields.Many2one(
+        "nsp.parking.layout.lane", string="Lane Configuration", ondelete="set null", index=True,
+        help="Contextual Lane Configuration from the published Parking Layout used for this event.",
+    )
     lane_id = fields.Many2one("nsp.parking.lane", ondelete="set null", index=True)
     lane_code = fields.Char(required=True, index=True)
     layout_revision = fields.Integer(default=0, readonly=True, index=True)
@@ -168,7 +172,7 @@ class ParkingTransaction(models.Model):
     def _live_monitor_payload(self):
         self.ensure_one()
         area = self.parking_area_id or (
-            self.lane_id.parking_area_id if self.lane_id else False
+            self.layout_lane_id.parking_area_id if self.layout_lane_id else False
         )
         vehicle = self.vehicle_id
         owner = vehicle.owner_id if vehicle else self.env["nsp.user"].browse()
@@ -211,7 +215,8 @@ class ParkingTransaction(models.Model):
         bus = self.env["bus.bus"]
         for transaction in self:
             area = transaction.parking_area_id or (
-                transaction.lane_id.parking_area_id if transaction.lane_id else False
+                transaction.layout_lane_id.parking_area_id
+                if transaction.layout_lane_id else False
             )
             if not area:
                 continue

@@ -10,7 +10,7 @@ class TestFirstAntennaDuration(TransactionCase):
     def test_first_point_is_system_owned_zero_duration(self):
         reader_1 = self.env["nsp.device"].create({"name": "Duration Reader 1"})
         reader_2 = self.env["nsp.device"].create({"name": "Duration Reader 2"})
-        lane = self.env["nsp.parking.lane"].new({
+        lane = self.env["nsp.parking.layout.lane"].new({
             "antenna_sequence_ids": [
                 (0, 0, {
                     "sequence": 10,

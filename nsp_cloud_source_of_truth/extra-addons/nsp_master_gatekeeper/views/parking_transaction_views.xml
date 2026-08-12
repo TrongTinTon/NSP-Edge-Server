@@ -15,6 +15,7 @@
                 <field name="observed_duration_seconds"/>
                 <field name="allowed_duration_seconds"/>
                 <field name="lane_id"/>
+                <field name="layout_lane_id"/>
                 <field name="lane_code"/>
                 <field name="reader_id"/>
                 <field name="vehicle_id"/>
@@ -111,6 +112,7 @@
                             <field name="layout_revision"/>
                             <field name="lane_code"/>
                             <field name="lane_id"/>
+                            <field name="layout_lane_id"/>
                             <field name="sequence_path"/>
                             <field name="observed_duration_seconds"/>
                             <field name="allowed_duration_seconds"/>

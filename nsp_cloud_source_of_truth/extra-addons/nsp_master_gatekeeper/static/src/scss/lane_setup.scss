@@ -357,38 +357,3 @@
         }
     }
 }
-
-/* Lane infrastructure is configured inside Lane Setup, not in Parking Lanes Add a line. */
-.o_nsp_lane_setup_form {
-    .nsp-lane-setup__infrastructure-fields {
-        display: grid;
-        grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr);
-        gap: 16px;
-        width: 100%;
-        max-width: 760px;
-    }
-}
-
-@media (max-width: 900px) {
-    .o_nsp_lane_setup_form {
-        .nsp-lane-setup__infrastructure-fields {
-            grid-template-columns: 1fr;
-        }
-    }
-}
-
-.o_nsp_lane_setup_form {
-    .nsp-lane-setup__infra-field {
-        display: flex;
-        min-width: 0;
-        flex-direction: column;
-        gap: 5px;
-    }
-
-    .nsp-lane-setup__infra-field > label {
-        margin: 0;
-        color: var(--nsp-lane-muted);
-        font-size: 12px;
-        font-weight: 650;
-    }
-}

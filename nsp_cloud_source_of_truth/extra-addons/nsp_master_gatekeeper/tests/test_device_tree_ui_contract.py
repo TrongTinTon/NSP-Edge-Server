@@ -13,8 +13,9 @@ def _read(relative_path):
 class TestDeviceTreeUiContract(TransactionCase):
 
     def test_context_models_expose_device_tree_anchor(self):
-        self.assertIn("device_tree_anchor", self.env["nsp.parking.lane"]._fields)
+        self.assertIn("device_tree_anchor", self.env["nsp.parking.layout.lane"]._fields)
         self.assertIn("device_tree_anchor", self.env["nsp.measurement.session"]._fields)
+        self.assertIn("device_tree_anchor", self.env["nsp.lane.setup.wizard"]._fields)
 
     def test_device_tree_does_not_reintroduce_inventory_ownership(self):
         self.assertNotIn("edge_server_id", self.env["nsp.controller"]._fields)
@@ -44,6 +45,38 @@ class TestDeviceTreeUiContract(TransactionCase):
             self.assertIn(field_name, Node._fields)
 
 
+
+def test_lane_setup_reuses_device_tree_instead_of_reader_table():
+    view = _read("views/lane_setup_wizard_views.xml")
+    js = _read("static/src/js/device_tree_view.js")
+
+    assert 'widget="nsp_device_tree_view"' in view
+    assert '<field name="device_line_ids" invisible="1">' in view
+    assert 'return "lane_setup";' in js
+    assert 'this.props.record?.data?.device_line_ids || null' in js
+    assert 'this.props.record?.data?.source_scope !== "calibration"' in js
+
+
+def test_lane_setup_calibration_scope_is_branch_specific():
+    wizard = _read("wizards/lane_setup.py")
+    timeline = _read("models/lane_calibration/calibration_timeline.py")
+
+    assert "def _calibration_branch_nodes" in wizard
+    assert "node.parent_id == controller_node" in wizard
+    assert "for node in reader_nodes" in wizard
+    assert "lambda node: node.parent_id == controller_node" in timeline
+    assert "self._reader_nodes():" not in timeline[timeline.index("def action_open_lane_setup"):timeline.index("def action_open_lane_direction_setup")]
+
+
+def test_parking_layout_lane_form_keeps_same_device_tree_component():
+    view = _read("views/parking_lane_views.xml")
+    js = _read("static/src/js/device_tree_view.js")
+
+    assert 'widget="nsp_device_tree_view"' in view
+    assert 'model === "nsp.parking.layout.lane"' in js
+    assert 'return "parking_lane";' in js
+    assert 'this.mode === "parking_lane" || this.mode === "lane_setup"' in js
+
 def test_calibration_tree_crud_is_direct_orm_not_hidden_x2many():
     js = _read("static/src/js/device_tree_view.js")
     view = _read("views/measurement_session_views.xml")
@@ -55,7 +88,7 @@ def test_calibration_tree_crud_is_direct_orm_not_hidden_x2many():
     assert "serverScopeList" not in js
     assert "controllerScopeList" not in js
     assert "reader_line_ids" not in js
-    assert "list.addNewRecord" not in js[js.index("async _createCalibrationNode"):js.index("async _createParkingReader")]
+    assert "list.addNewRecord" not in js[js.index("async _createCalibrationNode"):js.index("async _createFlatReader")]
     assert '<field name="device_node_ids" invisible="1">' not in view
 
 
@@ -72,7 +105,7 @@ def test_lane_calibration_keeps_original_nested_add_buttons():
     assert "Unassigned Readers" not in xml
 
     add_controller = js[js.index("async addController(") : js.index("async addReader(")]
-    add_reader = js[js.index("async addReader(") : js.index("async _createParkingReader")]
+    add_reader = js[js.index("async addReader(") : js.index("async _createFlatReader")]
     assert '_createCalibrationNode("controller", controller.id, server.nodeId)' in add_controller
     assert '_createCalibrationNode("reader", reader.id, controller.nodeId)' in add_reader
 

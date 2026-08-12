@@ -20,7 +20,7 @@ class NspEdgeServer(models.Model):
     """Independent Server identity.
 
     Deployment topology is intentionally not stored on the Server master. Server,
-    Controller and Reader are associated only by Lane Calibration or Parking Lane
+    Controller and Reader are associated only by Lane Calibration or Lane Configuration
     configuration records.
     """
 

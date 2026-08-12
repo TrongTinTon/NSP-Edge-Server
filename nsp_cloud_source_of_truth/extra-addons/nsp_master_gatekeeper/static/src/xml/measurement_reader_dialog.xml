@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <templates xml:space="preserve">
     <!--
-        Parking Lane still uses Odoo's native x2many dialog lifecycle. Lane
+        Lane Configuration still uses Odoo's native x2many dialog lifecycle. Lane
         Calibration Device Tree no longer uses x2many dialogs; it persists
         contextual device nodes directly through ORM.
     -->
@@ -9,11 +9,11 @@
        t-inherit="web.X2ManyFieldDialogDefaultButtons"
        t-inherit-mode="extension">
         <xpath expr="//t[@t-if='canCreate']/button[contains(@class, 'o_form_button_save_new')]" position="attributes">
-            <attribute name="t-if">record.resModel !== 'nsp.parking.lane'</attribute>
+            <attribute name="t-if">record.resModel !== 'nsp.parking.layout.lane'</attribute>
         </xpath>
         <xpath expr="//t[@t-if='canCreate']/button[contains(@class, 'o_form_button_save') and not(contains(@class, 'o_form_button_save_new'))]" position="replace">
             <button class="btn btn-primary o_form_button_save" t-on-click="save" data-hotkey="c">
-                <t t-if="record.resModel === 'nsp.parking.lane'">Save</t>
+                <t t-if="record.resModel === 'nsp.parking.layout.lane'">Save</t>
                 <t t-else="">Save &amp; Close</t>
             </button>
         </xpath>

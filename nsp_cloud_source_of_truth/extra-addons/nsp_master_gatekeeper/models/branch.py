@@ -28,6 +28,8 @@ class NspBranch(models.Model):
     note = fields.Text(string="Note")
     parking_area_ids = fields.One2many("nsp.parking.area", "branch_id", string="Parking Areas", readonly=True)
     parking_area_count = fields.Integer(string="Parking Areas", compute="_compute_parking_area_count")
+    lane_ids = fields.One2many("nsp.parking.lane", "branch_id", string="Lanes", readonly=True)
+    lane_count = fields.Integer(string="Lanes", compute="_compute_lane_count")
 
     _sql_constraints = [
         ("code_unique", "unique(code)", "Branch Code must be unique."),
@@ -37,6 +39,11 @@ class NspBranch(models.Model):
     def _compute_parking_area_count(self):
         for rec in self:
             rec.parking_area_count = len(rec.parking_area_ids)
+
+    @api.depends("lane_ids")
+    def _compute_lane_count(self):
+        for rec in self:
+            rec.lane_count = len(rec.lane_ids)
 
     @api.model
     def _normalize_code(self, value):

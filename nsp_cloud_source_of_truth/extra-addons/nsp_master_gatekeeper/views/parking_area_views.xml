@@ -28,7 +28,7 @@
         <field name="state" widget="badge" decoration-success="state == 'operational'" decoration-warning="state in ('draft','maintenance')" decoration-danger="state == 'blocked'"/>
         <field name="name" string="Layout" decoration-bf="1"/>
         <field name="branch_id" string="Branch"/>
-        <field name="lane_count" string="Lanes"/>
+        <field name="lane_count" string="Lane Configurations"/>
         <field name="ready_lane_count" string="Ready"/>
         <field name="incomplete_lane_count" string="Attention"/>
         <field name="configuration_state" string="Readiness" widget="badge" decoration-success="configuration_state == 'ready'" decoration-warning="configuration_state == 'incomplete'" decoration-muted="configuration_state == 'empty'"/>
@@ -70,7 +70,7 @@
           <div class="nsp-parking-layout-summary row g-3 mb-4">
             <div class="col-12 col-md-6 col-xl-4">
               <div class="nsp-parking-layout-card">
-                <div class="nsp-parking-layout-card__label">LANES</div>
+                <div class="nsp-parking-layout-card__label">LANE CONFIGURATIONS</div>
                 <div class="nsp-parking-layout-card__value"><field name="lane_count" readonly="1" nolabel="1"/></div>
                 <div class="nsp-parking-layout-card__meta">
                   <field name="ready_lane_count" readonly="1" nolabel="1"/> ready ·
@@ -111,20 +111,23 @@
 
           <div class="nsp-parking-layout__lanes-header">
             <div>
-              <h3>Parking Lanes</h3>
-              <p class="text-muted mb-0">Add or open a Lane to manage its contextual NSP Device Tree, Reader configuration and Antenna Sequence.</p>
+              <h3>Lane Configurations</h3>
+              <p class="text-muted mb-0">Select a Lane master and configure its Device Tree, Reader settings and Antenna Sequence for this Parking Layout only.</p>
             </div>
           </div>
           <div class="alert alert-info" role="alert" invisible="state != 'draft' or not is_published">
             You are editing a new draft. The last published revision remains active on Edge until this layout is published again.
           </div>
-          <field name="lane_ids"
+          <field name="layout_lane_ids"
                  mode="list,form"
                  readonly="state != 'draft'"
-                 context="{'default_parking_area_id': id, 'default_name': False, 'default_setup_state': 'applied', 'lane_configuration_form': True, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_parking_lane_form'}">
+                 context="{'default_parking_area_id': id, 'default_branch_id': branch_id, 'default_setup_state': 'applied', 'lane_configuration_form': True, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_parking_layout_lane_form'}">
             <list create="1" edit="1" delete="1" decoration-muted="not active">
+              <control>
+                <create string="Add Lane"/>
+              </control>
               <field name="parking_area_state" column_invisible="1"/>
-              <field name="name" string="Lane" decoration-bf="1"/>
+              <field name="lane_id" string="Lane" decoration-bf="1"/>
               <field name="sequence_point_count" string="Sequence Points" readonly="1"/>
               <field name="reader_config_count" string="Readers" readonly="1"/>
               <field name="setup_state"

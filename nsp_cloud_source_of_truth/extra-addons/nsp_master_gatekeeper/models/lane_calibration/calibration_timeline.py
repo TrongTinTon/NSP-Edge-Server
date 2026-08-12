@@ -219,11 +219,25 @@ class NspMeasurementSessionTimeline(models.Model):
         selected, edge_server_id, controller_id = self._configuration_steps_from_selection(
             ordered_event_ids
         )
-        # Device Configuration is seeded from the complete Lane Calibration
-        # infrastructure scope. The Antenna Sequence is seeded from observed
-        # Detection Timeline order and remains editable inside that calibrated scope.
+        # Device Configuration is projected from the exact Server -> Controller
+        # branch used by the selected Detection Timeline path. The Antenna Sequence
+        # remains editable, but it cannot escape that calibrated branch.
+        server_node = self._server_nodes().filtered(
+            lambda node: node.server_id.id == edge_server_id
+        )[:1]
+        controller_node = self._controller_nodes().filtered(
+            lambda node: node.controller_id.id == controller_id
+            and node.parent_id == server_node
+        )[:1]
+        if not server_node or not controller_node:
+            raise ValidationError(_(
+                "The selected Detection Timeline rows do not resolve to a valid Device Configuration branch."
+            ))
+
         reader_defaults = {}
-        for reader_node in self._reader_nodes():
+        for reader_node in self._reader_nodes().filtered(
+            lambda node: node.parent_id == controller_node
+        ):
             reader_defaults[reader_node.reader_id.id] = {
                 "reader_id": reader_node.reader_id.id,
                 "reader_power_dbm": int(reader_node.power_dbm or 0),
@@ -232,10 +246,13 @@ class NspMeasurementSessionTimeline(models.Model):
                 "tid_length": int(reader_node.tid_len or 4),
             }
 
+        draft_layouts = self.env["nsp.parking.area"].search([("state", "=", "draft")], limit=2)
+        default_layout = draft_layouts[:1] if len(draft_layouts) == 1 else self.env["nsp.parking.area"].browse()
 
         wizard = self.env["nsp.lane.setup.wizard"].create({
             "source_scope": "calibration",
             "session_id": self.id,
+            "parking_area_id": default_layout.id if default_layout else False,
             "edge_server_id": edge_server_id,
             "controller_id": controller_id,
             "device_line_ids": [

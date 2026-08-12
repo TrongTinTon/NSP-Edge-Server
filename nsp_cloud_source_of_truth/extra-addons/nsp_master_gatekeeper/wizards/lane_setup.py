@@ -28,21 +28,26 @@ class NspLaneSetupWizard(models.TransientModel):
     controller_id = fields.Many2one(
         "nsp.controller", string="Controller", required=True
     )
-    available_edge_server_ids = fields.Many2many(
-        "nsp.edge.server",
-        compute="_compute_available_infrastructure",
-        string="Available Servers",
+    parking_area_id = fields.Many2one(
+        "nsp.parking.area",
+        string="Parking Layout",
+        domain=[("state", "=", "draft")],
+        help="Draft Parking Layout that will reference the selected independent Lane.",
     )
-    available_controller_ids = fields.Many2many(
-        "nsp.controller",
-        compute="_compute_available_infrastructure",
-        string="Available Controllers",
+    parking_area_branch_id = fields.Many2one(
+        "nsp.branch", related="parking_area_id.branch_id", readonly=True,
     )
     lane_id = fields.Many2one(
         "nsp.parking.lane",
         string="Lane",
-        ondelete="cascade",
-        help="Select an existing Lane or type a name to quick-create one.",
+        ondelete="set null",
+        help="Independent Lane master. Parking Layout configuration is stored separately.",
+    )
+    layout_lane_id = fields.Many2one(
+        "nsp.parking.layout.lane",
+        string="Lane Configuration",
+        ondelete="set null",
+        readonly=True,
     )
     active_section = fields.Selection(
         [
@@ -55,6 +60,12 @@ class NspLaneSetupWizard(models.TransientModel):
     )
     device_line_ids = fields.One2many(
         "nsp.lane.setup.device.line", "wizard_id", string="Device Configuration"
+    )
+    device_tree_anchor = fields.Boolean(
+        string="Device Configuration",
+        default=True,
+        readonly=True,
+        help="Presentation anchor for the reusable NSP Device Configuration Tree.",
     )
     sequence_line_ids = fields.One2many(
         "nsp.lane.setup.sequence.line", "wizard_id", string="Antenna Sequence"
@@ -71,67 +82,90 @@ class NspLaneSetupWizard(models.TransientModel):
         help="Presentation-only anchor for the live Antenna Sequence preview widget.",
     )
 
-    @api.depends("source_scope")
-    def _compute_available_infrastructure(self):
-        """Expose independent Server and Controller identities.
-
-        Master inventory never encodes Server -> Controller ownership. Calibration
-        pins both identities from its contextual assembly; Parking Layout may choose
-        any active whitelisted Server and Controller independently.
-        """
-        Edge = self.env["nsp.edge.server"]
-        Controller = self.env["nsp.controller"]
-        active_edges = Edge.search([
-            ("active", "=", True),
-            ("whitelist_id.active", "=", True),
-            ("whitelist_id.device_type_code", "=", "SERVER"),
-        ])
-        active_controllers = Controller.search([
-            ("active", "=", True),
-            ("whitelist_id.active", "=", True),
-            ("whitelist_id.device_type_code", "=", "CONTROLLER"),
-        ])
+    @api.onchange("parking_area_id")
+    def _onchange_parking_area_id(self):
         for wizard in self:
-            if wizard.source_scope == "calibration":
-                wizard.available_edge_server_ids = wizard.edge_server_id
-                wizard.available_controller_ids = wizard.controller_id
-                continue
-            wizard.available_edge_server_ids = active_edges
-            wizard.available_controller_ids = active_controllers
+            if (
+                wizard.lane_id
+                and wizard.parking_area_id
+                and wizard.lane_id.branch_id != wizard.parking_area_id.branch_id
+            ):
+                wizard.lane_id = False
+                wizard.layout_lane_id = False
+            elif wizard.layout_lane_id and wizard.layout_lane_id.parking_area_id != wizard.parking_area_id:
+                wizard.layout_lane_id = False
+
+    @api.onchange("lane_id")
+    def _onchange_lane_id(self):
+        for wizard in self:
+            if (
+                wizard.lane_id and wizard.parking_area_id
+                and wizard.lane_id.branch_id != wizard.parking_area_id.branch_id
+            ):
+                wizard.lane_id = False
+                wizard.layout_lane_id = False
+            elif wizard.layout_lane_id and wizard.layout_lane_id.lane_id != wizard.lane_id:
+                wizard.layout_lane_id = False
+
+    def _calibration_branch_nodes(self):
+        """Return the contextual Server, Controller and Reader nodes for this Lane.
+
+        Lane Calibration may contain many independent branches.  Lane Setup owns
+        exactly one physical Lane, so its Device Configuration must be projected
+        from the Server -> Controller branch selected by the Detection Timeline.
+        """
+        self.ensure_one()
+        if (
+            self.source_scope != "calibration"
+            or not self.session_id
+            or not self.edge_server_id
+            or not self.controller_id
+        ):
+            Node = self.env["nsp.measurement.device.node"]
+            return Node.browse(), Node.browse(), Node.browse()
+
+        server_node = self.session_id._server_nodes().filtered(
+            lambda node: node.server_id == self.edge_server_id
+        )[:1]
+        controller_node = self.session_id._controller_nodes().filtered(
+            lambda node: node.controller_id == self.controller_id
+            and node.parent_id == server_node
+        )[:1]
+        reader_nodes = self.session_id._reader_nodes().filtered(
+            lambda node: node.parent_id == controller_node
+        ) if controller_node else self.env["nsp.measurement.device.node"].browse()
+        return server_node, controller_node, reader_nodes
 
     @api.depends(
         "source_scope",
         "session_id",
+        "edge_server_id",
+        "controller_id",
+        "session_id.device_node_ids.parent_id",
         "session_id.device_node_ids.reader_id",
         "session_id.device_node_ids.reader_id.active",
     )
     def _compute_available_reader_ids(self):
-        """Resolve Reader scope without making Reader a Lane Controller child.
-
-        Parking Layout setup exposes the active Reader inventory directly. Reader
-        ownership by a physical Controller remains acquisition metadata and is not a
-        UI selection dependency. Calibration setup remains restricted to Readers
-        observed in that Calibration session.
-        """
+        """Expose Readers from the selected Calibration branch or active inventory."""
         active_readers = self.env["nsp.device"].search([("active", "=", True)])
         for wizard in self:
             if wizard.source_scope == "calibration" and wizard.session_id:
-                wizard.available_reader_ids = wizard.session_id._reader_nodes().mapped(
-                    "reader_id"
-                ).filtered("active")
+                _server, _controller, reader_nodes = wizard._calibration_branch_nodes()
+                wizard.available_reader_ids = reader_nodes.mapped("reader_id").filtered(
+                    "active"
+                )
                 continue
             wizard.available_reader_ids = active_readers
 
     def _allowed_reader_port_pairs(self):
-        """Return Calibration Reader/Port scope or ``None`` when unrestricted."""
+        """Return Reader/Port scope for the selected Calibration branch."""
         self.ensure_one()
         if self.source_scope != "calibration":
             return None
-        if not self.session_id:
-            return set()
+        _server, _controller, reader_nodes = self._calibration_branch_nodes()
         return {
             (node.reader_id.id, int(port.port_no or 0))
-            for node in self.session_id._reader_nodes()
+            for node in reader_nodes
             for port in node.reader_port_ids
             if node.reader_id and int(port.port_no or 0) > 0
         }
@@ -193,6 +227,15 @@ class NspLaneSetupDeviceLine(models.TransientModel):
         "nsp.lane.setup.wizard", required=True, ondelete="cascade", index=True
     )
     reader_id = fields.Many2one("nsp.device", string="Reader", required=True)
+    reader_name = fields.Char(
+        related="reader_id.name", string="Reader Name", readonly=True
+    )
+    reader_serial_number = fields.Char(
+        related="reader_id.serial_number", string="Serial", readonly=True
+    )
+    reader_status = fields.Selection(
+        related="reader_id.status", string="Status", readonly=True
+    )
     port_summary = fields.Char(string="Antennas", compute="_compute_port_summary")
     power_dbm = fields.Integer(string="Power (dBm)", required=True, default=30)
     read_interval_ms = fields.Integer(

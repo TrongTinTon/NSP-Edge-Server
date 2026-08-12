@@ -45,10 +45,10 @@ export class NspDeviceTreeView extends Component {
         this.dialog = useService("dialog");
         this.orm = useService("orm");
 
-        // Parking Lane still owns an editable x2many. Lane Calibration does not:
-        // its Device Tree is persisted directly through nsp.measurement.device.node.
-        const { removeRecord } = useX2ManyCrud(() => this.parkingReaderList, false);
-        this.removeParkingReaderRecord = removeRecord;
+        // Lane Calibration persists nodes directly. Lane Setup and Lane Configuration use
+        // their own contextual Reader x2many while sharing this exact Tree UI.
+        const { removeRecord } = useX2ManyCrud(() => this.flatReaderList, false);
+        this.removeFlatReaderRecord = removeRecord;
 
         this.state = useState({
             selectedKey: null,
@@ -89,8 +89,11 @@ export class NspDeviceTreeView extends Component {
 
     get mode() {
         const model = this.props.record?.resModel;
-        if (model === "nsp.parking.lane") {
+        if (model === "nsp.parking.layout.lane") {
             return "parking_lane";
+        }
+        if (model === "nsp.lane.setup.wizard") {
+            return "lane_setup";
         }
         if (model === "nsp.measurement.session") {
             return "lane_calibration";
@@ -103,16 +106,33 @@ export class NspDeviceTreeView extends Component {
         if (this.mode === "parking_lane") {
             return !data.parking_area_state || data.parking_area_state === "draft";
         }
+        if (this.mode === "lane_setup") {
+            return true;
+        }
         if (this.mode === "lane_calibration") {
             return Boolean(data.device_configuration_editable);
         }
         return false;
     }
 
-    get parkingReaderList() {
-        return this.mode === "parking_lane"
-            ? this.props.record?.data?.reader_config_ids || null
-            : null;
+    get flatReaderList() {
+        if (this.mode === "parking_lane") {
+            return this.props.record?.data?.reader_config_ids || null;
+        }
+        if (this.mode === "lane_setup") {
+            return this.props.record?.data?.device_line_ids || null;
+        }
+        return null;
+    }
+
+    get topologyEditable() {
+        if (!this.editable) {
+            return false;
+        }
+        if (this.mode === "lane_setup") {
+            return this.props.record?.data?.source_scope !== "calibration";
+        }
+        return true;
     }
 
     _status(value) {
@@ -331,9 +351,9 @@ export class NspDeviceTreeView extends Component {
         };
     }
 
-    _parkingLaneEntries() {
+    _flatLaneEntries() {
         const data = this.props.record?.data || {};
-        const lines = data.reader_config_ids?.records || [];
+        const lines = this.flatReaderList?.records || [];
         const serverId = many2oneId(data.edge_server_id);
         const controllerId = many2oneId(data.controller_id);
         const server = {
@@ -360,12 +380,12 @@ export class NspDeviceTreeView extends Component {
             const lineData = line.data || {};
             const readerId = many2oneId(lineData.reader_id);
             return {
-                key: `lane-reader-${line.resId || line.id || index}`,
+                key: `${this.mode}-reader-${line.resId || line.id || index}`,
                 record: line,
                 server,
                 controller,
                 reader: {
-                    key: `lane-reader-master-${readerId || index}`,
+                    key: `${this.mode}-reader-master-${readerId || index}`,
                     id: readerId,
                     name: this._masterName(
                         "reader",
@@ -387,8 +407,8 @@ export class NspDeviceTreeView extends Component {
     }
 
     get entries() {
-        if (this.mode === "parking_lane") {
-            return this._parkingLaneEntries();
+        if (this.mode === "parking_lane" || this.mode === "lane_setup") {
+            return this._flatLaneEntries();
         }
         if (this.mode === "lane_calibration") {
             return this.calibrationNodes
@@ -400,8 +420,8 @@ export class NspDeviceTreeView extends Component {
     }
 
     get tree() {
-        if (this.mode === "parking_lane") {
-            return this._parkingTree();
+        if (this.mode === "parking_lane" || this.mode === "lane_setup") {
+            return this._flatLaneTree();
         }
         if (this.mode === "lane_calibration") {
             return this._calibrationTree();
@@ -409,7 +429,7 @@ export class NspDeviceTreeView extends Component {
         return [];
     }
 
-    _parkingTree() {
+    _flatLaneTree() {
         const data = this.props.record?.data || {};
         const serverId = many2oneId(data.edge_server_id);
         if (!serverId) {
@@ -459,7 +479,7 @@ export class NspDeviceTreeView extends Component {
     }
 
     get canAddServer() {
-        if (!this.editable) {
+        if (!this.topologyEditable) {
             return false;
         }
         if (this.mode === "lane_calibration") {
@@ -469,7 +489,7 @@ export class NspDeviceTreeView extends Component {
     }
 
     canAddController(server) {
-        if (!this.editable || !server) {
+        if (!this.topologyEditable || !server) {
             return false;
         }
         if (this.mode === "lane_calibration") {
@@ -635,13 +655,13 @@ export class NspDeviceTreeView extends Component {
     }
 
     async addServer() {
-        if (!this.canAddServer) {
+        if (!this.topologyEditable || !this.canAddServer) {
             return;
         }
         this._openServerSearch({
             title: "Add Server",
             onSelected: async (server) => {
-                if (this.mode === "parking_lane") {
+                if (this.mode !== "lane_calibration") {
                     await this.props.record.update({ edge_server_id: toMany2one(server) });
                     return;
                 }
@@ -652,7 +672,7 @@ export class NspDeviceTreeView extends Component {
     }
 
     async addController(server = null) {
-        if (!this.editable || !server) {
+        if (!this.topologyEditable || !server) {
             return;
         }
         if (this.mode === "lane_calibration" && !server.nodeId) {
@@ -661,7 +681,7 @@ export class NspDeviceTreeView extends Component {
         this._openControllerSearch({
             title: "Add Controller",
             onSelected: async (controller) => {
-                if (this.mode === "parking_lane") {
+                if (this.mode !== "lane_calibration") {
                     await this.props.record.update({ controller_id: toMany2one(controller) });
                     return;
                 }
@@ -672,13 +692,13 @@ export class NspDeviceTreeView extends Component {
     }
 
     async addReader(server = null, controller = null) {
-        if (!this.editable || !controller) {
+        if (!this.topologyEditable || !controller) {
             return;
         }
         if (this.mode === "lane_calibration" && !controller.nodeId) {
             return;
         }
-        if (this.mode === "parking_lane" && (!server || !this.parkingReaderList)) {
+        if (this.mode !== "lane_calibration" && (!server || !this.flatReaderList)) {
             return;
         }
         this._openReaderSearch({
@@ -690,13 +710,13 @@ export class NspDeviceTreeView extends Component {
                     this.state.selectedKey = `cal-node-${nodeId}`;
                     return;
                 }
-                await this._createParkingReader({ server, controller, reader });
+                await this._createFlatReader({ server, controller, reader });
             },
         });
     }
 
-    async _createParkingReader({ server, controller, reader }) {
-        const list = this.parkingReaderList;
+    async _createFlatReader({ server, controller, reader }) {
+        const list = this.flatReaderList;
         if (!list) {
             return;
         }
@@ -715,14 +735,14 @@ export class NspDeviceTreeView extends Component {
     }
 
     async editServer(server) {
-        if (!server || !this.editable) {
+        if (!server || !this.topologyEditable) {
             return;
         }
         this._openServerSearch({
             title: "Edit Server",
             exceptNodeId: server.nodeId,
             onSelected: async (selection) => {
-                if (this.mode === "parking_lane") {
+                if (this.mode !== "lane_calibration") {
                     await this.props.record.update({ edge_server_id: toMany2one(selection) });
                     return;
                 }
@@ -736,14 +756,14 @@ export class NspDeviceTreeView extends Component {
     }
 
     async editController(server, controller) {
-        if (!controller || !this.editable) {
+        if (!controller || !this.topologyEditable) {
             return;
         }
         this._openControllerSearch({
             title: "Edit Controller",
             exceptNodeId: controller.nodeId,
             onSelected: async (selection) => {
-                if (this.mode === "parking_lane") {
+                if (this.mode !== "lane_calibration") {
                     await this.props.record.update({ controller_id: toMany2one(selection) });
                     return;
                 }
@@ -757,14 +777,14 @@ export class NspDeviceTreeView extends Component {
     }
 
     async editMapping(entry) {
-        if (!entry || !this.editable) {
+        if (!entry || !this.topologyEditable) {
             return;
         }
         this._openReaderSearch({
             title: "Edit Reader",
             exceptNodeId: entry.nodeId,
             onSelected: async (reader) => {
-                if (this.mode === "parking_lane") {
+                if (this.mode !== "lane_calibration") {
                     await entry.record.update({ reader_id: toMany2one(reader) });
                     await this.refreshOperationalStatuses();
                     return;
@@ -780,7 +800,7 @@ export class NspDeviceTreeView extends Component {
     }
 
     deleteServer(server) {
-        if (!server || !this.editable) {
+        if (!server || !this.topologyEditable) {
             return;
         }
         const body = `Remove ${server.name} and its contextual child mappings from this Device Tree?`;
@@ -795,7 +815,7 @@ export class NspDeviceTreeView extends Component {
                     this._clearSelectionIfMissing();
                 } else {
                     const records = this.entries.map((entry) => entry.record);
-                    await Promise.all(records.map((record) => this.removeParkingReaderRecord(record)));
+                    await Promise.all(records.map((record) => this.removeFlatReaderRecord(record)));
                     await this.props.record.update({ edge_server_id: false, controller_id: false });
                     this.state.selectedKey = null;
                 }
@@ -804,7 +824,7 @@ export class NspDeviceTreeView extends Component {
     }
 
     deleteController(server, controller) {
-        if (!controller || !this.editable) {
+        if (!controller || !this.topologyEditable) {
             return;
         }
         const body = `Remove ${controller.name} and its contextual Reader mappings from this Device Tree?`;
@@ -819,7 +839,7 @@ export class NspDeviceTreeView extends Component {
                     this._clearSelectionIfMissing();
                 } else {
                     const records = this.entries.map((entry) => entry.record);
-                    await Promise.all(records.map((record) => this.removeParkingReaderRecord(record)));
+                    await Promise.all(records.map((record) => this.removeFlatReaderRecord(record)));
                     await this.props.record.update({ controller_id: false });
                     this.state.selectedKey = null;
                 }
@@ -828,7 +848,7 @@ export class NspDeviceTreeView extends Component {
     }
 
     deleteMapping(entry) {
-        if (!entry || !this.editable) {
+        if (!entry || !this.topologyEditable) {
             return;
         }
         this.dialog.add(ConfirmationDialog, {
@@ -840,7 +860,7 @@ export class NspDeviceTreeView extends Component {
                     await this.orm.unlink("nsp.measurement.device.node", [entry.nodeId]);
                     await this.refreshCalibrationTree();
                 } else {
-                    await this.removeParkingReaderRecord(entry.record);
+                    await this.removeFlatReaderRecord(entry.record);
                 }
                 this.state.selectedKey = null;
                 this.cancelEdit();
@@ -990,7 +1010,7 @@ export class NspDeviceTreeView extends Component {
 
     _configurationValuesFromDraft() {
         const draft = this.state.draft;
-        if (this.mode === "parking_lane") {
+        if (this.mode === "parking_lane" || this.mode === "lane_setup") {
             return {
                 power_dbm: Number(draft.power),
                 read_interval_ms: Number(draft.interval),
@@ -1076,7 +1096,7 @@ export class NspDeviceTreeView extends Component {
         const readerIds = new Set();
         const data = this.props.record?.data || {};
 
-        if (this.mode === "parking_lane") {
+        if (this.mode === "parking_lane" || this.mode === "lane_setup") {
             const serverId = many2oneId(data.edge_server_id);
             const controllerId = many2oneId(data.controller_id);
             if (serverId) {
@@ -1085,7 +1105,7 @@ export class NspDeviceTreeView extends Component {
             if (controllerId) {
                 controllerIds.add(controllerId);
             }
-            for (const entry of this._parkingLaneEntries()) {
+            for (const entry of this._flatLaneEntries()) {
                 if (entry.reader.id) {
                     readerIds.add(Number(entry.reader.id));
                 }
