@@ -66,12 +66,20 @@ export class NspDeviceTreeView extends Component {
             calibrationNodes: [],
             calibrationPorts: [],
             calibrationLoaded: false,
+            parkingReaderRows: [],
+            parkingReadersLoaded: false,
+            laneSetupReaderRows: [],
+            laneSetupReadersLoaded: false,
         });
         this.statusRefreshTimer = null;
 
         onMounted(async () => {
             if (this.mode === "lane_calibration") {
                 await this.refreshCalibrationTree();
+            } else if (this.mode === "parking_lane") {
+                await this.refreshParkingLaneReaders();
+            } else if (this.mode === "lane_setup") {
+                await this.refreshLaneSetupReaders();
             }
             await this.refreshOperationalStatuses();
             this.statusRefreshTimer = setInterval(() => {
@@ -351,9 +359,90 @@ export class NspDeviceTreeView extends Component {
         };
     }
 
+    async refreshLaneSetupReaders() {
+        if (this.mode !== "lane_setup") {
+            return;
+        }
+        const wizardId = Number(this.props.record?.resId || 0);
+        if (!wizardId) {
+            this.state.laneSetupReaderRows = [];
+            this.state.laneSetupReadersLoaded = true;
+            return;
+        }
+        try {
+            this.state.laneSetupReaderRows = await this.orm.searchRead(
+                "nsp.lane.setup.device.line",
+                [["wizard_id", "=", wizardId]],
+                [
+                    "reader_id",
+                    "reader_name",
+                    "reader_serial_number",
+                    "reader_status",
+                    "port_summary",
+                    "power_dbm",
+                    "read_interval_ms",
+                    "tid_start_address",
+                    "tid_length",
+                ],
+                { order: "reader_id,id" }
+            );
+            this.state.laneSetupReadersLoaded = true;
+        } catch (error) {
+            this.state.laneSetupReadersLoaded = true;
+            this.notification.add(error?.message || "Unable to load Lane Setup Reader Configuration.", {
+                title: "Device Configuration",
+                type: "danger",
+            });
+        }
+    }
+
+    async refreshParkingLaneReaders() {
+        if (this.mode !== "parking_lane") {
+            return;
+        }
+        const layoutLaneId = Number(this.props.record?.resId || 0);
+        if (!layoutLaneId) {
+            this.state.parkingReaderRows = [];
+            this.state.parkingReadersLoaded = true;
+            return;
+        }
+        try {
+            this.state.parkingReaderRows = await this.orm.searchRead(
+                "nsp.parking.layout.lane.reader.config",
+                [["layout_lane_id", "=", layoutLaneId]],
+                [
+                    "reader_id",
+                    "reader_name",
+                    "reader_serial_number",
+                    "reader_status",
+                    "port_summary",
+                    "power_dbm",
+                    "read_interval_ms",
+                    "tid_start_address",
+                    "tid_length",
+                ],
+                { order: "reader_id,id" }
+            );
+            this.state.parkingReadersLoaded = true;
+        } catch (error) {
+            this.state.parkingReadersLoaded = true;
+            this.notification.add(error?.message || "Unable to load Reader Configuration.", {
+                title: "Device Configuration",
+                type: "danger",
+            });
+        }
+    }
+
     _flatLaneEntries() {
         const data = this.props.record?.data || {};
-        const lines = this.flatReaderList?.records || [];
+        const x2manyLines = this.flatReaderList?.records || [];
+        const usingParkingOrmRows = this.mode === "parking_lane" && this.state.parkingReadersLoaded;
+        const usingLaneSetupOrmRows = this.mode === "lane_setup" && this.state.laneSetupReadersLoaded;
+        const lines = usingParkingOrmRows
+            ? this.state.parkingReaderRows
+            : usingLaneSetupOrmRows
+                ? this.state.laneSetupReaderRows
+                : x2manyLines;
         const serverId = many2oneId(data.edge_server_id);
         const controllerId = many2oneId(data.controller_id);
         const server = {
@@ -377,11 +466,17 @@ export class NspDeviceTreeView extends Component {
             status: this._statusFor("controller", controllerId, data.controller_status),
         };
         return lines.map((line, index) => {
-            const lineData = line.data || {};
+            const isOrmRow = (usingParkingOrmRows || usingLaneSetupOrmRows) && !line.data;
+            const lineData = isOrmRow ? line : (line.data || {});
+            const configId = Number(isOrmRow ? line.id : (line.resId || 0)) || false;
+            const record = isOrmRow
+                ? x2manyLines.find((candidate) => Number(candidate.resId || 0) === configId) || null
+                : line;
             const readerId = many2oneId(lineData.reader_id);
             return {
-                key: `${this.mode}-reader-${line.resId || line.id || index}`,
-                record: line,
+                key: `${this.mode}-reader-${configId || line.id || index}`,
+                configId,
+                record,
                 server,
                 controller,
                 reader: {
@@ -588,6 +683,18 @@ export class NspDeviceTreeView extends Component {
 
     _existingMasterIds(deviceType, exceptNodeId = false) {
         if (this.mode !== "lane_calibration") {
+            if (deviceType === "server") {
+                return [many2oneId(this.props.record?.data?.edge_server_id)].filter(Boolean);
+            }
+            if (deviceType === "controller") {
+                return [many2oneId(this.props.record?.data?.controller_id)].filter(Boolean);
+            }
+            if (deviceType === "reader") {
+                return this.entries
+                    .filter((entry) => Number(entry.configId || entry.record?.resId || 0) !== Number(exceptNodeId || 0))
+                    .map((entry) => Number(entry.reader.id || 0))
+                    .filter(Boolean);
+            }
             return [];
         }
         return this.calibrationNodes
@@ -730,8 +837,23 @@ export class NspDeviceTreeView extends Component {
             position: "bottom",
         });
         await line.update({ reader_id: toMany2one(reader) });
-        this.state.selectedKey = `lane-reader-${line.resId || line.id}`;
+
+        // Lane Setup and Lane Configuration must not keep a Reader as a browser-only
+        // virtual x2many row. Persist the parent immediately so reload/reopen keeps it.
+        const saved = await this.props.record.save();
+        if (!saved) {
+            throw new Error("Unable to persist Reader Configuration.");
+        }
+        if (this.mode === "parking_lane") {
+            await this.refreshParkingLaneReaders();
+        } else if (this.mode === "lane_setup") {
+            await this.refreshLaneSetupReaders();
+        }
         await this.refreshOperationalStatuses();
+        this.state.expanded = { ...this.state.expanded, [controller.key]: true };
+        const persisted = this.entries.find((entry) => entry.reader.id === Number(reader.id));
+        this.state.selectedKey = persisted?.key || `${this.mode}-reader-${line.resId || line.id}`;
+        this.state.configState = "Saved";
     }
 
     async editServer(server) {
@@ -784,6 +906,24 @@ export class NspDeviceTreeView extends Component {
             title: "Edit Reader",
             exceptNodeId: entry.nodeId,
             onSelected: async (reader) => {
+                if (this.mode === "parking_lane" && entry.configId) {
+                    await this.orm.write("nsp.parking.layout.lane.reader.config", [entry.configId], {
+                        reader_id: reader.id,
+                    });
+                    await this.refreshParkingLaneReaders();
+                    await this.refreshOperationalStatuses();
+                    this.state.selectedKey = `parking_lane-reader-${entry.configId}`;
+                    return;
+                }
+                if (this.mode === "lane_setup" && entry.configId) {
+                    await this.orm.write("nsp.lane.setup.device.line", [entry.configId], {
+                        reader_id: reader.id,
+                    });
+                    await this.refreshLaneSetupReaders();
+                    await this.refreshOperationalStatuses();
+                    this.state.selectedKey = `lane_setup-reader-${entry.configId}`;
+                    return;
+                }
                 if (this.mode !== "lane_calibration") {
                     await entry.record.update({ reader_id: toMany2one(reader) });
                     await this.refreshOperationalStatuses();
@@ -813,8 +953,26 @@ export class NspDeviceTreeView extends Component {
                     await this.orm.unlink("nsp.measurement.device.node", [server.nodeId]);
                     await this.refreshCalibrationTree();
                     this._clearSelectionIfMissing();
+                } else if (this.mode === "parking_lane") {
+                    const configIds = this.entries.map((entry) => Number(entry.configId || 0)).filter(Boolean);
+                    if (configIds.length) {
+                        await this.orm.unlink("nsp.parking.layout.lane.reader.config", configIds);
+                    }
+                    await this.props.record.update({ edge_server_id: false, controller_id: false });
+                    await this.props.record.save();
+                    await this.refreshParkingLaneReaders();
+                    this.state.selectedKey = null;
+                } else if (this.mode === "lane_setup") {
+                    const configIds = this.entries.map((entry) => Number(entry.configId || 0)).filter(Boolean);
+                    if (configIds.length) {
+                        await this.orm.unlink("nsp.lane.setup.device.line", configIds);
+                    }
+                    await this.props.record.update({ edge_server_id: false, controller_id: false });
+                    await this.props.record.save();
+                    await this.refreshLaneSetupReaders();
+                    this.state.selectedKey = null;
                 } else {
-                    const records = this.entries.map((entry) => entry.record);
+                    const records = this.entries.map((entry) => entry.record).filter(Boolean);
                     await Promise.all(records.map((record) => this.removeFlatReaderRecord(record)));
                     await this.props.record.update({ edge_server_id: false, controller_id: false });
                     this.state.selectedKey = null;
@@ -837,8 +995,26 @@ export class NspDeviceTreeView extends Component {
                     await this.orm.unlink("nsp.measurement.device.node", [controller.nodeId]);
                     await this.refreshCalibrationTree();
                     this._clearSelectionIfMissing();
+                } else if (this.mode === "parking_lane") {
+                    const configIds = this.entries.map((entry) => Number(entry.configId || 0)).filter(Boolean);
+                    if (configIds.length) {
+                        await this.orm.unlink("nsp.parking.layout.lane.reader.config", configIds);
+                    }
+                    await this.props.record.update({ controller_id: false });
+                    await this.props.record.save();
+                    await this.refreshParkingLaneReaders();
+                    this.state.selectedKey = null;
+                } else if (this.mode === "lane_setup") {
+                    const configIds = this.entries.map((entry) => Number(entry.configId || 0)).filter(Boolean);
+                    if (configIds.length) {
+                        await this.orm.unlink("nsp.lane.setup.device.line", configIds);
+                    }
+                    await this.props.record.update({ controller_id: false });
+                    await this.props.record.save();
+                    await this.refreshLaneSetupReaders();
+                    this.state.selectedKey = null;
                 } else {
-                    const records = this.entries.map((entry) => entry.record);
+                    const records = this.entries.map((entry) => entry.record).filter(Boolean);
                     await Promise.all(records.map((record) => this.removeFlatReaderRecord(record)));
                     await this.props.record.update({ controller_id: false });
                     this.state.selectedKey = null;
@@ -859,7 +1035,13 @@ export class NspDeviceTreeView extends Component {
                 if (this.mode === "lane_calibration") {
                     await this.orm.unlink("nsp.measurement.device.node", [entry.nodeId]);
                     await this.refreshCalibrationTree();
-                } else {
+                } else if (this.mode === "parking_lane" && entry.configId) {
+                    await this.orm.unlink("nsp.parking.layout.lane.reader.config", [entry.configId]);
+                    await this.refreshParkingLaneReaders();
+                } else if (this.mode === "lane_setup" && entry.configId) {
+                    await this.orm.unlink("nsp.lane.setup.device.line", [entry.configId]);
+                    await this.refreshLaneSetupReaders();
+                } else if (entry.record) {
                     await this.removeFlatReaderRecord(entry.record);
                 }
                 this.state.selectedKey = null;
@@ -1060,8 +1242,17 @@ export class NspDeviceTreeView extends Component {
         try {
             if (this.mode === "lane_calibration") {
                 await this._persistCalibrationConfiguration(entry, values);
+            } else if (this.mode === "parking_lane" && entry.configId) {
+                await this.orm.write("nsp.parking.layout.lane.reader.config", [entry.configId], values);
+                await this.refreshParkingLaneReaders();
+            } else if (this.mode === "lane_setup" && entry.configId) {
+                await this.orm.write("nsp.lane.setup.device.line", [entry.configId], values);
+                await this.refreshLaneSetupReaders();
             } else {
-                const wasPersisted = Boolean(entry.record.resId);
+                const wasPersisted = Boolean(entry.record?.resId);
+                if (!entry.record) {
+                    throw new Error("Reader Configuration record is not available.");
+                }
                 await entry.record.update(values);
                 const saved = wasPersisted
                     ? await entry.record.save({ reload: false })

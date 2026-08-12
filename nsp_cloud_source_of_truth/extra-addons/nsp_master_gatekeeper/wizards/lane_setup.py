@@ -201,8 +201,46 @@ class NspLaneSetupWizard(models.TransientModel):
             "context": dict(self.env.context),
         }
 
+    def _ensure_calibration_device_lines(self):
+        """Ensure Lane Setup has one transient Reader config per Calibration branch Reader.
+
+        The reusable Tree UI is presentation only.  Saving Lane Setup must never
+        depend on whether the hidden x2many was hydrated in the browser.  For a
+        Calibration-sourced wizard the Device Configuration membership is locked
+        to the selected Server -> Controller branch, so any missing transient line
+        can be recreated safely from the persisted Calibration Reader node without
+        overwriting Reader settings the operator already edited in this wizard.
+        """
+        self.ensure_one()
+        if self.source_scope != "calibration" or not self.session_id:
+            return self.device_line_ids
+
+        _server, _controller, reader_nodes = self._calibration_branch_nodes()
+        existing_by_reader = {
+            line.reader_id.id: line
+            for line in self.device_line_ids
+            if line.reader_id
+        }
+        missing_values = []
+        for node in reader_nodes.sorted(lambda item: (item.sequence or 0, item.id)):
+            if not node.reader_id or node.reader_id.id in existing_by_reader:
+                continue
+            missing_values.append({
+                "wizard_id": self.id,
+                "reader_id": node.reader_id.id,
+                "power_dbm": int(node.power_dbm or 0),
+                "read_interval_ms": int(node.read_interval_ms or 200),
+                "tid_start_address": int(node.tid_addr or 0),
+                "tid_length": int(node.tid_len or 4),
+            })
+        if missing_values:
+            self.env["nsp.lane.setup.device.line"].create(missing_values)
+            self.invalidate_recordset(["device_line_ids"])
+        return self.device_line_ids
+
     def action_save(self):
         self.ensure_one()
+        self._ensure_calibration_device_lines()
         return LaneSetupService(self.env).save(self)
 
     def action_save_setup(self):

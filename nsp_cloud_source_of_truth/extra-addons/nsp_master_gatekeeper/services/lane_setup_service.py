@@ -16,7 +16,11 @@ class LaneSetupService:
         sequence_lines = wizard.sequence_line_ids.sorted(
             lambda row: (row.sequence or 0, row.id)
         )
-        device_lines = wizard.device_line_ids
+        device_lines = (
+            wizard._ensure_calibration_device_lines()
+            if wizard.source_scope == "calibration"
+            else wizard.device_line_ids
+        )
         self._normalize_first_duration(sequence_lines)
         lane = wizard.lane_id.exists()
         if not lane:
@@ -25,10 +29,9 @@ class LaneSetupService:
         self._validate_input(wizard, device_lines, sequence_lines)
 
         layout_lane = self._resolve_layout_lane(wizard, lane)
-        used_reader_ids = set(sequence_lines.mapped("reader_id").ids)
-        effective_device_lines = device_lines.filtered(
-            lambda line: line.reader_id.id in used_reader_ids
-        )
+        # Device Configuration owns Reader membership. Antenna Sequence only references
+        # configured Readers; it must never filter or delete Reader Configuration.
+        effective_device_lines = device_lines
         now = fields.Datetime.now()
         infrastructure_values = {
             "edge_server_id": wizard.edge_server_id.id,
@@ -44,14 +47,22 @@ class LaneSetupService:
         }
 
         layout_lane.write(infrastructure_values)
-        layout_lane.with_context(
-            skip_lane_reader_config_sync=True,
-            lane_setup=True,
-        ).write(configuration_values)
+        layout_lane.with_context(lane_setup=True).write(configuration_values)
         layout_lane._normalize_first_sequence_duration()
-        layout_lane._validate_lane_assembly()
-        layout_lane._validate_antenna_sequence()
-        layout_lane._validate_reader_configs()
+        layout_lane.invalidate_recordset(["reader_config_ids", "antenna_sequence_ids"])
+        if not layout_lane.exists():
+            raise ValidationError(_("Lane Configuration could not be persisted."))
+        expected_reader_ids = set(effective_device_lines.mapped("reader_id").ids)
+        persisted_reader_ids = set(layout_lane.reader_config_ids.mapped("reader_id").ids)
+        if expected_reader_ids != persisted_reader_ids:
+            raise ValidationError(_(
+                "Lane Configuration Reader persistence failed. Expected %(expected)s Reader(s), persisted %(persisted)s."
+            ) % {
+                "expected": len(expected_reader_ids),
+                "persisted": len(persisted_reader_ids),
+            })
+        # Save persists the Draft/working configuration exactly as entered.
+        # Parking Layout Publish is the completeness gate.
         wizard.layout_lane_id = layout_lane
 
         if wizard.session_id:
@@ -132,13 +143,6 @@ class LaneSetupService:
             raise ValidationError(_(
                 "Lane and Parking Layout must belong to the same Branch."
             ))
-        if len(sequence_lines) < 2:
-            raise ValidationError(_(
-                "Lane Setup requires at least two Antenna Sequence points."
-            ))
-        if not device_lines:
-            raise ValidationError(_("Lane Setup requires Device Configuration."))
-
         LaneSetupService._validate_infrastructure(wizard)
         if wizard.source_scope == "calibration":
             LaneSetupService._validate_calibration_scope(wizard, sequence_lines)
@@ -242,7 +246,7 @@ class LaneSetupService:
             raise ValidationError(_(
                 "Device Configuration is missing one or more Readers used by Antenna Sequence."
             ))
-        for line in device_lines.filtered(lambda item: item.reader_id.id in sequence_reader_ids):
+        for line in device_lines:
             if not 0 <= line.power_dbm <= 40:
                 raise ValidationError(_("Reader Power must be between 0 and 40 dBm."))
             if not 1 <= line.read_interval_ms <= 60000:

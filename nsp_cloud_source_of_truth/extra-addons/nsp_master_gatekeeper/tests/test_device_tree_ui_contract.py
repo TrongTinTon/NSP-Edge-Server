@@ -311,3 +311,31 @@ def test_reader_sync_contract_drops_obsolete_reader_fields():
     assert '"detected_serial_number"' not in sync_api
     assert 'values["runtime_detected_serial_number"]' not in sync_api
     assert 'raise ValueError("reader_serial_mismatch")' in sync_api
+
+
+def test_flat_reader_add_is_persisted_not_browser_only():
+    js = _read("static/src/js/device_tree_view.js")
+    block = js[js.index("async _createFlatReader"):js.index("async editServer")]
+    assert "await this.props.record.save()" in block
+    assert "Unable to persist Reader Configuration" in block
+
+
+def test_device_configuration_is_independent_from_antenna_sequence():
+    root = Path(__file__).resolve().parents[1]
+    parking = (root / "models/parking_config.py").read_text(encoding="utf-8")
+    service = (root / "services/lane_setup_service.py").read_text(encoding="utf-8")
+    assert "def _sync_reader_configs_from_sequence" not in parking
+    assert "Device Configuration contains Reader(s) not used by Antenna Sequence" not in parking
+    assert "used_reader_ids = set(sequence_lines.mapped" not in service
+    assert "effective_device_lines = device_lines" in service
+
+
+def test_publish_remains_the_completeness_gate_for_lane_configuration():
+    root = Path(__file__).resolve().parents[1]
+    parking = (root / "models/parking_config.py").read_text(encoding="utf-8")
+    create_write = parking[parking.index("class NspParkingLayoutLane(models.Model):"):parking.index("def action_open_lane_setup", parking.index("class NspParkingLayoutLane(models.Model):"))]
+    operational = parking[parking.index("def _operational_issues"):parking.index("def _publish", parking.index("def _operational_issues"))]
+    assert "_validate_antenna_sequence()" not in create_write
+    assert "_validate_reader_configs()" not in create_write
+    assert "lane._validate_antenna_sequence()" in operational
+    assert "lane._validate_reader_configs()" in operational

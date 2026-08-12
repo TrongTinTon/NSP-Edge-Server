@@ -780,15 +780,10 @@ class NspParkingLayoutLane(models.Model):
             for values in values_list:
                 values["setup_state"] = "applied"
                 values["setup_applied_at"] = applied_at
-        records = super(
-            NspParkingLayoutLane,
-            self.with_context(skip_lane_reader_config_sync=True),
-        ).create(values_list)
+        records = super().create(values_list)
         records._normalize_first_sequence_duration()
-        if direct_configuration:
-            records._validate_lane_assembly()
-            records._validate_antenna_sequence()
-            records._validate_reader_configs()
+        # Draft saves are intentionally incomplete-friendly. Publish validates the
+        # complete Lane Configuration contract before synchronizing to Edge.
         return records
 
     def write(self, vals):
@@ -796,16 +791,9 @@ class NspParkingLayoutLane(models.Model):
         values = dict(vals)
         if direct_configuration and self._DIRECT_CONFIGURATION_FIELDS.intersection(values):
             values.update({"setup_state": "applied", "setup_applied_at": fields.Datetime.now()})
-        result = super(
-            NspParkingLayoutLane,
-            self.with_context(skip_lane_reader_config_sync=True),
-        ).write(values)
+        result = super().write(values)
         if "antenna_sequence_ids" in values:
             self._normalize_first_sequence_duration()
-        if direct_configuration:
-            self._validate_lane_assembly()
-            self._validate_antenna_sequence()
-            self._validate_reader_configs()
         return result
 
     def action_open_lane_setup(self):
@@ -883,26 +871,6 @@ class NspParkingLayoutLane(models.Model):
             "applied_at": fields.Datetime.now(),
         }
 
-    def _sync_reader_configs_from_sequence(self):
-        Config = self.env["nsp.parking.layout.lane.reader.config"]
-        create_values = []
-        stale_configs = Config.browse()
-        for layout_lane in self:
-            readers = layout_lane.antenna_sequence_ids.mapped("reader_id")
-            existing_reader_ids = set(layout_lane.reader_config_ids.mapped("reader_id").ids)
-            for reader in readers.filtered(lambda item: item.id not in existing_reader_ids):
-                values = layout_lane._default_reader_config_values(reader)
-                values["layout_lane_id"] = layout_lane.id
-                create_values.append(values)
-            stale_configs |= layout_lane.reader_config_ids.filtered(
-                lambda config: config.reader_id not in readers
-            )
-        if create_values:
-            Config.create(create_values)
-        if stale_configs:
-            stale_configs.unlink()
-        return True
-
     def _validate_reader_configs(self):
         for layout_lane in self:
             sequence_readers = layout_lane.antenna_sequence_ids.mapped("reader_id")
@@ -915,16 +883,8 @@ class NspParkingLayoutLane(models.Model):
                     "lane": layout_lane.display_name,
                     "readers": ", ".join(missing.mapped("display_name")),
                 })
-            extra_configs = layout_lane.reader_config_ids.filtered(
-                lambda config: config.reader_id not in sequence_readers
-            )
-            if extra_configs:
-                raise ValidationError(_(
-                    "Lane %(lane)s Device Configuration contains Reader(s) not used by Antenna Sequence: %(readers)s"
-                ) % {
-                    "lane": layout_lane.display_name,
-                    "readers": ", ".join(extra_configs.mapped("reader_id.display_name")),
-                })
+            # Extra configured Readers are valid. Device Configuration is the
+            # infrastructure scope; Antenna Sequence may use any subset of it.
             layout_lane.reader_config_ids._validate_parameter_ranges()
         return True
 
@@ -964,8 +924,6 @@ class NspParkingLayoutLane(models.Model):
             configured_reader_ids = set(layout_lane.reader_config_ids.mapped("reader_id").ids)
             if not sequence_reader_ids.issubset(configured_reader_ids):
                 issues.append(_("Device Configuration is missing one or more Readers used by Antenna Sequence"))
-            if not configured_reader_ids.issubset(sequence_reader_ids):
-                issues.append(_("Device Configuration contains one or more Readers not used by Antenna Sequence"))
             layout_lane.configuration_state = "incomplete" if issues else "ready"
             layout_lane.configuration_issue = "; ".join(issues) if issues else _("Antenna Sequence is ready.")
 
@@ -999,7 +957,6 @@ class NspParkingLayoutLane(models.Model):
         if first_points:
             first_points.with_context(
                 skip_first_duration_normalization=True,
-                skip_lane_reader_config_sync=True,
             ).write({"duration_from_previous": 0.0})
         return True
 
@@ -1020,15 +977,6 @@ class NspParkingLayoutLane(models.Model):
             if any(float(row.duration_from_previous or 0.0) <= 0.0 for row in sequence[1:]):
                 raise ValidationError(_("Every Antenna after the first requires a positive Max Duration."))
         return True
-
-    @api.constrains(
-        "antenna_sequence_ids", "antenna_sequence_ids.sequence",
-        "antenna_sequence_ids.reader_id", "antenna_sequence_ids.port_no",
-        "antenna_sequence_ids.duration_from_previous",
-    )
-    def _check_antenna_sequence(self):
-        self._validate_antenna_sequence()
-
 
 class NspParkingLayoutLaneReaderConfig(models.Model):
     _name = "nsp.parking.layout.lane.reader.config"
@@ -1187,8 +1135,6 @@ class NspParkingLayoutLaneSequencePoint(models.Model):
         layout_lanes = records.mapped("layout_lane_id")
         if not self.env.context.get("skip_first_duration_normalization"):
             layout_lanes._normalize_first_sequence_duration()
-        if not self.env.context.get("skip_lane_reader_config_sync"):
-            layout_lanes._sync_reader_configs_from_sequence()
         return records
 
     def write(self, vals):
@@ -1197,8 +1143,6 @@ class NspParkingLayoutLaneSequencePoint(models.Model):
         affected = layout_lanes | self.mapped("layout_lane_id")
         if not self.env.context.get("skip_first_duration_normalization"):
             affected._normalize_first_sequence_duration()
-        if not self.env.context.get("skip_lane_reader_config_sync"):
-            affected._sync_reader_configs_from_sequence()
         return result
 
     def unlink(self):
@@ -1206,8 +1150,6 @@ class NspParkingLayoutLaneSequencePoint(models.Model):
         result = super().unlink()
         if not self.env.context.get("skip_first_duration_normalization"):
             layout_lanes._normalize_first_sequence_duration()
-        if not self.env.context.get("skip_lane_reader_config_sync"):
-            layout_lanes._sync_reader_configs_from_sequence()
         return result
 
     @api.constrains("sequence", "reader_id", "port_no", "duration_from_previous", "layout_lane_id")
