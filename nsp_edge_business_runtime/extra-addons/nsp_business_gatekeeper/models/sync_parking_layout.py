@@ -348,27 +348,45 @@ class NspSyncJobParkingLayout(models.Model):
             ("lane_id.active", "=", True),
             ("lane_id.parking_area_id.state", "=", "operational"),
         ])
-        lane_by_ref = {}
+        # A Reader/Antenna may be shared by multiple logical Lanes of the same
+        # Parking Layout. The complete ordered Antenna Sequence identifies the
+        # Lane. The same physical Reader/Antenna must still not be owned by two
+        # different operational Parking Layouts.
+        areas_by_ref = {}
         conflicts = []
         for row in rows:
             ref = (row.reader_id.id, int(row.port_no or 0))
-            previous = lane_by_ref.get(ref)
-            if previous and previous != row.lane_id:
-                conflicts.append(
-                    "%s / Port %s: %s / %s" % (
-                        row.reader_id.display_name,
-                        row.port_no,
-                        previous.display_name,
-                        row.lane_id.display_name,
-                    )
-                )
-            else:
-                lane_by_ref[ref] = row.lane_id
+            area_ids = areas_by_ref.setdefault(ref, set())
+            area_ids.add(row.lane_id.parking_area_id.id)
+            if len(area_ids) > 1:
+                conflicts.append("%s / Port %s" % (row.reader_id.display_name, row.port_no))
         if conflicts:
             raise UserError(
-                _("Operational Parking topology contains duplicated Reader Port assignments: %s")
+                _("Operational Parking Layouts cannot share Reader/Antenna points: %s")
                 % "; ".join(sorted(set(conflicts)))
             )
+
+        for parking_area in rows.mapped("lane_id.parking_area_id"):
+            lanes = parking_area.lane_ids.filtered("active")
+            lane_sequences = []
+            for lane in lanes:
+                sequence = tuple(
+                    (line.reader_id.id, int(line.port_no or 0))
+                    for line in lane.antenna_sequence_ids.sorted("sequence")
+                )
+                lane_sequences.append((lane, sequence))
+            for index, (first_lane, first_sequence) in enumerate(lane_sequences):
+                for second_lane, second_sequence in lane_sequences[index + 1:]:
+                    def is_subsequence(smaller, larger):
+                        position = 0
+                        for item in larger:
+                            if position < len(smaller) and item == smaller[position]:
+                                position += 1
+                        return position == len(smaller)
+                    if is_subsequence(first_sequence, second_sequence) or is_subsequence(second_sequence, first_sequence):
+                        raise UserError(_(
+                            "Logical Lanes %(first)s and %(second)s have ambiguous Antenna Sequences."
+                        ) % {"first": first_lane.display_name, "second": second_lane.display_name})
         return True
 
     def _reconcile_parking_config_snapshot(self, items):

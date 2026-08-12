@@ -393,13 +393,31 @@ class NspParkingArea(models.Model):
                     )
         return True
 
+    @api.model
+    def _sequence_is_ordered_subsequence(self, smaller, larger):
+        """Return True when ``smaller`` can be matched inside ``larger`` in order.
+
+        Shared Reader/Antenna points across logical Lanes are valid. Ambiguity
+        exists only when one complete Lane sequence can also satisfy another
+        Lane sequence. Reverse sequences such as A1->A3 and A3->A1 remain
+        distinct and are explicitly supported.
+        """
+        if len(smaller) > len(larger):
+            return False
+        position = 0
+        for item in larger:
+            if position < len(smaller) and item == smaller[position]:
+                position += 1
+        return position == len(smaller)
+
     def _operational_issues(self):
         self.ensure_one()
         issues = []
         lanes = self.layout_lane_ids.filtered("active")
         if not lanes:
             return [_('Configure at least one active Lane Configuration.')]
-        lane_by_reader_port = {}
+
+        valid_sequences = []
         for lane in lanes:
             try:
                 lane._validate_lane_assembly()
@@ -408,21 +426,28 @@ class NspParkingArea(models.Model):
             except ValidationError as exc:
                 issues.append(str(exc))
                 continue
-            for point in lane.antenna_sequence_ids:
-                key = (point.reader_id.id, int(point.port_no or 0))
-                previous_lane = lane_by_reader_port.get(key)
-                if previous_lane:
-                    issues.append(
-                        _("Reader/Antenna %(reader)s:%(port)s is assigned to both %(first)s and %(second)s.")
-                        % {
-                            "reader": point.reader_id.device_code or point.reader_id.serial_number,
-                            "port": point.port_no,
-                            "first": previous_lane.display_name,
-                            "second": lane.display_name,
-                        }
-                    )
-                else:
-                    lane_by_reader_port[key] = lane
+            sequence = tuple(
+                (point.reader_id.id, int(point.port_no or 0))
+                for point in lane.antenna_sequence_ids.sorted(lambda row: (row.sequence or 0, row.id))
+            )
+            valid_sequences.append((lane, sequence))
+
+        # Reader/Antenna points may be shared by multiple logical Lanes. The
+        # complete ordered sequence, not an individual port, identifies a Lane.
+        for index, (first_lane, first_sequence) in enumerate(valid_sequences):
+            for second_lane, second_sequence in valid_sequences[index + 1:]:
+                if (
+                    self._sequence_is_ordered_subsequence(first_sequence, second_sequence)
+                    or self._sequence_is_ordered_subsequence(second_sequence, first_sequence)
+                ):
+                    issues.append(_(
+                        "Antenna Sequences for %(first)s and %(second)s are ambiguous. "
+                        "Logical Lanes may share Reader/Antenna points, but each Lane must have "
+                        "a distinguishable ordered Antenna Sequence."
+                    ) % {
+                        "first": first_lane.display_name,
+                        "second": second_lane.display_name,
+                    })
         return issues
 
     def _publish(self, target_state):

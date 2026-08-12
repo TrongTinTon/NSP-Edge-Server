@@ -15,10 +15,11 @@ _logger = logging.getLogger(__name__)
 class ParkingDetectionEvent(models.Model):
     """Short-lived Edge RFID read used to build final parking transactions.
 
-    Controller reports physical reads only. Edge resolves each Reader Port
-    against the published Lane Reader Port Timeline, collapses repeated reads,
-    and matches the resulting detections against the single Lane Antenna Sequence
-    sequences. Raw detections remain on Edge and never synchronize to Cloud.
+    Controller reports physical reads only. A physical Reader/Antenna may belong
+    to multiple logical Lanes. Edge therefore fans one physical detection out to
+    every candidate Lane and resolves the logical Lane only after a complete
+    ordered Antenna Sequence matches. Raw detections remain on Edge and never
+    synchronize to Cloud.
     """
 
     _name = "nsp.parking.detection.event"
@@ -89,7 +90,11 @@ class ParkingDetectionEvent(models.Model):
     )
 
     _sql_constraints = [
-        ("event_uid_unique", "unique(event_uid)", "Detection UID must be unique."),
+        (
+            "event_uid_lane_unique",
+            "unique(event_uid, lane_id)",
+            "Detection UID must be unique per logical Lane.",
+        ),
         (
             "parking_detection_port_range",
             "CHECK(port_no >= 1 AND port_no <= 16)",
@@ -168,7 +173,11 @@ class ParkingDetectionEvent(models.Model):
         if not uid:
             raise ValidationError(_("missing_event_uid"))
         vals = dict(vals, event_uid=uid)
-        existing = self.search([("event_uid", "=", uid)], limit=1)
+        lane_id = int(vals.get("lane_id") or 0)
+        if not lane_id:
+            raise ValidationError(_("lane_id is required"))
+        domain = [("event_uid", "=", uid), ("lane_id", "=", lane_id)]
+        existing = self.search(domain, limit=1)
         if existing:
             if self._business_values(existing) != self._business_values(vals):
                 raise ValidationError(_(
@@ -179,7 +188,7 @@ class ParkingDetectionEvent(models.Model):
             with self.env.cr.savepoint():
                 return self.create(vals), False
         except IntegrityError:
-            existing = self.search([("event_uid", "=", uid)], limit=1)
+            existing = self.search(domain, limit=1)
             if not existing:
                 raise
             if self._business_values(existing) != self._business_values(vals):
@@ -240,14 +249,21 @@ class ParkingDetectionEvent(models.Model):
             if not lane_ids:
                 errors[key] = "no_reader_port_timeline"
                 continue
-            if len(lane_ids) != 1:
-                errors[key] = "ambiguous_reader_port_lane"
-                continue
-            lane = Lane.browse(next(iter(lane_ids))).exists()
-            if not lane or lane.controller_id != controller:
+            lanes = Lane.browse(sorted(lane_ids)).exists().filtered(
+                lambda candidate: candidate.controller_id == controller
+            )
+            if not lanes:
                 errors[key] = "controller_not_in_scope"
                 continue
-            resolved[key] = (device, lane, port_no)
+            parking_areas = lanes.mapped("parking_area_id")
+            if len(parking_areas) != 1:
+                # Sharing Reader/Antenna points is valid only between logical
+                # Lanes of the same operational Parking Layout.
+                errors[key] = "ambiguous_reader_port_layout"
+                continue
+            resolved[key] = [
+                (device, lane, port_no) for lane in lanes.sorted(key=lambda item: item.id)
+            ]
         return resolved, errors
 
     @api.model
@@ -291,32 +307,38 @@ class ParkingDetectionEvent(models.Model):
         if not target.active:
             raise ValidationError(_("rfid_assignment_target_inactive"))
 
-        topology = topology_cache.get((serial_number, port_no))
-        if topology is None:
+        topologies = topology_cache.get((serial_number, port_no))
+        if not topologies:
             raise ValidationError(_("no_reader_port_timeline"))
-        reader, lane, port_no = topology
-        parking_area = lane.parking_area_id
-        self._acquire_parking_area_runtime_lock(parking_area, shared=True)
-        parking_area.invalidate_recordset(["state", "published_revision"])
-        layout_revision = int(parking_area.published_revision or 0)
-        if parking_area.state != "operational" or layout_revision <= 0:
-            raise ValidationError(_("parking_area_not_operational"))
 
-        vals = {
-            "event_uid": event_uid,
-            "detected_at": detected_at,
-            "lane_id": lane.id,
-            "reader_id": reader.id,
-            "port_no": port_no,
-            "tid": tid,
-            "layout_revision": layout_revision,
-            "rssi_dbm": rssi_dbm,
-            "user_id": assignment.user_id.id if assignment.user_id else False,
-            "vehicle_id": assignment.vehicle_id.id if assignment.vehicle_id else False,
-            "state": "pending",
-        }
-        record, duplicate = self.create_idempotent(vals)
-        return record, duplicate, lane
+        records = self.browse()
+        new_lanes = self.env["nsp.parking.lane"].browse()
+        for reader, lane, candidate_port_no in topologies:
+            parking_area = lane.parking_area_id
+            self._acquire_parking_area_runtime_lock(parking_area, shared=True)
+            parking_area.invalidate_recordset(["state", "published_revision"])
+            layout_revision = int(parking_area.published_revision or 0)
+            if parking_area.state != "operational" or layout_revision <= 0:
+                raise ValidationError(_("parking_area_not_operational"))
+
+            vals = {
+                "event_uid": event_uid,
+                "detected_at": detected_at,
+                "lane_id": lane.id,
+                "reader_id": reader.id,
+                "port_no": candidate_port_no,
+                "tid": tid,
+                "layout_revision": layout_revision,
+                "rssi_dbm": rssi_dbm,
+                "user_id": assignment.user_id.id if assignment.user_id else False,
+                "vehicle_id": assignment.vehicle_id.id if assignment.vehicle_id else False,
+                "state": "pending",
+            }
+            record, duplicate = self.create_idempotent(vals)
+            records |= record
+            if not duplicate:
+                new_lanes |= lane
+        return records, new_lanes
 
     @api.model
     def ingest_controller_detections(self, controller, detections):
@@ -346,11 +368,10 @@ class ParkingDetectionEvent(models.Model):
                 continue
             try:
                 with self.env.cr.savepoint():
-                    _record, duplicate, lane = self._ingest_controller_detection(
+                    _records, new_lanes = self._ingest_controller_detection(
                         controller, payload, assignment, topology_cache
                     )
-                if not duplicate:
-                    touched_lanes |= lane
+                touched_lanes |= new_lanes
             except ValidationError as exc:
                 _logger.warning(
                     "Parking detection rejected at Edge: controller=%s event_uid=%s "
@@ -648,6 +669,24 @@ class ParkingDetectionEvent(models.Model):
             "state": "processed",
             "transaction_id": transaction.id if transaction else False,
         })
+
+        # The same physical Controller detection is fanned out to every logical
+        # Lane that references its Reader/Antenna. Once one Lane wins by matching
+        # the complete sequence, consume sibling copies so they cannot later be
+        # combined with another crossing and produce a false movement.
+        source_uids = [uid for uid in group.mapped("event_uid") if uid]
+        if source_uids:
+            siblings = self.search([
+                ("event_uid", "in", source_uids),
+                ("id", "not in", group.ids),
+                ("state", "=", "pending"),
+                ("transaction_id", "=", False),
+            ])
+            if siblings:
+                siblings.write({
+                    "state": "processed",
+                    "error_message": _("Consumed by a matching logical Lane Antenna Sequence."),
+                })
         return transaction
 
     @api.model
