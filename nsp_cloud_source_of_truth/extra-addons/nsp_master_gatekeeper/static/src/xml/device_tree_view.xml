@@ -166,7 +166,7 @@
                             </div>
                             <div class="nsp-device-tree__field nsp-device-tree__field--full">
                                 <div class="nsp-device-tree__ports-head">
-                                    <label>Antennas / Ports</label>
+                                    <label>Antennas</label>
                                     <button t-if="mode === 'lane_calibration' &amp;&amp; editable"
                                             type="button" class="btn btn-sm btn-outline-primary" t-on-click="addPort">
                                         <i class="fa fa-plus me-1"/> Add Port
@@ -177,7 +177,7 @@
                                         <div t-foreach="selectedPorts" t-as="port" t-key="port.key" class="nsp-device-tree__port-row">
                                             <t t-if="state.portEditingKey === port.key">
                                                 <div class="nsp-device-tree__port-edit">
-                                                    <span>P</span>
+                                                    <span class="nsp-device-tree__port-edit-label">Antenna</span>
                                                     <input type="number" min="1" max="16" class="form-control form-control-sm"
                                                            t-att-value="state.portDraft" t-on-input="onPortInput"/>
                                                     <button type="button" class="btn btn-sm btn-primary" t-on-click="() => this.savePort(port)">Save</button>
@@ -185,7 +185,7 @@
                                                 </div>
                                             </t>
                                             <t t-else="">
-                                                <span class="nsp-device-tree__port-chip">P<t t-esc="port.portNo"/></span>
+                                                <span class="nsp-lane-preview__antenna-badge">Antenna <t t-esc="port.portNo"/></span>
                                                 <div t-if="editable" class="nsp-device-tree__port-actions">
                                                     <button type="button" class="nsp-device-tree__icon-action" title="Edit Port"
                                                             t-on-click="() => this.startPortEdit(port)"><i class="fa fa-pencil"/></button>
@@ -198,7 +198,11 @@
                                         <small t-if="state.portError" class="text-danger" t-esc="state.portError"/>
                                     </div>
                                 </t>
-                                <div t-else="" class="nsp-device-tree__value" t-esc="selectedEntry.ports"/>
+                                <div t-else="" class="nsp-device-tree__antenna-badges">
+                                    <span t-foreach="selectedAntennaNumbers" t-as="portNo" t-key="portNo"
+                                          class="nsp-lane-preview__antenna-badge">Antenna <t t-esc="portNo"/></span>
+                                    <span t-if="!selectedAntennaNumbers.length" class="nsp-device-tree__value">—</span>
+                                </div>
                             </div>
                         </div>
                         <div class="nsp-device-tree__meta"><span>Configuration <strong t-esc="state.configState"/></span><span>Operational <strong t-esc="statusLabel(selectedEntry.reader.status)"/></span></div>

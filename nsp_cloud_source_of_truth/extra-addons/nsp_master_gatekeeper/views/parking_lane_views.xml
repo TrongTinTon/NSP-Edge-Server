@@ -135,9 +135,15 @@
                          nolabel="1"
                          widget="nsp_lane_sequence_preview"/>
                 </div>
-                <div class="nsp-parking-sequence-grid__preview-illustration" aria-label="Lane antenna sequence illustration">
-                  <img src="/nsp_master_gatekeeper/static/src/img/antenna_sequence_preview_vehicle.svg"
-                       alt="Lane antenna sequence illustration"/>
+                <div class="nsp-parking-sequence-grid__preview-illustration" aria-label="Vehicle direction illustration">
+                  <div class="nsp-parking-sequence-grid__vehicle-figure">
+                    <img src="/nsp_master_gatekeeper/static/src/img/antenna_sequence_preview_vehicle.svg"
+                         alt="Top view vehicle direction"/>
+                    <div class="nsp-parking-sequence-grid__vehicle-caption">
+                      <strong>Vehicle direction</strong>
+                      <span>Top view</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </aside>

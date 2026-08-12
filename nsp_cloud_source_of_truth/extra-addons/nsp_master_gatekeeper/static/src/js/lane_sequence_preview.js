@@ -27,20 +27,20 @@ export class NspLaneSequencePreview extends Component {
             ? this.props.record?.data?.antenna_sequence_ids
             : this.props.record?.data?.sequence_line_ids;
         const records = relation?.records || [];
+
         return [...records]
             .sort((left, right) => Number(left.data?.sequence || 0) - Number(right.data?.sequence || 0))
             .map((record, index, ordered) => {
                 const data = record.data || {};
                 const nextData = ordered[index + 1]?.data || {};
-                const readerLabel = many2oneLabel(data.reader_id, "Reader");
+                const readerName = many2oneLabel(data.reader_id, data.reader_identity || "Reader");
                 const port = Number(data.port_no || 0);
+
                 return {
                     key: record.resId || record.id || `point-${index}`,
                     number: index + 1,
-                    antenna: this.isParkingLane
-                        ? `${readerLabel} / Antenna ${port || "?"}`
-                        : (data.antenna || `${readerLabel}-P${port || "?"}`),
-                    identity: this.isParkingLane ? "" : (data.reader_identity || ""),
+                    antennaName: `Antenna ${port || "?"}`,
+                    readerName,
                     durationText: index < ordered.length - 1
                         ? this._durationText(nextData)
                         : "",

@@ -36,6 +36,14 @@ function toMany2one(option) {
     return option ? { id: option.id, display_name: option.name } : false;
 }
 
+function antennaNumbers(value) {
+    if (Array.isArray(value)) {
+        return [...new Set(value.map((item) => Number(item)).filter((item) => item > 0))];
+    }
+    const matches = String(value || "").match(/\d+/g) || [];
+    return [...new Set(matches.map((item) => Number(item)).filter((item) => item > 0))];
+}
+
 export class NspDeviceTreeView extends Component {
     static template = "nsp_master_gatekeeper.DeviceTreeView";
     static props = { ...standardFieldProps };
@@ -604,6 +612,15 @@ export class NspDeviceTreeView extends Component {
             return [];
         }
         return this._portsForReaderNode(this.selectedEntry.nodeId);
+    }
+
+    get selectedAntennaNumbers() {
+        if (this.mode === "lane_calibration") {
+            return this.selectedPorts
+                .map((port) => Number(port.portNo || 0))
+                .filter((portNo) => portNo > 0);
+        }
+        return antennaNumbers(this.selectedEntry?.ports);
     }
 
     get breadcrumb() {

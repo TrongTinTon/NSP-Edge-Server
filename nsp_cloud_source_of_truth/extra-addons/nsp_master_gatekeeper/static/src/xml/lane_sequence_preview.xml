@@ -1,22 +1,54 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <templates xml:space="preserve">
     <t t-name="nsp_master_gatekeeper.LaneSequencePreview">
-        <div class="nsp-lane-preview">
+        <div class="nsp-lane-preview nsp-lane-preview--v2">
             <t t-if="points.length">
-                <t t-foreach="points" t-as="point" t-key="point.key">
-                    <div class="nsp-lane-preview__card">
-                        <span class="nsp-lane-preview__index" t-esc="point.number"/>
-                        <div class="nsp-lane-preview__body">
-                            <strong t-esc="point.antenna"/>
-                            <span t-if="point.identity" t-esc="point.identity"/>
+                <div class="nsp-lane-preview__timeline">
+                    <div class="nsp-lane-preview__timeline-title">STEP</div>
+
+                    <t t-foreach="points" t-as="point" t-key="point.key">
+                        <div class="nsp-lane-preview__step-row">
+                            <div class="nsp-lane-preview__rail-cell">
+                                <span class="nsp-lane-preview__step-badge" t-esc="point.number"/>
+                            </div>
+
+                            <div class="nsp-lane-preview__antenna-card">
+                                <span class="nsp-lane-preview__signal" aria-hidden="true">
+                                    <span class="nsp-lane-preview__signal-ring nsp-lane-preview__signal-ring--1"/>
+                                    <span class="nsp-lane-preview__signal-ring nsp-lane-preview__signal-ring--2"/>
+                                    <span class="nsp-lane-preview__signal-ring nsp-lane-preview__signal-ring--3"/>
+                                    <span class="nsp-lane-preview__signal-dot"/>
+                                </span>
+
+                                <div class="nsp-lane-preview__antenna-info">
+                                    <span class="nsp-lane-preview__antenna-badge" t-esc="point.antennaName"/>
+                                    <span t-if="point.readerName" class="nsp-lane-preview__reader-name">
+                                        <span class="nsp-lane-preview__reader-label">Reader:</span>
+                                        <t t-esc="point.readerName"/>
+                                    </span>
+                                </div>
+                            </div>
                         </div>
+
+                        <div t-if="!point.isLast" class="nsp-lane-preview__transition-row">
+                            <div class="nsp-lane-preview__transition-marker" aria-hidden="true">
+                                <span/>
+                            </div>
+                            <div class="nsp-lane-preview__transition-content">
+                                <span class="nsp-lane-preview__duration">
+                                    <i class="fa fa-clock-o" aria-hidden="true"/>
+                                    <t t-esc="point.durationText"/>
+                                </span>
+                            </div>
+                        </div>
+                    </t>
+
+                    <div class="nsp-lane-preview__timeline-end" aria-hidden="true">
+                        <span class="nsp-lane-preview__end-arrow">↓</span>
                     </div>
-                    <div t-if="!point.isLast" class="nsp-lane-preview__connector">
-                        <span class="nsp-lane-preview__duration" t-esc="point.durationText"/>
-                        <span class="nsp-lane-preview__arrow">↓</span>
-                    </div>
-                </t>
+                </div>
             </t>
+
             <div t-else="" class="nsp-lane-preview__empty">
                 Add a line to preview this Antenna Sequence.
             </div>

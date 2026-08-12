@@ -4,20 +4,20 @@
         <field name="name">nsp.lane.setup.wizard.form</field>
         <field name="model">nsp.lane.setup.wizard</field>
         <field name="arch" type="xml">
-            <form string="Lane Setup" class="o_nsp_lane_setup_form">
+            <form string="Lane Setup" class="o_nsp_parking_lane_form o_nsp_lane_setup_flat_form">
                 <sheet>
                     <field name="source_scope" invisible="1"/>
                     <field name="session_id" invisible="1"/>
                     <field name="available_reader_ids" invisible="1"/>
-                    <field name="active_section" invisible="1"/>
                     <field name="parking_area_branch_id" invisible="1"/>
                     <field name="layout_lane_id" invisible="1"/>
                     <field name="sequence_preview_anchor" invisible="1"/>
                     <field name="edge_server_id" invisible="1"/>
                     <field name="controller_id" invisible="1"/>
 
-                    <!-- Hydrate the transient Reader configuration collection for the
-                         reusable Device Tree.  The Tree is the only Device editor. -->
+                    <!-- Keep the transient Reader configuration collection hydrated
+                         for the reusable Device Tree.  This collection remains the
+                         wizard persistence source; the UI below only changes layout. -->
                     <field name="device_line_ids" invisible="1">
                         <list create="1" edit="1" delete="1">
                             <field name="reader_id"/>
@@ -32,120 +32,78 @@
                         </list>
                     </field>
 
-                    <div class="nsp-lane-setup__lane-row">
-                        <span class="nsp-lane-setup__lane-label">Parking Layout</span>
-                        <div class="nsp-lane-setup__lane-field">
-                            <field name="parking_area_id"
-                                   nolabel="1"
-                                   placeholder="Select a Draft Parking Layout..."
-                                   domain="[('state', '=', 'draft')]"
-                                   readonly="source_scope == 'parking_layout'"
-                                   options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': False}"/>
-                        </div>
-                    </div>
-
-                    <div class="nsp-lane-setup__lane-row">
-                        <span class="nsp-lane-setup__lane-label">Lane</span>
-                        <div class="nsp-lane-setup__lane-field">
+                    <!-- Mirror Lane Configurations: Lane title + Parking Layout context. -->
+                    <div class="oe_title">
+                        <label for="lane_id" string="Lane"/>
+                        <h1>
                             <field name="lane_id"
-                                   nolabel="1"
                                    placeholder="Select or create an independent Lane..."
                                    domain="[('active', '=', True), ('branch_id', '=', parking_area_branch_id)] if parking_area_branch_id else [('active', '=', True)]"
                                    readonly="source_scope == 'parking_layout'"
                                    context="{'default_branch_id': parking_area_branch_id, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_parking_lane_form'}"
                                    options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"/>
-                        </div>
+                        </h1>
                     </div>
 
-                    <div class="nsp-lane-setup__workspace">
-                        <aside class="nsp-lane-setup__sidebar">
-                            <button name="action_show_device"
-                                    type="object"
-                                    string="Device"
-                                    icon="fa-microchip"
-                                    class="btn nsp-lane-setup__nav is-active"
-                                    invisible="active_section != 'device'"/>
-                            <button name="action_show_device"
-                                    type="object"
-                                    string="Device"
-                                    icon="fa-microchip"
-                                    class="btn nsp-lane-setup__nav"
-                                    invisible="active_section == 'device'"/>
+                    <group>
+                        <field name="parking_area_id"
+                               string="Parking Layout"
+                               placeholder="Select a Draft Parking Layout..."
+                               domain="[('state', '=', 'draft')]"
+                               readonly="source_scope == 'parking_layout'"
+                               options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': False}"/>
+                    </group>
 
-                            <button name="action_show_sequence"
-                                    type="object"
-                                    string="Antenna Sequence"
-                                    icon="fa-random"
-                                    class="btn nsp-lane-setup__nav is-active"
-                                    invisible="active_section != 'sequence'"/>
-                            <button name="action_show_sequence"
-                                    type="object"
-                                    string="Antenna Sequence"
-                                    icon="fa-random"
-                                    class="btn nsp-lane-setup__nav"
-                                    invisible="active_section == 'sequence'"/>
-                        </aside>
+                    <separator string="Device Configuration"/>
+                    <field name="device_tree_anchor"
+                           nolabel="1"
+                           class="o_nsp_device_tree_field"
+                           widget="nsp_device_tree_view"/>
 
-                        <main class="nsp-lane-setup__content">
-                            <section class="nsp-lane-setup__content-section"
-                                     invisible="active_section != 'device'">
-                                <div class="nsp-lane-setup__content-header">
-                                    <h3>Device Configuration</h3>
-                                    <p>Use the same Server → Controller → Reader configuration structure as Lane Calibration.</p>
+                    <separator string="Antenna Sequence"/>
+                    <div class="nsp-parking-sequence-grid">
+                        <section class="nsp-parking-sequence-grid__editor">
+                            <field name="sequence_line_ids" nolabel="1">
+                                <list editable="bottom" create="1" delete="1">
+                                    <field name="sequence" widget="handle" string="#"/>
+                                    <field name="reader_id"
+                                           string="Reader"
+                                           domain="[('active', '=', True)] if parent.source_scope == 'parking_layout' else [('id', 'in', parent.available_reader_ids)]"
+                                           options="{'no_create': True, 'no_open': True}"/>
+                                    <field name="port_no" string="Antenna"/>
+                                    <field name="antenna" column_invisible="1"/>
+                                    <field name="reader_identity" column_invisible="1"/>
+                                    <field name="is_first_point" column_invisible="1"/>
+                                    <field name="duration_ms"
+                                           string="Max Duration from Previous (ms)"
+                                           readonly="is_first_point"/>
+                                </list>
+                            </field>
+                        </section>
+
+                        <aside class="nsp-parking-sequence-grid__preview">
+                            <div class="nsp-parking-sequence-grid__preview-head">
+                                <h4>Sequence Preview</h4>
+                                <p>Live preview of the contextual Reader/Antenna order and timing window.</p>
+                            </div>
+                            <div class="nsp-parking-sequence-grid__preview-body">
+                                <div class="nsp-parking-sequence-grid__preview-sequence">
+                                    <field name="sequence_preview_anchor"
+                                           nolabel="1"
+                                           widget="nsp_lane_sequence_preview"/>
                                 </div>
-                                <field name="device_tree_anchor"
-                                       nolabel="1"
-                                       class="o_nsp_device_tree_field"
-                                       widget="nsp_device_tree_view"/>
-                            </section>
-
-                            <section class="nsp-lane-setup__content-section"
-                                     invisible="active_section != 'sequence'">
-                                <div class="nsp-lane-setup__content-header">
-                                    <h3>Antenna Sequence</h3>
-                                    <p>Define the physical Reader/Antenna order used to detect a vehicle crossing this Lane.</p>
-                                </div>
-
-                                <div class="nsp-lane-setup__sequence-grid">
-                                    <div class="nsp-lane-setup__sequence-editor">
-                                        <field name="sequence_line_ids" nolabel="1" class="nsp-lane-setup__sequence">
-                                            <list editable="bottom" create="1" delete="1">
-                                                <field name="sequence" widget="handle" string="#"/>
-                                                <field name="reader_id"
-                                                       string="Reader"
-                                                       domain="[('active', '=', True)] if parent.source_scope == 'parking_layout' else [('id', 'in', parent.available_reader_ids)]"
-                                                       options="{'no_create': True, 'no_open': True}"/>
-                                                <field name="port_no" string="Antenna"/>
-                                                <field name="antenna" column_invisible="1"/>
-                                                <field name="reader_identity" column_invisible="1"/>
-                                                <field name="is_first_point" column_invisible="1"/>
-                                                <field name="duration_ms"
-                                                       string="Max Duration from Previous (ms)"
-                                                       readonly="is_first_point"/>
-                                            </list>
-                                        </field>
+                                <div class="nsp-parking-sequence-grid__preview-illustration" aria-label="Vehicle direction illustration">
+                                    <div class="nsp-parking-sequence-grid__vehicle-figure">
+                                        <img src="/nsp_master_gatekeeper/static/src/img/antenna_sequence_preview_vehicle.svg"
+                                             alt="Top view vehicle direction"/>
+                                        <div class="nsp-parking-sequence-grid__vehicle-caption">
+                                            <strong>Vehicle direction</strong>
+                                            <span>Top view</span>
+                                        </div>
                                     </div>
-
-                                    <aside class="nsp-lane-setup__preview-panel">
-                                        <div class="nsp-lane-setup__preview-header">
-                                            <h4>Sequence Preview</h4>
-                                            <p>The same sequence identifies the Lane crossing. Vehicle parking state decides Check-in or Check-out.</p>
-                                        </div>
-                                        <div class="nsp-lane-setup__preview-body">
-                                            <div class="nsp-lane-setup__preview-sequence">
-                                                <field name="sequence_preview_anchor"
-                                                       nolabel="1"
-                                                       widget="nsp_lane_sequence_preview"/>
-                                            </div>
-                                            <div class="nsp-lane-setup__preview-illustration" aria-label="Lane antenna sequence illustration">
-                                                <img src="/nsp_master_gatekeeper/static/src/img/antenna_sequence_preview_vehicle.svg"
-                                                     alt="Lane antenna sequence illustration"/>
-                                            </div>
-                                        </div>
-                                    </aside>
                                 </div>
-                            </section>
-                        </main>
+                            </div>
+                        </aside>
                     </div>
                 </sheet>
 

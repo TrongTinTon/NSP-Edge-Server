@@ -339,3 +339,17 @@ def test_publish_remains_the_completeness_gate_for_lane_configuration():
     assert "_validate_reader_configs()" not in create_write
     assert "lane._validate_antenna_sequence()" in operational
     assert "lane._validate_reader_configs()" in operational
+
+
+def test_reader_information_renders_ports_as_antenna_badges():
+    xml = _read("static/src/xml/device_tree_view.xml")
+    js = _read("static/src/js/device_tree_view.js")
+    scss = _read("static/src/scss/device_tree_view.scss")
+
+    assert "<label>Antennas</label>" in xml
+    assert "Antennas / Ports" not in xml
+    assert 'class="nsp-lane-preview__antenna-badge">Antenna <t t-esc="port.portNo"/>' in xml
+    assert 't-foreach="selectedAntennaNumbers"' in xml
+    assert "get selectedAntennaNumbers()" in js
+    assert "function antennaNumbers(value)" in js
+    assert ".nsp-lane-preview__antenna-badge" in scss
