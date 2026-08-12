@@ -1370,9 +1370,20 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             normalized.append(payload)
             tids.add(tid)
 
-        self._touch_reader_activity_from_detections(
-            controller, normalized, "detected_at"
-        )
+        # Physical Reader observation is diagnostic/operational telemetry only.
+        # It must never turn a valid acquisition batch into a transport failure.
+        # In particular, a stale/unupgraded observation schema must not cause the
+        # Controller outbox to retry raw RFID detections forever.
+        try:
+            self._touch_reader_activity_from_detections(
+                controller, normalized, "detected_at"
+            )
+        except Exception:
+            _logger.exception(
+                "Reader observation update failed while accepting parking detections: "
+                "controller=%s count=%s. Raw detection processing will continue.",
+                controller.controller_id, len(normalized),
+            )
 
         assignments = RuntimeAssignment.search([
             ("tid", "in", list(tids)),

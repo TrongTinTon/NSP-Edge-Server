@@ -415,9 +415,21 @@ class ParkingDetectionEvent(models.Model):
 
         ordered_lane_ids = self._pending_lane_ids_in_event_order(touched_lanes.ids)
         for lane in self.env["nsp.parking.layout.lane"].sudo().browse(ordered_lane_ids).exists():
-            # Cross-request movement is normal. Ingestion never expires incomplete
-            # sequences; finalization belongs to the periodic pending-event job.
-            self._process_pending_for_lane(lane, finalize_expired=False)
+            # Acquisition and Parking business processing are deliberately isolated.
+            # Once candidate detections are persisted, a matcher/business exception
+            # must not roll back the acquisition batch or force Controller retries.
+            # Pending events remain on Edge and the periodic worker can retry them.
+            try:
+                with self.env.cr.savepoint():
+                    # Cross-request movement is normal. Ingestion never expires
+                    # incomplete sequences; finalization belongs to the periodic job.
+                    self._process_pending_for_lane(lane, finalize_expired=False)
+            except Exception:
+                _logger.exception(
+                    "Parking business processing deferred after raw detection ingest: "
+                    "controller=%s layout_lane=%s pending_events_preserved=true",
+                    controller.controller_id, lane.id,
+                )
         return True
 
     @api.model
