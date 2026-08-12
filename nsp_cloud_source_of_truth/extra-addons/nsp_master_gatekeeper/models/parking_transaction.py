@@ -186,9 +186,18 @@ class ParkingTransaction(models.Model):
             or "-"
         ).strip().upper()
         employee_name = (
-            (gate_user.name or _("Unknown employee")).strip().upper()
-            if gate_user else _("Unknown employee").upper()
+            (gate_user.name or _("Unknown employee")).strip()
+            if gate_user else _("Unknown employee")
         )
+        avatar_url = ""
+        if gate_user:
+            avatar_field = next(
+                (field_name for field_name in ("avatar_128", "image_128", "image_1920")
+                 if field_name in gate_user._fields),
+                "",
+            )
+            if avatar_field:
+                avatar_url = f"/web/image/nsp.user/{gate_user.id}/{avatar_field}"
         return {
             "id": self.id,
             "transaction_uid": self.transaction_uid,
@@ -208,6 +217,8 @@ class ParkingTransaction(models.Model):
             "vehicle_type": vehicle_type_code or "other",
             "license_plate": license_plate,
             "employee_name": employee_name,
+            "user_id": gate_user.id if gate_user else False,
+            "avatar_url": avatar_url,
             **self._live_monitor_display_meta(),
         }
 

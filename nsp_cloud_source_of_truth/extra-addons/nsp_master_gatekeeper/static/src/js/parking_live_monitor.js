@@ -14,6 +14,7 @@ const MAX_QUEUE = 240;
 const MAX_ALERTS = 8;
 const VISIBLE_ALERTS = 2;
 const ALERT_HOLD_MS = 12000;
+const NEW_CARD_HOLD_MS = 12000;
 const BURST_WINDOW_MS = 10000;
 const BURST_THRESHOLD = 10;
 const NORMAL_DRAIN_MS = 650;
@@ -48,6 +49,7 @@ export class NspParkingLiveMonitor extends Component {
             branchName: "",
             areaState: "",
             displayColumns: this.initialDisplayColumns,
+            settingsOpen: false,
             entries: [],
             alerts: [],
             flashKeys: [],
@@ -114,17 +116,12 @@ export class NspParkingLiveMonitor extends Component {
     }
 
     get visibleEntries() {
-        const capacity = this.visibleCapacity;
-        const rows = this.state.entries.slice(0, capacity).map((item, index) => ({
+        return this.state.entries.slice(0, this.visibleCapacity).map((item, index) => ({
             key: this._itemKey(item),
             item,
             index,
             classes: this.entryCardClass(item),
         }));
-        while (rows.length < capacity) {
-            rows.push({ key: `empty-${rows.length}`, item: null, index: rows.length, classes: "is-empty" });
-        }
-        return rows;
     }
 
     get visibleAlerts() {
@@ -162,17 +159,70 @@ export class NspParkingLiveMonitor extends Component {
         if (!item) {
             return "is-empty";
         }
-        return this.state.flashKeys.includes(this._itemKey(item)) ? "is-entry is-new" : "is-entry";
+        const classes = ["is-entry"];
+        if (this.isVerifying(item)) {
+            classes.push("is-verifying");
+        } else if (this.isNewEntry(item)) {
+            classes.push("is-new");
+        }
+        if (item.event_type === "check_out") {
+            classes.push("is-check-out");
+        }
+        return classes.join(" ");
     }
 
-    vehicleIconClass(item) {
-        if (item?.vehicle_type === "motorbike") {
-            return "fa fa-motorcycle";
+    isNewEntry(item) {
+        return item?.event_type === "check_in" && this.state.flashKeys.includes(this._itemKey(item));
+    }
+
+    isVerifying(item) {
+        const value = String(item?.verification_status || item?.status || "").trim().toLowerCase();
+        return ["verifying", "pending", "processing", "in_review"].includes(value);
+    }
+
+    entryStatusLabel(item) {
+        if (this.isVerifying(item)) {
+            return "ĐANG XÁC MINH";
         }
-        if (item?.vehicle_type === "truck") {
-            return "fa fa-truck";
+        if (this.isNewEntry(item)) {
+            return "MỚI VÀO";
         }
-        return "fa fa-car";
+        if (item?.event_type === "check_out") {
+            return "ĐÃ RA";
+        }
+        return "ĐÃ VÀO";
+    }
+
+    entryStatusClass(item) {
+        if (this.isVerifying(item)) {
+            return "is-verifying";
+        }
+        if (this.isNewEntry(item)) {
+            return "is-new";
+        }
+        return item?.event_type === "check_out" ? "is-out" : "is-in";
+    }
+
+    personInitials(item) {
+        const name = String(item?.employee_name || "").trim();
+        if (!name) {
+            return "?";
+        }
+        return name
+            .split(/\s+/)
+            .filter(Boolean)
+            .slice(-2)
+            .map((part) => part.charAt(0).toUpperCase())
+            .join("");
+    }
+
+    toggleSettings() {
+        this.state.settingsOpen = !this.state.settingsOpen;
+    }
+
+    selectDisplayColumns(value) {
+        this.setDisplayColumns(value);
+        this.state.settingsOpen = false;
     }
 
     _normalizeDisplayColumns(value) {
@@ -302,7 +352,8 @@ export class NspParkingLiveMonitor extends Component {
 
         this.clearVehicleAlert(payload);
         if (fromSnapshot) {
-            this.insertEntryNow(payload, { flash: false });
+            const recentCheckIn = payload.event_type === "check_in" && this._isRecent(payload, NEW_CARD_HOLD_MS);
+            this.insertEntryNow(payload, { flash: recentCheckIn });
             return;
         }
         this.enqueueEntry(payload);
@@ -374,13 +425,17 @@ export class NspParkingLiveMonitor extends Component {
     }
 
     flashEntries(items) {
-        this.state.flashKeys = items.map((item) => this._itemKey(item)).filter(Boolean);
+        const keys = items
+            .filter((item) => item?.event_type === "check_in")
+            .map((item) => this._itemKey(item))
+            .filter(Boolean);
+        this.state.flashKeys = [...new Set([...this.state.flashKeys, ...keys])];
         if (this.flashTimer) {
             clearTimeout(this.flashTimer);
         }
         this.flashTimer = setTimeout(() => {
             this.state.flashKeys = [];
-        }, 500);
+        }, NEW_CARD_HOLD_MS);
     }
 
     addAlert(item) {
