@@ -4,12 +4,11 @@ from odoo.exceptions import ValidationError
 from odoo.addons.nsp_core.utils import new_management_code
 
 
-VALID_DEVICE_TYPE_CODES = {"SERVER", "CONTROLLER", "RFID_READER", "ANTENNA"}
+VALID_DEVICE_TYPE_CODES = {"SERVER", "CONTROLLER", "RFID_READER"}
 DEVICE_CODE_PREFIX = {
     "SERVER": "EDGE",
     "CONTROLLER": "CTRL",
     "RFID_READER": "DEV",
-    "ANTENNA": "ANT",
 }
 
 
@@ -18,17 +17,20 @@ class DeviceWhitelist(models.Model):
 
     Device Whitelist answers only: which physical/runtime device exists and what
     stable code identifies it. It never stores deployment topology. Server,
-    Controller, RFID Reader and Antenna are assembled only inside Reader
-    Calibration or a published Parking Layout.
+    Controller and RFID Reader are assembled only inside Reader Calibration
+    or a published Parking Layout. Antenna is not a Device Whitelist identity.
     """
 
     _name = "nsp.device.whitelist"
     _description = "NSP Device Whitelist"
     _inherit = ["image.mixin"]
     _rec_name = "display_name"
-    _order = "device_type_id, technical_code, id"
+    _order = "device_type_id, name, technical_code, id"
 
-    name = fields.Char(string="Device Name", readonly=True, copy=False, index=True)
+    name = fields.Char(
+        string="Device Name", required=True, copy=False, index=True,
+        help="Friendly name entered by the operator and used for display. Technical identity remains in Management Code.",
+    )
     display_name = fields.Char(compute="_compute_display_name", store=True)
     active = fields.Boolean(default=True, index=True)
     device_type_id = fields.Many2one(
@@ -44,7 +46,6 @@ class DeviceWhitelist(models.Model):
             ("SERVER", "Server"),
             ("CONTROLLER", "Controller"),
             ("RFID_READER", "RFID Reader"),
-            ("ANTENNA", "Antenna"),
         ],
         string="Device Type", compute="_compute_device_type_badge", readonly=True,
     )
@@ -54,7 +55,7 @@ class DeviceWhitelist(models.Model):
     )
     serial_number = fields.Char(
         string="Serial Number", index=True, copy=False,
-        help="Required for RFID Reader; optional for Server, Controller and Antenna.",
+        help="Required for RFID Reader; optional for Server and Controller.",
     )
 
     # One-to-one technical mirrors. These records provide runtime status fields
@@ -92,9 +93,13 @@ class DeviceWhitelist(models.Model):
                 if record.device_type_code in VALID_DEVICE_TYPE_CODES else False
             )
 
-    @api.depends("device_type_id.name", "serial_number", "technical_code")
+    @api.depends("name", "device_type_id.name", "serial_number", "technical_code")
     def _compute_display_name(self):
         for record in self:
+            friendly_name = str(record.name or "").strip()
+            if friendly_name:
+                record.display_name = friendly_name
+                continue
             identity = record.serial_number or record.technical_code or ""
             record.display_name = "%s · %s" % (
                 record.device_type_id.name or _("Device"), identity,
@@ -135,17 +140,20 @@ class DeviceWhitelist(models.Model):
             values = dict(source)
             type_code = self._type_code_from_values(values)
             if type_code not in VALID_DEVICE_TYPE_CODES:
-                raise ValidationError(_("Select Server, Controller, RFID Reader or Antenna."))
+                raise ValidationError(_("Select Server, Controller or RFID Reader."))
             serial = self._normalize_serial(values.get("serial_number"))
             if type_code == "RFID_READER" and not serial:
                 raise ValidationError(_("Serial Number is required for RFID Reader."))
             code = self._normalize_code(values.get("technical_code"))
             if not code:
                 code = new_management_code(DEVICE_CODE_PREFIX[type_code])
+            friendly_name = str(values.get("name") or "").strip()
             values.update({
                 "technical_code": code,
                 "serial_number": serial,
-                "name": serial or code,
+                # Keep backward compatibility for API/import creates that do not
+                # yet send Device Name. The UI requires an explicit friendly name.
+                "name": friendly_name or serial or code,
             })
             prepared.append(values)
         records = super().create(prepared)
@@ -154,7 +162,10 @@ class DeviceWhitelist(models.Model):
 
     def write(self, vals):
         values = dict(vals)
-        values.pop("name", None)
+        if "name" in values:
+            values["name"] = str(values.get("name") or "").strip()
+            if not values["name"]:
+                raise ValidationError(_("Device Name is required."))
         if "technical_code" in values:
             values["technical_code"] = self._normalize_code(values.get("technical_code"))
         if "serial_number" in values:
@@ -176,19 +187,17 @@ class DeviceWhitelist(models.Model):
             serial = values.get("serial_number", record.serial_number)
             if type_code == "RFID_READER" and not self._normalize_serial(serial):
                 raise ValidationError(_("Serial Number is required for RFID Reader."))
-            if "serial_number" in values or "technical_code" in values:
-                values["name"] = str(
-                    serial or values.get("technical_code", record.technical_code) or ""
-                ).strip()
 
         result = super().write(values)
         if not self.env.context.get("nsp_skip_identity_mirror_sync"):
             self._sync_identity_mirrors()
         return result
 
-    @api.constrains("device_type_id", "technical_code", "serial_number")
+    @api.constrains("name", "device_type_id", "technical_code", "serial_number")
     def _check_device_identity(self):
         for record in self:
+            if not str(record.name or "").strip():
+                raise ValidationError(_("Device Name is required."))
             if record.device_type_code not in VALID_DEVICE_TYPE_CODES:
                 raise ValidationError(_("Unsupported Device Type."))
             if not self._normalize_code(record.technical_code):
@@ -291,30 +300,6 @@ class DeviceWhitelist(models.Model):
                 "controller_id": False,
                 "reader_id": runtime.id,
                 "antenna_id": False,
-            })
-            return True
-
-        if type_code == "ANTENNA":
-            Model = self.env["nsp.device.antenna"].sudo().with_context(active_test=False, **context)
-            runtime = self.antenna_id.exists() or Model.search(
-                [("technical_code", "=", self.technical_code)], limit=1,
-            )
-            values = {
-                "technical_code": self.technical_code,
-                "serial_number": self.serial_number,
-                "device_id": False,
-                "antenna_no": 0,
-                "active": active,
-            }
-            runtime.write(values) if runtime else None
-            runtime = runtime or Model.create(values)
-            if runtime.whitelist_id != self:
-                runtime.write({"whitelist_id": self.id})
-            self.with_context(nsp_skip_identity_mirror_sync=True).write({
-                "edge_server_id": False,
-                "controller_id": False,
-                "reader_id": False,
-                "antenna_id": runtime.id,
             })
             return True
 

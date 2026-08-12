@@ -12,8 +12,4 @@
         <field name="name">RFID Reader</field>
         <field name="code">RFID_READER</field>
     </record>
-    <record id="device_type_antenna" model="nsp.device.type">
-        <field name="name">Antenna</field>
-        <field name="code">ANTENNA</field>
-    </record>
 </odoo>

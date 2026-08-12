@@ -5,6 +5,7 @@
         <field name="model">nsp.device.whitelist</field>
         <field name="arch" type="xml">
             <search string="Device Whitelist">
+                <field name="name" string="Device Name"/>
                 <field name="technical_code" string="Management Code"/>
                 <field name="serial_number"/>
                 <field name="device_type_id"/>
@@ -25,14 +26,14 @@
             <list string="Device Whitelist">
                 <field name="image_128" string="Photo" widget="image" class="o_avatar" optional="show"/>
                 <field name="active" widget="boolean_toggle"/>
+                <field name="name" string="Device Name" decoration-bf="1"/>
                 <field name="device_type_code" column_invisible="1"/>
                 <field name="device_type_badge" string="Device Type" widget="badge" readonly="1"
                        decoration-info="device_type_badge == 'SERVER'"
                        decoration-warning="device_type_badge == 'CONTROLLER'"
-                       decoration-success="device_type_badge == 'RFID_READER'"
-                       decoration-primary="device_type_badge == 'ANTENNA'"/>
-                <field name="technical_code" string="Management Code" decoration-bf="1"/>
+                       decoration-success="device_type_badge == 'RFID_READER'"/>
                 <field name="serial_number" string="Serial Number"/>
+                <field name="technical_code" string="Management Code" optional="hide"/>
             </list>
         </field>
     </record>
@@ -46,33 +47,27 @@
                     <field name="image_1920" widget="image" class="oe_avatar"
                            options="{'preview_image': 'image_128'}"/>
                     <div class="oe_title">
-                        <label for="technical_code" string="Management Code"/>
+                        <label for="name" string="Device Name"/>
                         <h1>
-                            <field name="technical_code" readonly="1" widget="CopyClipboardChar"
-                                   placeholder="Generated automatically"/>
+                            <field name="name" placeholder="e.g. Reader Gate A, Controller Parking B1"/>
                         </h1>
                     </div>
                     <group>
-                        <group string="Device Identity">
+                        <group string="Device Information">
                             <field name="device_type_code" invisible="1"/>
                             <field name="device_type_id" string="Device Type"
                                    readonly="id"
-                                   domain="[('active','=',True),('code','in',['SERVER','CONTROLLER','RFID_READER','ANTENNA'])]"
+                                   domain="[('active','=',True),('code','in',['SERVER','CONTROLLER','RFID_READER'])]"
                                    options="{'no_create': True, 'no_quick_create': True, 'no_create_edit': True, 'no_open': True}"
-                                   placeholder="Select Server, Controller, RFID Reader or Antenna"/>
-                            <field name="device_type_badge" string="Device Type" widget="badge" readonly="1"
-                                   invisible="not device_type_id"
-                                   decoration-info="device_type_badge == 'SERVER'"
-                                   decoration-warning="device_type_badge == 'CONTROLLER'"
-                                   decoration-success="device_type_badge == 'RFID_READER'"
-                                   decoration-primary="device_type_badge == 'ANTENNA'"/>
+                                   placeholder="Select Server, Controller or RFID Reader"/>
                             <field name="serial_number" string="Serial Number"
                                    required="device_type_code == 'RFID_READER'"
-                                   placeholder="Required for RFID Reader; optional for other device types"/>
+                                   placeholder="Required for RFID Reader; optional for Server/Controller"/>
+                            <field name="technical_code" string="Management Code" readonly="1"
+                                   widget="CopyClipboardChar" placeholder="Generated automatically"/>
                             <field name="active" widget="boolean_toggle"/>
                         </group>
                     </group>
-                    <field name="name" invisible="1"/>
                     <field name="edge_server_id" invisible="1"/>
                     <field name="controller_id" invisible="1"/>
                     <field name="reader_id" invisible="1"/>
@@ -87,6 +82,7 @@
         <field name="res_model">nsp.device.whitelist</field>
         <field name="view_mode">list,form</field>
         <field name="search_view_id" ref="nsp_device_whitelist_search_view"/>
+        <field name="domain">[('device_type_code', 'in', ['SERVER', 'CONTROLLER', 'RFID_READER'])]</field>
         <field name="context">{'search_default_active': 1}</field>
     </record>
 </odoo>
