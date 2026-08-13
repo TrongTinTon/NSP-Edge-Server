@@ -171,104 +171,67 @@ class NspSyncBusinessAdapter(models.Model):
         }
 
     @api.model
-    def _serialize_parking_log_legacy(self, record):
-        """Serialize the lean Edge Parking Log to the existing Cloud route contract.
-
-        `parking_transaction` remains a transport-route compatibility name until
-        Cloud is upgraded. Redundant snapshot columns are deliberately not stored
-        on Edge; stable codes are resolved from referenced master/context records.
-        """
-        layout_lane = record.layout_lane_id
-        area = record.parking_area_id or (layout_lane.parking_area_id if layout_lane else False)
-        lane = record.lane_id or (layout_lane.lane_id if layout_lane else False)
-        controller = layout_lane.controller_id if layout_lane else self.env["nsp.controller"].browse()
-        sequence_rows = layout_lane.antenna_sequence_ids.sorted("sequence") if layout_lane else self.env["nsp.parking.layout.lane.sequence"].browse()
-        sequence_path = ">".join(
-            "%s:%s" % (
-                row.reader_id.device_code or row.reader_id.serial_number or row.reader_id.id,
-                int(row.port_no or 0),
-            )
-            for row in sequence_rows
-        )
-        allowed_duration = sum(
-            float(row.duration_from_previous or 0.0)
-            for row in sequence_rows[1:]
-        ) if layout_lane else 0.0
-        last_step = sequence_rows[-1:]
-
-        # Detection rows are a working buffer and are deleted after a movement is
-        # consumed. Keep the legacy transport field for compatibility, but do not
-        # make Cloud push depend on retained technical Detection history.
-        observed_duration = 0.0
+    def _serialize_parking_log(self, record):
+        """Serialize the final Edge Parking business event using the lean Cloud contract."""
+        area = record.parking_area_id
+        lane = record.lane_id
         payload = {
             "record_key": record.log_uid,
-            # External compatibility fields; internal Edge semantics are Parking Log.
-            "transaction_uid": record.log_uid,
-            "controller_code": str(controller.controller_id or "").strip().upper(),
+            "log_uid": record.log_uid,
             "parking_area_code": str(area.code or "").strip().upper() if area else "",
             "lane_code": str(lane.code or "").strip().upper() if lane else "",
             "layout_revision": int(record.layout_revision or 0),
-            "sequence_path": sequence_path,
-            "observed_duration_seconds": round(max(0.0, observed_duration), 6),
-            "allowed_duration_seconds": round(max(0.001, float(allowed_duration or 0.0)), 6),
-            "serial_number": (last_step.reader_id.serial_number or "") if last_step else "",
-            "port_no": int(last_step.port_no or 0) if last_step else 0,
             "event_type": record.event_type,
             "event_time": self._dt(record.event_time),
             "vehicle_tid": record.vehicle_tid or "",
             "vehicle_code": record.vehicle_id.vehicle_code if record.vehicle_id else "",
-            "license_plate": record.vehicle_id.license_plate if record.vehicle_id else "",
             "user_tid": record.user_tid or "",
             "user_code": record.user_id.user_code if record.user_id else "",
-            "observed_user_tids": record.user_tid or "",
-            "observed_user_codes": record.user_id.user_code if record.user_id else "",
             "borrow_uid": record.borrow_id.borrow_code if record.borrow_id else "",
             "decision": record.decision if record.decision in ("allowed", "denied") else "denied",
         }
         if payload["decision"] == "denied":
-            payload["decision_reason_code"] = record.reason_code or "unknown"
+            payload["reason_code"] = record.reason_code or "unknown"
         return payload
 
     def _push_cursor_domain(self):
         self.ensure_one()
-        # Parking Logs are immutable append-only rows. A monotonic database ID is
-        # therefore a smaller and more reliable cursor than write_date + ID.
+        # Parking Logs are immutable append-only rows; ID is the durable sync cursor.
         last_id = int(self.last_push_record_id or 0)
         return [("id", ">", last_id)] if last_id else []
 
     def _serialize_push_batch(self, kind):
         self.ensure_one()
+        # The concrete HTTP route is the transport contract. Do not depend on
+        # nsp_sync's internal push-kind taxonomy here: business modules may add
+        # routes before the generic transport module knows their semantic name.
+        route = str(self.route_suffix or "").strip().strip("/")
         limit = max(1, min(int(self.batch_size or 100), 1000))
-        if kind == "edge_server_status":
+        if route == "edge/status":
             return {
                 "items": [self._serialize_edge_server_status()],
                 "cursor_at": fields.Datetime.now(),
                 "cursor_id": 0,
                 "has_more": False,
             }
-        domain = self._push_cursor_domain()
-        if kind in ("parking_transaction", "parking_log"):
-            records = self.env["nsp.parking.log"].sudo().search(
-                domain,
-                order="id asc",
-                limit=limit + 1,
-            )
-            serializer = self._serialize_parking_log_legacy
-        else:
+        if route != "edge/parking-logs":
             raise UserError(_("Unsupported push route: %s") % self.route_suffix)
+
+        records = self.env["nsp.parking.log"].sudo().search(
+            self._push_cursor_domain(), order="id asc", limit=limit + 1,
+        )
         has_more = len(records) > limit
         selected = records[:limit]
-        if kind in ("parking_transaction", "parking_log") and selected:
-            # Batch-prefetch all relations touched by the legacy transport serializer.
-            # This keeps Cloud push bounded to a handful of queries instead of N+1.
-            selected.mapped("layout_lane_id.antenna_sequence_ids.reader_id")
+        if selected:
+            # Prefetch only relations serialized by the lean Cloud contract.
+            selected.mapped("parking_area_id")
+            selected.mapped("lane_id")
             selected.mapped("vehicle_id")
             selected.mapped("user_id")
             selected.mapped("borrow_id")
         last = selected[-1:] if selected else selected
         return {
-            "items": [serializer(record) for record in selected],
-            # cursor_at remains informational; cursor_id is the durable append cursor.
+            "items": [self._serialize_parking_log(record) for record in selected],
             "cursor_at": fields.Datetime.now() if last else self.last_push_at,
             "cursor_id": last.id if last else self.last_push_record_id,
             "has_more": has_more,
@@ -1265,7 +1228,7 @@ class NspSyncBusinessAdapter(models.Model):
             return False
         for field_name in (
             "record_key", "tid", "borrow_uid", "branch_code", "user_code",
-            "vehicle_code", "license_plate", "parking_area_code", "log_uid", "transaction_uid",
+            "vehicle_code", "license_plate", "parking_area_code", "log_uid",
             "lane_calibration_code", "event_uid", "serial_number", "code",
             "controller_code", "edge_server_code",
         ):

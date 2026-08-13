@@ -11,47 +11,74 @@ from odoo.exceptions import UserError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
-SYNC_ROUTE_DIRECTIONS = {
-    "edge/status": "push",
-    "edge/parking-runtime/snapshot": "pull",
-    "edge/users/snapshot": "pull",
-    "edge/vehicle-reference/snapshot": "pull",
-    "edge/vehicles/snapshot": "pull",
-    "edge/rfid-assignments/snapshot": "pull",
-    "edge/vehicle-borrows/snapshot": "pull",
-    "edge/lane-calibrations/snapshot": "pull",
-    "edge/lane-calibrations/events": "push",
-    "edge/lane-calibrations/status": "push",
-    "edge/parking-transactions": "push",
+SYNC_ROUTE_SPECS = {
+    "edge/status": {
+        "name": "Edge Status",
+        "endpoint_code": "nsp_edge_status",
+        "direction": "push", "interval": 1, "batch_size": 1, "kind": "edge_server_status",
+    },
+    "edge/parking-runtime/snapshot": {
+        "name": "Parking Runtime Snapshot",
+        "endpoint_code": "nsp_edge_parking_runtime_snapshot",
+        "direction": "pull", "interval": 1, "batch_size": 1, "kind": "parking_runtime",
+    },
+    "edge/users/snapshot": {
+        "name": "Users Snapshot",
+        "endpoint_code": "nsp_edge_users_snapshot",
+        "direction": "pull", "interval": 5, "batch_size": 500, "kind": "user",
+    },
+    "edge/vehicle-reference/snapshot": {
+        "name": "Vehicle Reference Snapshot",
+        "endpoint_code": "nsp_edge_vehicle_reference_snapshot",
+        "direction": "pull", "interval": 5, "batch_size": 1000, "kind": "vehicle_config",
+    },
+    "edge/vehicles/snapshot": {
+        "name": "Vehicles Snapshot",
+        "endpoint_code": "nsp_edge_vehicles_snapshot",
+        "direction": "pull", "interval": 5, "batch_size": 500, "kind": "vehicle",
+    },
+    "edge/rfid-assignments/snapshot": {
+        "name": "RFID Runtime Assignments Snapshot",
+        "endpoint_code": "nsp_edge_rfid_assignments_snapshot",
+        "direction": "pull", "interval": 5, "batch_size": 1000, "kind": "rfid_runtime_assignment",
+    },
+    "edge/vehicle-borrows/snapshot": {
+        "name": "Vehicle Borrows Snapshot",
+        "endpoint_code": "nsp_edge_vehicle_borrows_snapshot",
+        "direction": "pull", "interval": 5, "batch_size": 500, "kind": "vehicle_borrow",
+    },
+    "edge/lane-calibrations/snapshot": {
+        "name": "Lane Calibration Snapshot",
+        "endpoint_code": "nsp_edge_lane_calibration_snapshot",
+        "direction": "pull", "interval": 1, "batch_size": 100, "kind": "lane_calibration",
+    },
+    "edge/lane-calibrations/events": {
+        "name": "Lane Calibration Events",
+        "endpoint_code": "nsp_edge_lane_calibration_events",
+        "direction": "push", "interval": 1, "batch_size": 100, "kind": "lane_calibration_event",
+    },
+    "edge/lane-calibrations/status": {
+        "name": "Lane Calibration Status",
+        "endpoint_code": "nsp_edge_lane_calibration_status",
+        "direction": "push", "interval": 1, "batch_size": 100, "kind": "lane_calibration_status",
+    },
+    "edge/parking-logs": {
+        "name": "Parking Logs",
+        "endpoint_code": "nsp_edge_parking_logs",
+        "direction": "push", "interval": 1, "batch_size": 200, "kind": "parking_log",
+    },
 }
-NSP_SYNC_ALLOWED_ROUTES = tuple(SYNC_ROUTE_DIRECTIONS)
+NSP_SYNC_ALLOWED_ROUTES = tuple(SYNC_ROUTE_SPECS)
+SYNC_ROUTE_DIRECTIONS = {route: spec["direction"] for route, spec in SYNC_ROUTE_SPECS.items()}
 JOB_SEQUENCE = {route: sequence * 10 for sequence, route in enumerate(NSP_SYNC_ALLOWED_ROUTES, start=1)}
 DEFAULT_JOB_SETTINGS = {
-    "edge/status": {"schedule_interval_minutes": 1, "batch_size": 1},
-    "edge/parking-runtime/snapshot": {"schedule_interval_minutes": 1, "batch_size": 1},
-    "edge/users/snapshot": {"schedule_interval_minutes": 5, "batch_size": 500},
-    "edge/vehicle-reference/snapshot": {"schedule_interval_minutes": 5, "batch_size": 1000},
-    "edge/vehicles/snapshot": {"schedule_interval_minutes": 5, "batch_size": 500},
-    "edge/rfid-assignments/snapshot": {"schedule_interval_minutes": 5, "batch_size": 1000},
-    "edge/vehicle-borrows/snapshot": {"schedule_interval_minutes": 5, "batch_size": 500},
-    "edge/lane-calibrations/snapshot": {"schedule_interval_minutes": 1, "batch_size": 100},
-    "edge/lane-calibrations/events": {"schedule_interval_minutes": 1, "batch_size": 100},
-    "edge/lane-calibrations/status": {"schedule_interval_minutes": 1, "batch_size": 100},
-    "edge/parking-transactions": {"schedule_interval_minutes": 1, "batch_size": 200},
+    route: {
+        "schedule_interval_minutes": spec["interval"],
+        "batch_size": spec["batch_size"],
+    }
+    for route, spec in SYNC_ROUTE_SPECS.items()
 }
-ACTION_KINDS = {
-    "edge/status": "edge_server_status",
-    "edge/parking-runtime/snapshot": "parking_runtime",
-    "edge/users/snapshot": "user",
-    "edge/vehicle-reference/snapshot": "vehicle_config",
-    "edge/vehicles/snapshot": "vehicle",
-    "edge/rfid-assignments/snapshot": "rfid_runtime_assignment",
-    "edge/vehicle-borrows/snapshot": "vehicle_borrow",
-    "edge/lane-calibrations/snapshot": "lane_calibration",
-    "edge/lane-calibrations/events": "lane_calibration_event",
-    "edge/lane-calibrations/status": "lane_calibration_status",
-    "edge/parking-transactions": "parking_transaction",
-}
+ACTION_KINDS = {route: spec["kind"] for route, spec in SYNC_ROUTE_SPECS.items()}
 
 class NspSyncJob(models.Model):
     _name = "nsp.sync.job"
@@ -193,43 +220,130 @@ class NspSyncJob(models.Model):
             raise UserError(_("Outbound Sync Jobs run only on the Edge Server."))
 
     @api.model
+    def _record_delta(self, record, values):
+        delta = {}
+        for key, expected in values.items():
+            current = record[key]
+            if record._fields[key].type == "many2one":
+                current = current.id
+            if current != expected:
+                delta[key] = expected
+        return delta
+
+    @api.model
+    def _sync_route_manager(self):
+        """Return one stable local outbound route catalogue manager."""
+        model_id = self.env["ir.model"].sudo()._get_id(self._name)
+        if not model_id:
+            raise UserError(_("NSP Sync model metadata is unavailable."))
+        Manager = self.env["action.endpoint.manager"].sudo()
+        manager = self.env.ref(
+            "nsp_sync.action_endpoint_manager_nsp_sync_routes",
+            raise_if_not_found=False,
+        )
+        if not manager:
+            manager = Manager.search([
+                ("model_id", "=", model_id),
+                ("name", "=", "NSP Sync Remote Routes"),
+            ], limit=1)
+        if not manager:
+            manager = Manager.create({
+                "name": "NSP Sync Remote Routes",
+                "model_id": model_id,
+            })
+        elif manager.model_id.id != model_id:
+            manager.write({"model_id": model_id})
+        return manager
+
+    @api.model
+    def _ensure_sync_action_definitions(self):
+        """Create/repair the local outbound Core API route descriptors.
+
+        These records are transport metadata, not inbound Edge endpoints. Cloud
+        implementations are declared independently by nsp_master_gatekeeper.
+        Authenticate must be self-healing and must not depend on a prior manual
+        "Generate API Actions" operation or on stale module-data rows.
+        """
+        manager = self._sync_route_manager()
+        Action = self.env["ir.actions.core_api"].sudo()
+        model_id = self.env["ir.model"].sudo()._get_id(self._name)
+        actions = Action.search([("endpoint_manager_id", "=", manager.id)])
+
+        by_route = {}
+        by_code = {}
+        for action in actions.sorted(key=lambda rec: rec.id):
+            route = str(action.route_suffix or "").strip().strip("/")
+            code = str(action.endpoint_code or "").strip()
+            if route:
+                by_route.setdefault(route, action)
+            if code:
+                by_code.setdefault(code, action)
+
+        create_vals = []
+        resolved = {}
+        for route, spec in SYNC_ROUTE_SPECS.items():
+            action = by_route.get(route) or by_code.get(spec["endpoint_code"])
+            vals = {
+                "name": spec["name"],
+                "model_id": model_id,
+                "code": "model.api_client_route_not_available()",
+                "endpoint_manager_id": manager.id,
+                "endpoint_code": spec["endpoint_code"],
+                "route_suffix": route,
+                "http_methods": "POST",
+            }
+            if action:
+                delta = self._record_delta(action, vals)
+                if delta:
+                    action.write(delta)
+                resolved[route] = action
+            else:
+                create_vals.append(vals)
+
+        if create_vals:
+            for action in Action.create(create_vals):
+                resolved[str(action.route_suffix or "").strip().strip("/")] = action
+
+        missing = [route for route in NSP_SYNC_ALLOWED_ROUTES if route not in resolved]
+        if missing:
+            raise UserError(
+                _("Unable to create NSP Core API route definitions: %s") % ", ".join(missing)
+            )
+        return resolved
+
+    @api.model
     def ensure_default_jobs(self, auth_records):
-        """Create/repair the supported job set using bounded queries."""
+        """Create/repair the supported job set from the canonical route catalogue."""
         auth_records = auth_records.exists()
         if not auth_records:
             return self.browse()
         self._ensure_edge_server_instance()
-        Action = self.env["ir.actions.core_api"].sudo()
         version = self.env["core.api.version"].sudo().get_default_version()
         if not version:
             raise UserError(_("A default Core API Version is required before creating Sync Jobs."))
 
-        actions = Action.search([
-            ("endpoint_manager_id", "!=", False),
-            ("endpoint_code", "!=", False),
-            ("route_suffix", "in", list(NSP_SYNC_ALLOWED_ROUTES)),
-        ])
-        action_by_route = {}
-        for action in actions.sorted(key=lambda rec: rec.id):
-            route = str(action.route_suffix or "").strip().strip("/")
-            action_by_route.setdefault(route, action)
-        missing_routes = [route for route in NSP_SYNC_ALLOWED_ROUTES if route not in action_by_route]
-        if missing_routes:
-            raise UserError(
-                _("Missing NSP Core API endpoint definitions: %s") % ", ".join(missing_routes)
-            )
+        action_by_route = self._ensure_sync_action_definitions()
 
         existing_jobs = self.search([("auth_id", "in", auth_records.ids)])
         existing_by_auth = {}
+        unsupported_jobs = self.browse()
         for job in existing_jobs:
-            existing_by_auth.setdefault(job.auth_id.id, set()).add(
-                (job.route_suffix or "").strip().strip("/")
-            )
+            route = (job.route_suffix or "").strip().strip("/")
+            if route in NSP_SYNC_ALLOWED_ROUTES:
+                existing_by_auth.setdefault(job.auth_id.id, {})[route] = job
+            else:
+                unsupported_jobs |= job
+        if unsupported_jobs:
+            unsupported_jobs.write({
+                "active": False,
+                "status": "disabled",
+                "last_message": _("Route is no longer supported by NSP Sync."),
+            })
 
         now = fields.Datetime.now()
         vals_list = []
         for auth in auth_records:
-            existing_routes = existing_by_auth.get(auth.id, set())
+            existing_routes = existing_by_auth.get(auth.id, {})
             for route in NSP_SYNC_ALLOWED_ROUTES:
                 if route in existing_routes:
                     continue
@@ -249,16 +363,20 @@ class NspSyncJob(models.Model):
 
         for job in existing_jobs | created:
             route = (job.route_suffix or "").strip().strip("/")
+            if route not in NSP_SYNC_ALLOWED_ROUTES:
+                continue
             values = {}
-            expected_sequence = JOB_SEQUENCE.get(route)
-            if expected_sequence is not None and job.sequence != expected_sequence:
+            canonical_action = action_by_route[route]
+            if job.sync_action_id != canonical_action:
+                values["sync_action_id"] = canonical_action.id
+            expected_sequence = JOB_SEQUENCE[route]
+            if job.sequence != expected_sequence:
                 values["sequence"] = expected_sequence
-            settings = DEFAULT_JOB_SETTINGS.get(route)
-            if settings:
-                if job.schedule_interval_minutes < 1:
-                    values["schedule_interval_minutes"] = settings["schedule_interval_minutes"]
-                if job.batch_size < 1:
-                    values["batch_size"] = settings["batch_size"]
+            settings = DEFAULT_JOB_SETTINGS[route]
+            if job.schedule_interval_minutes < 1:
+                values["schedule_interval_minutes"] = settings["schedule_interval_minutes"]
+            if job.batch_size < 1:
+                values["batch_size"] = settings["batch_size"]
             if values:
                 job.write(values)
         return created
@@ -651,133 +769,17 @@ class NspSyncJob(models.Model):
             "message": "Pushed %s record(s)." % len(items),
         }
 
-    def _parking_runtime_pull_record_key(self, data=False):
-        self.ensure_one()
-        revision = 0
-        if isinstance(data, dict):
-            try:
-                revision = int(data.get("revision") or 0)
-            except (TypeError, ValueError):
-                revision = 0
-        return "PARKING-RUNTIME:R%s" % revision if revision > 0 else "PARKING-RUNTIME:REQUEST"
-
-    def _mark_parking_runtime_pull_result(
-        self, status, message, request_payload=False, response=False, data=False,
-    ):
-        self.ensure_one()
-        return self.env["nsp.sync.record"].sudo().mark_result(
-            sync_job=self,
-            action_code=self.sync_action_code,
-            action_name=self.sync_action_name,
-            route_suffix=self.route_suffix,
-            record_key=self._parking_runtime_pull_record_key(data=data),
-            status=status,
-            message=message,
-            payload=request_payload,
-            response=response,
-            operation="pull",
-        )
-
     def run_pull_once(self):
         self.ensure_one()
-        kind = self._action_kind()
         request_payload = self._build_pull_payload()
-        response = False
-        try:
-            response = self._post_remote(self.sync_action_id, request_payload, timeout=120)
-            data = self._json_or_error(response)
-        except Exception as exc:
-            if kind == "parking_runtime":
-                response_payload = False
-                if response:
-                    try:
-                        response_payload = response.json()
-                    except Exception:
-                        response_payload = {
-                            "http_status": getattr(response, "status_code", False),
-                            "body": getattr(response, "text", False),
-                        }
-                self._mark_parking_runtime_pull_result(
-                    "failed",
-                    "Parking Runtime snapshot request failed: %s" % exc,
-                    request_payload=request_payload,
-                    response=response_payload,
-                )
-            raise
+        data = self._json_or_error(
+            self._post_remote(self.sync_action_id, request_payload, timeout=120)
+        )
+        kind = self._action_kind()
 
         if kind == "parking_runtime":
-            try:
-                result = self._apply_parking_runtime_snapshot(
-                    data, request_payload=request_payload
-                )
-            except Exception as exc:
-                self._mark_parking_runtime_pull_result(
-                    "failed",
-                    "Parking Runtime snapshot apply failed: %s" % exc,
-                    request_payload=request_payload,
-                    response=data,
-                    data=data,
-                )
-                raise
-            area_count = len(data.get("parking_areas") or [])
-            if result.get("stale"):
-                message = (
-                    "Parking Runtime snapshot revision %(incoming)s skipped as stale; "
-                    "Edge Sync Job is already at revision %(current)s and the local "
-                    "Parking projection matches Cloud; Cloud returned %(areas)s Parking Layout(s)."
-                    % {
-                        "incoming": result.get("revision"),
-                        "current": result.get("current_revision") or self.snapshot_revision,
-                        "areas": area_count,
-                    }
-                )
-            elif result.get("recovery_replay"):
-                message = (
-                    "Parking Runtime snapshot revision %(revision)s recovery-applied because "
-                    "the local Parking projection was missing/incomplete even though the "
-                    "previous Edge Sync Job revision was %(previous)s; verified %(areas)s "
-                    "Parking Layout(s), %(lanes)s Lane Configuration(s), %(readers)s Reader "
-                    "Configuration(s), %(points)s Sequence point(s)."
-                    % {
-                        "revision": result.get("revision"),
-                        "previous": result.get("previous_revision"),
-                        "areas": result.get("parking_area_count", area_count),
-                        "lanes": result.get("lane_count", 0),
-                        "readers": result.get("reader_config_count", 0),
-                        "points": result.get("sequence_point_count", 0),
-                    }
-                )
-            else:
-                message = (
-                    "Parking Runtime snapshot revision %(revision)s applied and verified; "
-                    "%(removed)s stale record(s) removed/archived; %(areas)s Parking Layout(s), "
-                    "%(lanes)s Lane Configuration(s), %(readers)s Reader Configuration(s), "
-                    "%(points)s Sequence point(s)."
-                    % {
-                        "revision": result.get("revision"),
-                        "removed": result.get("removed", 0),
-                        "areas": result.get("parking_area_count", area_count),
-                        "lanes": result.get("lane_count", 0),
-                        "readers": result.get("reader_config_count", 0),
-                        "points": result.get("sequence_point_count", 0),
-                    }
-                )
-            self._mark_parking_runtime_pull_result(
-                "synced",
-                message,
-                request_payload=request_payload,
-                response={
-                    **data,
-                    "edge_apply_result": result,
-                },
-                data=data,
-            )
-            return {
-                "pulled": result.get("applied", 0),
-                "failed": 0,
-                "has_more": False,
-                "message": message,
-            }
+            result = self._apply_parking_runtime_snapshot(data, request_payload=request_payload)
+            return {"pulled": result["applied"], "failed": 0, "has_more": False, "message": "Parking Runtime snapshot revision %s applied; %s stale record(s) removed/archived." % (result["revision"], result["removed"])}
 
         if kind == "vehicle_config":
             records, removed = self._apply_vehicle_config_snapshot(
@@ -887,29 +889,14 @@ class NspSyncJob(models.Model):
 
     def action_run_now(self):
         self.run_once()
-        failed = self.filtered(lambda job: job.status == "failed")
-        if failed:
-            message = "; ".join(
-                "%s: %s" % (job.sync_action_name or job.route_suffix, job.last_message or _("Failed"))
-                for job in failed
-            )
-            notification_type = "danger"
-            sticky = True
-        else:
-            message = "; ".join(
-                "%s: %s" % (job.sync_action_name or job.route_suffix, job.last_message or _("Done"))
-                for job in self
-            ) or _("Sync Job completed.")
-            notification_type = "success"
-            sticky = False
         return {
             "type": "ir.actions.client",
             "tag": "display_notification",
             "params": {
                 "title": _("NSP Sync"),
-                "message": message,
-                "type": notification_type,
-                "sticky": sticky,
+                "message": _("Sync Job completed. Check Status and Last Message."),
+                "type": "success",
+                "sticky": False,
             },
         }
 

@@ -4,7 +4,7 @@ import { Component, onMounted, onWillUnmount, useState } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { useService } from "@web/core/utils/hooks";
 
-const BUS_EVENT = "nsp_parking_live_transaction";
+const BUS_EVENT = "nsp_parking_live_log";
 const DISPLAY_ROWS = 4;
 const DEFAULT_COLUMNS = 2;
 const MIN_COLUMNS = 1;
@@ -277,7 +277,7 @@ export class NspParkingLiveMonitor extends Component {
     }
 
     _itemKey(item) {
-        return String(item?.transaction_uid || item?.id || "");
+        return String(item?.log_uid || item?.id || "");
     }
 
     _vehicleKey(item) {

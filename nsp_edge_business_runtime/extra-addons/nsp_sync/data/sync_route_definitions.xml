@@ -94,13 +94,13 @@
     <field name="route_suffix">edge/lane-calibrations/status</field>
     <field name="http_methods">POST</field>
   </record>
-  <record id="api_parking_transactions" model="ir.actions.core_api">
-    <field name="name">Parking Transactions</field>
+  <record id="api_parking_logs" model="ir.actions.core_api">
+    <field name="name">Parking Logs</field>
     <field name="model_id" ref="model_nsp_sync_job"/>
     <field name="code">model.api_client_route_not_available()</field>
     <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_sync_routes"/>
-    <field name="endpoint_code">nsp_edge_parking_transactions</field>
-    <field name="route_suffix">edge/parking-transactions</field>
+    <field name="endpoint_code">nsp_edge_parking_logs</field>
+    <field name="route_suffix">edge/parking-logs</field>
     <field name="http_methods">POST</field>
   </record>
 </odoo>

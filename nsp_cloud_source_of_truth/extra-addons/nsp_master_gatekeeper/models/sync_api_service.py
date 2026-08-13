@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import json
 import logging
 
 from odoo import api, fields, models
@@ -9,7 +10,6 @@ from .lane_calibration.calibration_session import _normalize_raw_tid_value
 
 _logger = logging.getLogger(__name__)
 
-_DURATION_EPSILON_SECONDS = 0.001
 
 
 class NspMasterGatekeeperSyncApiService(models.AbstractModel):
@@ -1447,200 +1447,120 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             return self._measurement_error_response(exc)
 
     @api.model
-    def _prepare_parking_transaction_sync_cache(self, edge_server, items):
+    def _prepare_parking_log_sync_cache(self, edge_server, items):
         rows = [item for item in (items or []) if isinstance(item, dict)]
-        controller_codes = {
-            str(item.get("controller_code") or "").strip().upper()
-            for item in rows
-        }
         area_codes = {str(item.get("parking_area_code") or "").strip().upper() for item in rows}
         lane_codes = {str(item.get("lane_code") or "").strip().upper() for item in rows}
-        serials = {str(item.get("serial_number") or "").strip().upper() for item in rows}
         vehicle_codes = {str(item.get("vehicle_code") or "").strip().upper() for item in rows}
         user_codes = {str(item.get("user_code") or "").strip().upper() for item in rows}
         borrow_codes = {str(item.get("borrow_uid") or "").strip() for item in rows}
-        uids = {str(item.get("transaction_uid") or "").strip() for item in rows}
-        for values in (controller_codes, area_codes, lane_codes, serials, vehicle_codes, user_codes, borrow_codes, uids):
+        log_uids = {str(item.get("log_uid") or "").strip() for item in rows}
+        for values in (area_codes, lane_codes, vehicle_codes, user_codes, borrow_codes, log_uids):
             values.discard("")
-
-        Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
-        controllers = Controller.search([
-            ("controller_id", "in", list(controller_codes)),
-        ]) if controller_codes else Controller.browse()
-        controller_by_code = {
-            str(record.controller_id or "").strip().upper(): record
-            for record in controllers
-        }
 
         Area = self.env["nsp.parking.area"].sudo()
         areas = Area.search([("code", "in", list(area_codes))]) if area_codes else Area.browse()
-        area_by_code = {record.code: record for record in areas}
+        area_by_code = {str(record.code or "").strip().upper(): record for record in areas}
 
         LayoutLane = self.env["nsp.parking.layout.lane"].sudo().with_context(active_test=False)
         layout_lanes = LayoutLane.search([
-            ("parking_area_id.code", "in", list(area_codes)),
+            ("parking_area_id", "in", areas.ids),
             ("lane_id.code", "in", list(lane_codes)),
-        ]) if area_codes and lane_codes else LayoutLane.browse()
+        ]) if areas and lane_codes else LayoutLane.browse()
         lane_by_key = {
-            (record.controller_id.id, record.parking_area_id.code, record.lane_id.code): record
+            (
+                str(record.parking_area_id.code or "").strip().upper(),
+                str(record.lane_id.code or "").strip().upper(),
+            ): record
             for record in layout_lanes
-            if record.controller_id and record.parking_area_id and record.lane_id
+            if record.parking_area_id and record.lane_id
         }
 
-        Device = self.env["nsp.device"].sudo()
-        devices = Device.search([("serial_number", "in", list(serials))]) if serials else Device.browse()
-        device_by_serial = {
-            str(record.serial_number or "").strip().upper(): record
-            for record in devices if record.serial_number
-        }
+        edge_code = str(edge_server.edge_server_code or "").strip().upper()
+        valid_route_keys = set()
+        for area in areas:
+            if not area.published_payload_json or int(area.published_revision or 0) <= 0:
+                continue
+            try:
+                payload = json.loads(area.published_payload_json)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            revision = int(payload.get("published_revision") or 0)
+            if revision != int(area.published_revision or 0):
+                continue
+            for lane in payload.get("lanes") or []:
+                if not isinstance(lane, dict):
+                    continue
+                if str(lane.get("server_code") or "").strip().upper() != edge_code:
+                    continue
+                lane_code = str(lane.get("lane_code") or "").strip().upper()
+                if lane_code:
+                    valid_route_keys.add((str(area.code or "").strip().upper(), lane_code, revision))
 
         Vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False)
-        vehicles = Vehicle.search([
-            ("vehicle_code", "in", list(vehicle_codes)),
-        ]) if vehicle_codes else Vehicle.browse()
+        vehicles = Vehicle.search([("vehicle_code", "in", list(vehicle_codes))]) if vehicle_codes else Vehicle.browse()
         User = self.env["nsp.user"].sudo().with_context(active_test=False)
-        users = User.search([
-            ("user_code", "in", list(user_codes)),
-        ]) if user_codes else User.browse()
+        users = User.search([("user_code", "in", list(user_codes))]) if user_codes else User.browse()
         Borrow = self.env["nsp.vehicle.borrow"].sudo()
-        borrows = Borrow.search([
-            ("borrow_code", "in", list(borrow_codes)),
-        ]) if borrow_codes else Borrow.browse()
+        borrows = Borrow.search([("borrow_code", "in", list(borrow_codes))]) if borrow_codes else Borrow.browse()
+        Log = self.env["nsp.parking.log"].sudo()
+        existing = Log.search([("log_uid", "in", list(log_uids))]) if log_uids else Log.browse()
 
-        Transaction = self.env["nsp.parking.transaction"].sudo()
-        existing = Transaction.search([("transaction_uid", "in", list(uids))]) if uids else Transaction.browse()
         return {
-            "controller_by_code": controller_by_code,
             "area_by_code": area_by_code,
             "lane_by_key": lane_by_key,
-            "device_by_serial": device_by_serial,
-            "vehicle_by_code": {record.vehicle_code: record for record in vehicles},
-            "user_by_code": {record.user_code: record for record in users},
-            "borrow_by_code": {record.borrow_code: record for record in borrows},
-            "transaction_by_uid": {record.transaction_uid: record for record in existing},
+            "valid_route_keys": valid_route_keys,
+            "vehicle_by_code": {str(record.vehicle_code or "").strip().upper(): record for record in vehicles},
+            "user_by_code": {str(record.user_code or "").strip().upper(): record for record in users},
+            "borrow_by_code": {str(record.borrow_code or "").strip(): record for record in borrows},
+            "log_by_uid": {record.log_uid: record for record in existing},
+            "reason_codes": set(dict(Log._fields["reason_code"].selection)),
         }
 
     @api.model
-    def _upsert_parking_transaction_sync(self, edge_server, item, cache=None):
+    def _prepare_parking_log_values(self, item, cache):
         if not isinstance(item, dict):
             raise ValueError("invalid_payload")
         allowed_fields = {
-            "record_key", "transaction_uid", "controller_code", "parking_area_code", "lane_code",
-            "layout_revision", "sequence_path", "observed_duration_seconds",
-            "allowed_duration_seconds", "serial_number", "port_no", "event_type", "event_time",
-            "vehicle_tid", "vehicle_code", "license_plate", "user_tid", "user_code",
-            "observed_user_tids", "observed_user_codes", "borrow_uid",
-            "decision", "decision_reason_code",
-            "decision_message",
+            "record_key", "log_uid", "parking_area_code", "lane_code", "layout_revision",
+            "event_type", "event_time", "decision", "reason_code",
+            "vehicle_tid", "vehicle_code", "user_tid", "user_code", "borrow_uid",
         }
         unsupported = sorted(set(item) - allowed_fields)
         if unsupported:
-            raise ValueError(
-                "invalid_payload: unsupported field(s): %s" % ", ".join(unsupported)
-            )
+            raise ValueError("invalid_payload: unsupported field(s): %s" % ", ".join(unsupported))
 
-        uid = str(item.get("transaction_uid") or "").strip()
+        uid = str(item.get("log_uid") or "").strip()
         record_key = str(item.get("record_key") or uid).strip()
-        existing_transaction = ((cache or {}).get("transaction_by_uid") or {}).get(uid)
-        if not existing_transaction and cache is None and uid:
-            existing_transaction = self.env["nsp.parking.transaction"].sudo().search([
-                ("transaction_uid", "=", uid),
-            ], limit=1)
-        if record_key != uid:
-            raise ValueError("record_key_transaction_uid_mismatch")
-        controller_code = str(item.get("controller_code") or "").strip().upper()
-        parking_area_code = str(item.get("parking_area_code") or "").strip().upper()
-        lane_code = str(item.get("lane_code") or "").strip().upper()
-        serial_number = str(item.get("serial_number") or "").strip().upper()
         if not uid:
-            raise ValueError("missing_transaction_uid")
-        if not controller_code:
-            raise ValueError("missing_controller_code")
-        if not parking_area_code:
+            raise ValueError("missing_log_uid")
+        if record_key != uid:
+            raise ValueError("record_key_log_uid_mismatch")
+
+        area_code = str(item.get("parking_area_code") or "").strip().upper()
+        lane_code = str(item.get("lane_code") or "").strip().upper()
+        if not area_code:
             raise ValueError("missing_parking_area_code")
         if not lane_code:
             raise ValueError("missing_lane_code")
-        if not serial_number:
-            raise ValueError("missing_serial_number")
         try:
-            layout_revision = int(item.get("layout_revision") or 0)
+            revision = int(item.get("layout_revision") or 0)
         except (TypeError, ValueError) as exc:
             raise ValueError("invalid_layout_revision") from exc
-        if layout_revision <= 0:
+        if revision <= 0:
             raise ValueError("invalid_layout_revision")
-        sequence_path = str(item.get("sequence_path") or "").strip()
-        if not sequence_path:
-            raise ValueError("missing_sequence_path")
-        try:
-            observed_duration_seconds = float(item.get("observed_duration_seconds") or 0.0)
-            allowed_duration_seconds = float(item.get("allowed_duration_seconds") or 0.0)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("invalid_sequence_duration") from exc
-        if observed_duration_seconds < 0 or allowed_duration_seconds <= 0:
-            raise ValueError("invalid_sequence_duration")
-        if observed_duration_seconds > allowed_duration_seconds + _DURATION_EPSILON_SECONDS:
-            raise ValueError("invalid_duration_snapshot")
-        if observed_duration_seconds > allowed_duration_seconds:
-            observed_duration_seconds = allowed_duration_seconds
-        observed_duration_seconds = round(observed_duration_seconds, 6)
-        allowed_duration_seconds = round(allowed_duration_seconds, 6)
-        try:
-            port_no = int(item.get("port_no") or 0)
-        except Exception as exc:
-            raise ValueError("invalid_port_no") from exc
-        if port_no < 1 or port_no > 16:
-            raise ValueError("invalid_port_no")
 
-        use_cache = cache is not None
-        cache = cache or {}
-        if use_cache:
-            controller = cache["controller_by_code"].get(controller_code)
-        else:
-            controller = self.env["nsp.controller"].sudo().with_context(active_test=False).search([
-                ("controller_id", "=", controller_code),
-            ], limit=1)
-        # A retry of an already accepted immutable UID must remain idempotent.
-        # Server/Controller/Reader are independent identities; the immutable
-        # published Lane mapping is the only authority for Edge routing.
-        if (
-            controller
-            and not existing_transaction
-            and not self._parking_transaction_matches_published_route(
-                edge_server, item, cache
-            )
-        ):
-            raise ValueError("controller_not_in_edge_scope")
+        area = cache["area_by_code"].get(area_code)
+        layout_lane = cache["lane_by_key"].get((area_code, lane_code))
+        if not area or not layout_lane:
+            raise ValueError("parking_lane_not_found")
+        existing = cache["log_by_uid"].get(uid)
+        if not existing and (area_code, lane_code, revision) not in cache["valid_route_keys"]:
+            current_revision = int(area.published_revision or 0)
+            if current_revision and revision < current_revision:
+                raise ValueError("stale_parking_layout_revision")
+            raise ValueError("lane_not_in_edge_scope")
 
-        if use_cache:
-            parking_area = cache["area_by_code"].get(parking_area_code)
-        else:
-            parking_area = self.env["nsp.parking.area"].sudo().search([
-                ("code", "=", parking_area_code),
-            ], limit=1)
-
-        layout_lane = self.env["nsp.parking.layout.lane"].browse()
-        lane = self.env["nsp.parking.lane"].browse()
-        device = self.env["nsp.device"].browse()
-        if controller and parking_area:
-            if use_cache:
-                layout_lane = cache["lane_by_key"].get(
-                    (controller.id, parking_area_code, lane_code)
-                ) or layout_lane
-            else:
-                layout_lane = self.env["nsp.parking.layout.lane"].sudo().with_context(
-                    active_test=False
-                ).search([
-                    ("parking_area_id", "=", parking_area.id),
-                    ("controller_id", "=", controller.id),
-                    ("lane_id.code", "=", lane_code),
-                ], limit=1)
-            lane = layout_lane.lane_id if layout_lane else lane
-        if use_cache:
-            device = cache["device_by_serial"].get(serial_number) or device
-        else:
-            device = self.env["nsp.device"].sudo().search([
-                ("serial_number", "=", serial_number),
-            ], limit=1)
         event_time = self._safe_datetime_value(item.get("event_time"), default_now=False)
         if not event_time:
             raise ValueError("event_time is required")
@@ -1650,47 +1570,30 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         decision = str(item.get("decision") or "").strip().lower()
         if decision not in ("allowed", "denied"):
             raise ValueError("invalid_decision")
-        Transaction = self.env["nsp.parking.transaction"].sudo()
-        vehicle_tid = str(item.get("vehicle_tid") or "").strip()
+
+        reason_code = str(item.get("reason_code") or "").strip().lower()
+        if reason_code and reason_code not in cache["reason_codes"]:
+            raise ValueError("invalid_reason_code")
+        if decision == "denied" and not reason_code:
+            reason_code = "unknown"
+        if decision == "allowed" and reason_code:
+            raise ValueError("allowed_event_cannot_have_reason")
+
+        vehicle_tid = str(item.get("vehicle_tid") or "").strip().upper()
         if not vehicle_tid:
             raise ValueError("missing_vehicle_tid")
         vehicle_code = str(item.get("vehicle_code") or "").strip().upper()
-        user_tid = str(item.get("user_tid") or "").strip()
+        user_tid = str(item.get("user_tid") or "").strip().upper()
         user_code = str(item.get("user_code") or "").strip().upper()
-        observed_user_tids = ",".join(sorted({
-            value.strip().upper()
-            for value in str(item.get("observed_user_tids") or "").split(",")
-            if value.strip()
-        }))
-        observed_user_codes = ",".join(sorted({
-            value.strip().upper()
-            for value in str(item.get("observed_user_codes") or "").split(",")
-            if value.strip()
-        }))
         borrow_code = str(item.get("borrow_uid") or "").strip()
-        if event_type == "check_in" and (
-            user_tid or user_code or observed_user_tids or observed_user_codes or borrow_code
-        ):
+        if event_type == "check_in" and (user_tid or user_code or borrow_code):
             raise ValueError("check_in_cannot_have_user_identity")
-        if event_type == "check_out" and decision == "allowed":
-            if not user_tid or not user_code:
-                raise ValueError("allowed_check_out_requires_user_identity")
-            if observed_user_tids != user_tid or observed_user_codes != user_code:
-                raise ValueError("allowed_check_out_identity_snapshot_mismatch")
-        if use_cache:
-            vehicle = cache["vehicle_by_code"].get(vehicle_code) or self.env["nsp.vehicle"].browse()
-            user = cache["user_by_code"].get(user_code) or self.env["nsp.user"].browse()
-            borrow = cache["borrow_by_code"].get(borrow_code) or self.env["nsp.vehicle.borrow"].browse()
-        else:
-            vehicle = self.env["nsp.vehicle"].sudo().with_context(active_test=False).search([
-                ("vehicle_code", "=", vehicle_code),
-            ], limit=1) if vehicle_code else self.env["nsp.vehicle"].browse()
-            user = self.env["nsp.user"].sudo().with_context(active_test=False).search([
-                ("user_code", "=", user_code),
-            ], limit=1) if user_code else self.env["nsp.user"].browse()
-            borrow = self.env["nsp.vehicle.borrow"].sudo().search([
-                ("borrow_code", "=", borrow_code),
-            ], limit=1) if borrow_code else self.env["nsp.vehicle.borrow"].browse()
+        if event_type == "check_out" and decision == "allowed" and (not user_tid or not user_code):
+            raise ValueError("allowed_check_out_requires_user_identity")
+
+        vehicle = cache["vehicle_by_code"].get(vehicle_code) if vehicle_code else False
+        user = cache["user_by_code"].get(user_code) if user_code else False
+        borrow = cache["borrow_by_code"].get(borrow_code) if borrow_code else False
         if vehicle_code and not vehicle:
             raise ValueError("vehicle_not_found")
         if user_code and not user:
@@ -1699,162 +1602,26 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             raise ValueError("borrow_vehicle_mismatch")
         if borrow and user and borrow.borrower_id != user:
             raise ValueError("borrow_user_mismatch")
-        reason_code = Transaction._normalize_error_code(
-            item.get("decision_reason_code"), item.get("decision_message")
-        )
-        if decision == "denied" and not reason_code:
-            reason_code = "unknown"
-        if reason_code == "multiple_user_tags" and len(observed_user_tids.split(",")) < 2:
-            raise ValueError("multiple_user_tags_requires_identity_snapshot")
-        if decision == "allowed" and (item.get("decision_reason_code") or item.get("decision_message")):
-            raise ValueError("allowed_event_cannot_have_decision_reason")
 
-        vals = {
-            "transaction_uid": uid,
+        return uid, {
+            "log_uid": uid,
             "event_time": event_time,
-            "controller_id": controller.id if controller else False,
-            "controller_code": controller_code,
-            "parking_area_id": parking_area.id if parking_area else False,
-            "parking_area_code": parking_area_code,
-            "layout_lane_id": layout_lane.id if layout_lane else False,
-            "lane_id": lane.id if lane else False,
-            "lane_code": lane_code,
-            "layout_revision": layout_revision,
-            "sequence_path": sequence_path,
-            "observed_duration_seconds": observed_duration_seconds,
-            "allowed_duration_seconds": allowed_duration_seconds,
-            "reader_id": device.id if device else False,
-            "serial_number": serial_number,
-            "port_no": port_no,
             "event_type": event_type,
-            "status": decision,
-            "error_code": reason_code or False,
-            "error_message": str(item.get("decision_message") or "").strip() or False,
+            "decision": decision,
+            "reason_code": reason_code or False,
+            "parking_area_id": area.id,
+            "layout_lane_id": layout_lane.id,
+            "lane_id": layout_lane.lane_id.id,
+            "layout_revision": revision,
             "vehicle_id": vehicle.id if vehicle else False,
-            "vehicle_code": vehicle_code or False,
-            "license_plate": str(item.get("license_plate") or (vehicle.license_plate if vehicle else "")).strip() or False,
-            "vehicle_tid": vehicle_tid or False,
+            "vehicle_tid": vehicle_tid,
             "user_id": user.id if user else False,
-            "user_code": user_code or False,
             "user_tid": user_tid or False,
-            "observed_user_codes": observed_user_codes or False,
-            "observed_user_tids": observed_user_tids or False,
             "borrow_id": borrow.id if borrow else False,
-            "borrow_code": borrow_code or False,
         }
-        return Transaction.create_idempotent(
-            vals, existing_by_uid=cache.get("transaction_by_uid")
-        )
 
-    @api.model
-    def _parking_transaction_matches_published_route(self, edge_server, item, cache):
-        """Validate routing against the immutable published Layout snapshot."""
-        if not isinstance(item, dict):
-            return False
-        area_code = str(item.get("parking_area_code") or "").strip().upper()
-        lane_code = str(item.get("lane_code") or "").strip().upper()
-        controller_code = str(item.get("controller_code") or "").strip().upper()
-        area = ((cache or {}).get("area_by_code") or {}).get(area_code)
-        if not area and area_code:
-            area = self.env["nsp.parking.area"].sudo().search([
-                ("code", "=", area_code),
-            ], limit=1)
-        try:
-            incoming_revision = int(item.get("layout_revision") or 0)
-        except (TypeError, ValueError):
-            return False
-        if (
-            not area
-            or incoming_revision <= 0
-            or incoming_revision != int(area.published_revision or 0)
-        ):
-            return False
-        try:
-            payload = self._published_parking_payload_for_edge(
-                area, edge_server.edge_server_code
-            )
-        except Exception:
-            _logger.exception(
-                "Failed to validate published Parking Layout payload",
-                extra={
-                    "parking_area_code": area.code if area else area_code,
-                    "incoming_revision": incoming_revision,
-                },
-            )
-            return False
-        if not payload or int(payload.get("published_revision") or 0) != incoming_revision:
-            return False
-        return any(
-            str(lane.get("lane_code") or "").strip().upper() == lane_code
-            and str(lane.get("controller_code") or "").strip().upper() == controller_code
-            and str(lane.get("server_code") or "").strip().upper()
-                == str(edge_server.edge_server_code or "").strip().upper()
-            for lane in (payload.get("lanes") or [])
-            if isinstance(lane, dict)
-        )
-
-    @api.model
-    def _parking_transaction_sync_preflight(self, edge_server, item, cache):
-        """Classify stale or invalid queued transactions before immutable upsert."""
-        if not isinstance(item, dict):
-            return False
-        uid = str(item.get("transaction_uid") or "").strip()
-        if not uid:
-            return False
-        if (cache.get("transaction_by_uid") or {}).get(uid):
-            return False
-
-        try:
-            observed = float(item.get("observed_duration_seconds") or 0.0)
-            allowed = float(item.get("allowed_duration_seconds") or 0.0)
-        except (TypeError, ValueError):
-            return False
-        if allowed > 0 and observed > allowed + _DURATION_EPSILON_SECONDS:
-            return {
-                "status": "ignored",
-                "error_code": "invalid_duration_snapshot",
-                "message": (
-                    "Transaction ignored because observed duration %.6fs exceeds "
-                    "the published allowed duration %.6fs." % (observed, allowed)
-                ),
-            }
-
-        controller_code = str(item.get("controller_code") or "").strip().upper()
-        controller = (cache.get("controller_by_code") or {}).get(controller_code)
-        if (
-            controller
-            and not self._parking_transaction_matches_published_route(
-                edge_server, item, cache
-            )
-        ):
-            area_code = str(item.get("parking_area_code") or "").strip().upper()
-            area = (cache.get("area_by_code") or {}).get(area_code)
-            try:
-                incoming_revision = int(item.get("layout_revision") or 0)
-            except (TypeError, ValueError):
-                incoming_revision = 0
-            current_revision = int(area.published_revision or 0) if area else 0
-            if current_revision and incoming_revision and incoming_revision < current_revision:
-                return {
-                    "status": "ignored",
-                    "error_code": "stale_controller_route",
-                    "message": (
-                        "Historical transaction ignored because its Layout revision "
-                        "predates the current Controller-to-Edge route."
-                    ),
-                }
-            return {
-                "status": "rejected",
-                "error_code": "controller_not_in_edge_scope",
-                "message": (
-                    "Controller %s is not assigned to authenticated Edge Server %s."
-                    % (controller_code, edge_server.edge_server_code)
-                ),
-            }
-        return False
-
-    @endpoint("NSP Edge Parking Transactions", route_path="edge/parking-transactions", methods="POST", code="nsp_edge_parking_transactions")
-    def api_parking_transactions(self):
+    @endpoint("NSP Edge Parking Logs", route_path="edge/parking-logs", methods="POST", code="nsp_edge_parking_logs")
+    def api_parking_logs(self):
         data = self._payload()
         edge_server, error = self._auth_edge_server_sync(data)
         if error:
@@ -1863,72 +1630,85 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         if isinstance(incoming, dict):
             incoming = [incoming]
         if not isinstance(incoming, list) or not incoming:
-            return self._error("items must contain at least one transaction", 400, error_code="invalid_payload", details={"field": "items"})
-        cache = self._prepare_parking_transaction_sync_cache(edge_server, incoming)
-        results = []
-        processed = failed = ignored = 0
+            return self._error(
+                "items must contain at least one Parking Log", 400,
+                error_code="invalid_payload", details={"field": "items"},
+            )
+
+        cache = self._prepare_parking_log_sync_cache(edge_server, incoming)
+        Log = self.env["nsp.parking.log"].sudo()
+        results_by_index = {}
+        pending = []
+        failed = 0
+
         for idx, item in enumerate(incoming):
-            key = str(item.get("transaction_uid") or "").strip() if isinstance(item, dict) else ""
-            legacy_reason = (
-                str(item.get("decision_reason_code") or "").strip().lower()
-                if isinstance(item, dict) else ""
-            )
-            if legacy_reason in ("continuity_duplicate", "check_out_without_check_in"):
-                ignored += 1
-                message = (
-                    "Legacy duplicate movement ignored"
-                    if legacy_reason == "continuity_duplicate"
-                    else "Legacy Check-out without a previous Check-in ignored"
-                )
-                results.append({
-                    "index": idx,
-                    "record_key": key,
-                    "status": "ignored",
-                    "message": message,
-                })
-                continue
-            disposition = self._parking_transaction_sync_preflight(
-                edge_server, item, cache
-            )
-            if disposition:
-                results.append({"index": idx, "record_key": key, **disposition})
-                if disposition["status"] == "ignored":
-                    ignored += 1
-                else:
-                    failed += 1
-                continue
+            key = str(item.get("log_uid") or "").strip() if isinstance(item, dict) else ""
             try:
-                with self.env.cr.savepoint():
-                    rec, duplicate = self._upsert_parking_transaction_sync(edge_server, item, cache=cache)
-                result = {
-                    "index": idx,
-                    "record_key": rec.transaction_uid,
-                    "status": "duplicate" if duplicate else "processed",
-                    "message": "Already processed" if duplicate else "Processed",
-                }
-                if rec.status == "denied":
-                    result.update({
-                        "business_decision": "denied",
-                        "decision_reason_code": rec.error_code or "unknown",
-                    })
-                results.append(result)
-                if not duplicate:
-                    processed += 1
+                uid, vals = self._prepare_parking_log_values(item, cache)
+                existing = cache["log_by_uid"].get(uid)
+                if existing:
+                    if Log._business_values(existing) != Log._business_values(vals):
+                        raise ValueError("log_uid_conflict")
+                    results_by_index[idx] = {
+                        "index": idx, "record_key": uid,
+                        "status": "duplicate", "message": "Already processed",
+                    }
+                else:
+                    pending.append((idx, uid, vals))
             except Exception as exc:
                 failed += 1
                 message = str(exc)
-                error_code = message.split(":", 1)[0].strip() or "rejected"
-                results.append({
+                results_by_index[idx] = {
                     "index": idx,
                     "record_key": key,
                     "status": "rejected",
-                    "error_code": error_code,
+                    "error_code": message.split(":", 1)[0].strip() or "rejected",
                     "message": message,
-                })
+                }
+
+        processed = 0
+        if pending:
+            try:
+                # Normal path: one model_create_multi call for the entire new batch.
+                with self.env.cr.savepoint():
+                    records = Log.create([vals for _idx, _uid, vals in pending])
+                for (idx, uid, _vals), record in zip(pending, records):
+                    cache["log_by_uid"][uid] = record
+                    processed += 1
+                    results_by_index[idx] = {
+                        "index": idx, "record_key": uid,
+                        "status": "processed", "message": "Processed",
+                    }
+            except Exception:
+                # Rare concurrent duplicate/race: isolate only the affected row instead
+                # of failing the complete Edge batch.
+                for idx, uid, vals in pending:
+                    try:
+                        record, duplicate = Log.create_idempotent(
+                            vals, existing_by_uid=cache["log_by_uid"]
+                        )
+                        if not duplicate:
+                            processed += 1
+                        results_by_index[idx] = {
+                            "index": idx,
+                            "record_key": record.log_uid,
+                            "status": "duplicate" if duplicate else "processed",
+                            "message": "Already processed" if duplicate else "Processed",
+                        }
+                    except Exception as exc:
+                        failed += 1
+                        message = str(exc)
+                        results_by_index[idx] = {
+                            "index": idx,
+                            "record_key": uid,
+                            "status": "rejected",
+                            "error_code": message.split(":", 1)[0].strip() or "rejected",
+                            "message": message,
+                        }
+
         return self._ok({
             "received": len(incoming),
             "processed": processed,
-            "ignored": ignored,
             "failed": failed,
-            "results": results,
-        }, message="Parking transactions synced.")
+            "results": [results_by_index[idx] for idx in range(len(incoming))],
+        }, message="Parking Logs synced.")

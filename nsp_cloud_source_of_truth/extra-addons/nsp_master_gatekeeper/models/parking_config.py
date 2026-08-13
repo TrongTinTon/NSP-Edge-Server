@@ -215,12 +215,8 @@ class NspParkingArea(models.Model):
         if not area:
             return {"found": False}
         area.check_access("read")
-        transactions = self.env["nsp.parking.transaction"].search(
-            [
-                "|",
-                ("parking_area_id", "=", area.id),
-                ("layout_lane_id.parking_area_id", "=", area.id),
-            ],
+        logs = self.env["nsp.parking.log"].search(
+            [("parking_area_id", "=", area.id)],
             order="event_time desc, id desc", limit=limit,
         )
         return {
@@ -229,7 +225,7 @@ class NspParkingArea(models.Model):
             "parking_area_name": area.name,
             "branch_name": area.branch_id.name or "",
             "state": area.state,
-            "items": [tx._live_monitor_payload() for tx in transactions[::-1]],
+            "items": [log._live_monitor_payload() for log in logs[::-1]],
         }
 
     def _lane_payload(self):

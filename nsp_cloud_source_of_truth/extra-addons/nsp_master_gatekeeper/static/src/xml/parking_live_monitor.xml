@@ -63,7 +63,7 @@
 
             <main class="nsp-parking-live-monitor__content">
                 <section class="nsp-parking-live-monitor__alerts" t-if="visibleAlerts.length">
-                    <t t-foreach="visibleAlerts" t-as="alert" t-key="alert.transaction_uid || alert.id">
+                    <t t-foreach="visibleAlerts" t-as="alert" t-key="alert.log_uid || alert.id">
                         <div class="nsp-parking-live-monitor__alert-card">
                             <div class="nsp-parking-live-monitor__alert-mark"><i class="fa fa-exclamation-triangle"/></div>
                             <div class="nsp-parking-live-monitor__alert-copy min-w-0">

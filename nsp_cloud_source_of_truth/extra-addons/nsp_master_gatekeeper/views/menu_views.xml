@@ -21,10 +21,10 @@
               groups="nsp_core.group_nsp_it_parking"/>
 
     <!-- Parking business history is a first-class operational menu. -->
-    <menuitem id="menu_nsp_transactions"
-              name="Transactions"
+    <menuitem id="menu_nsp_parking_logs"
+              name="Parking Logs"
               parent="nsp_core.menu_nsp_root"
-              action="action_nsp_parking_transaction"
+              action="action_nsp_parking_log"
               sequence="30"
               groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking"/>
 
