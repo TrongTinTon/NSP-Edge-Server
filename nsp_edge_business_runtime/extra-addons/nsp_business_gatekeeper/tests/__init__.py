@@ -6,3 +6,5 @@ from . import test_live_monitor_high_density_1060_contract
 from . import test_live_monitor_fixed_four_rows_1061_contract
 
 from . import test_live_monitor_plate_only_1062_contract
+from . import test_live_monitor_gradient_1063_contract
+from . import test_live_monitor_checkin_checkout_1064_contract

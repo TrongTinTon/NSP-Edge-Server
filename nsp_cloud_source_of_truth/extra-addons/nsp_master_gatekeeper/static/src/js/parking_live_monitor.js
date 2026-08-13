@@ -6,14 +6,18 @@ import { useService } from "@web/core/utils/hooks";
 
 const BUS_EVENT = "nsp_parking_live_log";
 const DISPLAY_ROWS = 4;
-const DEFAULT_COLUMNS = 2;
-const MIN_COLUMNS = 1;
-const MAX_COLUMNS = 4;
-const MAX_HISTORY = 60;
-const MAX_QUEUE = 240;
+const DISPLAY_COLUMN_OPTIONS = Object.freeze([8, 16, 24]);
+const DISPLAY_MODE_OPTIONS = Object.freeze(["check_in", "check_out"]);
+const DEFAULT_COLUMNS = 16;
+const DEFAULT_MODE = "check_in";
+const CHECKOUT_COLUMNS = 4;
+const CHECKOUT_ROWS = 4;
+const MAX_HISTORY = 96;
+const MAX_QUEUE = 192;
+const SNAPSHOT_LIMIT = 96;
 const MAX_ALERTS = 8;
 const VISIBLE_ALERTS = 2;
-const ALERT_HOLD_MS = 12000;
+const ALERT_HOLD_MS = 30000;
 const NEW_CARD_HOLD_MS = 12000;
 const BURST_WINDOW_MS = 10000;
 const BURST_THRESHOLD = 10;
@@ -30,7 +34,9 @@ export class NspParkingLiveMonitor extends Component {
         const params = this.props.action?.params || {};
         this.parkingAreaId = Number(params.parking_area_id || 0);
         this.displayColumnsStorageKey = `nsp.parking.live.columns.${this.parkingAreaId}`;
+        this.displayModeStorageKey = `nsp.parking.live.mode.${this.parkingAreaId}`;
         this.initialDisplayColumns = this._loadDisplayColumns();
+        this.initialDisplayMode = this._loadDisplayMode();
 
         this.seenKeys = new Set();
         this.seenOrder = [];
@@ -49,6 +55,7 @@ export class NspParkingLiveMonitor extends Component {
             branchName: "",
             areaState: "",
             displayColumns: this.initialDisplayColumns,
+            displayMode: this.initialDisplayMode,
             settingsOpen: false,
             entries: [],
             alerts: [],
@@ -69,8 +76,6 @@ export class NspParkingLiveMonitor extends Component {
             });
 
             await this.loadSnapshot({ reset: true });
-            // Reconciliation is deliberately slow. Realtime data comes from bus_service;
-            // this only heals a browser reconnect or missed event.
             this.reconcileTimer = setInterval(() => this.loadSnapshot({ reset: false }), 15000);
         });
 
@@ -91,15 +96,29 @@ export class NspParkingLiveMonitor extends Component {
     }
 
     get rootClass() {
-        return `nsp-parking-live-monitor columns-${this.displayColumns}${this.isBurstMode ? " is-burst" : ""}`;
+        return `nsp-parking-live-monitor columns-${this.displayColumns} mode-${this.displayMode.replace("_", "-")}${this.isBurstMode ? " is-burst" : ""}`;
     }
 
     get displayColumns() {
         return this._normalizeDisplayColumns(this.state.displayColumns);
     }
 
+    get displayMode() {
+        return this._normalizeDisplayMode(this.state.displayMode);
+    }
+
+    get isCheckInMode() {
+        return this.displayMode === "check_in";
+    }
+
+    get isCheckOutMode() {
+        return this.displayMode === "check_out";
+    }
+
     get visibleCapacity() {
-        return this.displayColumns * DISPLAY_ROWS;
+        return this.isCheckOutMode
+            ? CHECKOUT_COLUMNS * CHECKOUT_ROWS
+            : this.displayColumns * DISPLAY_ROWS;
     }
 
     get gridStyle() {
@@ -125,11 +144,11 @@ export class NspParkingLiveMonitor extends Component {
     }
 
     get visibleAlerts() {
-        return this.state.alerts.slice(0, VISIBLE_ALERTS);
+        return this.isCheckOutMode ? this.state.alerts.slice(0, VISIBLE_ALERTS) : [];
     }
 
     get hiddenAlertCount() {
-        return Math.max(this.state.alerts.length - VISIBLE_ALERTS, 0);
+        return this.isCheckOutMode ? Math.max(this.state.alerts.length - VISIBLE_ALERTS, 0) : 0;
     }
 
     get burstCount() {
@@ -142,17 +161,23 @@ export class NspParkingLiveMonitor extends Component {
     }
 
     get burstLabel() {
+        const movement = this.isCheckOutMode ? "xe ra" : "xe vào";
         if (!this.isBurstMode) {
-            return `${this.burstCount} lượt / 10 giây`;
+            return `${this.burstCount} ${movement} / 10 giây`;
         }
-        return `CAO ĐIỂM • ${this.burstCount} lượt / 10 giây`;
+        return `CAO ĐIỂM • ${this.burstCount} ${movement} / 10 giây`;
     }
 
     get queueLabel() {
-        if (!this.state.pendingCount) {
-            return `${this.visibleCapacity} xe gần nhất • ${this.displayColumns} cột`;
+        if (this.isCheckOutMode) {
+            return this.state.pendingCount
+                ? `CHECK-OUT • còn ${this.state.pendingCount} xe đang chờ hiển thị`
+                : `CHECK-OUT • ${this.visibleCapacity} lượt ra gần nhất • 4 hàng × 4 cột`;
         }
-        return `Đang hiển thị theo đợt • còn ${this.state.pendingCount}`;
+        if (!this.state.pendingCount) {
+            return `CHECK-IN • ${this.visibleCapacity} xe gần nhất • 4 hàng × ${this.displayColumns} cột`;
+        }
+        return `CHECK-IN • đang hiển thị theo đợt • còn ${this.state.pendingCount}`;
     }
 
     entryCardClass(item) {
@@ -172,48 +197,12 @@ export class NspParkingLiveMonitor extends Component {
     }
 
     isNewEntry(item) {
-        return item?.event_type === "check_in" && this.state.flashKeys.includes(this._itemKey(item));
+        return item?.event_type === this.displayMode && this.state.flashKeys.includes(this._itemKey(item));
     }
 
     isVerifying(item) {
         const value = String(item?.verification_status || item?.status || "").trim().toLowerCase();
         return ["verifying", "pending", "processing", "in_review"].includes(value);
-    }
-
-    entryStatusLabel(item) {
-        if (this.isVerifying(item)) {
-            return "ĐANG XÁC MINH";
-        }
-        if (this.isNewEntry(item)) {
-            return "MỚI VÀO";
-        }
-        if (item?.event_type === "check_out") {
-            return "ĐÃ RA";
-        }
-        return "ĐÃ VÀO";
-    }
-
-    entryStatusClass(item) {
-        if (this.isVerifying(item)) {
-            return "is-verifying";
-        }
-        if (this.isNewEntry(item)) {
-            return "is-new";
-        }
-        return item?.event_type === "check_out" ? "is-out" : "is-in";
-    }
-
-    personInitials(item) {
-        const name = String(item?.employee_name || "").trim();
-        if (!name) {
-            return "?";
-        }
-        return name
-            .split(/\s+/)
-            .filter(Boolean)
-            .slice(-2)
-            .map((part) => part.charAt(0).toUpperCase())
-            .join("");
     }
 
     toggleSettings() {
@@ -225,12 +214,37 @@ export class NspParkingLiveMonitor extends Component {
         this.state.settingsOpen = false;
     }
 
+    async selectDisplayMode(value) {
+        const mode = this._normalizeDisplayMode(value);
+        if (mode === this.displayMode) {
+            return;
+        }
+        this.state.displayMode = mode;
+        this.state.entries = [];
+        this.state.alerts = [];
+        this.state.flashKeys = [];
+        this.state.recentArrivalTimes = [];
+        this.entryQueue = [];
+        this.pendingBusPayloads = [];
+        this.seenKeys.clear();
+        this.seenOrder = [];
+        this.state.pendingCount = 0;
+        try {
+            window.localStorage.setItem(this.displayModeStorageKey, mode);
+        } catch {
+            // Browser storage may be unavailable in private/restricted sessions.
+        }
+        await this.loadSnapshot({ reset: true });
+    }
+
     _normalizeDisplayColumns(value) {
         const columns = Number.parseInt(value, 10);
-        if (!Number.isFinite(columns)) {
-            return DEFAULT_COLUMNS;
-        }
-        return Math.min(MAX_COLUMNS, Math.max(MIN_COLUMNS, columns));
+        return DISPLAY_COLUMN_OPTIONS.includes(columns) ? columns : DEFAULT_COLUMNS;
+    }
+
+    _normalizeDisplayMode(value) {
+        const mode = String(value || "").trim().toLowerCase();
+        return DISPLAY_MODE_OPTIONS.includes(mode) ? mode : DEFAULT_MODE;
     }
 
     _loadDisplayColumns() {
@@ -241,10 +255,17 @@ export class NspParkingLiveMonitor extends Component {
         }
     }
 
+    _loadDisplayMode() {
+        try {
+            return this._normalizeDisplayMode(window.localStorage.getItem(this.displayModeStorageKey));
+        } catch {
+            return DEFAULT_MODE;
+        }
+    }
+
     setDisplayColumns(value) {
         const columns = this._normalizeDisplayColumns(value);
         this.state.displayColumns = columns;
-        this.state.entries = this.state.entries.slice(0, this.visibleCapacity);
         try {
             window.localStorage.setItem(this.displayColumnsStorageKey, String(columns));
         } catch {
@@ -261,19 +282,6 @@ export class NspParkingLiveMonitor extends Component {
         const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/.test(iso) ? iso : `${iso}Z`;
         const parsed = new Date(normalized);
         return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
-    }
-
-    formatEventTime(value) {
-        const eventMs = this._eventTimeMs(value);
-        if (!eventMs) {
-            return "";
-        }
-        return new Date(eventMs).toLocaleTimeString("vi-VN", {
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-            hour12: false,
-        });
     }
 
     _itemKey(item) {
@@ -301,6 +309,9 @@ export class NspParkingLiveMonitor extends Component {
         if (!payload || Number(payload.parking_area_id || 0) !== this.parkingAreaId) {
             return;
         }
+        if (String(payload.event_type || "") !== this.displayMode) {
+            return;
+        }
         this.pendingBusPayloads.push(payload);
         if (!this.busFlushFrame) {
             this.busFlushFrame = requestAnimationFrame(() => this.flushBusPayloads());
@@ -317,26 +328,25 @@ export class NspParkingLiveMonitor extends Component {
         const now = Date.now();
         const arrivals = [...this.state.recentArrivalTimes];
         for (const payload of batch) {
-            if (!this._markSeen(payload)) {
+            if (String(payload.event_type || "") !== this.displayMode || !this._markSeen(payload)) {
                 continue;
             }
-            if (payload.event_type === "check_in") {
-                arrivals.push(now);
-            }
+            arrivals.push(now);
             this.routeDisplayPayload(payload);
         }
         const cutoff = now - BURST_WINDOW_MS;
         this.state.recentArrivalTimes = arrivals.filter((value) => value >= cutoff).slice(-240);
         this.state.pendingCount = this.entryQueue.length;
 
-        // Low traffic should feel immediate. High traffic is drained as pages so
-        // a 20-30 vehicle burst is not visually dropped in a single render frame.
         if (this.entryQueue.length && !this.isBurstMode) {
             this.drainEntryQueue();
         }
     }
 
     routeDisplayPayload(payload, { fromSnapshot = false } = {}) {
+        if (String(payload?.event_type || "") !== this.displayMode) {
+            return;
+        }
         if (payload.display_kind === "none" || payload.display_kind === "ignore") {
             return;
         }
@@ -345,7 +355,7 @@ export class NspParkingLiveMonitor extends Component {
             return;
         }
         if (payload.display_kind === "alert") {
-            if (!fromSnapshot || this._isRecent(payload, ALERT_HOLD_MS)) {
+            if (this.isCheckOutMode && (!fromSnapshot || this._isRecent(payload, ALERT_HOLD_MS))) {
                 this.addAlert(payload);
             }
             return;
@@ -356,8 +366,8 @@ export class NspParkingLiveMonitor extends Component {
 
         this.clearVehicleAlert(payload);
         if (fromSnapshot) {
-            const recentCheckIn = payload.event_type === "check_in" && this._isRecent(payload, NEW_CARD_HOLD_MS);
-            this.insertEntryNow(payload, { flash: recentCheckIn });
+            const recentMovement = this._isRecent(payload, NEW_CARD_HOLD_MS);
+            this.insertEntryNow(payload, { flash: recentMovement });
             return;
         }
         this.enqueueEntry(payload);
@@ -389,8 +399,6 @@ export class NspParkingLiveMonitor extends Component {
         const capacity = this.visibleCapacity;
         const burst = this.entryQueue.length >= capacity || this.isBurstMode;
         if (burst) {
-            // Page mode uses the Parking Area display configuration. With four rows,
-            // 1/2/3/4 columns render 4/8/12/16 vehicles per readable wave.
             const page = this.entryQueue.splice(0, Math.min(capacity, this.entryQueue.length));
             const newestFirst = page.reverse();
             this.state.entries = newestFirst;
@@ -401,8 +409,6 @@ export class NspParkingLiveMonitor extends Component {
         }
         this.state.pendingCount = this.entryQueue.length;
 
-        // When backlog is large, shorten only the page interval; never animate
-        // individual vehicles faster than the browser can render.
         if (this.queueTimer) {
             clearInterval(this.queueTimer);
         }
@@ -430,7 +436,7 @@ export class NspParkingLiveMonitor extends Component {
 
     flashEntries(items) {
         const keys = items
-            .filter((item) => item?.event_type === "check_in")
+            .filter((item) => item?.event_type === this.displayMode)
             .map((item) => this._itemKey(item))
             .filter(Boolean);
         this.state.flashKeys = [...new Set([...this.state.flashKeys, ...keys])];
@@ -443,6 +449,9 @@ export class NspParkingLiveMonitor extends Component {
     }
 
     addAlert(item) {
+        if (!this.isCheckOutMode) {
+            return;
+        }
         const vehicleKey = this._vehicleKey(item);
         const alert = {
             ...item,
@@ -498,7 +507,7 @@ export class NspParkingLiveMonitor extends Component {
             const data = await this.orm.call(
                 "nsp.parking.area",
                 "get_live_monitor_snapshot",
-                [this.parkingAreaId, 60]
+                [this.parkingAreaId, SNAPSHOT_LIMIT, this.displayMode]
             );
             if (!data?.found) {
                 this.state.error = "Không tìm thấy Parking Operation Configuration.";
@@ -518,12 +527,11 @@ export class NspParkingLiveMonitor extends Component {
             }
 
             for (const item of data.items || []) {
-                if (!this._markSeen(item)) {
+                if (String(item?.event_type || "") !== this.displayMode || !this._markSeen(item)) {
                     continue;
                 }
                 this.routeDisplayPayload(item, { fromSnapshot: true });
             }
-            this.state.entries = this.state.entries.slice(0, this.visibleCapacity);
             this.state.pendingCount = this.entryQueue.length;
             this.state.error = "";
         } catch (error) {

@@ -189,18 +189,27 @@ class ParkingLog(models.Model):
 
     def _live_monitor_display_meta(self):
         self.ensure_one()
-        if self.decision == "allowed":
-            # The main grid represents Vehicle entries. A successful Check-out
-            # clears an outstanding alert but must not create another entry card.
-            if self.event_type == "check_out":
+        if self.event_type == "check_in":
+            # Check-in Live Monitor is informational only. Business denials remain
+            # in Parking Logs but must never create a guard alert on the Check-in screen.
+            if self.decision != "allowed":
                 return {
-                    "display_kind": "clear",
+                    "display_kind": "ignore",
                     "display_title": "",
                     "display_reason": "",
                 }
             return {
                 "display_kind": "entry",
                 "display_title": _("MỜI VÀO"),
+                "display_reason": "",
+            }
+
+        # Check-out is a guard-verification workflow. Successful exits are shown
+        # in the left-side exit list; denied exits are prominent guard alerts.
+        if self.decision == "allowed":
+            return {
+                "display_kind": "entry",
+                "display_title": _("ĐƯỢC PHÉP LẤY XE"),
                 "display_reason": "",
             }
         reasons = {
@@ -213,8 +222,7 @@ class ParkingLog(models.Model):
         }
         return {
             "display_kind": "alert",
-            "display_title": _("KHÔNG ĐƯỢC PHÉP LẤY XE")
-            if self.event_type == "check_out" else _("VUI LÒNG DỪNG LẠI"),
+            "display_title": _("KHÔNG ĐƯỢC PHÉP LẤY XE"),
             "display_reason": reasons.get(
                 self.reason_code or "unknown",
                 _("VUI LÒNG LIÊN HỆ BỘ PHẬN VẬN HÀNH"),
@@ -225,15 +233,14 @@ class ParkingLog(models.Model):
         self.ensure_one()
         area = self.parking_area_id
         vehicle = self.vehicle_id
-        owner = vehicle.owner_id if vehicle else self.env["nsp.user"].browse()
-        gate_user = self.user_id if self.event_type == "check_out" and self.user_id else owner
+        # Never fall back to Vehicle Owner for Check-out. The guard must see the
+        # actually detected User; displaying the Owner when User RFID is missing
+        # would create a dangerous false identity.
+        gate_user = self.user_id if self.event_type == "check_out" and self.user_id else self.env["nsp.user"].browse()
         vehicle_type = vehicle.vehicle_type_id if vehicle else self.env["nsp.vehicle.type"].browse()
         vehicle_type_code = str(vehicle_type.code or "").strip().lower() if vehicle_type else ""
         license_plate = ((vehicle.license_plate if vehicle else "") or self.vehicle_tid or "-").strip().upper()
-        employee_name = (
-            (gate_user.name or _("Unknown employee")).strip().upper()
-            if gate_user else _("Unknown employee").upper()
-        )
+        employee_name = (gate_user.name or "").strip().upper() if gate_user else ""
         avatar_url = ""
         if gate_user:
             avatar_field = next(
@@ -255,6 +262,7 @@ class ParkingLog(models.Model):
             "license_plate": license_plate,
             "employee_name": employee_name,
             "avatar_url": avatar_url,
+            "has_checkout_user": bool(gate_user),
             **self._live_monitor_display_meta(),
         }
 

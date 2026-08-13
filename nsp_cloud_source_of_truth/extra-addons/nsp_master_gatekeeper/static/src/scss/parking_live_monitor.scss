@@ -1,17 +1,10 @@
 .nsp-parking-live-monitor {
     --nsp-live-bg: #f6f8fc;
     --nsp-live-surface: #ffffff;
-    --nsp-live-surface-soft: #f8fafc;
     --nsp-live-line: #e2e8f0;
-    --nsp-live-line-strong: #cbd5e1;
     --nsp-live-text: #0f172a;
     --nsp-live-muted: #64748b;
     --nsp-live-blue: #2563eb;
-    --nsp-live-blue-soft: #eff6ff;
-    --nsp-live-green: #16a34a;
-    --nsp-live-green-soft: #f0fdf4;
-    --nsp-live-amber: #d97706;
-    --nsp-live-amber-soft: #fffbeb;
     --nsp-live-red: #dc2626;
     --nsp-live-red-soft: #fef2f2;
 
@@ -20,37 +13,64 @@
     height: 100vh;
     min-height: 100vh;
     overflow: hidden;
-    padding: clamp(16px, 1.5vw, 28px);
-    background: var(--nsp-live-bg);
+    padding: 5px 6px 3px;
+    background: linear-gradient(135deg, #0d1b2a 0%, #1b263b 100%);
     color: var(--nsp-live-text);
     font-family: Inter, "Segoe UI", Arial, Helvetica, sans-serif;
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr) auto;
-    gap: clamp(12px, 1.2vh, 18px);
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: 3px;
 }
 
-.nsp-parking-live-monitor .min-w-0 {
-    min-width: 0;
-}
+.nsp-parking-live-monitor .min-w-0 { min-width: 0; }
 
-/* Header */
+/* Auto-hidden header. A thin 8px hover target remains visible at the top. */
 .nsp-parking-live-monitor__header {
-    position: relative;
-    z-index: 12;
-    min-height: 82px;
+    position: absolute;
+    z-index: 40;
+    top: 0;
+    left: 6px;
+    right: 6px;
+    min-height: 50px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 24px;
-    padding: 0 2px 14px;
-    border-bottom: 1px solid var(--nsp-live-line);
+    gap: 12px;
+    padding: 5px 8px 7px;
+    border: 1px solid rgba(203, 213, 225, .9);
+    border-top: 0;
+    border-radius: 0 0 10px 10px;
+    background: rgba(255, 255, 255, .97);
+    box-shadow: 0 7px 22px rgba(15, 23, 42, .10);
+    transform: translateY(calc(-100% + 8px));
+    opacity: .72;
+    transition: transform .18s ease, opacity .18s ease;
+}
+
+.nsp-parking-live-monitor__header:hover,
+.nsp-parking-live-monitor__header:focus-within {
+    transform: translateY(0);
+    opacity: 1;
+}
+
+.nsp-parking-live-monitor__header::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: 2px;
+    width: 42px;
+    height: 2px;
+    transform: translateX(-50%);
+    border-radius: 999px;
+    background: #94a3b8;
+    opacity: .55;
 }
 
 .nsp-parking-live-monitor__identity {
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 8px;
 }
 
 .nsp-parking-live-monitor__settings-anchor {
@@ -60,28 +80,20 @@
 
 .nsp-parking-live-monitor__identity-icon {
     position: relative;
-    width: clamp(54px, 4.2vw, 68px);
-    height: clamp(54px, 4.2vw, 68px);
-    padding: 5px;
+    width: 32px;
+    height: 32px;
+    padding: 3px;
     display: inline-grid;
     place-items: center;
     border: 1px solid #dbe4f0;
-    border-radius: 18px;
+    border-radius: 8px;
     background: #fff;
-    box-shadow: 0 8px 24px rgba(15, 23, 42, .08);
     cursor: pointer;
-    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
-}
-
-.nsp-parking-live-monitor__identity-icon:hover {
-    transform: translateY(-1px);
-    border-color: #bfdbfe;
-    box-shadow: 0 10px 28px rgba(37, 99, 235, .13);
 }
 
 .nsp-parking-live-monitor__identity-icon img {
-    width: 88%;
-    height: 88%;
+    width: 90%;
+    height: 90%;
     display: block;
 }
 
@@ -89,162 +101,129 @@
     position: absolute;
     right: -4px;
     bottom: -4px;
-    width: 23px;
-    height: 23px;
+    width: 16px;
+    height: 16px;
     display: grid;
     place-items: center;
-    border: 2px solid #fff;
+    border: 1px solid #fff;
     border-radius: 50%;
     background: #0f172a;
     color: #fff;
-    font-size: 11px;
-    box-shadow: 0 4px 12px rgba(15, 23, 42, .22);
+    font-size: 8px;
 }
 
 .nsp-parking-live-monitor__settings-popover {
     position: absolute;
     left: 0;
-    top: calc(100% + 12px);
-    width: 270px;
-    padding: 14px;
+    top: calc(100% + 7px);
+    width: 220px;
+    padding: 10px;
     border: 1px solid var(--nsp-live-line);
-    border-radius: 16px;
+    border-radius: 10px;
     background: #fff;
-    box-shadow: 0 18px 50px rgba(15, 23, 42, .16);
+    box-shadow: 0 14px 36px rgba(15, 23, 42, .16);
 }
 
 .nsp-parking-live-monitor__settings-title {
-    font-size: 14px;
+    font-size: 12px;
     font-weight: 800;
-    color: var(--nsp-live-text);
 }
 
 .nsp-parking-live-monitor__settings-help {
-    margin-top: 2px;
+    margin-top: 1px;
     color: var(--nsp-live-muted);
-    font-size: 12px;
+    font-size: 10px;
     font-weight: 600;
 }
 
 .nsp-parking-live-monitor__settings-columns {
-    margin-top: 12px;
+    margin-top: 8px;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
 }
 
 .nsp-parking-live-monitor__settings-column {
     min-width: 0;
-    min-height: 58px;
-    padding: 8px 5px;
+    min-height: 42px;
+    padding: 5px 3px;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 5px;
     border: 1px solid var(--nsp-live-line);
-    border-radius: 11px;
+    border-radius: 8px;
     background: #fff;
     color: #475569;
     cursor: pointer;
-    transition: border-color .15s ease, background .15s ease, color .15s ease;
+}
+
+.nsp-parking-live-monitor__settings-column span {
+    font-size: 9px;
+    font-weight: 650;
 }
 
 .nsp-parking-live-monitor__settings-column:hover,
 .nsp-parking-live-monitor__settings-column.is-active {
     border-color: #93c5fd;
-    background: var(--nsp-live-blue-soft);
+    background: #eff6ff;
     color: var(--nsp-live-blue);
 }
 
-.nsp-parking-live-monitor__settings-grid-icon {
-    width: 34px;
-    height: 16px;
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 2px;
-}
-
-.nsp-parking-live-monitor__settings-grid-icon i {
-    display: block;
-    border-radius: 2px;
-    background: currentColor;
-    opacity: .20;
-}
-
-.nsp-parking-live-monitor__settings-grid-icon i:nth-child(-n+1) { opacity: .72; }
-.nsp-parking-live-monitor__settings-column:nth-child(2) .nsp-parking-live-monitor__settings-grid-icon i:nth-child(-n+2),
-.nsp-parking-live-monitor__settings-column:nth-child(3) .nsp-parking-live-monitor__settings-grid-icon i:nth-child(-n+3),
-.nsp-parking-live-monitor__settings-column:nth-child(4) .nsp-parking-live-monitor__settings-grid-icon i:nth-child(-n+4) { opacity: .72; }
-
-.nsp-parking-live-monitor__identity-copy {
-    min-width: 0;
-}
+.nsp-parking-live-monitor__identity-copy { min-width: 0; }
 
 .nsp-parking-live-monitor__eyebrow {
     color: var(--nsp-live-blue);
-    font-size: 11px;
+    font-size: 8px;
     font-weight: 800;
-    letter-spacing: .16em;
+    letter-spacing: .12em;
 }
 
 .nsp-parking-live-monitor__title {
-    margin-top: 2px;
-    font-size: clamp(30px, 2.6vw, 48px);
+    margin-top: 0;
+    font-size: 17px;
     font-weight: 850;
-    line-height: 1.02;
-    letter-spacing: -.035em;
+    line-height: 1;
 }
 
 .nsp-parking-live-monitor__subtitle {
-    margin-top: 7px;
+    margin-top: 2px;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 5px;
     color: var(--nsp-live-muted);
-    font-size: clamp(12px, .9vw, 15px);
+    font-size: 9px;
     font-weight: 650;
 }
 
-.nsp-parking-live-monitor__subtitle-separator {
-    color: #cbd5e1;
-}
-
-.nsp-parking-live-monitor__area-status {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    color: #334155;
-}
-
+.nsp-parking-live-monitor__subtitle-separator { color: #cbd5e1; }
+.nsp-parking-live-monitor__area-status { display: inline-flex; align-items: center; gap: 4px; }
 .nsp-parking-live-monitor__live-dot {
-    width: 8px;
-    height: 8px;
-    display: inline-block;
+    width: 5px;
+    height: 5px;
     border-radius: 50%;
     background: #22c55e;
-    box-shadow: 0 0 0 4px rgba(34, 197, 94, .11);
 }
 
 .nsp-parking-live-monitor__header-meta {
     flex: 0 0 auto;
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 5px;
 }
 
 .nsp-parking-live-monitor__traffic-pill,
 .nsp-parking-live-monitor__clock {
-    min-height: 38px;
+    min-height: 26px;
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
+    gap: 5px;
+    padding: 4px 7px;
     border: 1px solid var(--nsp-live-line);
     border-radius: 999px;
-    background: rgba(255, 255, 255, .82);
+    background: #fff;
     color: #475569;
-    font-size: 12px;
+    font-size: 9px;
     font-weight: 750;
     white-space: nowrap;
 }
@@ -255,12 +234,13 @@
     background: #fff7ed;
 }
 
-/* Main */
+/* Main area uses practically the full viewport while the header stays hidden. */
 .nsp-parking-live-monitor__content {
+    grid-row: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 5px;
 }
 
 .nsp-parking-live-monitor__alerts {
@@ -268,114 +248,91 @@
     flex: 0 0 auto;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
+    gap: 5px;
 }
 
 .nsp-parking-live-monitor__alert-card {
     min-width: 0;
-    min-height: 74px;
-    padding: 12px 14px;
+    min-height: 48px;
+    padding: 6px 8px;
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
-    gap: 12px;
+    gap: 7px;
     border: 1px solid #fecaca;
-    border-radius: 14px;
+    border-radius: 8px;
     background: var(--nsp-live-red-soft);
-    box-shadow: 0 5px 18px rgba(127, 29, 29, .06);
 }
 
 .nsp-parking-live-monitor__alert-mark {
-    width: 36px;
-    height: 36px;
+    width: 26px;
+    height: 26px;
     display: grid;
     place-items: center;
     border-radius: 50%;
     background: #fee2e2;
     color: var(--nsp-live-red);
-    font-size: 16px;
+    font-size: 12px;
 }
 
-.nsp-parking-live-monitor__alert-copy {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.nsp-parking-live-monitor__alert-plate {
-    flex: 0 0 auto;
-    color: #991b1b;
-    font-size: 18px;
-    font-weight: 900;
-    letter-spacing: .025em;
-}
-
-.nsp-parking-live-monitor__alert-title {
-    color: #7f1d1d;
-    font-size: 13px;
-    font-weight: 850;
-}
-
+.nsp-parking-live-monitor__alert-copy { display: flex; align-items: center; gap: 7px; }
+.nsp-parking-live-monitor__alert-plate { color: #991b1b; font-size: 13px; font-weight: 900; }
+.nsp-parking-live-monitor__alert-title { color: #7f1d1d; font-size: 10px; font-weight: 850; }
 .nsp-parking-live-monitor__alert-reason,
-.nsp-parking-live-monitor__alert-lane {
-    margin-top: 2px;
-    color: #b91c1c;
-    font-size: 11px;
-    font-weight: 650;
-}
-
+.nsp-parking-live-monitor__alert-lane { margin-top: 1px; color: #b91c1c; font-size: 9px; font-weight: 650; }
 .nsp-parking-live-monitor__alert-more {
     position: absolute;
-    right: 10px;
-    bottom: -8px;
-    padding: 3px 8px;
+    right: 7px;
+    bottom: -6px;
+    padding: 2px 6px;
     border-radius: 999px;
     background: #dc2626;
     color: #fff;
-    font-size: 10px;
+    font-size: 8px;
     font-weight: 800;
 }
 
 .nsp-parking-live-monitor__grid {
     flex: 1 1 auto;
     min-height: 0;
-    overflow: auto;
+    overflow: hidden;
     align-content: start;
     display: grid;
-    grid-template-columns: repeat(var(--nsp-live-columns, 2), minmax(0, 1fr));
-    grid-auto-rows: clamp(170px, 18vh, 210px);
-    gap: clamp(12px, 1vw, 16px);
-    padding: 2px 3px 5px;
+    grid-template-columns: repeat(var(--nsp-live-columns, 16), minmax(0, 1fr));
+    grid-template-rows: repeat(4, 68px);
+    grid-auto-rows: 0;
+    gap: 4px;
+    padding: 1px;
 }
 
 .nsp-parking-live-monitor__entry-card {
     position: relative;
     isolation: isolate;
     min-width: 0;
-    min-height: 170px;
-    padding: clamp(16px, 1.25vw, 20px);
+    min-height: 0;
+    padding: 6px 4px 5px;
     display: flex;
     flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
     border: 1px solid var(--nsp-live-line);
-    border-radius: 18px;
+    border-radius: 8px;
     background: var(--nsp-live-surface);
-    box-shadow: 0 7px 22px rgba(15, 23, 42, .055);
+    box-shadow: 0 2px 7px rgba(15, 23, 42, .045);
     overflow: hidden;
-    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease;
+    transition: border-color .15s ease, background .15s ease;
 }
 
 .nsp-parking-live-monitor__entry-card:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 10px 28px rgba(15, 23, 42, .08);
-    border-color: #cbd5e1;
+    border-color: #94a3b8;
+    background: #f8fafc;
 }
 
-/* Moving 2px gradient border for a newly arrived / verifying vehicle. */
 .nsp-parking-live-monitor__entry-card.is-new,
 .nsp-parking-live-monitor__entry-card.is-verifying {
     border-color: transparent;
     background: #f8fbff;
-    box-shadow: 0 10px 30px rgba(79, 70, 229, .10);
 }
 
 .nsp-parking-live-monitor__entry-card.is-new::before,
@@ -384,7 +341,7 @@
     position: absolute;
     inset: 0;
     z-index: -1;
-    padding: 2px;
+    padding: 1px;
     border-radius: inherit;
     background: linear-gradient(115deg, #2563EB, #7C3AED, #EC4899, #2563EB);
     background-size: 300% 300%;
@@ -395,264 +352,100 @@
     mask-composite: exclude;
 }
 
-.nsp-parking-live-monitor__avatar {
-    position: absolute;
-    top: 14px;
-    right: 14px;
-    z-index: 2;
-    width: clamp(42px, 3.3vw, 54px);
-    height: clamp(42px, 3.3vw, 54px);
-    display: grid;
-    place-items: center;
-    border: 3px solid #fff;
-    border-radius: 50%;
-    background: #e2e8f0;
-    color: #475569;
-    box-shadow: 0 5px 16px rgba(15, 23, 42, .12);
-    overflow: hidden;
-}
-
-.nsp-parking-live-monitor__avatar-fallback {
-    font-size: 12px;
-    font-weight: 850;
-    letter-spacing: .03em;
-}
-
-.nsp-parking-live-monitor__avatar img {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    display: block;
-    object-fit: cover;
-}
-
 .nsp-parking-live-monitor__plate {
-    max-width: calc(100% - 70px);
-    padding-right: 4px;
+    width: 100%;
     color: #0f172a;
-    font-size: clamp(31px, 2.65vw, 48px);
+    font-size: 14px;
     font-weight: 900;
     line-height: 1;
     font-variant-numeric: tabular-nums;
-    letter-spacing: .025em;
+    letter-spacing: 0;
+    text-align: center;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
-.nsp-parking-live-monitor__meta-row {
-    margin-top: 14px;
-    min-width: 0;
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
-    gap: 12px;
-    color: var(--nsp-live-muted);
-    font-size: clamp(11px, .82vw, 13px);
-    font-weight: 650;
-}
+/* Density modes: only 8 / 16 / 24 columns are supported. */
+.nsp-parking-live-monitor.columns-8 .nsp-parking-live-monitor__grid { grid-template-rows: repeat(4, 82px); gap: 5px; }
+.nsp-parking-live-monitor.columns-8 .nsp-parking-live-monitor__entry-card { padding: 8px 6px; border-radius: 10px; }
+.nsp-parking-live-monitor.columns-8 .nsp-parking-live-monitor__plate { font-size: clamp(19px, 1.5vw, 26px); letter-spacing: .015em; }
 
-.nsp-parking-live-monitor__entry-time {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-}
+.nsp-parking-live-monitor.columns-16 .nsp-parking-live-monitor__grid { grid-template-rows: repeat(4, 68px); }
+.nsp-parking-live-monitor.columns-16 .nsp-parking-live-monitor__plate { font-size: clamp(13px, .82vw, 16px); }
 
-.nsp-parking-live-monitor__person-name {
-    min-width: 0;
-    text-align: right;
-    color: #475569;
-}
-
-.nsp-parking-live-monitor__card-footer {
-    margin-top: auto;
-    padding-top: 16px;
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 10px;
-}
-
-.nsp-parking-live-monitor__lane {
-    min-width: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    color: #94a3b8;
-    font-size: 11px;
-    font-weight: 650;
-}
-
-.nsp-parking-live-monitor__status-badge {
-    flex: 0 0 auto;
-    min-height: 34px;
-    padding: 8px 13px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 7px;
-    border: 1px solid transparent;
-    border-radius: 999px;
-    font-size: clamp(11px, .8vw, 13px);
-    font-weight: 850;
-    letter-spacing: .035em;
-    white-space: nowrap;
-}
-
-.nsp-parking-live-monitor__status-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: currentColor;
-}
-
-.nsp-parking-live-monitor__status-badge.is-new {
-    color: #1d4ed8;
-    border-color: #bfdbfe;
-    background: #eff6ff;
-}
-
-.nsp-parking-live-monitor__status-badge.is-verifying {
-    color: #7c3aed;
-    border-color: #ddd6fe;
-    background: #f5f3ff;
-}
-
-.nsp-parking-live-monitor__status-badge.is-in {
-    color: #15803d;
-    border-color: #bbf7d0;
-    background: var(--nsp-live-green-soft);
-}
-
-.nsp-parking-live-monitor__status-badge.is-out {
-    color: #475569;
-    border-color: #e2e8f0;
-    background: #f8fafc;
-}
+.nsp-parking-live-monitor.columns-24 .nsp-parking-live-monitor__grid { grid-template-rows: repeat(4, 58px); gap: 3px; }
+.nsp-parking-live-monitor.columns-24 .nsp-parking-live-monitor__entry-card { padding: 5px 2px 4px; border-radius: 6px; gap: 4px; }
+.nsp-parking-live-monitor.columns-24 .nsp-parking-live-monitor__plate { font-size: clamp(10px, .58vw, 12px); }
 
 .nsp-parking-live-monitor__empty-state {
     grid-column: 1 / -1;
-    min-height: 220px;
+    grid-row: 1 / -1;
+    min-height: 160px;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    color: #94a3b8;
+    gap: 5px;
+    color: #cbd5e1;
     text-align: center;
 }
-
-.nsp-parking-live-monitor__empty-state strong {
-    color: #475569;
-    font-size: 15px;
-}
-
-.nsp-parking-live-monitor__empty-state > span:last-child {
-    font-size: 12px;
-}
-
+.nsp-parking-live-monitor__empty-state strong { color: #f1f5f9; font-size: 13px; }
+.nsp-parking-live-monitor__empty-state > span:last-child { font-size: 10px; }
 .nsp-parking-live-monitor__empty-icon {
-    width: 48px;
-    height: 48px;
-    margin-bottom: 4px;
+    width: 38px;
+    height: 38px;
+    margin-bottom: 2px;
     display: grid;
     place-items: center;
-    border-radius: 14px;
-    background: #eaf0f7;
-    color: #94a3b8;
-    font-size: 21px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, .08);
+    color: #cbd5e1;
+    font-size: 17px;
 }
 
-/* Density tuning by configured columns. */
-.nsp-parking-live-monitor.columns-1 .nsp-parking-live-monitor__entry-card {
-    min-height: 190px;
-}
-
-.nsp-parking-live-monitor.columns-1 .nsp-parking-live-monitor__plate {
-    font-size: clamp(42px, 3.6vw, 64px);
-}
-
-.nsp-parking-live-monitor.columns-3 .nsp-parking-live-monitor__entry-card,
-.nsp-parking-live-monitor.columns-4 .nsp-parking-live-monitor__entry-card {
-    padding: 15px;
-}
-
-.nsp-parking-live-monitor.columns-3 .nsp-parking-live-monitor__plate,
-.nsp-parking-live-monitor.columns-4 .nsp-parking-live-monitor__plate {
-    max-width: calc(100% - 58px);
-    font-size: clamp(25px, 1.9vw, 34px);
-}
-
-.nsp-parking-live-monitor.columns-3 .nsp-parking-live-monitor__avatar,
-.nsp-parking-live-monitor.columns-4 .nsp-parking-live-monitor__avatar {
-    width: 42px;
-    height: 42px;
-}
-
-.nsp-parking-live-monitor.columns-4 .nsp-parking-live-monitor__meta-row {
-    grid-template-columns: 1fr;
-    gap: 4px;
-}
-
-.nsp-parking-live-monitor.columns-4 .nsp-parking-live-monitor__person-name {
-    text-align: left;
-}
-
-.nsp-parking-live-monitor.columns-4 .nsp-parking-live-monitor__card-footer {
-    padding-top: 10px;
-}
-
-.nsp-parking-live-monitor.columns-4 .nsp-parking-live-monitor__lane {
-    display: none;
-}
-
-/* Footer */
 .nsp-parking-live-monitor__footer {
-    min-height: 34px;
+    grid-row: 2;
+    min-height: 18px;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding-top: 8px;
-    border-top: 1px solid var(--nsp-live-line);
+    border-top: 1px solid rgba(255, 255, 255, .12);
 }
 
 .nsp-parking-live-monitor__flow-info {
     min-width: 0;
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    color: var(--nsp-live-muted);
+    gap: 5px;
+    color: #cbd5e1;
     text-align: center;
-    font-size: 11px;
+    font-size: 9px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
 .nsp-parking-live-monitor__footer-dot {
-    width: 6px;
-    height: 6px;
+    width: 5px;
+    height: 5px;
     border-radius: 50%;
     background: #22c55e;
 }
 
 .nsp-parking-live-monitor__error {
     position: absolute;
-    left: 20px;
-    right: 20px;
-    bottom: 16px;
-    z-index: 30;
-    padding: 10px 12px;
+    left: 10px;
+    right: 10px;
+    bottom: 24px;
+    z-index: 50;
+    padding: 8px 10px;
     border: 1px solid #fecaca;
-    border-radius: 12px;
+    border-radius: 8px;
     background: rgba(254, 242, 242, .98);
     color: #b91c1c;
-    font-size: 12px;
+    font-size: 10px;
     font-weight: 700;
-    box-shadow: 0 10px 30px rgba(127, 29, 29, .12);
 }
 
 @keyframes nspLiveCardGradient {
@@ -661,15 +454,9 @@
     100% { background-position: 0% 50%; }
 }
 
-@media (max-width: 1200px) {
-    .nsp-parking-live-monitor__header-meta {
-        flex-direction: column;
-        align-items: flex-end;
-    }
-
-    .nsp-parking-live-monitor__alerts {
-        grid-template-columns: 1fr;
-    }
+@media (max-width: 1100px) {
+    .nsp-parking-live-monitor__alerts { grid-template-columns: 1fr; }
+    .nsp-parking-live-monitor__header-meta { display: none; }
 }
 
 @media (max-width: 900px) {
@@ -679,22 +466,421 @@
         height: auto;
         overflow: auto;
     }
-
     .nsp-parking-live-monitor__header {
-        align-items: flex-start;
+        position: sticky;
+        left: auto;
+        right: auto;
+        transform: none;
+        opacity: 1;
+        border-top: 1px solid var(--nsp-live-line);
+        border-radius: 8px;
     }
-
-    .nsp-parking-live-monitor__header-meta {
-        display: none;
-    }
-
     .nsp-parking-live-monitor__grid {
-        overflow: visible;
-        grid-template-columns: 1fr !important;
-        grid-auto-rows: auto;
+        overflow: hidden;
+        grid-template-columns: repeat(8, minmax(0, 1fr)) !important;
+        grid-template-rows: repeat(4, 72px);
+        grid-auto-rows: 0;
     }
+}
 
-    .nsp-parking-live-monitor__entry-card {
-        min-height: 180px;
+
+/* === Live Monitor operation modes ======================================= */
+.nsp-parking-live-monitor__settings-help.is-checkout-note {
+    margin-top: 8px;
+    padding-top: 7px;
+    border-top: 1px solid var(--nsp-live-line);
+    line-height: 1.35;
+}
+
+.nsp-parking-live-monitor__checkout-layout {
+    min-height: 0;
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: minmax(0, 2.15fr) minmax(340px, .85fr);
+    gap: 8px;
+}
+
+.nsp-parking-live-monitor__checkout-list-panel,
+.nsp-parking-live-monitor__guard-alert-panel {
+    min-width: 0;
+    min-height: 0;
+    border: 1px solid rgba(255, 255, 255, .12);
+    border-radius: 12px;
+    background: rgba(8, 18, 31, .36);
+    overflow: hidden;
+}
+
+.nsp-parking-live-monitor__checkout-list-panel {
+    display: grid;
+    grid-template-rows: 38px minmax(0, 1fr);
+}
+
+.nsp-parking-live-monitor__panel-heading,
+.nsp-parking-live-monitor__guard-alert-heading {
+    min-width: 0;
+    min-height: 38px;
+    padding: 6px 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, .10);
+    color: #e2e8f0;
+}
+
+.nsp-parking-live-monitor__panel-heading > div {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+}
+
+.nsp-parking-live-monitor__panel-heading strong,
+.nsp-parking-live-monitor__guard-alert-heading span {
+    font-size: 13px;
+    font-weight: 900;
+    letter-spacing: .04em;
+}
+
+.nsp-parking-live-monitor__panel-heading > span {
+    color: #94a3b8;
+    font-size: 9px;
+    font-weight: 700;
+}
+
+.nsp-parking-live-monitor__panel-kicker {
+    padding: 2px 5px;
+    border-radius: 5px;
+    background: rgba(37, 99, 235, .18);
+    color: #93c5fd;
+    font-size: 8px;
+    font-weight: 900;
+    letter-spacing: .08em;
+}
+
+.nsp-parking-live-monitor__checkout-grid {
+    min-height: 0;
+    padding: 6px;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: repeat(4, minmax(76px, 1fr));
+    grid-auto-rows: 0;
+    gap: 6px;
+    overflow: hidden;
+}
+
+.nsp-parking-live-monitor__checkout-card {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    padding: 8px;
+    display: grid;
+    grid-template-columns: 46px minmax(0, 1fr);
+    align-items: center;
+    gap: 9px;
+    border: 1px solid #dbe4f0;
+    border-radius: 10px;
+    background: #fff;
+    box-shadow: 0 3px 10px rgba(15, 23, 42, .10);
+    overflow: hidden;
+}
+
+.nsp-parking-live-monitor__checkout-card.is-new {
+    border-color: #60a5fa;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, .12), 0 3px 10px rgba(15, 23, 42, .10);
+}
+
+.nsp-parking-live-monitor__checkout-avatar,
+.nsp-parking-live-monitor__guard-avatar {
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: #e2e8f0;
+    color: #64748b;
+}
+
+.nsp-parking-live-monitor__checkout-avatar {
+    width: 46px;
+    height: 46px;
+    font-size: 20px;
+}
+
+.nsp-parking-live-monitor__checkout-avatar img,
+.nsp-parking-live-monitor__guard-avatar img {
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: cover;
+}
+
+.nsp-parking-live-monitor__checkout-card-copy { min-width: 0; }
+
+.nsp-parking-live-monitor__checkout-plate {
+    color: #0f172a;
+    font-size: clamp(16px, 1.15vw, 22px);
+    font-weight: 950;
+    line-height: 1.05;
+    font-variant-numeric: tabular-nums;
+}
+
+.nsp-parking-live-monitor__checkout-user {
+    margin-top: 5px;
+    color: #334155;
+    font-size: clamp(10px, .72vw, 13px);
+    font-weight: 800;
+    line-height: 1.15;
+}
+
+.nsp-parking-live-monitor__guard-alert-panel {
+    position: relative;
+    display: grid;
+    grid-template-rows: 38px minmax(0, 1fr) auto;
+    border-color: rgba(248, 113, 113, .28);
+    background: linear-gradient(180deg, rgba(69, 10, 10, .52), rgba(24, 10, 15, .46));
+}
+
+.nsp-parking-live-monitor__guard-alert-heading {
+    color: #fecaca;
+    background: rgba(127, 29, 29, .18);
+}
+
+.nsp-parking-live-monitor__guard-alert-heading strong {
+    min-width: 25px;
+    height: 25px;
+    padding: 0 7px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: #dc2626;
+    color: #fff;
+    font-size: 11px;
+}
+
+.nsp-parking-live-monitor__guard-safe {
+    min-height: 0;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: #bbf7d0;
+    text-align: center;
+}
+
+.nsp-parking-live-monitor__guard-safe-icon {
+    width: 72px;
+    height: 72px;
+    display: grid;
+    place-items: center;
+    border: 2px solid rgba(74, 222, 128, .35);
+    border-radius: 50%;
+    background: rgba(22, 101, 52, .22);
+    font-size: 28px;
+}
+
+.nsp-parking-live-monitor__guard-safe strong {
+    font-size: clamp(18px, 1.4vw, 26px);
+    font-weight: 950;
+}
+
+.nsp-parking-live-monitor__guard-safe > span:last-child {
+    max-width: 280px;
+    color: #86efac;
+    font-size: 11px;
+    font-weight: 650;
+    line-height: 1.4;
+}
+
+.nsp-parking-live-monitor__guard-alerts {
+    min-height: 0;
+    padding: 8px;
+    display: grid;
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    overflow: hidden;
+}
+
+.nsp-parking-live-monitor__guard-alert-card {
+    min-width: 0;
+    min-height: 0;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    border: 2px solid #ef4444;
+    border-radius: 12px;
+    background: #fff1f2;
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, .10), 0 12px 28px rgba(0, 0, 0, .18);
+    overflow: hidden;
+}
+
+.nsp-parking-live-monitor__guard-alert-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #b91c1c;
+    font-size: clamp(13px, .9vw, 16px);
+    font-weight: 950;
+    letter-spacing: .04em;
+}
+
+.nsp-parking-live-monitor__guard-alert-icon {
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: #dc2626;
+    color: #fff;
+    animation: nspGuardAlertPulse 1.15s ease-in-out infinite;
+}
+
+.nsp-parking-live-monitor__guard-alert-plate {
+    margin-top: 8px;
+    color: #7f1d1d;
+    font-size: clamp(28px, 2.35vw, 46px);
+    font-weight: 1000;
+    line-height: 1;
+    letter-spacing: .01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.nsp-parking-live-monitor__guard-person {
+    margin-top: 10px;
+    padding: 8px;
+    display: grid;
+    grid-template-columns: 56px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    border: 1px solid #fecaca;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, .8);
+}
+
+.nsp-parking-live-monitor__guard-avatar {
+    width: 56px;
+    height: 56px;
+    background: #fee2e2;
+    color: #b91c1c;
+    font-size: 24px;
+}
+
+.nsp-parking-live-monitor__guard-person small {
+    display: block;
+    color: #991b1b;
+    font-size: 9px;
+    font-weight: 850;
+    letter-spacing: .05em;
+}
+
+.nsp-parking-live-monitor__guard-person strong {
+    display: block;
+    margin-top: 3px;
+    color: #450a0a;
+    font-size: clamp(15px, 1.15vw, 21px);
+    font-weight: 950;
+}
+
+.nsp-parking-live-monitor__guard-alert-title {
+    margin-top: 10px;
+    color: #991b1b;
+    font-size: clamp(15px, 1.05vw, 20px);
+    font-weight: 950;
+}
+
+.nsp-parking-live-monitor__guard-alert-reason {
+    margin-top: 4px;
+    color: #b91c1c;
+    font-size: clamp(13px, .92vw, 17px);
+    font-weight: 800;
+    line-height: 1.25;
+}
+
+.nsp-parking-live-monitor__guard-alert-lane {
+    margin-top: auto;
+    padding-top: 7px;
+    color: #9f1239;
+    font-size: 11px;
+    font-weight: 750;
+}
+
+.nsp-parking-live-monitor__guard-alert-more {
+    padding: 5px 8px;
+    border-top: 1px solid rgba(248, 113, 113, .18);
+    color: #fecaca;
+    text-align: center;
+    font-size: 10px;
+    font-weight: 800;
+}
+
+.nsp-parking-live-monitor__footer {
+    position: relative;
+    min-height: 28px;
+    justify-content: center;
+}
+
+.nsp-parking-live-monitor__mode-switch {
+    position: absolute;
+    left: 0;
+    top: 2px;
+    bottom: 2px;
+    display: inline-flex;
+    align-items: stretch;
+    padding: 2px;
+    border: 1px solid rgba(255, 255, 255, .16);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, .72);
+}
+
+.nsp-parking-live-monitor__mode-button {
+    min-width: 86px;
+    padding: 3px 8px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #94a3b8;
+    font-size: 9px;
+    font-weight: 900;
+    cursor: pointer;
+}
+
+.nsp-parking-live-monitor__mode-button.is-active {
+    background: #2563eb;
+    color: #fff;
+}
+
+.nsp-parking-live-monitor__mode-button.is-active.is-checkout {
+    background: #0f766e;
+}
+
+@keyframes nspGuardAlertPulse {
+    0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 38, 38, .35); }
+    50% { transform: scale(1.06); box-shadow: 0 0 0 6px rgba(220, 38, 38, 0); }
+}
+
+@media (max-width: 1200px) {
+    .nsp-parking-live-monitor__checkout-layout {
+        grid-template-columns: minmax(0, 1.65fr) minmax(300px, .85fr);
     }
+}
+
+@media (max-width: 900px) {
+    .nsp-parking-live-monitor__checkout-layout {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(420px, 1fr) minmax(420px, 1fr);
+    }
+    .nsp-parking-live-monitor__checkout-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-rows: none;
+        grid-auto-rows: 88px;
+        overflow-y: auto;
+    }
+    .nsp-parking-live-monitor__mode-switch {
+        position: static;
+        margin-right: auto;
+    }
+    .nsp-parking-live-monitor__flow-info { display: none; }
 }

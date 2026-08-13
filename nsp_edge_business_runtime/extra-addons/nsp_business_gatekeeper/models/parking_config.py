@@ -172,7 +172,7 @@ class NspParkingArea(models.Model):
         }
 
     @api.model
-    def get_live_monitor_snapshot(self, parking_area_id, limit=16):
+    def get_live_monitor_snapshot(self, parking_area_id, limit=16, event_type="check_in"):
         if not (
             self.env.user.has_group("nsp_core.group_nsp_operator")
             or self.env.user.has_group("nsp_core.group_nsp_it_parking")
@@ -181,15 +181,21 @@ class NspParkingArea(models.Model):
             raise AccessError(_("You do not have access to the Parking Live Monitor."))
         try:
             parking_area_id = int(parking_area_id or 0)
-            limit = min(max(int(limit or 12), 3), 50)
+            limit = min(max(int(limit or 16), 3), 96)
         except (TypeError, ValueError):
-            parking_area_id, limit = 0, 12
+            parking_area_id, limit = 0, 16
+        event_type = str(event_type or "check_in").strip().lower()
+        if event_type not in {"check_in", "check_out"}:
+            event_type = "check_in"
         area = self.browse(parking_area_id).exists()
         if not area:
             return {"found": False}
         area.check_access("read")
         logs = self.env["nsp.parking.log"].search(
-            [("parking_area_id", "=", area.id)],
+            [
+                ("parking_area_id", "=", area.id),
+                ("event_type", "=", event_type),
+            ],
             order="event_time desc, id desc", limit=limit,
         )
         return {
@@ -198,6 +204,7 @@ class NspParkingArea(models.Model):
             "parking_area_name": area.name,
             "branch_name": area.branch_id.name or "",
             "state": area.state,
+            "event_type": event_type,
             "items": [log._live_monitor_payload() for log in logs[::-1]],
         }
 

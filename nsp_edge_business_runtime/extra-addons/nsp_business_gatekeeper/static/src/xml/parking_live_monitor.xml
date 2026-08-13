@@ -16,8 +16,8 @@
                             </span>
                         </button>
                         <div class="nsp-parking-live-monitor__settings-popover" t-if="state.settingsOpen">
-                            <div class="nsp-parking-live-monitor__settings-title">Bố cục hiển thị</div>
-                            <div class="nsp-parking-live-monitor__settings-help">Số cột phương tiện</div>
+                            <div class="nsp-parking-live-monitor__settings-title">Bố cục Check-in</div>
+                            <div class="nsp-parking-live-monitor__settings-help">Số cột phương tiện · 4 hàng cố định</div>
                             <div class="nsp-parking-live-monitor__settings-columns">
                                 <t t-foreach="[8, 16, 24]" t-as="column" t-key="column">
                                     <button type="button"
@@ -27,6 +27,9 @@
                                         <span>cột · 4 hàng</span>
                                     </button>
                                 </t>
+                            </div>
+                            <div class="nsp-parking-live-monitor__settings-help is-checkout-note">
+                                Check-out dùng bố cục 4 × 4 để đủ chỗ đối chiếu người lấy xe.
                             </div>
                         </div>
                     </div>
@@ -60,32 +63,8 @@
             </header>
 
             <main class="nsp-parking-live-monitor__content">
-                <section class="nsp-parking-live-monitor__alerts" t-if="visibleAlerts.length">
-                    <t t-foreach="visibleAlerts" t-as="alert" t-key="alert.log_uid || alert.id">
-                        <div class="nsp-parking-live-monitor__alert-card">
-                            <div class="nsp-parking-live-monitor__alert-mark"><i class="fa fa-exclamation-triangle"/></div>
-                            <div class="nsp-parking-live-monitor__alert-copy min-w-0">
-                                <div class="nsp-parking-live-monitor__alert-plate"><t t-esc="alert.license_plate || '-'"/></div>
-                                <div class="nsp-parking-live-monitor__alert-text min-w-0">
-                                    <div class="nsp-parking-live-monitor__alert-title text-truncate">
-                                        <t t-esc="alert.display_title || 'VUI LÒNG DỪNG LẠI'"/>
-                                    </div>
-                                    <div class="nsp-parking-live-monitor__alert-reason text-truncate">
-                                        <t t-esc="alert.display_reason || 'Vui lòng liên hệ nhân viên bảo vệ'"/>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="nsp-parking-live-monitor__alert-lane text-truncate" t-if="alert.lane_name">
-                                <t t-esc="alert.lane_name"/>
-                            </div>
-                        </div>
-                    </t>
-                    <div class="nsp-parking-live-monitor__alert-more" t-if="hiddenAlertCount">
-                        +<t t-esc="hiddenAlertCount"/> cảnh báo
-                    </div>
-                </section>
-
-                <section class="nsp-parking-live-monitor__grid" t-att-style="gridStyle">
+                <!-- Check-in intentionally has no alert surface. Denied Check-in logs are ignored. -->
+                <section class="nsp-parking-live-monitor__grid" t-if="isCheckInMode" t-att-style="gridStyle">
                     <t t-foreach="visibleEntries" t-as="row" t-key="row.key">
                         <article class="nsp-parking-live-monitor__entry-card" t-att-class="row.classes">
                             <div class="nsp-parking-live-monitor__plate" title="Biển số xe">
@@ -96,17 +75,117 @@
 
                     <div class="nsp-parking-live-monitor__empty-state" t-if="!visibleEntries.length">
                         <span class="nsp-parking-live-monitor__empty-icon"><i class="fa fa-car"/></span>
-                        <strong>Chưa có phương tiện</strong>
-                        <span>Dữ liệu mới sẽ xuất hiện tự động tại đây.</span>
+                        <strong>Chưa có xe vào</strong>
+                        <span>Xe Check-in mới sẽ xuất hiện tự động tại đây.</span>
                     </div>
+                </section>
+
+                <section class="nsp-parking-live-monitor__checkout-layout" t-if="isCheckOutMode">
+                    <div class="nsp-parking-live-monitor__checkout-list-panel">
+                        <div class="nsp-parking-live-monitor__panel-heading">
+                            <div>
+                                <span class="nsp-parking-live-monitor__panel-kicker">CHECK-OUT</span>
+                                <strong>XE RA</strong>
+                            </div>
+                            <span><t t-esc="visibleEntries.length"/> / <t t-esc="visibleCapacity"/> lượt gần nhất</span>
+                        </div>
+
+                        <div class="nsp-parking-live-monitor__checkout-grid">
+                            <t t-foreach="visibleEntries" t-as="row" t-key="row.key">
+                                <article class="nsp-parking-live-monitor__checkout-card" t-att-class="row.classes">
+                                    <div class="nsp-parking-live-monitor__checkout-avatar">
+                                        <img t-if="row.item.avatar_url" t-att-src="row.item.avatar_url" alt=""/>
+                                        <i t-else="" class="fa fa-user"/>
+                                    </div>
+                                    <div class="nsp-parking-live-monitor__checkout-card-copy min-w-0">
+                                        <div class="nsp-parking-live-monitor__checkout-plate text-truncate">
+                                            <t t-esc="row.item.license_plate || '-'"/>
+                                        </div>
+                                        <div class="nsp-parking-live-monitor__checkout-user text-truncate">
+                                            <t t-esc="row.item.employee_name || 'CHƯA XÁC ĐỊNH NGƯỜI LẤY XE'"/>
+                                        </div>
+                                    </div>
+                                </article>
+                            </t>
+
+                            <div class="nsp-parking-live-monitor__empty-state is-checkout" t-if="!visibleEntries.length">
+                                <span class="nsp-parking-live-monitor__empty-icon"><i class="fa fa-sign-out"/></span>
+                                <strong>Chưa có xe ra</strong>
+                                <span>Check-out hợp lệ sẽ xuất hiện tại đây.</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <aside class="nsp-parking-live-monitor__guard-alert-panel">
+                        <div class="nsp-parking-live-monitor__guard-alert-heading">
+                            <span><i class="fa fa-shield me-2"/>CẢNH BÁO CHECK-OUT</span>
+                            <strong t-if="state.alerts.length"><t t-esc="state.alerts.length"/></strong>
+                        </div>
+
+                        <div class="nsp-parking-live-monitor__guard-safe" t-if="!visibleAlerts.length">
+                            <span class="nsp-parking-live-monitor__guard-safe-icon"><i class="fa fa-check"/></span>
+                            <strong>KHÔNG CÓ CẢNH BÁO</strong>
+                            <span>Chỉ lỗi Check-out mới hiển thị tại khu vực này.</span>
+                        </div>
+
+                        <div class="nsp-parking-live-monitor__guard-alerts" t-if="visibleAlerts.length">
+                            <t t-foreach="visibleAlerts" t-as="alert" t-key="alert.log_uid || alert.id">
+                                <article class="nsp-parking-live-monitor__guard-alert-card">
+                                    <div class="nsp-parking-live-monitor__guard-alert-top">
+                                        <span class="nsp-parking-live-monitor__guard-alert-icon"><i class="fa fa-exclamation-triangle"/></span>
+                                        <span>KHÔNG CHO XE RA</span>
+                                    </div>
+                                    <div class="nsp-parking-live-monitor__guard-alert-plate">
+                                        <t t-esc="alert.license_plate || '-'"/>
+                                    </div>
+                                    <div class="nsp-parking-live-monitor__guard-person">
+                                        <div class="nsp-parking-live-monitor__guard-avatar">
+                                            <img t-if="alert.avatar_url" t-att-src="alert.avatar_url" alt=""/>
+                                            <i t-else="" class="fa fa-user"/>
+                                        </div>
+                                        <div class="min-w-0">
+                                            <small>NGƯỜI ĐANG LẤY XE</small>
+                                            <strong class="text-truncate">
+                                                <t t-esc="alert.employee_name || 'CHƯA XÁC ĐỊNH'"/>
+                                            </strong>
+                                        </div>
+                                    </div>
+                                    <div class="nsp-parking-live-monitor__guard-alert-title">
+                                        <t t-esc="alert.display_title || 'KHÔNG ĐƯỢC PHÉP LẤY XE'"/>
+                                    </div>
+                                    <div class="nsp-parking-live-monitor__guard-alert-reason">
+                                        <t t-esc="alert.display_reason || 'Vui lòng kiểm tra trước khi cho xe ra'"/>
+                                    </div>
+                                    <div class="nsp-parking-live-monitor__guard-alert-lane" t-if="alert.lane_name">
+                                        <i class="fa fa-map-marker me-1"/><t t-esc="alert.lane_name"/>
+                                    </div>
+                                </article>
+                            </t>
+                        </div>
+                        <div class="nsp-parking-live-monitor__guard-alert-more" t-if="hiddenAlertCount">
+                            +<t t-esc="hiddenAlertCount"/> cảnh báo khác
+                        </div>
+                    </aside>
                 </section>
             </main>
 
             <footer class="nsp-parking-live-monitor__footer">
+                <div class="nsp-parking-live-monitor__mode-switch" role="group" aria-label="Chế độ Live Monitor">
+                    <button type="button"
+                            t-att-class="'nsp-parking-live-monitor__mode-button' + (isCheckInMode ? ' is-active' : '')"
+                            t-on-click="() => this.selectDisplayMode('check_in')">
+                        <i class="fa fa-sign-in"/> CHECK-IN
+                    </button>
+                    <button type="button"
+                            t-att-class="'nsp-parking-live-monitor__mode-button' + (isCheckOutMode ? ' is-active is-checkout' : '')"
+                            t-on-click="() => this.selectDisplayMode('check_out')">
+                        <i class="fa fa-sign-out"/> CHECK-OUT
+                    </button>
+                </div>
                 <div class="nsp-parking-live-monitor__flow-info">
                     <span class="nsp-parking-live-monitor__footer-dot"/>
                     <strong><t t-esc="queueLabel"/></strong>
-                    <span t-if="state.alerts.length"> · <t t-esc="state.alerts.length"/> cảnh báo</span>
+                    <span t-if="isCheckOutMode and state.alerts.length"> · <t t-esc="state.alerts.length"/> cảnh báo</span>
                 </div>
             </footer>
 

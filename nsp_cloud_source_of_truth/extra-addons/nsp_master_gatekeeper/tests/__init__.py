@@ -9,3 +9,5 @@ from . import test_lane_master_layout_context
 
 from . import test_parking_log_master_runtime_contract
 from . import test_parking_log_master_clean_1341_contract
+from . import test_live_monitor_edge_ui_parity_1342_contract
+from . import test_live_monitor_checkin_checkout_1343_contract
