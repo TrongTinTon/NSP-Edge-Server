@@ -1,5 +1,7 @@
 # Nearest User RFID — 19.0.10.46.0
 
+> **Historical behavior:** This document is superseded by `CHECKOUT_SINGLE_VEHICLE_USER_19.0.10.47.0.md`. From 19.0.10.47.0 onward, any present User detection resolves Check-out immediately; only missing User waits until the Lane deadline.
+
 ## Rule
 
 Check-out no longer treats more than one User RFID identity in the Lane window as an ambiguity error.

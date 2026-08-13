@@ -41,11 +41,11 @@ class ParkingDetectionEvent(models.Model):
     controller_id = fields.Many2one(
         "nsp.controller", string="Controller",
         ondelete="restrict", readonly=True,
-        help="Stored only for unresolved raw observations; resolved candidates derive scope from Lane Configuration.",
+        help="Controller that reported the physical RFID detection. Kept on every Detection Log, including resolved Lane candidates.",
     )
     serial_number = fields.Char(
         string="Reader Serial", readonly=True,
-        help="Stored only when raw Reader identity cannot be represented by the resolved Reader relation.",
+        help="Backend-only raw Reader identity retained when the Reader cannot be resolved. It is intentionally not exposed in Detection Logs UI.",
     )
     layout_lane_id = fields.Many2one(
         "nsp.parking.layout.lane", string="Lane Configuration",
@@ -75,6 +75,11 @@ class ParkingDetectionEvent(models.Model):
         "nsp.vehicle", string="Resolved Vehicle", ondelete="restrict",
         readonly=True,
     )
+    resolved_identity = fields.Char(
+        string="Identity",
+        compute="_compute_resolved_identity",
+        help="Display-only identity label resolved from the RFID assignment. The UI renders the User/Vehicle type as a small badge while keeping the name or license plate as normal text.",
+    )
     error_code = fields.Selection(
         [
             ("rfid_assignment_not_found", "RFID Assignment Not Found"),
@@ -88,7 +93,7 @@ class ParkingDetectionEvent(models.Model):
             ("vehicle_not_found", "Vehicle Not Found"),
             ("processing_error", "Processing Error"),
         ],
-        string="Processing Result", readonly=True, copy=False,
+        string="Issue", readonly=True, copy=False,
     )
     _sql_constraints = [
         (
@@ -96,7 +101,29 @@ class ParkingDetectionEvent(models.Model):
             "CHECK(port_no >= 1 AND port_no <= 16)",
             "Reader Port must be between 1 and 16.",
         ),
+        (
+            "parking_detection_single_resolved_identity",
+            "CHECK(NOT (user_id IS NOT NULL AND vehicle_id IS NOT NULL))",
+            "A Detection Log can resolve to either one User or one Vehicle, never both.",
+        ),
     ]
+
+    @api.depends(
+        "user_id",
+        "user_id.display_name",
+        "vehicle_id",
+        "vehicle_id.display_name",
+        "vehicle_id.license_plate",
+    )
+    def _compute_resolved_identity(self):
+        for record in self:
+            if record.vehicle_id:
+                label = record.vehicle_id.license_plate or record.vehicle_id.display_name
+                record.resolved_identity = label
+            elif record.user_id:
+                record.resolved_identity = record.user_id.display_name
+            else:
+                record.resolved_identity = False
 
     def init(self):
         # Detection is a high-write working buffer, not long-term history. Keep
@@ -129,6 +156,20 @@ class ParkingDetectionEvent(models.Model):
             CREATE UNIQUE INDEX IF NOT EXISTS nsp_parking_detection_unresolved_uid_unique
                 ON nsp_parking_detection_event (event_uid)
              WHERE layout_lane_id IS NULL;
+            """
+        )
+
+        # 19.0.10.51.0: older resolved candidates intentionally omitted
+        # controller_id. Controller is acquisition provenance, so backfill any
+        # still-pending rows from their already-resolved Lane Configuration.
+        self.env.cr.execute(
+            """
+            UPDATE nsp_parking_detection_event AS event
+               SET controller_id = lane.controller_id
+              FROM nsp_parking_layout_lane AS lane
+             WHERE event.controller_id IS NULL
+               AND event.layout_lane_id = lane.id
+               AND lane.controller_id IS NOT NULL;
             """
         )
 
@@ -190,8 +231,10 @@ class ParkingDetectionEvent(models.Model):
             "reader_id": reader_id,
             "port_no": int(value("port_no") or 0),
             "tid": str(value("tid") or "").strip(),
-            # Raw identity fields are needed only when contextual resolution failed.
-            "controller_id": 0 if layout_lane_id else int(value("controller_id") or 0),
+            # Controller is immutable acquisition provenance and must remain part
+            # of every resolved or unresolved Detection Log. Reader serial is raw
+            # fallback evidence only when Reader Master cannot be resolved.
+            "controller_id": int(value("controller_id") or 0),
             "serial_number": "" if reader_id else str(value("serial_number") or "").strip().upper(),
         }
 
@@ -453,6 +496,7 @@ class ParkingDetectionEvent(models.Model):
             values.append({
                 "event_uid": payload["event_uid"],
                 "detected_at": payload["detected_at"],
+                "controller_id": lane.controller_id.id,
                 "layout_lane_id": lane.id,
                 "reader_id": reader.id,
                 "port_no": port_no,
@@ -775,7 +819,7 @@ class ParkingDetectionEvent(models.Model):
                 consumed_events = detail["consumed_events"]
                 matches.append({
                     "tid": tid,
-                    "duration_seconds": total_allowed,
+                    "window_seconds": total_allowed,
                     "start_at": path[0].detected_at,
                     "end_at": path[-1].detected_at,
                     "events": self.browse([event.id for event in path]),
@@ -837,7 +881,6 @@ class ParkingDetectionEvent(models.Model):
         vehicle_events,
         movement_state,
         user_events=False,
-        authorized_borrow_map=False,
         consume_vehicle_events=False,
         consume_user_events=False,
     ):
@@ -847,7 +890,6 @@ class ParkingDetectionEvent(models.Model):
         parking_log = self.env["nsp.parking.log"].sudo().create_from_detection_group(
             group,
             movement_state=movement_state,
-            authorized_borrow_map=authorized_borrow_map,
         )
         self._consume_detection_group(
             group | (consume_user_events or self.browse()),
@@ -895,7 +937,7 @@ class ParkingDetectionEvent(models.Model):
                 })
                 continue
 
-            duration = max(0.001, float(match["duration_seconds"] or 0.001))
+            correlation_window = max(0.001, float(match["window_seconds"] or 0.001))
             ParkingLog._acquire_vehicle_continuity_lock(vehicle)
 
             # Re-check existence/error after waiting on the Vehicle lock. Successful
@@ -910,7 +952,7 @@ class ParkingDetectionEvent(models.Model):
 
             # Suppress a repeated physical crossing before resolving Check-in/Check-out.
             # The index matches this exact Lane + revision + Vehicle + time lookup.
-            window_start = match["end_at"] - timedelta(seconds=duration)
+            window_start = match["end_at"] - timedelta(seconds=correlation_window)
             recent = ParkingLog.search([
                 ("layout_lane_id", "=", lane.id),
                 ("layout_revision", "=", layout_revision),
@@ -936,12 +978,11 @@ class ParkingDetectionEvent(models.Model):
             event_type = movement_state.get("event_type")
             matched_user_events = self.browse()
             consume_user_events = self.browse()
-            authorized_borrow_map = False
             if event_type == "check_out" and movement_state.get("action") != "deny":
-                deadline = match["end_at"] + timedelta(seconds=duration)
+                deadline = match["end_at"] + timedelta(seconds=correlation_window)
                 deadline_reached = bool(finalize_expired and now >= deadline)
                 candidates = self._user_candidates_from_pool(
-                    user_events, match["end_at"], duration, consumed_user_ids
+                    user_events, match["end_at"], correlation_window, consumed_user_ids
                 )
                 # Gatekeeper operating rule: one Vehicle + one User may occupy a
                 # Lane read zone at a time. As soon as a User read exists, select
@@ -962,9 +1003,6 @@ class ParkingDetectionEvent(models.Model):
                     consume_user_events = candidates.filtered(
                         lambda event: event.user_id.id == selected_user.id
                     )
-                    authorized_borrow_map = ParkingLog._authorized_user_borrow_map(
-                        vehicle, match["end_at"]
-                    )
 
             try:
                 with self.env.cr.savepoint():
@@ -972,7 +1010,6 @@ class ParkingDetectionEvent(models.Model):
                         movement_events,
                         movement_state,
                         user_events=matched_user_events,
-                        authorized_borrow_map=authorized_borrow_map,
                         consume_vehicle_events=consume_vehicle_events,
                         consume_user_events=consume_user_events,
                     )

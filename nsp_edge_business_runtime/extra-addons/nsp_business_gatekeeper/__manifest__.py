@@ -2,7 +2,7 @@
  'summary': 'Edge parking business runtime and Controller integration',
  'description': 'Edge-only Gatekeeper runtime. Keeps independent Server/Controller/Reader identities, contextual Reader Ports, RFID '
                 'runtime assignments, parking processing and measurement runtime.',
- 'version': '19.0.10.49.0',
+ 'version': '19.0.10.54.0',
  'sequence': 20,
  'author': 'BKU Team',
  'category': 'Services',
@@ -35,6 +35,8 @@
  'assets': {'web.assets_backend': ['nsp_business_gatekeeper/static/src/scss/device_tree_view.scss',
                                    'nsp_business_gatekeeper/static/src/xml/device_tree_view.xml',
                                    'nsp_business_gatekeeper/static/src/js/device_tree_view.js',
+                                   'nsp_business_gatekeeper/static/src/xml/detection_identity_field.xml',
+                                   'nsp_business_gatekeeper/static/src/js/detection_identity_field.js',
                                    'nsp_business_gatekeeper/static/src/xml/lane_sequence_preview.xml',
                                    'nsp_business_gatekeeper/static/src/js/lane_sequence_preview.js',
                                    'nsp_business_gatekeeper/static/src/js/parking_live_monitor.js',

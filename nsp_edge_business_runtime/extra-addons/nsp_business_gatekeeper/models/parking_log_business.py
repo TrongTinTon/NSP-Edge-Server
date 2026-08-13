@@ -149,7 +149,6 @@ class ParkingLogBusiness(models.Model):
         self,
         detections,
         movement_state=False,
-        authorized_borrow_map=False,
     ):
         """Create one business Parking Log from a matched Lane detection group."""
         detections = detections.filtered(lambda rec: not rec.error_code)
@@ -206,20 +205,14 @@ class ParkingLogBusiness(models.Model):
             if not user_events:
                 reason_codes.append("missing_user_tid")
             else:
-                # The Detection matcher supplies the User read nearest to the
-                # Vehicle sequence completion. Re-select defensively here so the
-                # business boundary remains deterministic if a caller provides
-                # more than one supporting User event.
-                user_event = user_events.sorted(key=lambda rec: (
-                    abs((rec.detected_at - event_time).total_seconds()),
-                    rec.detected_at,
-                    rec.id,
-                ))[:1]
+                # Detection correlation owns User selection and must provide exactly
+                # one supporting User read. Parking business owns authorization only.
+                if len(user_events) != 1:
+                    raise ValidationError(_("invalid_supporting_user_detection_count"))
+                user_event = user_events[:1]
                 user = user_event.user_id
                 user_tid = user_event.tid
-                authorized = authorized_borrow_map
-                if authorized is False:
-                    authorized = self._authorized_user_borrow_map(vehicle, event_time)
+                authorized = self._authorized_user_borrow_map(vehicle, event_time)
                 if user.id not in authorized:
                     reason_codes.append("unauthorized_vehicle_user")
                 else:

@@ -30,5 +30,14 @@ def test_detection_working_buffer_keeps_known_tid_resolution_errors():
     assert '"nsp.parking.layout.lane", string="Lane Configuration", required=True' not in model
     assert '"nsp.device", string="Reader", required=True' not in model
 
-    assert '<field name="controller_id" optional="show"/>' in view
-    assert '<field name="serial_number" optional="show"/>' in view
+    assert '<field name="controller_id"/>' in view
+    assert '<field name="serial_number"' not in view
+
+
+def test_resolved_detection_keeps_source_controller_for_ui_and_provenance():
+    root = Path(__file__).resolve().parents[1]
+    model = (root / 'models' / 'parking_detection_event.py').read_text(encoding='utf-8')
+
+    assert '"controller_id": lane.controller_id.id' in model
+    assert '"controller_id": 0 if layout_lane_id' not in model
+    assert 'SET controller_id = lane.controller_id' in model

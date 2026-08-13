@@ -13,8 +13,9 @@ def test_checkout_selects_only_nearest_user_read_to_vehicle_completion():
     assert "nearest_user_event = candidates[:1]" in detection
     assert "matched_user_events = nearest_user_event" in detection
     assert "abs((event.detected_at - anchor_at).total_seconds())" in detection
-    assert "abs((rec.detected_at - event_time).total_seconds())" in business
-    assert "user_event = user_events.sorted" in business
+    assert "abs((rec.detected_at - event_time).total_seconds())" not in business
+    assert "user_event = user_events[:1]" in business
+    assert "invalid_supporting_user_detection_count" in business
 
 
 def test_multiple_user_tags_is_not_emitted_or_exposed_by_runtime_ui():
@@ -37,6 +38,7 @@ def test_multiple_user_tags_is_not_emitted_or_exposed_by_runtime_ui():
 def test_any_present_user_resolves_checkout_immediately_without_authorization_wait():
     root = _root()
     detection = (root / "models" / "parking_detection_event.py").read_text(encoding="utf-8")
+    business = (root / "models" / "parking_log_business.py").read_text(encoding="utf-8")
 
     start = detection.index("nearest_user_event = candidates[:1]")
     end = detection.index("try:", start)
@@ -47,7 +49,8 @@ def test_any_present_user_resolves_checkout_immediately_without_authorization_wa
     assert "if not deadline_reached:" in selection_block
     assert "blocked_tids.add(tid)" in selection_block
     assert "matched_user_events = nearest_user_event" in selection_block
-    assert "authorized_borrow_map = ParkingLog._authorized_user_borrow_map(" in selection_block
+    assert "_authorized_user_borrow_map" not in selection_block
+    assert "authorized = self._authorized_user_borrow_map(vehicle, event_time)" in business
 
 
 def test_only_missing_user_waits_until_lane_deadline():

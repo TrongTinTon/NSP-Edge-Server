@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="nsp_business_gatekeeper.DetectionIdentityField">
+        <span class="d-inline-flex align-items-center">
+            <span t-if="identityType" t-att-class="badgeClass" t-esc="identityType"/>
+            <span t-if="identityLabel" t-esc="identityLabel"/>
+        </span>
+    </t>
+</templates>
