@@ -4,7 +4,7 @@ from datetime import timedelta
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
 from odoo.addons.nsp_core.utils import new_management_code
-from ..services.raw_rfid_tag import normalize_raw_tid
+from ..services.raw_rfid_tag import normalize_raw_tid, normalize_reader_serial
 
 
 def _new_measurement_code():
@@ -389,16 +389,16 @@ class NspMeasurementSession(models.Model):
     def _allowed_reader_port_pairs(self):
         self.ensure_one()
         return {
-            ((node.reader_id.serial_number or "").strip().upper(), int(port.port_no or 0))
+            (normalize_reader_serial(node.reader_id.serial_number), int(port.port_no or 0))
             for node in self._reader_nodes()
             for port in node.reader_port_ids
         }
 
     def _measurement_node_for_serial(self, serial_number):
         self.ensure_one()
-        serial = str(serial_number or "").strip().upper()
+        serial = normalize_reader_serial(serial_number)
         return self._reader_nodes().filtered(
-            lambda node: (node.reader_id.serial_number or "").strip().upper() == serial
+            lambda node: normalize_reader_serial(node.reader_id.serial_number) == serial
         )[:1]
 
     def _reader_power_for_serial(self, serial_number):
@@ -857,7 +857,7 @@ class NspMeasurementEvent(models.Model):
         reader_name_by_key = {}
         for session in persisted.mapped("session_id"):
             for node in session._reader_nodes():
-                serial = str(node.reader_id.serial_number or "").strip().upper()
+                serial = normalize_reader_serial(node.reader_id.serial_number)
                 if serial:
                     reader_name_by_key[(session.id, serial)] = (
                         node.reader_id.name or node.reader_id.serial_number or serial
@@ -889,7 +889,7 @@ class NspMeasurementEvent(models.Model):
             event.timeline_timestamp = (
                 "%s.%03d" % (base, int(event.read_at_ms or 0)) if base else ""
             )
-            serial = str(event.serial_number or "").strip().upper()
+            serial = normalize_reader_serial(event.serial_number)
             event.timeline_reader = reader_name_by_key.get(
                 (event.session_id.id, serial), event.serial_number or ""
             )
@@ -911,7 +911,7 @@ class NspMeasurementEvent(models.Model):
         for source in vals_list:
             vals = dict(source)
             vals["event_uid"] = str(vals.get("event_uid") or "").strip()
-            vals["serial_number"] = str(vals.get("serial_number") or "").strip().upper()
+            vals["serial_number"] = normalize_reader_serial(vals.get("serial_number"))
             try:
                 vals["tid"] = normalize_raw_tid(vals.get("tid"))
             except ValueError as exc:
@@ -942,7 +942,7 @@ class NspMeasurementEvent(models.Model):
     def _check_event_scope(self):
         for event in self:
             session = event.session_id
-            key = (event.serial_number, int(event.port_no or 0))
+            key = (normalize_reader_serial(event.serial_number), int(event.port_no or 0))
             if key not in session._allowed_reader_port_pairs():
                 raise ValidationError(_("Reader Port is not part of the Lane Calibration."))
             if event.tid not in session._allowed_target_tids():

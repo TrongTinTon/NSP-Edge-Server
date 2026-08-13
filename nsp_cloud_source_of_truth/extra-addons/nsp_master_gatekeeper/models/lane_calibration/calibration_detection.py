@@ -203,8 +203,8 @@ class NspMeasurementEvent(models.Model):
             and self.serial_number == values["serial_number"]
             and int(self.port_no or 0) == int(values["port_no"] or 0)
             and self.tid == values["tid"]
-            and fields.Datetime.to_string(self.read_at)
-            == fields.Datetime.to_string(values["read_at"])
+            and fields.Datetime.to_datetime(self.read_at)
+            == fields.Datetime.to_datetime(values["read_at"])
             and int(self.read_at_ms or 0) == int(values["read_at_ms"] or 0)
             and (False if self.rssi_dbm in (False, None) else float(self.rssi_dbm))
             == (

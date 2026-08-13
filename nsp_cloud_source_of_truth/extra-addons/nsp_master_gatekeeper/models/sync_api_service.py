@@ -1291,7 +1291,11 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     and first["serial_number"] == values["serial_number"]
                     and int(first["port_no"]) == int(values["port_no"])
                     and first["tid"] == values["tid"]
-                    and fields.Datetime.to_string(first["read_at"]) == fields.Datetime.to_string(values["read_at"])
+                    # _measurement_datetime() already normalizes read_at to an
+                    # Odoo UTC datetime string. Comparing the normalized values
+                    # directly avoids calling fields.Datetime.to_string() on str,
+                    # which raises: 'str' object has no attribute 'strftime'.
+                    and first["read_at"] == values["read_at"]
                     and int(first["read_at_ms"] or 0) == int(values["read_at_ms"] or 0)
                     and (False if first["rssi_dbm"] in (False, None) else float(first["rssi_dbm"]))
                     == (False if values["rssi_dbm"] in (False, None) else float(values["rssi_dbm"]))

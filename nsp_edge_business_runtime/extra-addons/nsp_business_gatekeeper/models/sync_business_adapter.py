@@ -1365,13 +1365,13 @@ class NspSyncBusinessAdapter(models.Model):
         Event = self.env["nsp.measurement.event"].sudo()
         action_code = str(self.sync_action_code or "").strip()
         source_code = str(self.edge_server_code or "NSP").strip() or "NSP"
-        synced_keys = Record.search([
+        terminal_keys = Record.search([
             ("source_code", "=", source_code),
             ("sync_action_code", "=", action_code),
             ("operation", "=", "push"),
-            ("status", "=", "synced"),
+            ("status", "in", ("synced", "skipped")),
         ]).mapped("record_key")
-        domain = [("event_uid", "not in", synced_keys)] if synced_keys else []
+        domain = [("event_uid", "not in", terminal_keys)] if terminal_keys else []
         return Event.search(
             domain,
             order="read_at, id",
@@ -1427,11 +1427,19 @@ class NspSyncBusinessAdapter(models.Model):
         }
         reported_failed = int(data.get("failed") or 0)
         failed = 0
+        skipped = 0
         for event in events:
             result = result_by_key.get(event.event_uid)
-            rejected = bool(result and result.get("status") in ("rejected", "failed", "error"))
+            remote_status = str((result or {}).get("status") or "").strip().lower()
+            rejected = remote_status in ("rejected", "failed", "error")
+            ignored = remote_status == "ignored"
             if not result_by_key and reported_failed:
                 rejected = True
+            local_status = "failed" if rejected else ("skipped" if ignored else "synced")
+            default_message = (
+                "Rejected by Cloud." if rejected
+                else ("Ignored by Cloud." if ignored else "Accepted by Cloud.")
+            )
             Record.mark_result(
                 sync_job=self,
                 action_code=self.sync_action_code,
@@ -1439,13 +1447,14 @@ class NspSyncBusinessAdapter(models.Model):
                 route_suffix=self.route_suffix,
                 record=event,
                 record_key=event.event_uid,
-                status="failed" if rejected else "synced",
-                message=(result or {}).get("message") or ("Rejected by Cloud." if rejected else "Accepted by Cloud."),
+                status=local_status,
+                message=(result or {}).get("message") or default_message,
                 payload=self._lane_calibration_event_payload(event),
                 response=result or data,
                 operation="push",
             )
             failed += int(rejected)
+            skipped += int(ignored)
         if failed:
             reasons = {}
             for result in result_by_key.values():
@@ -1462,11 +1471,23 @@ class NspSyncBusinessAdapter(models.Model):
                 message += " " + _("Reasons: %s") % reason_text
             raise UserError(message)
         self.last_push_at = fields.Datetime.now()
+        if skipped:
+            _logger.warning(
+                "Cloud ignored %s/%s Lane Calibration Event(s) for %s; "
+                "see Sync Records for the per-event reason.",
+                skipped, len(events), session.measurement_code,
+            )
         return {
-            "pushed": len(events),
+            "pushed": len(events) - skipped,
+            "skipped": skipped,
             "failed": 0,
             "has_more": bool(self._pending_lane_calibration_events(1)),
-            "message": "Pushed %s Lane Calibration Event(s)." % len(events),
+            "message": (
+                "Pushed %s Lane Calibration Event(s); Cloud ignored %s."
+                % (len(events) - skipped, skipped)
+                if skipped
+                else "Pushed %s Lane Calibration Event(s)." % len(events)
+            ),
         }
 
     def _run_lane_calibration_event_push_once(self):

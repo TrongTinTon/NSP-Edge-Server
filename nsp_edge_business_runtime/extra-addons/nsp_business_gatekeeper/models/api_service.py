@@ -7,6 +7,7 @@ from odoo import api, fields, models
 from odoo.addons.t4_coreapi.utils import endpoint, get_body
 
 from .state_policy import classify_idempotent_replay, compare_revision
+from ..services.raw_rfid_tag import normalize_raw_tid, normalize_reader_serial
 
 _logger = logging.getLogger(__name__)
 
@@ -467,7 +468,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             key=lambda item: ((item.reader_id.serial_number or ""), item.id)
         ):
             readers.append({
-                "serial_number": node.reader_id.serial_number or "",
+                "serial_number": normalize_reader_serial(node.reader_id.serial_number),
                 "power_dbm": node._effective_power_dbm(),
                 "read_interval_ms": node._effective_read_interval_ms(),
                 "tid_start_address": node._effective_tid_addr(),
@@ -659,7 +660,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             item, ["event_uid", "serial_number", "port_no", "tid", "read_at", "revision"]
         )
         event_uid = str(item.get("event_uid") or "").strip()
-        serial_number = str(item.get("serial_number") or "").strip().upper()
+        serial_number = normalize_reader_serial(item.get("serial_number"))
         tid = normalize_raw_tid(item.get("tid"))
         try:
             port_no = int(item.get("port_no") or 0)
@@ -761,8 +762,8 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             and event.serial_number == values["serial_number"]
             and int(event.port_no or 0) == int(values["port_no"] or 0)
             and event.tid == values["tid"]
-            and fields.Datetime.to_string(event.read_at)
-            == fields.Datetime.to_string(values["read_at"])
+            and fields.Datetime.to_datetime(event.read_at)
+            == fields.Datetime.to_datetime(values["read_at"])
             and int(event.read_at_ms or 0) == int(values["read_at_ms"] or 0)
             and (
                 False if event.rssi_dbm in (False, None)
@@ -795,7 +796,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 and node.parent_id.controller_id == controller
             )
         reader_node_by_serial = {
-            str(node.reader_id.serial_number or "").strip().upper(): node
+            normalize_reader_serial(node.reader_id.serial_number): node
             for node in reader_nodes
             if node.reader_id.serial_number
         }
@@ -898,7 +899,10 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                     and first["serial_number"] == values["serial_number"]
                     and int(first["port_no"]) == int(values["port_no"])
                     and first["tid"] == values["tid"]
-                    and fields.Datetime.to_string(first["read_at"]) == fields.Datetime.to_string(values["read_at"])
+                    # _measurement_datetime() already normalizes read_at to an
+                    # Odoo UTC datetime string. Compare normalized values directly;
+                    # fields.Datetime.to_string(str) calls strftime and crashes.
+                    and first["read_at"] == values["read_at"]
                     and int(first["read_at_ms"] or 0) == int(values["read_at_ms"] or 0)
                     and (False if first["rssi_dbm"] in (False, None) else float(first["rssi_dbm"]))
                     == (False if values["rssi_dbm"] in (False, None) else float(values["rssi_dbm"]))
@@ -1070,17 +1074,8 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                     controller.controller_id, code, len(items), reason,
                 )
                 return self._ok(
-                    {"data": {
-                        "lane_calibration_code": code,
-                        "received": len(items),
-                        "stored": 0,
-                        "duplicates": 0,
-                        "ignored": len(items),
-                        "rejected": 0,
-                        "reason": "lane_calibration_obsolete",
-                        "reader_activity_touched": 0,
-                    }},
-                    message="Obsolete Lane Calibration events ignored.",
+                    {"data": {"lane_calibration_code": code, "acknowledged": True}},
+                    message="Lane Calibration event batch received.",
                 )
             if controller not in session._controller_nodes().mapped("controller_id"):
                 raise ValueError("controller_not_in_scope")
@@ -1127,15 +1122,10 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 {
                     "data": {
                         "lane_calibration_code": session.measurement_code,
-                        "received": int(result.get("received", 0)),
-                        "stored": int(result.get("processed", 0)),
-                        "duplicates": int(result.get("duplicates", 0)),
-                        "ignored": int(result.get("ignored", 0)),
-                        "rejected": int(result.get("failed", 0)),
-                        "reader_activity_touched": 0,
+                        "acknowledged": True,
                     }
                 },
-                message="Lane Calibration events received.",
+                message="Lane Calibration event batch received.",
             )
         except Exception as exc:
             _logger.exception("Lane Calibration raw batch processing failed")
