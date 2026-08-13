@@ -6,11 +6,11 @@ import { useService } from "@web/core/utils/hooks";
 
 const BUS_EVENT = "nsp_parking_live_log";
 const DISPLAY_ROWS = 4;
-const DEFAULT_COLUMNS = 2;
-const MIN_COLUMNS = 1;
-const MAX_COLUMNS = 4;
-const MAX_HISTORY = 60;
-const MAX_QUEUE = 240;
+const DISPLAY_COLUMN_OPTIONS = Object.freeze([8, 16, 24]);
+const DEFAULT_COLUMNS = 16;
+const MAX_HISTORY = 96;
+const MAX_QUEUE = 192;
+const SNAPSHOT_LIMIT = 96;
 const MAX_ALERTS = 8;
 const VISIBLE_ALERTS = 2;
 const ALERT_HOLD_MS = 12000;
@@ -150,7 +150,7 @@ export class NspParkingLiveMonitor extends Component {
 
     get queueLabel() {
         if (!this.state.pendingCount) {
-            return `${this.visibleCapacity} xe gần nhất • ${this.displayColumns} cột`;
+            return `${this.visibleCapacity} xe gần nhất • 4 hàng × ${this.displayColumns} cột`;
         }
         return `Đang hiển thị theo đợt • còn ${this.state.pendingCount}`;
     }
@@ -180,42 +180,6 @@ export class NspParkingLiveMonitor extends Component {
         return ["verifying", "pending", "processing", "in_review"].includes(value);
     }
 
-    entryStatusLabel(item) {
-        if (this.isVerifying(item)) {
-            return "ĐANG XÁC MINH";
-        }
-        if (this.isNewEntry(item)) {
-            return "MỚI VÀO";
-        }
-        if (item?.event_type === "check_out") {
-            return "ĐÃ RA";
-        }
-        return "ĐÃ VÀO";
-    }
-
-    entryStatusClass(item) {
-        if (this.isVerifying(item)) {
-            return "is-verifying";
-        }
-        if (this.isNewEntry(item)) {
-            return "is-new";
-        }
-        return item?.event_type === "check_out" ? "is-out" : "is-in";
-    }
-
-    personInitials(item) {
-        const name = String(item?.employee_name || "").trim();
-        if (!name) {
-            return "?";
-        }
-        return name
-            .split(/\s+/)
-            .filter(Boolean)
-            .slice(-2)
-            .map((part) => part.charAt(0).toUpperCase())
-            .join("");
-    }
-
     toggleSettings() {
         this.state.settingsOpen = !this.state.settingsOpen;
     }
@@ -227,10 +191,7 @@ export class NspParkingLiveMonitor extends Component {
 
     _normalizeDisplayColumns(value) {
         const columns = Number.parseInt(value, 10);
-        if (!Number.isFinite(columns)) {
-            return DEFAULT_COLUMNS;
-        }
-        return Math.min(MAX_COLUMNS, Math.max(MIN_COLUMNS, columns));
+        return DISPLAY_COLUMN_OPTIONS.includes(columns) ? columns : DEFAULT_COLUMNS;
     }
 
     _loadDisplayColumns() {
@@ -244,7 +205,6 @@ export class NspParkingLiveMonitor extends Component {
     setDisplayColumns(value) {
         const columns = this._normalizeDisplayColumns(value);
         this.state.displayColumns = columns;
-        this.state.entries = this.state.entries.slice(0, this.visibleCapacity);
         try {
             window.localStorage.setItem(this.displayColumnsStorageKey, String(columns));
         } catch {
@@ -261,19 +221,6 @@ export class NspParkingLiveMonitor extends Component {
         const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/.test(iso) ? iso : `${iso}Z`;
         const parsed = new Date(normalized);
         return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
-    }
-
-    formatEventTime(value) {
-        const eventMs = this._eventTimeMs(value);
-        if (!eventMs) {
-            return "";
-        }
-        return new Date(eventMs).toLocaleTimeString("vi-VN", {
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-            hour12: false,
-        });
     }
 
     _itemKey(item) {
@@ -389,8 +336,8 @@ export class NspParkingLiveMonitor extends Component {
         const capacity = this.visibleCapacity;
         const burst = this.entryQueue.length >= capacity || this.isBurstMode;
         if (burst) {
-            // Page mode uses the Parking Area display configuration. With four rows,
-            // 1/2/3/4 columns render 4/8/12/16 vehicles per readable wave.
+            // Page mode follows the fixed four-row Live Monitor configuration.
+            // 8/16/24 columns render at most 32/64/96 entries per visible wave.
             const page = this.entryQueue.splice(0, Math.min(capacity, this.entryQueue.length));
             const newestFirst = page.reverse();
             this.state.entries = newestFirst;
@@ -498,7 +445,7 @@ export class NspParkingLiveMonitor extends Component {
             const data = await this.orm.call(
                 "nsp.parking.area",
                 "get_live_monitor_snapshot",
-                [this.parkingAreaId, 60]
+                [this.parkingAreaId, SNAPSHOT_LIMIT]
             );
             if (!data?.found) {
                 this.state.error = "Không tìm thấy Parking Operation Configuration.";
@@ -523,7 +470,6 @@ export class NspParkingLiveMonitor extends Component {
                 }
                 this.routeDisplayPayload(item, { fromSnapshot: true });
             }
-            this.state.entries = this.state.entries.slice(0, this.visibleCapacity);
             this.state.pendingCount = this.entryQueue.length;
             this.state.error = "";
         } catch (error) {

@@ -19,14 +19,12 @@
                             <div class="nsp-parking-live-monitor__settings-title">Bố cục hiển thị</div>
                             <div class="nsp-parking-live-monitor__settings-help">Số cột phương tiện</div>
                             <div class="nsp-parking-live-monitor__settings-columns">
-                                <t t-foreach="[1, 2, 3, 4]" t-as="column" t-key="column">
+                                <t t-foreach="[8, 16, 24]" t-as="column" t-key="column">
                                     <button type="button"
                                             t-att-class="'nsp-parking-live-monitor__settings-column' + (displayColumns === column ? ' is-active' : '')"
                                             t-on-click="() => this.selectDisplayColumns(column)">
-                                        <span class="nsp-parking-live-monitor__settings-grid-icon" t-att-style="'--nsp-mini-columns:' + column + ';'">
-                                            <i/><i/><i/><i/>
-                                        </span>
                                         <strong><t t-esc="column"/></strong>
+                                        <span>cột · 4 hàng</span>
                                     </button>
                                 </t>
                             </div>
@@ -90,34 +88,8 @@
                 <section class="nsp-parking-live-monitor__grid" t-att-style="gridStyle">
                     <t t-foreach="visibleEntries" t-as="row" t-key="row.key">
                         <article class="nsp-parking-live-monitor__entry-card" t-att-class="row.classes">
-                            <div class="nsp-parking-live-monitor__avatar" title="Người điều khiển">
-                                <span class="nsp-parking-live-monitor__avatar-fallback"><t t-esc="personInitials(row.item)"/></span>
-                                <img t-if="row.item.avatar_url" t-att-src="row.item.avatar_url" alt="Ảnh đại diện"/>
-                            </div>
-
                             <div class="nsp-parking-live-monitor__plate" title="Biển số xe">
                                 <t t-esc="row.item.license_plate || '-'"/>
-                            </div>
-
-                            <div class="nsp-parking-live-monitor__meta-row">
-                                <div class="nsp-parking-live-monitor__entry-time">
-                                    <i class="fa fa-clock-o"/>
-                                    <span><t t-esc="formatEventTime(row.item.event_time) || '--:--'"/></span>
-                                </div>
-                                <div class="nsp-parking-live-monitor__person-name text-truncate">
-                                    <t t-esc="row.item.employee_name || 'Không xác định'"/>
-                                </div>
-                            </div>
-
-                            <div class="nsp-parking-live-monitor__card-footer">
-                                <span class="nsp-parking-live-monitor__lane text-truncate" t-if="row.item.lane_name">
-                                    <i class="fa fa-map-marker"/>
-                                    <t t-esc="row.item.lane_name"/>
-                                </span>
-                                <span t-att-class="'nsp-parking-live-monitor__status-badge ' + entryStatusClass(row.item)">
-                                    <span class="nsp-parking-live-monitor__status-dot"/>
-                                    <t t-esc="entryStatusLabel(row.item)"/>
-                                </span>
                             </div>
                         </article>
                     </t>

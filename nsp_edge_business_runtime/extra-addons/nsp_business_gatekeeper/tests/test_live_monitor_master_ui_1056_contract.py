@@ -15,10 +15,8 @@ def test_business_live_monitor_uses_master_ui_contract():
     assert 'toggleSettings' in js
     assert 'settingsOpen' in js
     assert 'NEW_CARD_HOLD_MS = 12000' in js
-    assert 'ĐANG XÁC MINH' in js
-    assert 'MỚI VÀO' in js
     assert 'nsp-parking-live-monitor__settings-popover' in xml
-    assert 'nsp-parking-live-monitor__avatar' in xml
+    assert 'nsp-parking-live-monitor__avatar' not in xml
     assert 'avatar_url' in live
     assert '"decision": self.decision' in live
     assert '/nsp_master_gatekeeper/static/' not in xml
