@@ -206,6 +206,17 @@ class NspSyncJob(models.Model):
             rec.sync_action_name = action.name if action else False
             rec.route_suffix = action.route_suffix if action else False
 
+    def _canonical_route(self):
+        """Return the live Core API action route, never stale stored job metadata.
+
+        ``route_suffix`` on the job is a stored projection for search/UI. Route
+        renames can leave that projection stale until recomputation. The related
+        Core API action is the transport source of truth used for execution.
+        """
+        self.ensure_one()
+        action_route = (self.sync_action_id.route_suffix or "").strip().strip("/") if self.sync_action_id else ""
+        return action_route or (self.route_suffix or "").strip().strip("/")
+
     def _deployment_role(self):
         role = (
             self.env["ir.config_parameter"].sudo().get_param("nsp.deployment_role")
@@ -328,7 +339,10 @@ class NspSyncJob(models.Model):
         existing_by_auth = {}
         unsupported_jobs = self.browse()
         for job in existing_jobs:
-            route = (job.route_suffix or "").strip().strip("/")
+            # Use the live action route rather than the stored projection. This
+            # self-heals jobs created before a route rename (e.g.
+            # parking-transactions -> parking-logs).
+            route = job._canonical_route()
             if route in NSP_SYNC_ALLOWED_ROUTES:
                 existing_by_auth.setdefault(job.auth_id.id, {})[route] = job
             else:
@@ -362,7 +376,7 @@ class NspSyncJob(models.Model):
         created = self.create(vals_list) if vals_list else self.browse()
 
         for job in existing_jobs | created:
-            route = (job.route_suffix or "").strip().strip("/")
+            route = job._canonical_route()
             if route not in NSP_SYNC_ALLOWED_ROUTES:
                 continue
             values = {}
@@ -379,6 +393,9 @@ class NspSyncJob(models.Model):
                 values["batch_size"] = settings["batch_size"]
             if values:
                 job.write(values)
+            # Force the stored projection to converge even on databases where a
+            # previous action route rename bypassed the dependency recompute.
+            job._compute_action_meta()
         return created
 
     @api.onchange("sync_action_id")
@@ -391,7 +408,7 @@ class NspSyncJob(models.Model):
     @api.constrains("sync_action_id", "direction")
     def _check_sync_actions(self):
         for rec in self:
-            route = (rec.route_suffix or "").strip().strip("/")
+            route = rec._canonical_route()
             if route not in NSP_SYNC_ALLOWED_ROUTES:
                 raise ValidationError(_("Route %s is not supported by NSP Sync.") % (route or "-"))
             expected = SYNC_ROUTE_DIRECTIONS[route]
@@ -515,7 +532,7 @@ class NspSyncJob(models.Model):
 
     def _action_kind(self):
         self.ensure_one()
-        return ACTION_KINDS.get((self.route_suffix or "").strip().strip("/"), "unsupported")
+        return ACTION_KINDS.get(self._canonical_route(), "unsupported")
 
     @api.model
     def _dt(self, value):
@@ -593,7 +610,7 @@ class NspSyncJob(models.Model):
 
     def _build_push_payload(self, items):
         self.ensure_one()
-        route = (self.route_suffix or "").strip().strip("/")
+        route = self._canonical_route()
         base = {"edge_server_code": self.edge_server_code}
         if route == "edge/status":
             base.update(self._remote_push_item(items[0] if items else self._serialize_edge_server_status()))
@@ -697,7 +714,12 @@ class NspSyncJob(models.Model):
         batch = self._serialize_push_batch(kind)
         items = batch["items"]
         if not items:
-            return {"pushed": 0, "failed": 0, "has_more": False, "message": "No changed records to push."}
+            return {
+                "pushed": 0,
+                "failed": 0,
+                "has_more": False,
+                "message": batch.get("empty_message") or "No changed records to push.",
+            }
         Record = self.env["nsp.sync.record"].sudo()
         for item in items:
             key = self._record_key_from_item(item)
@@ -889,16 +911,36 @@ class NspSyncJob(models.Model):
 
     def action_run_now(self):
         self.run_once()
+        failed = self.filtered(lambda job: job.status == "failed")
         return {
             "type": "ir.actions.client",
             "tag": "display_notification",
             "params": {
                 "title": _("NSP Sync"),
-                "message": _("Sync Job completed. Check Status and Last Message."),
-                "type": "success",
-                "sticky": False,
+                "message": (
+                    failed[:1].last_message
+                    if failed
+                    else _("Sync Job completed successfully.")
+                ),
+                "type": "danger" if failed else "success",
+                "sticky": bool(failed),
             },
         }
+
+    @api.model
+    def _ensure_edge_sync_jobs(self):
+        """Repair the canonical job catalogue for all Edge Cloud connections.
+
+        Job lifecycle belongs to nsp_sync itself. Business modules provide
+        serializers/apply handlers, but the transport scheduler must remain able
+        to repair its jobs independently.
+        """
+        if self._deployment_role() != "edge_server":
+            return self.browse()
+        auth_records = self.env["nsp.sync.auth"].sudo().search([])
+        if not auth_records:
+            return self.browse()
+        return self.sudo().ensure_default_jobs(auth_records)
 
     @api.model
     def run_due_jobs(self):

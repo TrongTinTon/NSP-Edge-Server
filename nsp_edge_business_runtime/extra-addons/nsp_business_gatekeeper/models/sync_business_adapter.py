@@ -205,7 +205,13 @@ class NspSyncBusinessAdapter(models.Model):
         # The concrete HTTP route is the transport contract. Do not depend on
         # nsp_sync's internal push-kind taxonomy here: business modules may add
         # routes before the generic transport module knows their semantic name.
-        route = str(self.route_suffix or "").strip().strip("/")
+        # The live Core API action is the transport source of truth. The stored
+        # job route may be stale immediately after a route rename/migration.
+        route = (
+            (self.sync_action_id.route_suffix or "").strip().strip("/")
+            if self.sync_action_id
+            else str(self.route_suffix or "").strip().strip("/")
+        )
         limit = max(1, min(int(self.batch_size or 100), 1000))
         if route == "edge/status":
             return {
@@ -217,9 +223,19 @@ class NspSyncBusinessAdapter(models.Model):
         if route != "edge/parking-logs":
             raise UserError(_("Unsupported push route: %s") % self.route_suffix)
 
-        records = self.env["nsp.parking.log"].sudo().search(
-            self._push_cursor_domain(), order="id asc", limit=limit + 1,
-        )
+        Log = self.env["nsp.parking.log"].sudo()
+        latest = Log.search([], order="id desc", limit=1)
+        cursor_id = int(self.last_push_record_id or 0)
+
+        # An append-only table can never legitimately have a durable cursor above
+        # its current maximum ID.  This can happen after a legacy table/route
+        # migration.  Recover locally; Cloud log_uid idempotency protects replay.
+        if latest and cursor_id > latest.id:
+            self.write({"last_push_record_id": 0, "last_push_at": False})
+            cursor_id = 0
+
+        domain = [("id", ">", cursor_id)] if cursor_id else []
+        records = Log.search(domain, order="id asc", limit=limit + 1)
         has_more = len(records) > limit
         selected = records[:limit]
         if selected:
@@ -230,11 +246,25 @@ class NspSyncBusinessAdapter(models.Model):
             selected.mapped("user_id")
             selected.mapped("borrow_id")
         last = selected[-1:] if selected else selected
+        empty_message = False
+        if not selected:
+            if not latest:
+                empty_message = (
+                    "No Parking Logs exist on Edge. Detection processing has not "
+                    "created any nsp.parking.log records yet."
+                )
+            else:
+                empty_message = (
+                    "No new Parking Logs after cursor %(cursor)s "
+                    "(Edge max log id=%(max_id)s)."
+                    % {"cursor": cursor_id, "max_id": latest.id}
+                )
         return {
             "items": [self._serialize_parking_log(record) for record in selected],
             "cursor_at": fields.Datetime.now() if last else self.last_push_at,
-            "cursor_id": last.id if last else self.last_push_record_id,
+            "cursor_id": last.id if last else cursor_id,
             "has_more": has_more,
+            "empty_message": empty_message,
         }
 
     def _find_or_create_controller(self, code, name=False):
@@ -1501,15 +1531,17 @@ class NspSyncBusinessAdapter(models.Model):
     def _ensure_edge_sync_jobs(self):
         """Repair missing default Sync Jobs for existing Edge connections.
 
-        New route types may be introduced after an Edge connection already
-        exists.  Do not require an operator to re-authenticate merely to create
-        those jobs: the scheduler and immediate Lane Calibration forwarding can
-        self-heal the job set.
+        nsp_sync 19.0.9.1.2 owns this method natively. Keep this compatibility
+        implementation so Gatekeeper remains upgrade-safe when the business
+        module is loaded before the transport module has been upgraded.
         """
+        parent = super()
+        parent_repair = getattr(parent, "_ensure_edge_sync_jobs", None)
+        if parent_repair:
+            return parent_repair()
         if self._deployment_role() != "edge_server":
             return self.browse()
-        Auth = self.env["nsp.sync.auth"].sudo()
-        auth_records = Auth.search([])
+        auth_records = self.env["nsp.sync.auth"].sudo().search([])
         if not auth_records:
             return self.browse()
         try:

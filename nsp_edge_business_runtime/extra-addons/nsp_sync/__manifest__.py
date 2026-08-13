@@ -2,7 +2,7 @@
     "name": "NSP Sync",
     "summary": "Edge reliable transport for NSP",
     "description": "Edge-only transport for Cloud authentication, snapshot pull, durable outbox push, retry, ACK tracking and idempotent delivery.",
-    "version": "19.0.9.1.1",
+    "version": "19.0.9.1.4",
     "sequence": 2,
     "author": "BKU Team",
     "category": "Services",
