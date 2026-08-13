@@ -116,8 +116,38 @@ class TestGatekeeperContractPolicies(TransactionCase):
         self.assertNotIn("cumulative_time", Sequence._fields)
         self.assertNotIn("is_first_point", Sequence._fields)
 
+    def test_lane_calibration_edge_projection_is_cloud_owned(self):
+        Session = self.env["nsp.measurement.session"]
+        Target = self.env["nsp.measurement.target.line"]
+        Node = self.env["nsp.measurement.device.node"]
+        Port = self.env["nsp.measurement.reader.port"]
+
+        with self.assertRaises(ValidationError):
+            Session.create({})
+        with self.assertRaises(ValidationError):
+            Target.create({"tid": "E2000017221101441890ABCD"})
+        with self.assertRaises(ValidationError):
+            Node.create({})
+        with self.assertRaises(ValidationError):
+            Port.create({"port_no": 1})
+
+        session = Session.with_context(measurement_sync=True).create({
+            "measurement_code": "MSR-EDGE-OWNERSHIP-TEST",
+            "revision": 1,
+            "status": "draft",
+        })
+        try:
+            with self.assertRaises(ValidationError):
+                session.write({"status": "ready"})
+            with self.assertRaises(ValidationError):
+                session.unlink()
+        finally:
+            session.with_context(measurement_sync=True).unlink()
+
     def test_lane_calibration_keeps_only_runtime_fields(self):
         Session = self.env["nsp.measurement.session"]
+        Node = self.env["nsp.measurement.device.node"]
+        Event = self.env["nsp.measurement.event"]
         Target = self.env["nsp.measurement.target.line"]
         ReaderConfig = self.env["nsp.parking.layout.lane.reader.config"]
         Parking = self.env["nsp.parking.area"]
@@ -128,6 +158,16 @@ class TestGatekeeperContractPolicies(TransactionCase):
             "is_cloud_deployment", "applied_at",
         ):
             self.assertNotIn(obsolete, Session._fields)
+        self.assertTrue(Session._fields["workflow_status"].store)
+        for field_name in (
+            "runtime_override_enabled", "runtime_power_dbm",
+            "runtime_read_interval_ms", "runtime_tid_addr", "runtime_tid_len",
+            "effective_power_dbm", "effective_read_interval_ms",
+            "effective_tid_addr", "effective_tid_len",
+        ):
+            self.assertIn(field_name, Node._fields)
+        for field_name in ("power_dbm", "read_interval_ms", "tid_addr", "tid_len"):
+            self.assertIn(field_name, Event._fields)
         for obsolete in ("vehicle_id", "vehicle_tid", "detection_state", "detection_count"):
             self.assertNotIn(obsolete, Target._fields)
         for obsolete in ("source_type", "source_revision"):

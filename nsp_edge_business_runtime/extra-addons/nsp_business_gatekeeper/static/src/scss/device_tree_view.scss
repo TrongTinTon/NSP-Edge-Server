@@ -634,3 +634,38 @@
 @media (prefers-reduced-motion: reduce) {
     .nsp-device-tree__dot::after { animation: none; opacity: 0; }
 }
+
+/* Lane Calibration runtime-override controls. Topology remains read-only on Edge. */
+.nsp-device-tree {
+    &__actions {
+        flex: 0 0 auto;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    &__input-wrap {
+        position: relative;
+        display: flex;
+        align-items: center;
+
+        input {
+            padding-right: 58px;
+            font-size: 12px;
+        }
+
+        span {
+            position: absolute;
+            right: 11px;
+            color: var(--nsp-tree-muted);
+            font-size: 10px;
+            pointer-events: none;
+        }
+    }
+
+    &__mode-badge.is-edit {
+        border-color: #BFDBFE;
+        background: var(--nsp-tree-primary-soft);
+        color: var(--nsp-tree-primary);
+    }
+}

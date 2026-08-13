@@ -10,7 +10,7 @@ from .state_policy import classify_idempotent_replay, compare_revision
 
 _logger = logging.getLogger(__name__)
 
-_LANE_CALIBRATION_CLOUD_STATUSES = frozenset({"draft", "ready", "applied"})
+_LANE_CALIBRATION_CLOUD_STATUSES = frozenset({"draft", "ready"})
 _LANE_CALIBRATION_RUNTIME_STATUSES = frozenset({"running", "completed", "failed", "cancelled"})
 _LANE_CALIBRATION_ALL_STATUSES = (
     _LANE_CALIBRATION_CLOUD_STATUSES | _LANE_CALIBRATION_RUNTIME_STATUSES
@@ -22,7 +22,6 @@ _LANE_CALIBRATION_RUNTIME_TRANSITIONS = {
     "completed": frozenset(),
     "failed": frozenset(),
     "cancelled": frozenset(),
-    "applied": frozenset(),
 }
 _LANE_CALIBRATION_STALE_RUNTIME_TARGETS = {
     "completed": frozenset({"running"}),
@@ -469,10 +468,10 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         ):
             readers.append({
                 "serial_number": node.reader_id.serial_number or "",
-                "power_dbm": int(node.power_dbm or 0),
-                "read_interval_ms": int(node.read_interval_ms or 200),
-                "tid_start_address": int(node.tid_addr or 0),
-                "tid_length": int(node.tid_len or 4),
+                "power_dbm": node._effective_power_dbm(),
+                "read_interval_ms": node._effective_read_interval_ms(),
+                "tid_start_address": node._effective_tid_addr(),
+                "tid_length": node._effective_tid_len(),
             })
         return {
             "lane_calibration_code": session.measurement_code,
@@ -512,13 +511,11 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         """Apply an external Lane Calibration runtime status safely.
 
         State ownership is intentionally asymmetric:
-        - Cloud owns ``draft``, ``ready`` and ``applied`` (displayed as Configured).
+        - Cloud owns ``draft`` and ``ready`` (displayed as Released).
         - Edge/Controller owns ``running``, ``completed``, ``failed`` and ``cancelled``.
 
         Cloud-owned states received through a runtime status endpoint are
-        acknowledged but never applied. Once Cloud marks a revision Configured,
-        every delayed runtime status for that same revision is stale and must be
-        ACKed instead of returning ``invalid_status_transition``.
+        acknowledged but never applied.
         """
         target = str(status or "").strip().lower()
         if target not in _LANE_CALIBRATION_ALL_STATUSES:
@@ -557,12 +554,6 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         # without allowing an Edge or Controller to drive Cloud-owned lifecycle.
         if target in _LANE_CALIBRATION_CLOUD_STATUSES and target != current:
             result["outcome"] = "ignored_cloud_owned_status"
-            return result
-
-        # Configured is the authoritative Cloud final state for this revision.
-        # Any late Running/Completed/Failed/Cancelled status is superseded.
-        if current == "applied" and target in _LANE_CALIBRATION_RUNTIME_STATUSES:
-            result["outcome"] = "ignored_after_configured"
             return result
 
         if target != current:
@@ -657,7 +648,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
     @api.model
     def _measurement_event_values(
         self, session, item, allowed_reader_ports=None, accept_snapshot=False,
-        allow_historical_scope=False,
+        allow_historical_scope=False, reader_node_by_serial=None,
     ):
         allowed = {
             "event_uid", "serial_number", "port_no", "tid", "read_at", "rssi_dbm",
@@ -669,14 +660,16 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         )
         event_uid = str(item.get("event_uid") or "").strip()
         serial_number = str(item.get("serial_number") or "").strip().upper()
-        tid = self.env["nsp.rfid.runtime.assignment"].sudo()._normalize_tid(item.get("tid"))
+        tid = normalize_raw_tid(item.get("tid"))
         try:
             port_no = int(item.get("port_no") or 0)
         except (TypeError, ValueError):
             port_no = 0
         if port_no < 1 or port_no > 16:
             raise ValueError("reader_port_not_found")
-        reader_node = session._measurement_node_for_serial(serial_number)
+        reader_node = (reader_node_by_serial or {}).get(serial_number)
+        if reader_node_by_serial is None:
+            reader_node = session._measurement_node_for_serial(serial_number)
         if allow_historical_scope:
             reader = self.env["nsp.device"].sudo().search([
                 ("serial_number", "=", serial_number),
@@ -703,7 +696,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             try:
                 revision = int(item.get("revision"))
                 fallback_power = (
-                    reader_node.power_dbm
+                    reader_node._effective_power_dbm()
                     if reader_node
                     else session._reader_power_for_serial(serial_number)
                 )
@@ -713,7 +706,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                     else fallback_power
                 )
                 fallback_interval = (
-                    reader_node.read_interval_ms
+                    reader_node._effective_read_interval_ms()
                     if reader_node
                     else session._reader_interval_for_serial(serial_number)
                 )
@@ -726,14 +719,21 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 raise ValueError("invalid_measurement_snapshot") from exc
         else:
             revision = int(session.revision or 1)
-            power_dbm = int(reader_node.power_dbm or 0)
-            read_interval_ms = int(reader_node.read_interval_ms or 0)
+            power_dbm = reader_node._effective_power_dbm()
+            read_interval_ms = reader_node._effective_read_interval_ms()
+        # TID parameters are Edge execution state. Controller sends the raw TID only;
+        # snapshot the effective Reader settings here so Calibration evidence remains
+        # self-contained even when an Edge-local runtime override is later reset.
+        tid_addr = reader_node._effective_tid_addr() if reader_node else 0
+        tid_len = reader_node._effective_tid_len() if reader_node else 4
         if (
             revision <= 0
             or power_dbm < 0
             or power_dbm > 40
             or read_interval_ms <= 0
             or read_interval_ms > 60000
+            or tid_addr < 0
+            or tid_len <= 0
         ):
             raise ValueError("invalid_measurement_snapshot")
         return {
@@ -748,6 +748,8 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             "rssi_dbm": rssi,
             "power_dbm": power_dbm,
             "read_interval_ms": read_interval_ms,
+            "tid_addr": tid_addr,
+            "tid_len": tid_len,
         }
 
 
@@ -773,6 +775,8 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             and int(event.power_dbm or 0) == int(values["power_dbm"] or 0)
             and int(event.read_interval_ms or 0)
             == int(values["read_interval_ms"] or 0)
+            and int(event.tid_addr or 0) == int(values["tid_addr"] or 0)
+            and int(event.tid_len or 0) == int(values["tid_len"] or 0)
         )
 
 
@@ -781,21 +785,25 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         self, session, items, allow_final=False, accept_snapshot=False,
         enforce_current_snapshot=False, allow_historical_scope=False, controller=False,
     ):
-        """Store only selected RFID targets, idempotently, with bounded queries."""
+        """Store only the active Calibration Tag, idempotently, with bounded queries."""
         Event = self.env["nsp.measurement.event"].sudo()
+        reader_nodes = session._reader_nodes()
         if controller:
-            nodes = session._reader_nodes().filtered(
+            reader_nodes = reader_nodes.filtered(
                 lambda node: node.parent_id
                 and node.parent_id.device_type == "controller"
                 and node.parent_id.controller_id == controller
             )
-            allowed_reader_ports = {
-                ((node.reader_id.serial_number or "").strip().upper(), int(port.port_no or 0))
-                for node in nodes
-                for port in node.reader_port_ids
-            }
-        else:
-            allowed_reader_ports = session._allowed_reader_port_pairs()
+        reader_node_by_serial = {
+            str(node.reader_id.serial_number or "").strip().upper(): node
+            for node in reader_nodes
+            if node.reader_id.serial_number
+        }
+        allowed_reader_ports = {
+            (serial, int(port.port_no or 0))
+            for serial, node in reader_node_by_serial.items()
+            for port in node.reader_port_ids
+        }
         target_tids = session._allowed_target_tids()
         prepared = []
         results = [None] * len(items)
@@ -805,13 +813,13 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             try:
                 if not isinstance(item, dict):
                     raise ValueError("invalid_payload")
-                incoming_tid = self.env["nsp.rfid.runtime.assignment"].sudo()._normalize_tid(item.get("tid"))
+                incoming_tid = normalize_raw_tid(item.get("tid"))
                 if incoming_tid not in target_tids:
                     results[index] = {
                         "index": index,
                         "record_key": key,
                         "status": "ignored",
-                        "message": "RFID Tag is not in the Measurement target list",
+                        "message": "RFID Tag is not the active Lane Calibration Tag",
                     }
                     continue
                 values = self._measurement_event_values(
@@ -820,6 +828,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                     allowed_reader_ports=allowed_reader_ports,
                     accept_snapshot=accept_snapshot,
                     allow_historical_scope=allow_historical_scope,
+                    reader_node_by_serial=reader_node_by_serial,
                 )
                 if enforce_current_snapshot:
                     revision_state = compare_revision(
@@ -896,6 +905,8 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                     and int(first["power_dbm"] or 0) == int(values["power_dbm"] or 0)
                     and int(first["read_interval_ms"] or 0)
                     == int(values["read_interval_ms"] or 0)
+                    and int(first["tid_addr"] or 0) == int(values["tid_addr"] or 0)
+                    and int(first["tid_len"] or 0) == int(values["tid_len"] or 0)
                 )
                 if same:
                     duplicate_indices.setdefault(uid, []).append((index, key))
@@ -906,7 +917,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                     }
                 continue
 
-            if not allow_final and session.status in ("completed", "applied", "failed", "cancelled"):
+            if not allow_final and session.status in ("completed", "failed", "cancelled"):
                 results[index] = {
                     "index": index, "record_key": key, "status": "rejected",
                     "error_code": "lane_calibration_not_running", "message": "lane_calibration_not_running",
@@ -1041,12 +1052,38 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 data, {"controller_code", "lane_calibration_code", "events"}
             )
             self._measurement_require_fields(data, ["lane_calibration_code", "events"])
-            session = self._measurement_session(data.get("lane_calibration_code"))
-            if controller not in session._controller_nodes().mapped("controller_id"):
-                raise ValueError("controller_not_in_scope")
             items = data.get("events")
             if not isinstance(items, list) or not items or len(items) > 100:
                 raise ValueError("invalid_payload")
+            code = str(data.get("lane_calibration_code") or "").strip().upper()
+            session = self.env["nsp.measurement.session"].sudo().search(
+                [("measurement_code", "=", code)], limit=1
+            )
+            if not session or session.status not in ("ready", "running"):
+                # A durable Controller outbox can legitimately contain rows from a
+                # previous Calibration after Edge has already replaced, completed,
+                # cancelled, failed or cleaned that projection. Returning 500 makes
+                # those rows retry forever. ACK the obsolete batch as ignored.
+                reason = "lane_calibration_not_found" if not session else "lane_calibration_closed"
+                _logger.warning(
+                    "Ignored obsolete Lane Calibration event batch: controller=%s code=%s count=%s reason=%s",
+                    controller.controller_id, code, len(items), reason,
+                )
+                return self._ok(
+                    {"data": {
+                        "lane_calibration_code": code,
+                        "received": len(items),
+                        "stored": 0,
+                        "duplicates": 0,
+                        "ignored": len(items),
+                        "rejected": 0,
+                        "reason": "lane_calibration_obsolete",
+                        "reader_activity_touched": 0,
+                    }},
+                    message="Obsolete Lane Calibration events ignored.",
+                )
+            if controller not in session._controller_nodes().mapped("controller_id"):
+                raise ValueError("controller_not_in_scope")
             # Reader Observation is a control/telemetry-plane concern.
             # Raw Calibration acquisition must not update the same observation row
             # used by /devices/report, otherwise concurrent status reporting can

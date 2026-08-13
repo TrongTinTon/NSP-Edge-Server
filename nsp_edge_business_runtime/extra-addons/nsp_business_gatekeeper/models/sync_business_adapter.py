@@ -766,7 +766,7 @@ class NspSyncBusinessAdapter(models.Model):
             raise UserError(_("Calibration Tag TID is required."))
 
         status = str(item.get("status") or "ready").strip().lower()
-        if status not in ("ready", "running", "completed", "applied", "failed", "cancelled"):
+        if status not in ("ready", "running", "completed", "failed", "cancelled"):
             raise UserError(_("Invalid Lane Calibration status: %s") % status)
         try:
             revision = int(item.get("revision") or 1)
@@ -928,6 +928,73 @@ class NspSyncBusinessAdapter(models.Model):
             )
             return session
 
+        def projection_matches_current_revision():
+            if not session or revision != max(int(session.revision or 1), 1):
+                return False
+            if normalize_raw_tid(session.calibration_tid) != calibration_tid:
+                return False
+            local_by_source = {node.source_node_id: node for node in session.device_node_ids}
+            if len(local_by_source) != len(normalized_nodes):
+                return False
+            for remote in normalized_nodes:
+                local = local_by_source.get(remote["source_node_id"])
+                if not local or local.device_type != remote["device_type"]:
+                    return False
+                parent_source = local.parent_id.source_node_id if local.parent_id else False
+                if (parent_source or False) != (remote["parent_source_node_id"] or False):
+                    return False
+                if int(local.sequence or 10) != int(remote["sequence"] or 10):
+                    return False
+                if remote["device_type"] == "server":
+                    local_code = str(local.server_id.edge_server_code or "").strip().upper()
+                elif remote["device_type"] == "controller":
+                    local_code = str(local.controller_id.controller_id or "").strip().upper()
+                else:
+                    local_code = str(local.reader_id.device_code or "").strip().upper()
+                if local_code != remote["device_code"]:
+                    return False
+                if remote["device_type"] == "reader":
+                    local_ports = sorted(
+                        (int(port.port_no or 0), int(port.sequence or 10))
+                        for port in local.reader_port_ids
+                    )
+                    remote_ports = [
+                        (int(port["port_no"]), int(port["sequence"]))
+                        for port in remote["ports"]
+                    ]
+                    if (
+                        int(local.power_dbm or 0) != remote["power_dbm"]
+                        or int(local.read_interval_ms or 0) != remote["read_interval_ms"]
+                        or int(local.tid_addr or 0) != remote["tid_addr"]
+                        or int(local.tid_len or 0) != remote["tid_len"]
+                        or local_ports != remote_ports
+                    ):
+                        return False
+            return True
+
+        effective_status = status
+        reset_lifecycle = False
+        if session:
+            current_revision = max(int(session.revision or 1), 1)
+            if revision > current_revision:
+                reset_lifecycle = True
+            else:
+                stale_snapshot_targets = {
+                    "running": {"draft", "ready"},
+                    "completed": {"draft", "ready", "running"},
+                    "failed": {"draft", "ready", "running"},
+                    "cancelled": {"draft", "ready", "running"},
+                }
+                if status in stale_snapshot_targets.get(session.status, set()):
+                    effective_status = session.status
+
+        # Fast path: immutable released revision is already projected exactly.
+        # Update lifecycle only and preserve revision-local Reader overrides.
+        if projection_matches_current_revision():
+            if session.status != effective_status:
+                session.write({"status": effective_status})
+            return session
+
         identity_list = list(identity_rows.values())
         identity_cache = self._prepare_apply_cache("device_whitelist", identity_list)
         for row in identity_list:
@@ -942,10 +1009,23 @@ class NspSyncBusinessAdapter(models.Model):
         Edge = self.env["nsp.edge.server"].sudo().with_context(active_test=False)
         Controller = self.env["nsp.controller"].sudo().with_context(active_test=False)
         Device = self.env["nsp.device"].sudo().with_context(active_test=False)
-        edge_by_code = {row.edge_server_code: row for row in Edge.search([])}
-        controller_by_code = {row.controller_id: row for row in Controller.search([])}
-        reader_by_code = {row.device_code: row for row in Device.search([])}
-        reader_by_serial = {row.serial_number: row for row in Device.search([])}
+        edge_codes = list(device_meta["server"])
+        controller_codes = list(device_meta["controller"])
+        reader_codes = list(device_meta["reader"])
+        reader_serials = [meta["serial_number"] for meta in device_meta["reader"].values()]
+        edge_by_code = {
+            row.edge_server_code: row
+            for row in Edge.search([("edge_server_code", "in", edge_codes)])
+        } if edge_codes else {}
+        controller_by_code = {
+            row.controller_id: row
+            for row in Controller.search([("controller_id", "in", controller_codes)])
+        } if controller_codes else {}
+        reader_rows = Device.search([
+            "|", ("device_code", "in", reader_codes), ("serial_number", "in", reader_serials),
+        ]) if reader_codes or reader_serials else Device.browse()
+        reader_by_code = {row.device_code: row for row in reader_rows if row.device_code}
+        reader_by_serial = {row.serial_number: row for row in reader_rows if row.serial_number}
 
         runtime_by_code = {"server": {}, "controller": {}, "reader": {}}
         # Servers first.
@@ -1022,42 +1102,31 @@ class NspSyncBusinessAdapter(models.Model):
             reader_by_serial[meta["serial_number"]] = record
             runtime_by_code["reader"][code_value] = record
 
-        effective_status = status
-        reset_lifecycle = False
-        if session:
-            current_revision = max(int(session.revision or 1), 1)
-            if revision > current_revision:
-                reset_lifecycle = True
-            else:
-                stale_snapshot_targets = {
-                    "running": {"draft", "ready"},
-                    "completed": {"draft", "ready", "running"},
-                    "applied": {"draft", "ready", "running", "completed", "failed", "cancelled"},
-                    "failed": {"draft", "ready", "running"},
-                    "cancelled": {"draft", "ready", "running"},
-                }
-                if status in stale_snapshot_targets.get(session.status, set()):
-                    effective_status = session.status
-
         values = {
             "measurement_code": code,
             "revision": revision,
             "status": effective_status,
-            "target_line_ids": [(5, 0, 0), (0, 0, {"tid": calibration_tid})],
         }
+        values["target_line_ids"] = [(5, 0, 0), (0, 0, {"tid": calibration_tid})]
         if reset_lifecycle:
             values.update({"started_at": False, "ended_at": False})
         if session:
             session.write(values)
         else:
+            values["target_line_ids"] = [(5, 0, 0), (0, 0, {"tid": calibration_tid})]
             session = Session.create(values)
 
-        # Replace the contextual projection atomically for this released revision.
+        # New revision or recovery of an incomplete projection: replace topology.
+        # Runtime overrides are intentionally revision-local and therefore reset.
         session.device_node_ids.filtered(lambda node: not node.parent_id).unlink()
         Node = self.env["nsp.measurement.device.node"].sudo().with_context(measurement_sync=True)
         local_by_source = {}
         for device_type in ("server", "controller", "reader"):
-            for node in [value for value in normalized_nodes if value["device_type"] == device_type]:
+            source_nodes = [
+                node for node in normalized_nodes if node["device_type"] == device_type
+            ]
+            vals_list = []
+            for node in source_nodes:
                 vals = {
                     "session_id": session.id,
                     "source_node_id": node["source_node_id"],
@@ -1081,11 +1150,12 @@ class NspSyncBusinessAdapter(models.Model):
                         "tid_len": node["tid_len"],
                         "reader_port_ids": [(0, 0, port) for port in node["ports"]],
                     })
-                local_by_source[node["source_node_id"]] = Node.create(vals)
+                vals_list.append(vals)
+            created = Node.create(vals_list) if vals_list else Node.browse()
+            for source_node, record in zip(source_nodes, created):
+                local_by_source[source_node["source_node_id"]] = record
 
         session._require_ready_configuration()
-        if effective_status == "applied":
-            self._acknowledge_configured_status_records(session)
         return session
 
     def _apply_items(self, kind, items, request_payload=False):
@@ -1148,11 +1218,12 @@ class NspSyncBusinessAdapter(models.Model):
         return results, failed
 
     def _reconcile_measurement_snapshot(self, items):
-        """Stop/remove Edge Measurement runtime records absent from Cloud snapshot.
+        """Close active Edge projections absent from the full Cloud snapshot.
 
-        A deleted Cloud Measurement must stop physical execution on Edge. Sessions
-        that still own observations are kept only as short-lived history and are
-        removed by the normal retention cleanup after their observations expire.
+        Cloud sends only currently released/running Lane Calibrations. Avoid loading
+        historical sessions with observations on every pull: query active stale
+        projections directly, then separately delete only terminal projections that
+        have no observations.
         """
         self.ensure_one()
         rows = [item for item in (items or []) if isinstance(item, dict)]
@@ -1162,19 +1233,34 @@ class NspSyncBusinessAdapter(models.Model):
             if item.get("lane_calibration_code")
         }
         Session = self.env["nsp.measurement.session"].sudo()
-        stale = Session.search([("measurement_code", "not in", list(incoming))]) if incoming else Session.search([])
-        if not stale:
-            return 0
+        active_domain = [("status", "in", ("ready", "running"))]
+        if incoming:
+            active_domain.append(("measurement_code", "not in", sorted(incoming)))
+        stale_active = Session.search(active_domain)
+
         now = fields.Datetime.now()
-        running = stale.filtered(lambda rec: rec.status in ("ready", "running"))
+        # A full Cloud snapshot intentionally contains only active released runtime.
+        # If a previously Running projection disappears, Cloud performed the normal
+        # Stop/Complete action. A Released projection that disappears before it ever
+        # ran was withdrawn by Revise/Cancel and is therefore Stopped locally.
+        running = stale_active.filtered(lambda rec: rec.status == "running")
         if running:
-            running._apply_status_transition("cancelled", {"ended_at": now})
-        disposable = stale.filtered(
-            lambda rec: rec.status in ("completed", "applied", "failed", "cancelled") and not rec.event_ids
-        )
+            running._apply_status_transition("completed", {"ended_at": now})
+        released = stale_active.filtered(lambda rec: rec.status == "ready")
+        if released:
+            released._apply_status_transition("cancelled", {"ended_at": now})
+
+        disposable_domain = [
+            ("status", "in", ("completed", "failed", "cancelled")),
+            ("event_ids", "=", False),
+        ]
+        if incoming:
+            disposable_domain.append(("measurement_code", "not in", sorted(incoming)))
+        disposable = Session.search(disposable_domain, limit=1000)
+        touched_ids = set(stale_active.ids) | set(disposable.ids)
         if disposable:
             disposable.with_context(measurement_sync=True).unlink()
-        return len(stale)
+        return len(touched_ids)
 
     def _reconcile_business_snapshot(self, kind, items):
         """Archive/remove records absent from full Cloud master snapshots."""
@@ -1266,6 +1352,8 @@ class NspSyncBusinessAdapter(models.Model):
                 if event.read_interval_ms is not None
                 else event.session_id._reader_interval_for_serial(event.serial_number)
             ),
+            "tid_addr": int(event.tid_addr or 0),
+            "tid_len": int(event.tid_len or 4),
         }
         if event.rssi_dbm not in (False, None):
             payload["rssi_dbm"] = float(event.rssi_dbm)
@@ -1421,39 +1509,6 @@ class NspSyncBusinessAdapter(models.Model):
             self._ensure_edge_sync_jobs()
             job = self.sudo().search(domain, order="sequence, id", limit=1)
         return job
-
-    @api.model
-    def _acknowledge_configured_status_records(self, session):
-        """Close obsolete runtime status retries after Cloud configures a revision."""
-        status_job = self._lane_calibration_push_job("edge/lane-calibrations/status")
-        if not status_job:
-            return 0
-        revision = max(int(session.revision or 1), 1)
-        record_keys = [
-            "%s:R%s:%s" % (session.measurement_code, revision, status)
-            for status in self._lane_calibration_runtime_statuses()
-        ]
-        Record = self.env["nsp.sync.record"].sudo()
-        obsolete = Record.search([
-            ("sync_action_code", "=", status_job.sync_action_code),
-            ("operation", "=", "push"),
-            ("record_key", "in", record_keys),
-            ("status", "!=", "synced"),
-        ])
-        for record_key in set(obsolete.mapped("record_key")):
-            Record.mark_result(
-                sync_job=status_job,
-                action_code=status_job.sync_action_code,
-                action_name=status_job.sync_action_name,
-                route_suffix=status_job.route_suffix,
-                record=session,
-                record_key=record_key,
-                status="synced",
-                message="Superseded by the Configured Cloud state.",
-                response={"status_sync": {"outcome": "ignored_after_configured"}},
-                operation="push",
-            )
-        return len(obsolete)
 
     @api.model
     def push_lane_calibration_events_now(self, events):

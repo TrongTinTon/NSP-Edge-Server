@@ -7,13 +7,12 @@
       <search>
         <field name="measurement_code" string="Calibration Code"/>
         <filter string="Draft" name="draft" domain="[('status','=','draft')]"/>
-        <filter string="Ready" name="ready" domain="[('status','=','ready')]"/>
+        <filter string="Released" name="released" domain="[('status','=','ready')]"/>
         <filter string="Running" name="running" domain="[('status','=','running')]"/>
         <filter string="Completed" name="completed" domain="[('status','=','completed')]"/>
-        <filter string="Configured" name="applied" domain="[('status','=','applied')]"/>
-        <filter string="Failed" name="failed" domain="[('status','=','failed')]"/>
+        <filter string="Stopped" name="stopped" domain="[('status','in',('failed','cancelled'))]"/>
         <group>
-          <filter string="Status" name="group_status" context="{'group_by':'status'}"/>
+          <filter string="Status" name="group_status" context="{'group_by':'workflow_status'}"/>
         </group>
       </search>
     </field>
@@ -25,12 +24,12 @@
     <field name="arch" type="xml">
       <list string="Lane Calibration"
             create="0" edit="0" delete="0"
-            decoration-info="status == 'running'"
-            decoration-success="status in ('completed','applied')"
-            decoration-danger="status == 'failed'">
+            decoration-info="workflow_status == 'running'"
+            decoration-success="workflow_status == 'completed'"
+            decoration-danger="workflow_status == 'stopped'">
         <field name="measurement_code" readonly="1"/>
         <field name="revision" readonly="1"/>
-        <field name="status" widget="badge" readonly="1"/>
+        <field name="workflow_status" widget="badge" readonly="1"/>
       </list>
     </field>
   </record>
@@ -41,9 +40,10 @@
     <field name="arch" type="xml">
       <form string="Lane Calibration" create="0" edit="0" delete="0">
         <header>
-          <field name="status" widget="statusbar"
-                 statusbar_visible="draft,ready,running,completed,applied,failed,cancelled"
+          <field name="workflow_status" widget="statusbar"
+                 statusbar_visible="draft,released,running,completed,stopped"
                  readonly="1"/>
+          <field name="status" invisible="1"/>
         </header>
         <sheet>
           <div class="oe_title mb-3">
@@ -52,7 +52,7 @@
           </div>
 
           <div class="alert alert-info" role="alert">
-            Read-only runtime projection synchronized from Cloud. Configure and release Lane Calibration on Cloud to change this configuration.
+            Device topology and base configuration are synchronized from Cloud. Reader runtime parameters can be tuned locally while the calibration is Released or Running; local overrides reset automatically on a new revision.
           </div>
 
           <separator string="Calibration Tag"/>
@@ -60,6 +60,7 @@
             <field name="calibration_tid" string="Scan Tag" readonly="1"/>
           </group>
 
+          <field name="device_configuration_editable" invisible="1"/>
           <separator string="Device Configuration"/>
           <field name="device_tree_anchor"
                  nolabel="1"
@@ -80,6 +81,10 @@
               <field name="rssi_dbm" string="RSSI"/>
               <field name="timeline_reader" string="Reader"/>
               <field name="port_no" string="Port"/>
+              <field name="power_dbm" string="Power (dBm)" optional="hide"/>
+              <field name="read_interval_ms" string="Read Interval (ms)" optional="hide"/>
+              <field name="tid_addr" string="TID Start" optional="hide"/>
+              <field name="tid_len" string="TID Length" optional="hide"/>
               <field name="timeline_duration_ms" string="Duration (ms)"/>
             </list>
           </field>

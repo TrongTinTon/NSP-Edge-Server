@@ -10,9 +10,8 @@ _MEASUREMENT_STATUS_TRANSITIONS = {
     "draft": frozenset({"ready", "cancelled"}),
     "ready": frozenset({"running", "completed", "failed", "cancelled"}),
     "running": frozenset({"completed", "failed", "cancelled"}),
-    "completed": frozenset({"applied"}),
+    "completed": frozenset(),
     "failed": frozenset(),
-    "applied": frozenset(),
     "cancelled": frozenset(),
 }
 

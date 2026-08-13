@@ -40,12 +40,17 @@ export class NspDeviceTreeView extends Component {
 
     setup() {
         this.orm = useService("orm");
+        this.notification = useService("notification");
         this.state = useState({
             selectedKey: null,
             expanded: {},
             calibrationNodes: [],
             parkingReaders: [],
             loaded: false,
+            editing: false,
+            saving: false,
+            draft: {},
+            errors: {},
         });
 
         onMounted(async () => {
@@ -68,6 +73,11 @@ export class NspDeviceTreeView extends Component {
             return "lane_calibration";
         }
         return "unsupported";
+    }
+
+    get editable() {
+        return this.mode === "lane_calibration"
+            && Boolean(this.props.record?.data?.device_configuration_editable);
     }
 
     _status(value) {
@@ -106,7 +116,9 @@ export class NspDeviceTreeView extends Component {
                     "device_type", "parent_id", "sequence",
                     "server_id", "controller_id", "reader_id",
                     "device_name", "device_status", "serial_number", "port_numbers",
-                    "power_dbm", "read_interval_ms", "tid_addr", "tid_len",
+                    "runtime_override_enabled",
+                    "effective_power_dbm", "effective_read_interval_ms",
+                    "effective_tid_addr", "effective_tid_len",
                 ],
                 { order: "sequence,id" }
             );
@@ -178,11 +190,12 @@ export class NspDeviceTreeView extends Component {
                         status: this._status(readerNode.device_status),
                     },
                     portNumbers: antennaNumbers(readerNode.port_numbers),
+                    runtimeOverride: Boolean(readerNode.runtime_override_enabled),
                     values: {
-                        power: Number(readerNode.power_dbm || 0),
-                        interval: Number(readerNode.read_interval_ms || 0),
-                        tidStart: Number(readerNode.tid_addr || 0),
-                        tidLength: Number(readerNode.tid_len || 0),
+                        power: Number(readerNode.effective_power_dbm || 0),
+                        interval: Number(readerNode.effective_read_interval_ms || 0),
+                        tidStart: Number(readerNode.effective_tid_addr || 0),
+                        tidLength: Number(readerNode.effective_tid_len || 0),
                     },
                 };
             })
@@ -305,6 +318,122 @@ export class NspDeviceTreeView extends Component {
 
     selectReader(entry) {
         this.state.selectedKey = entry.key;
+        this.cancelEdit();
+    }
+
+    startEdit() {
+        const entry = this.selectedEntry;
+        if (!entry || !this.editable) {
+            return;
+        }
+        this.state.draft = { ...entry.values };
+        this.state.errors = {};
+        this.state.editing = true;
+    }
+
+    cancelEdit() {
+        this.state.editing = false;
+        this.state.saving = false;
+        this.state.draft = {};
+        this.state.errors = {};
+    }
+
+    onConfigInput(ev) {
+        const field = ev.target.dataset.field;
+        if (!field) {
+            return;
+        }
+        this.state.draft[field] = ev.target.value;
+        if (this.state.errors[field]) {
+            delete this.state.errors[field];
+        }
+    }
+
+    _validateDraft() {
+        const draft = this.state.draft;
+        const errors = {};
+        const power = Number(draft.power);
+        const interval = Number(draft.interval);
+        const tidStart = Number(draft.tidStart);
+        const tidLength = Number(draft.tidLength);
+        if (!Number.isInteger(power) || power < 0 || power > 40) {
+            errors.power = "Power must be between 0 and 40 dBm.";
+        }
+        if (!Number.isInteger(interval) || interval < 1 || interval > 60000) {
+            errors.interval = "Read Interval must be between 1 and 60000 ms.";
+        }
+        if (!Number.isInteger(tidStart) || tidStart < 0) {
+            errors.tidStart = "TID Start cannot be negative.";
+        }
+        if (!Number.isInteger(tidLength) || tidLength < 1) {
+            errors.tidLength = "TID Length must be greater than zero.";
+        }
+        this.state.errors = errors;
+        return Object.keys(errors).length === 0;
+    }
+
+    async saveConfiguration() {
+        const entry = this.selectedEntry;
+        const sessionId = Number(this.props.record?.resId || 0);
+        if (!entry?.nodeId || !sessionId || this.state.saving || !this._validateDraft()) {
+            return;
+        }
+        this.state.saving = true;
+        try {
+            await this.orm.call(
+                "nsp.measurement.session",
+                "action_save_device_configuration",
+                [[sessionId]],
+                {
+                    node_id: Number(entry.nodeId),
+                    values: {
+                        power_dbm: Number(this.state.draft.power),
+                        read_interval_ms: Number(this.state.draft.interval),
+                        tid_addr: Number(this.state.draft.tidStart),
+                        tid_len: Number(this.state.draft.tidLength),
+                    },
+                }
+            );
+            await this.refreshCalibrationTree();
+            this.cancelEdit();
+            this.notification.add("Reader runtime settings applied.", {
+                title: "Lane Calibration", type: "success",
+            });
+        } catch (error) {
+            this.notification.add(error?.message || "Unable to update Reader runtime settings.", {
+                title: "Lane Calibration", type: "danger",
+            });
+        } finally {
+            this.state.saving = false;
+        }
+    }
+
+    async resetConfiguration() {
+        const entry = this.selectedEntry;
+        const sessionId = Number(this.props.record?.resId || 0);
+        if (!entry?.nodeId || !sessionId || this.state.saving) {
+            return;
+        }
+        this.state.saving = true;
+        try {
+            await this.orm.call(
+                "nsp.measurement.session",
+                "action_reset_device_configuration",
+                [[sessionId]],
+                { node_id: Number(entry.nodeId) }
+            );
+            await this.refreshCalibrationTree();
+            this.cancelEdit();
+            this.notification.add("Cloud Reader settings restored.", {
+                title: "Lane Calibration", type: "success",
+            });
+        } catch (error) {
+            this.notification.add(error?.message || "Unable to reset Reader runtime settings.", {
+                title: "Lane Calibration", type: "danger",
+            });
+        } finally {
+            this.state.saving = false;
+        }
     }
 }
 

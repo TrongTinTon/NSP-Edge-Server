@@ -52,15 +52,31 @@ class TestGatekeeperContractPolicies(TransactionCase):
         self.assertEqual(compare_revision(5, 5), "current")
         self.assertEqual(compare_revision(6, 5), "future")
 
-    def test_calibration_recovery_and_strict_runtime_path(self):
+    def test_calibration_runtime_path_and_revise_sources(self):
         self.assertEqual(
-            CalibrationStatusPolicy.validate_transition("failed", "ready"),
-            "ready",
-        )
-        with self.assertRaises(ValidationError):
             CalibrationStatusPolicy.validate_transition(
                 "ready", "completed", allow_same=False
-            )
+            ),
+            "completed",
+        )
+        with self.assertRaises(ValidationError):
+            CalibrationStatusPolicy.validate_transition("failed", "ready")
+        self.assertEqual(
+            CalibrationStatusPolicy.REVISION_SOURCES,
+            frozenset({"ready", "completed"}),
+        )
+
+    def test_lane_calibration_lifecycle_requires_actions(self):
+        Session = self.env["nsp.measurement.session"]
+        session = Session.create({})
+        try:
+            self.assertEqual(session.status, "draft")
+            with self.assertRaises(ValidationError):
+                session.write({"status": "ready"})
+            with self.assertRaises(ValidationError):
+                session.write({"revision": 2})
+        finally:
+            session.unlink()
 
     def test_parking_state_policy(self):
         self.assertEqual(

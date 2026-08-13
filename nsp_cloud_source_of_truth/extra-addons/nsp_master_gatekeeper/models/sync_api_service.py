@@ -1069,10 +1069,11 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
     @api.model
     def _measurement_event_values(
         self, session, item, allowed_reader_ports=None, accept_snapshot=False,
+        reader_node_by_serial=None,
     ):
         allowed = {
             "event_uid", "serial_number", "port_no", "tid", "read_at", "rssi_dbm",
-            "revision", "power_dbm", "read_interval_ms",
+            "revision", "power_dbm", "read_interval_ms", "tid_addr", "tid_len",
         }
         self._measurement_reject_unknown_fields(item, allowed)
         self._measurement_require_fields(
@@ -1090,7 +1091,9 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             port_no = 0
         if port_no <= 0:
             raise ValueError("reader_port_not_found")
-        reader_node = session._measurement_node_for_serial(serial_number)
+        reader_node = (reader_node_by_serial or {}).get(serial_number)
+        if reader_node_by_serial is None:
+            reader_node = session._measurement_node_for_serial(serial_number)
         if allowed_reader_ports is None:
             allowed_reader_ports = session._allowed_reader_port_pairs()
         if (serial_number, port_no) not in allowed_reader_ports:
@@ -1129,18 +1132,32 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     if item.get("read_interval_ms") is not None
                     else fallback_interval
                 )
+                tid_addr = int(
+                    item.get("tid_addr")
+                    if item.get("tid_addr") is not None
+                    else reader_node.tid_addr
+                )
+                tid_len = int(
+                    item.get("tid_len")
+                    if item.get("tid_len") is not None
+                    else reader_node.tid_len
+                )
             except Exception as exc:
                 raise ValueError("invalid_measurement_snapshot") from exc
         else:
             revision = int(session.revision or 1)
             power_dbm = int(reader_node.power_dbm or 0)
             read_interval_ms = int(reader_node.read_interval_ms or 0)
+            tid_addr = int(reader_node.tid_addr or 0)
+            tid_len = int(reader_node.tid_len or 4)
         if (
             revision <= 0
             or power_dbm < 0
             or power_dbm > 40
             or read_interval_ms <= 0
             or read_interval_ms > 60000
+            or tid_addr < 0
+            or tid_len <= 0
         ):
             raise ValueError("invalid_measurement_snapshot")
         return {
@@ -1155,6 +1172,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "rssi_dbm": rssi,
             "power_dbm": power_dbm,
             "read_interval_ms": read_interval_ms,
+            "tid_addr": tid_addr,
+            "tid_len": tid_len,
         }
 
     @api.model
@@ -1167,7 +1186,17 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         enforce_current_snapshot=False,
     ):
         Event = self.env["nsp.measurement.event"].sudo()
-        allowed_reader_ports = session._allowed_reader_port_pairs()
+        reader_nodes = session._reader_nodes()
+        reader_node_by_serial = {
+            str(node.reader_id.serial_number or "").strip().upper(): node
+            for node in reader_nodes
+            if node.reader_id.serial_number
+        }
+        allowed_reader_ports = {
+            (serial, int(port.port_no or 0))
+            for serial, node in reader_node_by_serial.items()
+            for port in node.reader_port_ids
+        }
         target_tids = session._allowed_target_tids()
         prepared = []
         results = [None] * len(items)
@@ -1194,6 +1223,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     item,
                     allowed_reader_ports=allowed_reader_ports,
                     accept_snapshot=accept_snapshot,
+                    reader_node_by_serial=reader_node_by_serial,
                 )
                 if enforce_current_snapshot:
                     relation = compare_revision(values["revision"], session.revision or 1)
@@ -1213,20 +1243,6 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                             "status": "rejected",
                             "error_code": "lane_calibration_revision_ahead",
                             "message": "lane_calibration_revision_ahead",
-                        }
-                        continue
-                    if (
-                        int(values["power_dbm"] or 0)
-                        != int(session._reader_power_for_serial(values["serial_number"]) or 0)
-                        or int(values["read_interval_ms"] or 0)
-                        != int(session._reader_interval_for_serial(values["serial_number"]) or 0)
-                    ):
-                        results[index] = {
-                            "index": index,
-                            "record_key": key,
-                            "status": "ignored",
-                            "error_code": "lane_calibration_settings_mismatch",
-                            "message": "Lane Calibration Reader settings snapshot does not match current revision",
                         }
                         continue
                 prepared.append((index, key, values))
@@ -1282,6 +1298,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     and int(first["power_dbm"] or 0) == int(values["power_dbm"] or 0)
                     and int(first["read_interval_ms"] or 0)
                     == int(values["read_interval_ms"] or 0)
+                    and int(first["tid_addr"] or 0) == int(values["tid_addr"] or 0)
+                    and int(first["tid_len"] or 0) == int(values["tid_len"] or 0)
                 )
                 if same:
                     duplicate_indices.setdefault(uid, []).append((index, key))
@@ -1292,7 +1310,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
                     }
                 continue
 
-            if not allow_final and session.status in ("completed", "applied", "failed", "cancelled"):
+            if not allow_final and session.status in ("completed", "failed", "cancelled"):
                 results[index] = {
                     "index": index, "record_key": key, "status": "rejected",
                     "error_code": "lane_calibration_not_running", "message": "lane_calibration_not_running",

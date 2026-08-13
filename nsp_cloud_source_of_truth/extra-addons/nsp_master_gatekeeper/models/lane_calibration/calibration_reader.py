@@ -5,7 +5,8 @@ Server, Controller and Reader remain independent master identities.  A Lane
 Calibration owns contextual ``nsp.measurement.device.node`` rows.  The only
 relationship between devices in a calibration is ``parent_id`` on those rows.
 Drafts may contain incomplete branches (for example Server without Controller or
-Controller without Reader); Release validates the complete Server -> Controller -> Reader topology.
+Controller without Reader), but every existing Controller must already belong to a Server
+and every existing Reader must already belong to a Controller. Release validates branch completeness.
 """
 
 from odoo import api, fields, models, _
@@ -79,7 +80,7 @@ class NspMeasurementSessionDeviceTopology(models.Model):
         })
 
     def _validate_device_node_scope(self):
-        """Validate only record integrity, never Draft completeness/topology."""
+        """Validate identity uniqueness; node-level hierarchy is enforced immediately."""
         for session in self:
             seen = {"server": set(), "controller": set(), "reader": set()}
             for node in session.device_node_ids:
@@ -303,7 +304,7 @@ class NspMeasurementDeviceNode(models.Model):
             )
 
     def _validate_node_integrity(self):
-        """Validate node identity only; topology completeness belongs to Release."""
+        """Validate identity and mandatory parent hierarchy; branch completeness is Release-only."""
         for node in self:
             selected = {
                 "server": bool(node.server_id),
@@ -324,6 +325,16 @@ class NspMeasurementDeviceNode(models.Model):
                     raise ValidationError(_("A Device Tree node cannot be its own parent."))
                 if node.parent_id.session_id != node.session_id:
                     raise ValidationError(_("Parent Node must belong to the same Lane Calibration."))
+            if node.device_type == "server" and node.parent_id:
+                raise ValidationError(_("Server node must be a Device Tree root."))
+            if node.device_type == "controller" and (
+                not node.parent_id or node.parent_id.device_type != "server"
+            ):
+                raise ValidationError(_("Controller node must belong to a Server node."))
+            if node.device_type == "reader" and (
+                not node.parent_id or node.parent_id.device_type != "controller"
+            ):
+                raise ValidationError(_("Reader node must belong to a Controller node."))
             if node.device_type == "reader":
                 for port in node.reader_port_ids:
                     port._validate_port()
@@ -409,7 +420,7 @@ class NspMeasurementDeviceNode(models.Model):
 
 class NspMeasurementReaderPort(models.Model):
     _name = "nsp.measurement.reader.port"
-    _description = "NSP Measurement Reader Port"
+    _description = "NSP Lane Calibration Reader Port"
     _order = "reader_node_id, port_no, id"
     _rec_name = "display_name"
 
@@ -456,17 +467,6 @@ class NspMeasurementReaderPort(models.Model):
         for node in nodes:
             node._ensure_draft_session(node.session_id)
         return True
-
-    @api.model
-    def _reader_configuration_defaults(self, reader):
-        return {
-            "power_dbm": int(reader.runtime_power_dbm or reader.power_dbm or 30),
-            "read_interval_ms": int(
-                reader.runtime_read_interval_ms or reader.read_interval_ms or 200
-            ),
-            "tid_addr": int(reader.tid_addr or 0),
-            "tid_len": int(reader.tid_len or 4),
-        }
 
     @api.model_create_multi
     def create(self, vals_list):

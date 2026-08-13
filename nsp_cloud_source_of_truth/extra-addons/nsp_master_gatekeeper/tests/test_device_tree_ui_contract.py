@@ -65,7 +65,8 @@ def test_lane_setup_calibration_scope_is_branch_specific():
     assert "node.parent_id == controller_node" in wizard
     assert "for node in reader_nodes" in wizard
     assert "lambda node: node.parent_id == controller_node" in timeline
-    assert "self._reader_nodes():" not in timeline[timeline.index("def action_open_lane_setup"):timeline.index("def action_open_lane_direction_setup")]
+    lane_setup_block = timeline[timeline.index("def action_open_lane_setup"):timeline.index("class NspMeasurementSessionCalibrationResult")]
+    assert "self._reader_nodes():" not in lane_setup_block
 
 
 def test_parking_layout_lane_form_keeps_same_device_tree_component():
@@ -139,8 +140,8 @@ def test_release_is_the_topology_completeness_gate_and_supports_many_nodes():
     assert "server_nodes = self._server_nodes()" in status
     assert "controller_nodes = self._controller_nodes()" in status
     assert "reader_nodes = self._reader_nodes()" in status
-    assert "unassigned_controllers" in status
-    assert "unassigned_readers" in status
+    assert 'server_parent_ids = set(controller_nodes.mapped("parent_id").ids)' in status
+    assert 'controller_parent_ids = set(reader_nodes.mapped("parent_id").ids)' in status
     assert "missing_ports" in status
     assert "len(self._server_nodes()) != 1" not in status
     assert "len(self.server_scope_ids) != 1" not in status
@@ -353,3 +354,50 @@ def test_reader_information_renders_ports_as_antenna_badges():
     assert "get selectedAntennaNumbers()" in js
     assert "function antennaNumbers(value)" in js
     assert ".nsp-lane-preview__antenna-badge" in scss
+
+
+def test_lane_calibration_workflow_is_five_statuses_with_revise():
+    model = _read("models/lane_calibration/calibration_session.py")
+    status = _read("models/lane_calibration/calibration_status.py")
+    view = _read("views/measurement_session_views.xml")
+
+    assert '("released", "Released")' in model
+    assert '("stopped", "Stopped")' in model
+    assert '("applied", "Configured")' not in model
+    assert 'REVISION_SOURCES = frozenset({"ready", "completed"})' in status
+    assert "def action_revise" in status
+    assert 'string="Revise"' in view
+    assert 'string="Stop"' in view
+    assert "status not in ('ready','completed')" in view
+    assert "status != 'running'" in view
+
+
+def test_lane_calibration_removed_legacy_action_helpers():
+    session = _read("models/lane_calibration/calibration_session.py")
+    status = _read("models/lane_calibration/calibration_status.py")
+    for obsolete in (
+        "action_live_measure_again",
+        "action_live_apply_to_operation",
+        "action_measure_again",
+        "action_apply_reader_settings",
+        "action_apply_to_operation",
+        "action_prepare_device_reconfiguration",
+        "action_open_vehicles_card",
+        "action_open_rfid_coverage_card",
+        "action_open_apply_configuration",
+    ):
+        assert obsolete not in session + status
+
+
+def test_lane_calibration_legacy_popup_views_and_aliases_are_removed():
+    view = _read("views/measurement_session_views.xml")
+    timeline = _read("models/lane_calibration/calibration_timeline.py")
+    for legacy_view in (
+        "view_nsp_measurement_session_vehicles_popup_form",
+        "view_nsp_measurement_target_line_scope_edit_list",
+        "view_nsp_measurement_target_line_scope_list",
+        "view_nsp_measurement_target_line_coverage_list",
+    ):
+        assert legacy_view not in view
+    assert "def action_open_lane_direction_setup" not in timeline
+    assert "Measure Again" not in timeline

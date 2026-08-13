@@ -242,7 +242,6 @@ class NspMeasurementSessionSync(models.Model):
             }),
             "started_at": fields.Datetime.to_string(session.started_at) if session.started_at else None,
             "ended_at": fields.Datetime.to_string(session.ended_at) if session.ended_at else None,
-            "applied_at": fields.Datetime.to_string(session.applied_at) if session.applied_at else None,
             "raw_event_count": int(session.event_count or 0),
             "detection_count": len(steps),
             "unique_reader_ports": len({(step["serial_number"], step["port_no"]) for step in steps}),

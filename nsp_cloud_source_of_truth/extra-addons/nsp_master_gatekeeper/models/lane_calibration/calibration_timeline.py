@@ -178,10 +178,10 @@ class NspMeasurementSessionTimeline(models.Model):
                 "observed_at": event.read_at,
                 "observed_at_ms": int(event.read_at_ms or 0),
                 "duration_from_previous": duration,
-                "reader_power_dbm": int(reader_node.power_dbm or 0),
-                "read_interval_ms": int(reader_node.read_interval_ms or 200),
-                "tid_start_address": int(reader_node.tid_addr or 0),
-                "tid_length": int(reader_node.tid_len or 4),
+                "reader_power_dbm": int(event.power_dbm or 0),
+                "read_interval_ms": int(event.read_interval_ms or 200),
+                "tid_start_address": int(event.tid_addr or 0),
+                "tid_length": int(event.tid_len or 4),
             })
 
         if len(selected) < 2:
@@ -234,16 +234,33 @@ class NspMeasurementSessionTimeline(models.Model):
                 "The selected Detection Timeline rows do not resolve to a valid Device Configuration branch."
             ))
 
+        # Lane Setup must reflect the settings actually used by the selected
+        # Calibration detections, not the base Cloud configuration that may have
+        # been locally tuned on Edge. One Reader cannot silently span multiple
+        # runtime profiles inside a single selected path.
         reader_defaults = {}
-        for reader_node in self._reader_nodes().filtered(
-            lambda node: node.parent_id == controller_node
-        ):
-            reader_defaults[reader_node.reader_id.id] = {
-                "reader_id": reader_node.reader_id.id,
-                "reader_power_dbm": int(reader_node.power_dbm or 0),
-                "read_interval_ms": int(reader_node.read_interval_ms or 200),
-                "tid_start_address": int(reader_node.tid_addr or 0),
-                "tid_length": int(reader_node.tid_len or 4),
+        reader_profiles = {}
+        for row in selected:
+            reader_id = row["reader_id"]
+            profile = (
+                row["reader_power_dbm"],
+                row["read_interval_ms"],
+                row["tid_start_address"],
+                row["tid_length"],
+            )
+            previous = reader_profiles.get(reader_id)
+            if previous is not None and previous != profile:
+                raise ValidationError(_(
+                    "Selected Detection Timeline spans multiple runtime settings for one Reader. "
+                    "Select detections captured under one Reader configuration."
+                ))
+            reader_profiles[reader_id] = profile
+            reader_defaults[reader_id] = {
+                "reader_id": reader_id,
+                "reader_power_dbm": profile[0],
+                "read_interval_ms": profile[1],
+                "tid_start_address": profile[2],
+                "tid_length": profile[3],
             }
 
         draft_layouts = self.env["nsp.parking.area"].search([("state", "=", "draft")], limit=2)
@@ -291,11 +308,6 @@ class NspMeasurementSessionTimeline(models.Model):
             "context": dict(self.env.context),
         }
 
-    def action_open_lane_direction_setup(self):
-        """Deprecated compatibility alias. Removal target: NSP 20.0."""
-        return self.action_open_lane_setup()
-
-
 
 class NspMeasurementSessionCalibrationResult(models.Model):
     _inherit = "nsp.measurement.session"
@@ -303,30 +315,9 @@ class NspMeasurementSessionCalibrationResult(models.Model):
     pass_ids = fields.One2many(
         "nsp.measurement.pass", "session_id", string="Calibration Runs", copy=False,
     )
-    pass_count = fields.Integer(compute="_compute_calibration_result_counts")
-    accepted_pass_count = fields.Integer(compute="_compute_calibration_result_counts")
     result_ids = fields.One2many(
         "nsp.measurement.result", "session_id", string="Calibration Results", copy=False,
     )
-    accepted_result_id = fields.Many2one(
-        "nsp.measurement.result", compute="_compute_calibration_result_counts",
-        string="Accepted Result",
-    )
-    @api.depends("pass_ids.state", "result_ids.state", "result_ids.accepted_at")
-    def _compute_calibration_result_counts(self):
-        Result = self.env["nsp.measurement.result"]
-        for session in self:
-            session.pass_count = len(session.pass_ids)
-            session.accepted_pass_count = len(
-                session.pass_ids.filtered(lambda item: item.state == "accepted")
-            )
-            accepted = session.result_ids.filtered(
-                lambda item: item.state == "accepted"
-            ).sorted(
-                key=lambda item: (item.accepted_at or item.write_date or item.create_date, item.id),
-                reverse=True,
-            )[:1]
-            session.accepted_result_id = accepted or Result.browse()
 
     def _reader_port_for_event(self, event):
         self.ensure_one()
@@ -403,7 +394,7 @@ class NspMeasurementSessionCalibrationResult(models.Model):
                 "running", {"started_at": self.started_at or fields.Datetime.now()}, allow_same=False,
             )
         elif self.status != "running":
-            raise ValidationError(_("Release the calibration or use Measure Again before starting a Calibration Run."))
+            raise ValidationError(_("Release the Lane Calibration before starting a Calibration Run."))
         target = self.target_line_ids[:1]
         next_no = max(self.pass_ids.mapped("pass_no") or [0]) + 1
         self.env["nsp.measurement.pass"].create({
@@ -479,12 +470,7 @@ class NspMeasurementSessionCalibrationResult(models.Model):
             "line_ids": values,
         })
         return result.action_open_form()
-    def _current_calibration_result(self):
-        self.ensure_one()
-        candidates = self.result_ids.filtered(
-            lambda item: item.state == "accepted"
-        ).sorted(key=lambda item: (item.revision, item.id), reverse=True)
-        return candidates[:1]
+
 
 class NspMeasurementPass(models.Model):
     _name = "nsp.measurement.pass"

@@ -2,7 +2,7 @@
 """Public actions and the single state machine for Lane Calibration."""
 
 from odoo import _, fields, models
-from odoo.exceptions import UserError, ValidationError
+from odoo.exceptions import ValidationError
 
 
 
@@ -11,20 +11,19 @@ class CalibrationStatusPolicy:
 
     TRANSITIONS = {
         "draft": frozenset({"ready", "cancelled"}),
-        "ready": frozenset({"running", "cancelled"}),
+        "ready": frozenset({"running", "completed", "failed", "cancelled"}),
         "running": frozenset({"completed", "failed", "cancelled"}),
-        "completed": frozenset({"applied"}),
-        "applied": frozenset(),
-        "failed": frozenset({"ready", "cancelled"}),
+        "completed": frozenset(),
+        "failed": frozenset(),
         "cancelled": frozenset(),
     }
 
-    REVISION_SOURCES = {
-        "ready": frozenset({"running", "completed", "failed"}),
-        "draft": frozenset({"completed", "failed", "applied"}),
-    }
+    # Revise is a Cloud-authoring action, not a runtime state transition.
+    # It creates the next Draft revision while preserving historical events/results
+    # under their original revision numbers.
+    REVISION_SOURCES = frozenset({"ready", "completed"})
 
-    CLOUD_STATUSES = frozenset({"draft", "ready", "applied"})
+    CLOUD_STATUSES = frozenset({"draft", "ready"})
     RUNTIME_STATUSES = frozenset({"running", "completed", "failed", "cancelled"})
     ALL_STATUSES = CLOUD_STATUSES | RUNTIME_STATUSES
 
@@ -50,15 +49,6 @@ class CalibrationStatusPolicy:
                 "target": target_state,
             })
         return target_state
-
-    @classmethod
-    def validate_revision_source(cls, current, target_status):
-        allowed_sources = cls.REVISION_SOURCES.get(target_status, frozenset())
-        if current not in allowed_sources:
-            raise ValidationError(_(
-                "Lane Calibration cannot create a new %(target)s revision from %(current)s."
-            ) % {"target": target_status, "current": current})
-        return True
 
     @classmethod
     def classify_revision(cls, incoming, current):
@@ -99,9 +89,6 @@ class CalibrationStatusPolicy:
         if target_status in cls.CLOUD_STATUSES and target_status != current_status:
             result["outcome"] = "ignored_cloud_owned_status"
             return result
-        if current_status == "applied" and target_status in cls.RUNTIME_STATUSES:
-            result["outcome"] = "ignored_after_configured"
-            return result
         if target_status != current_status:
             if target_status in cls.STALE_RUNTIME_TARGETS.get(current_status, frozenset()):
                 result["outcome"] = "ignored_stale_status"
@@ -112,8 +99,6 @@ class CalibrationStatusPolicy:
                 raise ValueError("invalid_status_transition") from exc
         return result
 
-
-CALIBRATION_TRANSITIONS = CalibrationStatusPolicy.TRANSITIONS
 
 
 class NspMeasurementSessionStatus(models.Model):
@@ -166,33 +151,14 @@ class NspMeasurementSessionStatus(models.Model):
                 _("Missing Lane Calibration configuration: %s") % ", ".join(missing)
             )
 
-        invalid_servers = server_nodes.filtered(lambda node: bool(node.parent_id))
-        if invalid_servers:
-            raise ValidationError(
-                _("Server nodes must be roots of the Device Tree: %s")
-                % ", ".join(invalid_servers.mapped("device_name"))
-            )
-
-        unassigned_controllers = controller_nodes.filtered(
-            lambda node: not node.parent_id or node.parent_id.device_type != "server"
-        )
-        if unassigned_controllers:
-            raise ValidationError(
-                _("Assign every Controller to a Server before Release. Missing: %s")
-                % ", ".join(unassigned_controllers.mapped("device_name"))
-            )
-
-        unassigned_readers = reader_nodes.filtered(
-            lambda node: not node.parent_id or node.parent_id.device_type != "controller"
-        )
-        if unassigned_readers:
-            raise ValidationError(
-                _("Assign every Reader to a Controller before Release. Missing: %s")
-                % ", ".join(unassigned_readers.mapped("device_name"))
-            )
+        # Parent validity is enforced immediately by Device Node create/write.
+        # Release only checks branch completeness, using parent-id sets instead of
+        # nested recordset filtering.
+        server_parent_ids = set(controller_nodes.mapped("parent_id").ids)
+        controller_parent_ids = set(reader_nodes.mapped("parent_id").ids)
 
         servers_without_controllers = server_nodes.filtered(
-            lambda server: not controller_nodes.filtered(lambda node: node.parent_id == server)
+            lambda server: server.id not in server_parent_ids
         )
         if servers_without_controllers:
             raise ValidationError(
@@ -201,7 +167,7 @@ class NspMeasurementSessionStatus(models.Model):
             )
 
         controllers_without_readers = controller_nodes.filtered(
-            lambda controller: not reader_nodes.filtered(lambda node: node.parent_id == controller)
+            lambda controller: controller.id not in controller_parent_ids
         )
         if controllers_without_readers:
             raise ValidationError(
@@ -220,18 +186,6 @@ class NspMeasurementSessionStatus(models.Model):
         self._validate_measurement_scope()
         return True
 
-    def _release_new_revision(self, target_status="ready"):
-        self.ensure_one()
-        CalibrationStatusPolicy.validate_revision_source(self.status, target_status)
-        self.with_context(measurement_sync=True).write({
-            "revision": int(self.revision or 1) + 1,
-            "status": target_status,
-            "started_at": False,
-            "ended_at": False,
-            "applied_at": False,
-        })
-        return self.get_live_snapshot(self.id)
-
     def _set_ready(self):
         sessions = self._check_public_action_access("write")
         for session in sessions:
@@ -240,6 +194,32 @@ class NspMeasurementSessionStatus(models.Model):
             session._require_ready_configuration()
             session._apply_status_transition("ready", allow_same=False)
         return True
+
+    def action_revise(self):
+        """Open the next editable Draft revision.
+
+        Revise is intentionally separate from Release: edits to the new Draft are
+        Cloud-local and are not part of any runtime snapshot until Release is
+        pressed again. Historical detections/results remain keyed by their old
+        revision and are never rewritten.
+        """
+        sessions = self._check_public_action_access("write")
+        if len(sessions) != 1:
+            raise ValidationError(_("Revise one Lane Calibration at a time."))
+        session = sessions
+        if session.status not in CalibrationStatusPolicy.REVISION_SOURCES:
+            raise ValidationError(
+                _("Revise is available only for Released or Completed Lane Calibration.")
+            )
+        if session.pass_ids.filtered(lambda item: item.state == "running"):
+            raise ValidationError(_("Stop the running Calibration Run before Revise."))
+        session.with_context(measurement_sync=True).write({
+            "revision": int(session.revision or 1) + 1,
+            "status": "draft",
+            "started_at": False,
+            "ended_at": False,
+        })
+        return {"type": "ir.actions.client", "tag": "reload"}
 
     def _complete_calibration(self):
         sessions = self._check_public_action_access("write")
@@ -265,121 +245,6 @@ class NspMeasurementSessionStatus(models.Model):
             )
         return True
 
-    def action_prepare_device_reconfiguration(self):
-        """Create a new editable revision without changing historical results."""
-        self.ensure_one()
-        self._check_public_action_access("write")
-        if self._deployment_role() != "cloud":
-            raise UserError(_("Device reconfiguration is owned by the Cloud Master."))
-        running_passes = getattr(self, "pass_ids", self.browse()).filtered(
-            lambda item: item.state == "running"
-        )
-        if running_passes:
-            raise ValidationError(_("Stop the running Run before changing devices."))
-        self._release_new_revision("draft")
-        action = self.action_open_session_form()
-        action["name"] = _("Revise · R%(revision)s") % {"revision": self.revision}
-        action["context"] = {
-            **dict(action.get("context") or {}),
-            "form_view_initial_mode": "edit",
-            "nsp_device_reconfiguration": True,
-        }
-        return action
-
-    def action_measure_again(self, reader_settings=None):
-        self.ensure_one()
-        self._check_public_action_access("write")
-        if self.status not in CalibrationStatusPolicy.REVISION_SOURCES["ready"]:
-            raise ValidationError(_(
-                "Measure Again is available for running, completed, or failed sessions."
-            ))
-        self._require_ready_configuration()
-        if reader_settings not in (None, False, ""):
-            if not isinstance(reader_settings, list):
-                raise ValidationError(_("Reader settings must be a list."))
-            node_by_id = {node.id: node for node in self._reader_nodes()}
-            seen = set()
-            updates_by_values = {}
-            for item in reader_settings:
-                if not isinstance(item, dict):
-                    raise ValidationError(_("Invalid Reader settings."))
-                try:
-                    node_id = int(item.get("reader_node_id") or 0)
-                    power = int(item.get("power_dbm"))
-                    interval = int(item.get("read_interval_ms"))
-                except (TypeError, ValueError) as exc:
-                    raise ValidationError(_("Invalid Reader settings.")) from exc
-                node = node_by_id.get(node_id)
-                if not node or node_id in seen:
-                    raise ValidationError(_(
-                        "Reader settings do not match this Lane Calibration."
-                    ))
-                seen.add(node_id)
-                updates_by_values.setdefault((power, interval), self.env[node._name].browse())
-                updates_by_values[(power, interval)] |= node
-            for (power, interval), nodes in updates_by_values.items():
-                nodes.with_context(measurement_sync=True).write({
-                    "power_dbm": power,
-                    "read_interval_ms": interval,
-                })
-        return self._release_new_revision("ready")
-
-    def action_apply_reader_settings(self, reader_node_id, power_dbm, read_interval_ms):
-        """Apply one contextual Reader-node configuration and release a new revision."""
-        self.ensure_one()
-        self._check_public_action_access("write")
-        if self.status not in CalibrationStatusPolicy.REVISION_SOURCES["ready"]:
-            raise ValidationError(_(
-                "Reader settings can be applied only while running, completed, or failed."
-            ))
-        try:
-            node_id = int(reader_node_id or 0)
-            power = int(power_dbm)
-            interval = int(read_interval_ms)
-        except (TypeError, ValueError) as exc:
-            raise ValidationError(_("Invalid Reader settings.")) from exc
-        node = self._reader_nodes().filtered(lambda item: item.id == node_id)[:1]
-        if not node:
-            raise ValidationError(_("Reader does not belong to this Lane Calibration."))
-        node.with_context(measurement_sync=True).write({
-            "power_dbm": power,
-            "read_interval_ms": interval,
-        })
-        self._require_ready_configuration()
-        return self._release_new_revision("ready")
-
-    def action_apply_to_operation(self):
-        self.ensure_one()
-        self._check_public_action_access("write")
-        if self._deployment_role() != "cloud":
-            raise UserError(_("Applying calibration results is owned by the Cloud Master."))
-        if self.status != "completed":
-            raise ValidationError(_(
-                "Complete the Lane Calibration before applying its result to a Lane configuration."
-            ))
-        self._require_ready_configuration()
-
-        readers_by_settings = {}
-        for node in self._reader_nodes():
-            values = (
-                int(node.power_dbm or 0),
-                int(node.read_interval_ms or 200),
-            )
-            readers_by_settings.setdefault(values, self.env[node.reader_id._name].browse())
-            readers_by_settings[values] |= node.reader_id
-        for (power, interval), readers in readers_by_settings.items():
-            # Device-node scope and contextual Reader settings were validated above.
-            readers.sudo().write({
-                "power_dbm": power,
-                "read_interval_ms": interval,
-            })
-
-        self._apply_status_transition(
-            "applied",
-            {"applied_at": fields.Datetime.now()},
-            allow_same=False,
-        )
-        return self.get_live_snapshot(self.id)
 
 
 _PASS_STATE_TRANSITIONS = {

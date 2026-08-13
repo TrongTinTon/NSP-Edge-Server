@@ -26,7 +26,7 @@ class NspMeasurementSessionDetection(models.Model):
         cutoff = fields.Datetime.now() - timedelta(days=retention_days)
         events = self.env["nsp.measurement.event"].sudo().search(
             [
-                ("session_id.status", "in", ["completed", "applied", "failed", "cancelled"]),
+                ("session_id.status", "in", ["completed", "failed", "cancelled"]),
                 ("read_at", "<", cutoff),
             ],
             limit=5000,
@@ -40,7 +40,7 @@ class NspMeasurementSessionDetection(models.Model):
         events.unlink()
         if role != "cloud":
             stale_sessions = self.sudo().search([
-                ("status", "in", ["completed", "applied", "failed", "cancelled"]),
+                ("status", "in", ["completed", "failed", "cancelled"]),
                 ("ended_at", "!=", False),
                 ("ended_at", "<", cutoff),
             ])
@@ -52,7 +52,7 @@ class NspMeasurementSessionDetection(models.Model):
 
 class NspMeasurementEvent(models.Model):
     _name = "nsp.measurement.event"
-    _description = "NSP Measurement Observation"
+    _description = "NSP Lane Calibration Observation"
     _rec_name = "event_uid"
     _order = "read_at desc, id desc"
 
@@ -72,6 +72,8 @@ class NspMeasurementEvent(models.Model):
     rssi_dbm = fields.Float()
     power_dbm = fields.Integer(string="Reader Power (dBm)")
     read_interval_ms = fields.Integer(string="Read Interval ms", required=True, default=200)
+    tid_addr = fields.Integer(string="TID Start Address (Words)", required=True, default=0)
+    tid_len = fields.Integer(string="TID Length (Words)", required=True, default=4)
 
     # Presentation-only fields for the native Odoo Detection Timeline list.
     # They are computed from raw observations and do not change the sync contract.
@@ -126,8 +128,9 @@ class NspMeasurementEvent(models.Model):
                         node.reader_id.name or node.reader_id.serial_number or serial
                     )
 
+        revisions = sorted({revision for _session_id, revision in requested_pairs})
         all_events = self.search(
-            [("session_id", "in", session_ids)],
+            [("session_id", "in", session_ids), ("revision", "in", revisions)],
             order="session_id, revision, read_at asc, read_at_ms asc, id asc",
         )
         previous_seconds = {}
@@ -166,9 +169,11 @@ class NspMeasurementEvent(models.Model):
     _sql_constraints = [
         ("measurement_event_uid_unique", "unique(event_uid)", "Measurement Event UID must be unique."),
         ("measurement_event_port_positive", "CHECK(port_no > 0)", "Reader Port must be greater than zero."),
-        ("measurement_event_revision_positive", "CHECK(revision > 0)", "Measurement Revision must be greater than zero."),
+        ("measurement_event_revision_positive", "CHECK(revision > 0)", "Lane Calibration Revision must be greater than zero."),
         ("measurement_event_ms_range", "CHECK(read_at_ms >= 0 AND read_at_ms <= 999)", "Measurement millisecond must be between 0 and 999."),
         ("measurement_event_read_interval_range", "CHECK(read_interval_ms > 0 AND read_interval_ms <= 60000)", "Read Interval must be between 1 and 60000 ms."),
+        ("measurement_event_tid_addr_nonnegative", "CHECK(tid_addr >= 0)", "TID Start Address must not be negative."),
+        ("measurement_event_tid_len_positive", "CHECK(tid_len > 0)", "TID Length must be greater than zero."),
     ]
 
     @api.model_create_multi
@@ -181,10 +186,12 @@ class NspMeasurementEvent(models.Model):
             try:
                 vals["tid"] = _normalize_raw_tid_value(vals.get("tid"))
             except ValueError as exc:
-                raise ValidationError(_("Measurement TID must contain hexadecimal characters only.")) from exc
+                raise ValidationError(_("Lane Calibration TID must contain hexadecimal characters only.")) from exc
             vals["revision"] = max(int(vals.get("revision") or 1), 1)
             vals["read_at_ms"] = max(0, min(int(vals.get("read_at_ms") or 0), 999))
             vals["read_interval_ms"] = max(1, min(int(vals.get("read_interval_ms") or 200), 60000))
+            vals["tid_addr"] = max(int(vals.get("tid_addr") or 0), 0)
+            vals["tid_len"] = max(int(vals.get("tid_len") or 4), 1)
             prepared.append(vals)
         return super().create(prepared)
 
@@ -208,6 +215,8 @@ class NspMeasurementEvent(models.Model):
             and int(self.power_dbm or 0) == int(values["power_dbm"] or 0)
             and int(self.read_interval_ms or 0)
             == int(values["read_interval_ms"] or 0)
+            and int(self.tid_addr or 0) == int(values["tid_addr"] or 0)
+            and int(self.tid_len or 0) == int(values["tid_len"] or 0)
         )
 
     def init(self):
@@ -230,6 +239,6 @@ class NspMeasurementEvent(models.Model):
             session = event.session_id
             key = (event.serial_number, int(event.port_no or 0))
             if key not in session._allowed_reader_port_pairs():
-                raise ValidationError(_("Measurement observation Reader Port is not part of the Lane Calibration."))
+                raise ValidationError(_("Reader Port is not part of the Lane Calibration."))
             if event.tid not in session._allowed_target_tids():
                 raise ValidationError(_("Only the active Calibration Tag may be stored in this Lane Calibration."))

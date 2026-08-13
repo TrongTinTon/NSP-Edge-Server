@@ -12,12 +12,12 @@ def _new_measurement_code():
 
 
 class NspMeasurementSession(models.Model):
-    """Measurement plan shared by Cloud, Edge and one-or-more Controllers.
+    """Edge projection of a Cloud-owned Lane Calibration.
 
-    The Session owns one raw calibration tag and a list of Reader lines.
-    Reader ownership determines Controller scope; therefore Controller is not stored
-    again on the Session. Each Edge receives only Reader lines belonging to it and
-    each physical Controller pulls only its own Reader subset.
+    The released snapshot owns a contextual Server -> Controller -> Reader tree.
+    Controller scope is resolved from node ``parent_id`` relationships, never from
+    mutable ownership on the Reader master. Edge may hold revision-local Reader
+    runtime overrides while topology/base configuration remain Cloud-owned.
     """
 
     _name = "nsp.measurement.session"
@@ -67,7 +67,6 @@ class NspMeasurementSession(models.Model):
             ("ready", "Ready"),
             ("running", "Running"),
             ("completed", "Completed"),
-            ("applied", "Configured"),
             ("failed", "Failed"),
             ("cancelled", "Cancelled"),
         ],
@@ -76,10 +75,29 @@ class NspMeasurementSession(models.Model):
         index=True,
         tracking=True,
     )
+    workflow_status = fields.Selection(
+        [
+            ("draft", "Draft"),
+            ("released", "Released"),
+            ("running", "Running"),
+            ("completed", "Completed"),
+            ("stopped", "Stopped"),
+        ],
+        string="Status",
+        compute="_compute_workflow_status",
+        store=True,
+        index=True,
+        readonly=True,
+    )
+    device_configuration_editable = fields.Boolean(
+        string="Reader Runtime Settings Editable",
+        compute="_compute_device_configuration_editable",
+        readonly=True,
+    )
     event_ids = fields.One2many(
         "nsp.measurement.event",
         "session_id",
-        string="Measurement Observations",
+        string="Lane Calibration Observations",
         readonly=True,
     )
 
@@ -87,12 +105,12 @@ class NspMeasurementSession(models.Model):
         (
             "measurement_code_unique",
             "unique(measurement_code)",
-            "Measurement Code must be unique.",
+            "Lane Calibration Code must be unique.",
         ),
         (
             "measurement_revision_positive",
             "CHECK(revision > 0)",
-            "Measurement Revision must be greater than zero.",
+            "Lane Calibration Revision must be greater than zero.",
         ),
     ]
 
@@ -105,6 +123,97 @@ class NspMeasurementSession(models.Model):
     def _compute_calibration_tid(self):
         for session in self:
             session.calibration_tid = session.target_line_ids[:1].tid or ""
+
+    @api.depends("status")
+    def _compute_workflow_status(self):
+        mapping = {
+            "draft": "draft",
+            "ready": "released",
+            "running": "running",
+            "completed": "completed",
+            "failed": "stopped",
+            "cancelled": "stopped",
+        }
+        for session in self:
+            session.workflow_status = mapping.get(session.status, "stopped")
+
+    @api.depends("status")
+    def _compute_device_configuration_editable(self):
+        for session in self:
+            session.device_configuration_editable = bool(
+                session.status in ("ready", "running") and session.has_access("write")
+            )
+
+    def action_save_device_configuration(self, node_id=None, values=None):
+        """Persist an Edge-local Reader runtime override for this revision.
+
+        Cloud remains source-of-truth for topology/base configuration.  Runtime
+        overrides affect only Controller execution for the current released revision
+        and disappear automatically when a new revision rebuilds the projection.
+        """
+        self.ensure_one()
+        self.check_access("write")
+        if self.status not in ("ready", "running"):
+            raise ValidationError(_(
+                "Reader runtime settings can be changed only while Lane Calibration is Released or Running."
+            ))
+        node = self.env["nsp.measurement.device.node"].browse(int(node_id or 0)).exists()
+        if not node or node.session_id != self or node.device_type != "reader":
+            raise ValidationError(_("Reader node does not belong to this Lane Calibration."))
+
+        source = dict(values or {})
+        allowed = {"power_dbm", "read_interval_ms", "tid_addr", "tid_len"}
+        unknown = sorted(set(source) - allowed)
+        if unknown:
+            raise ValidationError(
+                _("Unsupported Reader runtime fields: %s") % ", ".join(unknown)
+            )
+        current = {
+            "power_dbm": node._effective_power_dbm(),
+            "read_interval_ms": node._effective_read_interval_ms(),
+            "tid_addr": node._effective_tid_addr(),
+            "tid_len": node._effective_tid_len(),
+        }
+        try:
+            current.update({key: int(value) for key, value in source.items()})
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(_("Reader runtime settings must be integer values.")) from exc
+        power = current["power_dbm"]
+        interval = current["read_interval_ms"]
+        tid_addr = current["tid_addr"]
+        tid_len = current["tid_len"]
+        if power < 0 or power > 40:
+            raise ValidationError(_("Reader Power must be between 0 and 40 dBm."))
+        if interval < 1 or interval > 60000:
+            raise ValidationError(_("Read Interval must be between 1 and 60000 ms."))
+        if tid_addr < 0:
+            raise ValidationError(_("TID Start Address cannot be negative."))
+        if tid_len < 1:
+            raise ValidationError(_("TID Length must be greater than zero."))
+
+        node.with_context(measurement_runtime_override=True).write({
+            "runtime_override_enabled": True,
+            "runtime_power_dbm": power,
+            "runtime_read_interval_ms": interval,
+            "runtime_tid_addr": tid_addr,
+            "runtime_tid_len": tid_len,
+        })
+        return node._runtime_configuration_payload()
+
+    def action_reset_device_configuration(self, node_id=None):
+        self.ensure_one()
+        self.check_access("write")
+        if self.status not in ("ready", "running"):
+            raise ValidationError(_(
+                "Reader runtime settings can be reset only while Lane Calibration is Released or Running."
+            ))
+        node = self.env["nsp.measurement.device.node"].browse(int(node_id or 0)).exists()
+        if not node or node.session_id != self or node.device_type != "reader":
+            raise ValidationError(_("Reader node does not belong to this Lane Calibration."))
+        node.with_context(measurement_runtime_override=True).write({
+            "runtime_override_enabled": False,
+        })
+        return node._runtime_configuration_payload()
 
     def _sanitize_target_commands(self, commands):
         """Normalize the single raw Calibration Tag without runtime assignment lookup."""
@@ -166,6 +275,10 @@ class NspMeasurementSession(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
+        if not self.env.context.get("measurement_sync"):
+            raise ValidationError(_(
+                "Lane Calibration sessions are synchronized from Cloud and cannot be created on Edge."
+            ))
         prepared = []
         for source in vals_list:
             vals = dict(source)
@@ -175,32 +288,32 @@ class NspMeasurementSession(models.Model):
                 vals.get("measurement_code") or _new_measurement_code()
             ).strip().upper()
             vals["revision"] = max(int(vals.get("revision") or 1), 1)
-            if not self.env.context.get("measurement_sync"):
-                vals["status"] = "draft"
             prepared.append(vals)
         records = super().create(prepared)
         records._validate_measurement_scope()
         return records
 
     def write(self, vals):
+        if not self.env.context.get("measurement_sync"):
+            raise ValidationError(_(
+                "Lane Calibration lifecycle and base configuration are synchronized from Cloud."
+            ))
         values = dict(vals)
         if "target_line_ids" in values:
             values["target_line_ids"] = self._sanitize_target_commands(values.get("target_line_ids"))
-        configuration_fields = {
-            "measurement_code", "target_line_ids", "device_node_ids",
-        }
-        if configuration_fields.intersection(values) and not self.env.context.get("measurement_sync"):
-            protected = self.filtered(lambda session: session.status not in ("draft", "completed"))
-            if protected:
-                raise ValidationError(_(
-                    "Measurement configuration can be edited only while Draft or after completion before Measure Again."
-                ))
         if "measurement_code" in values:
             values["measurement_code"] = str(values.get("measurement_code") or "").strip().upper()
         result = super().write(values)
         if {"target_line_ids", "device_node_ids"}.intersection(values):
             self._validate_measurement_scope()
         return result
+
+    def unlink(self):
+        if not self.env.context.get("measurement_sync"):
+            raise ValidationError(_(
+                "Lane Calibration sessions are synchronized from Cloud and cannot be deleted on Edge."
+            ))
+        return super().unlink()
 
     @api.constrains("device_node_ids", "target_line_ids")
     def _check_scope_constraint(self):
@@ -240,14 +353,14 @@ class NspMeasurementSession(models.Model):
             missing.append(_("Reader"))
         if missing:
             raise ValidationError(_("Missing Lane Calibration configuration: %s") % ", ".join(missing))
-        invalid_controllers = controllers.filtered(
-            lambda node: not node.parent_id or node.parent_id.device_type != "server"
-        )
-        invalid_readers = readers.filtered(
-            lambda node: not node.parent_id or node.parent_id.device_type != "controller"
-        )
-        if invalid_controllers or invalid_readers:
-            raise ValidationError(_("Lane Calibration Device Tree is incomplete."))
+        # Node integrity already enforces parent types. Release projection recovery
+        # only needs to verify that every selected branch is complete.
+        server_parent_ids = set(controllers.mapped("parent_id").ids)
+        controller_parent_ids = set(readers.mapped("parent_id").ids)
+        if servers.filtered(lambda node: node.id not in server_parent_ids):
+            raise ValidationError(_("Every Lane Calibration Server requires a Controller."))
+        if controllers.filtered(lambda node: node.id not in controller_parent_ids):
+            raise ValidationError(_("Every Lane Calibration Controller requires a Reader."))
         missing_ports = readers.filtered(lambda node: not node.reader_port_ids)
         if missing_ports:
             raise ValidationError(_("Select at least one Reader Port for each RFID Reader."))
@@ -290,11 +403,11 @@ class NspMeasurementSession(models.Model):
 
     def _reader_power_for_serial(self, serial_number):
         node = self._measurement_node_for_serial(serial_number)
-        return int(node.power_dbm or 0) if node else 0
+        return node._effective_power_dbm() if node else 0
 
     def _reader_interval_for_serial(self, serial_number):
         node = self._measurement_node_for_serial(serial_number)
-        return int(node.read_interval_ms or 0) if node else 0
+        return node._effective_read_interval_ms() if node else 0
 
     @api.model
     def cron_cleanup_expired_measurements(self):
@@ -308,7 +421,7 @@ class NspMeasurementSession(models.Model):
         cutoff = fields.Datetime.now() - timedelta(days=retention_days)
         events = self.env["nsp.measurement.event"].sudo().search(
             [
-                ("session_id.status", "in", ["completed", "applied", "failed", "cancelled"]),
+                ("session_id.status", "in", ["completed", "failed", "cancelled"]),
                 ("read_at", "<", cutoff),
             ],
             limit=5000,
@@ -324,7 +437,7 @@ class NspMeasurementSession(models.Model):
         # Let PostgreSQL test emptiness instead of prefetching event_ids for every
         # stale Session in Python. Keep the batch bounded like the Event cleanup.
         stale_empty_sessions = self.sudo().search([
-            ("status", "in", ["completed", "applied", "failed", "cancelled"]),
+            ("status", "in", ["completed", "failed", "cancelled"]),
             ("ended_at", "!=", False),
             ("ended_at", "<", cutoff),
             ("event_ids", "=", False),
@@ -372,6 +485,8 @@ class NspMeasurementTargetLine(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
+        if not self.env.context.get("measurement_sync"):
+            raise ValidationError(_("Calibration Tag is synchronized from Cloud."))
         prepared = []
         for source in vals_list:
             values = dict(source)
@@ -382,6 +497,8 @@ class NspMeasurementTargetLine(models.Model):
         return super().create(prepared)
 
     def write(self, vals):
+        if not self.env.context.get("measurement_sync"):
+            raise ValidationError(_("Calibration Tag is synchronized from Cloud."))
         values = dict(vals)
         if "tid" in values:
             values["tid"] = self._normalize_tid(values.get("tid"))
@@ -390,6 +507,12 @@ class NspMeasurementTargetLine(models.Model):
         result = super().write(values)
         self.mapped("session_id")._validate_measurement_scope()
         return result
+
+
+    def unlink(self):
+        if not self.env.context.get("measurement_sync"):
+            raise ValidationError(_("Calibration Tag is synchronized from Cloud."))
+        return super().unlink()
 
     @api.constrains("tid", "session_id")
     def _check_raw_tag(self):
@@ -434,6 +557,18 @@ class NspMeasurementDeviceNode(models.Model):
     read_interval_ms = fields.Integer(string="Read Interval ms", default=200)
     tid_addr = fields.Integer(string="TID Start Address (Words)", default=0)
     tid_len = fields.Integer(string="TID Length (Words)", default=4)
+
+    runtime_override_enabled = fields.Boolean(
+        string="Runtime Override", default=False, copy=False,
+    )
+    runtime_power_dbm = fields.Integer(string="Runtime Power (dBm)", default=30, copy=False)
+    runtime_read_interval_ms = fields.Integer(string="Runtime Read Interval ms", default=200, copy=False)
+    runtime_tid_addr = fields.Integer(string="Runtime TID Start Address", default=0, copy=False)
+    runtime_tid_len = fields.Integer(string="Runtime TID Length", default=4, copy=False)
+    effective_power_dbm = fields.Integer(compute="_compute_effective_configuration")
+    effective_read_interval_ms = fields.Integer(compute="_compute_effective_configuration")
+    effective_tid_addr = fields.Integer(compute="_compute_effective_configuration")
+    effective_tid_len = fields.Integer(compute="_compute_effective_configuration")
     reader_port_ids = fields.One2many(
         "nsp.measurement.reader.port", "reader_node_id", string="Reader Ports", copy=True,
     )
@@ -452,6 +587,10 @@ class NspMeasurementDeviceNode(models.Model):
         ("measurement_node_interval_range", "CHECK(read_interval_ms > 0 AND read_interval_ms <= 60000)", "Read Interval must be between 1 and 60000 ms."),
         ("measurement_node_tid_addr_nonnegative", "CHECK(tid_addr >= 0)", "TID Start Address cannot be negative."),
         ("measurement_node_tid_len_positive", "CHECK(tid_len > 0)", "TID Length must be greater than zero."),
+        ("measurement_runtime_power_range", "CHECK(NOT runtime_override_enabled OR (runtime_power_dbm >= 0 AND runtime_power_dbm <= 40))", "Runtime Reader Power must be between 0 and 40 dBm."),
+        ("measurement_runtime_interval_range", "CHECK(NOT runtime_override_enabled OR (runtime_read_interval_ms > 0 AND runtime_read_interval_ms <= 60000))", "Runtime Read Interval must be between 1 and 60000 ms."),
+        ("measurement_runtime_tid_addr_nonnegative", "CHECK(NOT runtime_override_enabled OR runtime_tid_addr >= 0)", "Runtime TID Start Address cannot be negative."),
+        ("measurement_runtime_tid_len_positive", "CHECK(NOT runtime_override_enabled OR runtime_tid_len > 0)", "Runtime TID Length must be greater than zero."),
     ]
 
     @property
@@ -464,6 +603,80 @@ class NspMeasurementDeviceNode(models.Model):
         if self.device_type == "reader":
             return self.reader_id
         return self.env["nsp.device"].browse()
+
+    @api.depends(
+        "power_dbm", "read_interval_ms", "tid_addr", "tid_len",
+        "runtime_override_enabled", "runtime_power_dbm",
+        "runtime_read_interval_ms", "runtime_tid_addr", "runtime_tid_len",
+    )
+    def _compute_effective_configuration(self):
+        for node in self:
+            node.effective_power_dbm = node._effective_power_dbm()
+            node.effective_read_interval_ms = node._effective_read_interval_ms()
+            node.effective_tid_addr = node._effective_tid_addr()
+            node.effective_tid_len = node._effective_tid_len()
+
+    def _effective_power_dbm(self):
+        self.ensure_one()
+        return int(self.runtime_power_dbm if self.runtime_override_enabled else self.power_dbm or 0)
+
+    def _effective_read_interval_ms(self):
+        self.ensure_one()
+        return int(self.runtime_read_interval_ms if self.runtime_override_enabled else self.read_interval_ms or 200)
+
+    def _effective_tid_addr(self):
+        self.ensure_one()
+        return int(self.runtime_tid_addr if self.runtime_override_enabled else self.tid_addr or 0)
+
+    def _effective_tid_len(self):
+        self.ensure_one()
+        return int(self.runtime_tid_len if self.runtime_override_enabled else self.tid_len or 4)
+
+    def _runtime_configuration_payload(self):
+        self.ensure_one()
+        return {
+            "id": self.id,
+            "runtime_override_enabled": bool(self.runtime_override_enabled),
+            "power_dbm": self._effective_power_dbm(),
+            "read_interval_ms": self._effective_read_interval_ms(),
+            "tid_addr": self._effective_tid_addr(),
+            "tid_len": self._effective_tid_len(),
+        }
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        if not self.env.context.get("measurement_sync"):
+            raise ValidationError(_("Lane Calibration Device Tree is synchronized from Cloud."))
+        records = super().create(vals_list)
+        records._validate_node()
+        return records
+
+    def write(self, vals):
+        values = dict(vals)
+        override_fields = {
+            "runtime_override_enabled", "runtime_power_dbm",
+            "runtime_read_interval_ms", "runtime_tid_addr", "runtime_tid_len",
+        }
+        base_fields = {
+            "session_id", "source_node_id", "device_type", "server_id",
+            "controller_id", "reader_id", "parent_id", "sequence",
+            "power_dbm", "read_interval_ms", "tid_addr", "tid_len",
+            "reader_port_ids",
+        }
+        if self.env.context.get("measurement_sync"):
+            return super().write(values)
+        if self.env.context.get("measurement_runtime_override") and set(values).issubset(override_fields):
+            return super().write(values)
+        if override_fields.intersection(values):
+            raise ValidationError(_("Reader runtime overrides must be changed from Lane Calibration Device Configuration."))
+        if base_fields.intersection(values) or values:
+            raise ValidationError(_("Lane Calibration Device Tree is synchronized from Cloud."))
+        return True
+
+    def unlink(self):
+        if not self.env.context.get("measurement_sync"):
+            raise ValidationError(_("Lane Calibration Device Tree is synchronized from Cloud."))
+        return super().unlink()
 
     @api.depends(
         "device_type", "server_id.name", "server_id.status",
@@ -530,7 +743,7 @@ class NspMeasurementDeviceNode(models.Model):
 
 class NspMeasurementReaderPort(models.Model):
     _name = "nsp.measurement.reader.port"
-    _description = "NSP Measurement Reader Port"
+    _description = "NSP Lane Calibration Reader Port"
     _order = "reader_node_id, sequence, port_no, id"
     _rec_name = "display_name"
 
@@ -561,6 +774,26 @@ class NspMeasurementReaderPort(models.Model):
                 raise ValidationError(_("Reader Port must be an integer from 1 to 16."))
         return True
 
+    @api.model_create_multi
+    def create(self, vals_list):
+        if not self.env.context.get("measurement_sync"):
+            raise ValidationError(_("Lane Calibration Reader Ports are synchronized from Cloud."))
+        records = super().create(vals_list)
+        records._validate_port()
+        return records
+
+    def write(self, vals):
+        if not self.env.context.get("measurement_sync"):
+            raise ValidationError(_("Lane Calibration Reader Ports are synchronized from Cloud."))
+        result = super().write(vals)
+        self._validate_port()
+        return result
+
+    def unlink(self):
+        if not self.env.context.get("measurement_sync"):
+            raise ValidationError(_("Lane Calibration Reader Ports are synchronized from Cloud."))
+        return super().unlink()
+
     @api.constrains("port_no", "reader_node_id")
     def _check_port(self):
         for record in self:
@@ -571,7 +804,7 @@ class NspMeasurementReaderPort(models.Model):
 
 class NspMeasurementEvent(models.Model):
     _name = "nsp.measurement.event"
-    _description = "NSP Measurement Observation"
+    _description = "NSP Lane Calibration Observation"
     _rec_name = "event_uid"
     _order = "read_at desc, id desc"
 
@@ -591,6 +824,8 @@ class NspMeasurementEvent(models.Model):
     rssi_dbm = fields.Float()
     power_dbm = fields.Integer(string="Reader Power (dBm)")
     read_interval_ms = fields.Integer(string="Read Interval ms", required=True, default=200)
+    tid_addr = fields.Integer(string="TID Start Address (Words)", required=True, default=0)
+    tid_len = fields.Integer(string="TID Length (Words)", required=True, default=4)
     timeline_timestamp = fields.Char(
         string="Timestamp", compute="_compute_timeline_display", readonly=True,
     )
@@ -627,8 +862,9 @@ class NspMeasurementEvent(models.Model):
                     reader_name_by_key[(session.id, serial)] = (
                         node.reader_id.name or node.reader_id.serial_number or serial
                     )
+        revisions = sorted({revision for _session_id, revision in requested_pairs})
         all_events = self.search(
-            [("session_id", "in", session_ids)],
+            [("session_id", "in", session_ids), ("revision", "in", revisions)],
             order="session_id, revision, read_at asc, read_at_ms asc, id asc",
         )
         previous_seconds = {}
@@ -662,9 +898,11 @@ class NspMeasurementEvent(models.Model):
     _sql_constraints = [
         ("measurement_event_uid_unique", "unique(event_uid)", "Measurement Event UID must be unique."),
         ("measurement_event_port_positive", "CHECK(port_no > 0)", "Reader Port must be greater than zero."),
-        ("measurement_event_revision_positive", "CHECK(revision > 0)", "Measurement Revision must be greater than zero."),
+        ("measurement_event_revision_positive", "CHECK(revision > 0)", "Lane Calibration Revision must be greater than zero."),
         ("measurement_event_ms_range", "CHECK(read_at_ms >= 0 AND read_at_ms <= 999)", "Measurement millisecond must be between 0 and 999."),
         ("measurement_event_read_interval_range", "CHECK(read_interval_ms > 0 AND read_interval_ms <= 60000)", "Read Interval must be between 1 and 60000 ms."),
+        ("measurement_event_tid_addr_nonnegative", "CHECK(tid_addr >= 0)", "TID Start Address must not be negative."),
+        ("measurement_event_tid_len_positive", "CHECK(tid_len > 0)", "TID Length must be greater than zero."),
     ]
 
     @api.model_create_multi
@@ -677,10 +915,12 @@ class NspMeasurementEvent(models.Model):
             try:
                 vals["tid"] = normalize_raw_tid(vals.get("tid"))
             except ValueError as exc:
-                raise ValidationError(_("Measurement TID must contain hexadecimal characters only.")) from exc
+                raise ValidationError(_("Lane Calibration TID must contain hexadecimal characters only.")) from exc
             vals["revision"] = max(int(vals.get("revision") or 1), 1)
             vals["read_at_ms"] = max(0, min(int(vals.get("read_at_ms") or 0), 999))
             vals["read_interval_ms"] = max(1, min(int(vals.get("read_interval_ms") or 200), 60000))
+            vals["tid_addr"] = max(int(vals.get("tid_addr") or 0), 0)
+            vals["tid_len"] = max(int(vals.get("tid_len") or 4), 1)
             prepared.append(vals)
         return super().create(prepared)
 
@@ -704,6 +944,6 @@ class NspMeasurementEvent(models.Model):
             session = event.session_id
             key = (event.serial_number, int(event.port_no or 0))
             if key not in session._allowed_reader_port_pairs():
-                raise ValidationError(_("Measurement observation Reader Port is not part of the Lane Calibration."))
+                raise ValidationError(_("Reader Port is not part of the Lane Calibration."))
             if event.tid not in session._allowed_target_tids():
                 raise ValidationError(_("Only the active Calibration Tag may be stored in this Lane Calibration."))
