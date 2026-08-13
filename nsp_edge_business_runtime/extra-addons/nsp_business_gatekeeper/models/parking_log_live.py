@@ -19,7 +19,6 @@ class ParkingLogLiveMonitor(models.Model):
         reasons = {
             "parking_area_not_operational": _("BÃI XE TẠM NGƯNG VẬN HÀNH"),
             "missing_user_tid": _("THIẾU THẺ NGƯỜI DÙNG"),
-            "multiple_user_tags": _("PHÁT HIỆN NHIỀU THẺ NGƯỜI DÙNG"),
             "user_tag_not_assigned": _("THẺ NGƯỜI DÙNG CHƯA ĐƯỢC GÁN"),
             "unauthorized_vehicle_user": _("NGƯỜI QUÉT KHÔNG ĐƯỢC PHÉP LẤY XE"),
             "vehicle_checked_in_other_area": _("XE ĐANG Ở MỘT BÃI XE KHÁC"),

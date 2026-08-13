@@ -20,7 +20,6 @@
                 <filter string="Allowed" name="allowed" domain="[('decision','=','allowed')]"/>
                 <filter string="Denied" name="denied" domain="[('decision','=','denied')]"/>
                 <filter string="Missing User Tag" name="missing_user_tid" domain="[('reason_code','=','missing_user_tid')]"/>
-                <filter string="Multiple User Tags" name="multiple_user_tags" domain="[('reason_code','=','multiple_user_tags')]"/>
                 <filter string="Wrong Parking Area" name="vehicle_checked_in_other_area" domain="[('reason_code','=','vehicle_checked_in_other_area')]"/>
                 <filter string="Authorization Denied" name="authorization_denied"
                         domain="[('reason_code','=','unauthorized_vehicle_user')]"/>

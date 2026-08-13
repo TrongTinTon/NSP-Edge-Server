@@ -203,15 +203,19 @@ class ParkingLogBusiness(models.Model):
         final_context_denial = bool(reason_codes)
         if event_type == "check_out" and not final_context_denial:
             user_events = detections.filtered(lambda rec: bool(rec.user_id))
-            unique_users = user_events.mapped("user_id")
-            unique_tids = {event.tid for event in user_events if event.tid}
-            if len(unique_users) > 1 or len(unique_tids) > 1:
-                reason_codes.append("multiple_user_tags")
-            elif not unique_users:
+            if not user_events:
                 reason_codes.append("missing_user_tid")
             else:
-                user = unique_users[:1]
-                user_event = user_events.sorted(key=lambda rec: (rec.detected_at, rec.id))[-1:]
+                # The Detection matcher supplies the User read nearest to the
+                # Vehicle sequence completion. Re-select defensively here so the
+                # business boundary remains deterministic if a caller provides
+                # more than one supporting User event.
+                user_event = user_events.sorted(key=lambda rec: (
+                    abs((rec.detected_at - event_time).total_seconds()),
+                    rec.detected_at,
+                    rec.id,
+                ))[:1]
+                user = user_event.user_id
                 user_tid = user_event.tid
                 authorized = authorized_borrow_map
                 if authorized is False:

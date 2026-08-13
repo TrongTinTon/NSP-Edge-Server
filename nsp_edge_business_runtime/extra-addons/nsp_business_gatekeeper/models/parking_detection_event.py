@@ -8,6 +8,8 @@ from psycopg2 import IntegrityError
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
 
+from ..services.antenna_sequence_matcher import match_ordered_sequence_details
+
 
 _logger = logging.getLogger(__name__)
 
@@ -466,16 +468,30 @@ class ParkingDetectionEvent(models.Model):
     def ingest_controller_detections(self, controller, detections):
         """Accept one normalized Controller batch into the Edge working buffer.
 
-        Resolved observations become short-lived Lane candidates; meaningful
-        resolution failures become temporary error rows. Successful candidates are
-        consumed immediately after Parking business processing.
+        Known RFID observations become short-lived Lane candidates; meaningful
+        resolution failures for known TIDs become temporary error rows. Unknown TIDs
+        are ignored before persistence. Successful candidates are consumed immediately
+        after Parking business processing.
         """
         self._ensure_edge_role()
         if not isinstance(detections, list):
             raise ValidationError(_("invalid_payload"))
 
+        # Unknown TIDs are acquisition noise for Parking runtime. They have no
+        # business identity to match and must not occupy Detection Logs or trigger
+        # topology resolution. Keep invalid/inactive *known* assignments below as
+        # short-lived diagnostics because those indicate an Edge configuration issue.
+        known_detections = []
+        ignored_unknown_tid_detections = 0
+        for payload, assignment in detections:
+            tid = self.env["nsp.rfid.runtime.assignment"]._normalize_tid(payload.get("tid"))
+            if not assignment or assignment.tid != tid:
+                ignored_unknown_tid_detections += 1
+                continue
+            known_detections.append((payload, assignment))
+
         topology_cache, topology_errors, device_by_serial = self._resolve_topology_batch(
-            controller, detections
+            controller, known_detections
         )
         runtime_snapshot = self._runtime_snapshot_for_topology(topology_cache)
         touched_lane_ids = set()
@@ -483,12 +499,13 @@ class ParkingDetectionEvent(models.Model):
         error_values = []
         stats = {
             "received": len(detections),
+            "ignored_unknown_tid_detections": ignored_unknown_tid_detections,
             "candidate_records_created": 0,
             "error_records_created": 0,
             "duplicates": 0,
         }
 
-        for payload, assignment in detections:
+        for payload, assignment in known_detections:
             serial = str(payload.get("serial_number") or "").strip().upper()
             try:
                 port_no = int(payload.get("port_no") or 0)
@@ -715,7 +732,12 @@ class ParkingDetectionEvent(models.Model):
 
     @api.model
     def _build_vehicle_sequence_matches(self, lane):
-        """Match the published Antenna Sequence for each pending Vehicle TID."""
+        """Match one Lane Configuration against each Vehicle TID raw timeline.
+
+        Repeated RFID reads are interpreted inside the Lane-specific matcher.
+        The raw timeline is never collapsed before Antenna Sequence and Max
+        Duration rules are applied.
+        """
         rows = lane.antenna_sequence_ids.sorted("sequence")
         if len(rows) < 2:
             return []
@@ -739,46 +761,27 @@ class ParkingDetectionEvent(models.Model):
             events_by_tid.setdefault(event.tid, []).append(event)
 
         matches = []
-        length = len(expected_keys)
+        total_allowed = max(0.001, sum(allowed_durations[1:]))
         for tid, raw_events in events_by_tid.items():
-            collapsed = []
-            for event in raw_events:
-                key = (event.reader_id.id, int(event.port_no or 0))
-                if collapsed:
-                    previous = (
-                        collapsed[-1].reader_id.id, int(collapsed[-1].port_no or 0)
-                    )
-                    if previous == key:
-                        continue
-                collapsed.append(event)
-            if len(collapsed) < length:
-                continue
-            for offset in range(0, len(collapsed) - length + 1):
-                window = collapsed[offset:offset + length]
-                actual_keys = [
-                    (event.reader_id.id, int(event.port_no or 0)) for event in window
-                ]
-                if actual_keys != expected_keys:
-                    continue
-                total_allowed = 0.0
-                valid = True
-                for index in range(1, length):
-                    allowed = allowed_durations[index]
-                    gap = (
-                        window[index].detected_at - window[index - 1].detected_at
-                    ).total_seconds()
-                    if gap < 0 or gap > allowed:
-                        valid = False
-                        break
-                    total_allowed += allowed
-                if valid:
-                    matches.append({
-                        "tid": tid,
-                        "duration_seconds": max(0.001, total_allowed),
-                        "start_at": window[0].detected_at,
-                        "end_at": window[-1].detected_at,
-                        "events": self.browse([event.id for event in window]),
-                    })
+            match_details = match_ordered_sequence_details(
+                raw_events,
+                expected_keys,
+                allowed_durations,
+                key_of=lambda event: (event.reader_id.id, int(event.port_no or 0)),
+                time_of=lambda event: event.detected_at,
+            )
+            for detail in match_details:
+                path = detail["path"]
+                consumed_events = detail["consumed_events"]
+                matches.append({
+                    "tid": tid,
+                    "duration_seconds": total_allowed,
+                    "start_at": path[0].detected_at,
+                    "end_at": path[-1].detected_at,
+                    "events": self.browse([event.id for event in path]),
+                    "consume_events": self.browse([event.id for event in consumed_events]),
+                })
+
         matches.sort(key=lambda item: (item["end_at"], item["start_at"], item["tid"]))
         return matches
 
@@ -791,8 +794,13 @@ class ParkingDetectionEvent(models.Model):
         events = events.exists()
         if not events:
             return 0
-        event_uids = sorted({uid for uid in events.mapped("event_uid") if uid})
         vehicle_events = (vehicle_events or events).exists().filtered("vehicle_id")
+        # ``vehicle_events`` can include repeated reads that the Lane matcher
+        # intentionally ignored/replaced while constructing the successful path.
+        # Include their physical event UIDs as well so sibling Lane fan-out copies
+        # are removed together with the winning traversal.
+        delete_events = (events | vehicle_events).exists()
+        event_uids = sorted({uid for uid in delete_events.mapped("event_uid") if uid})
         vehicle_tids = {tid for tid in vehicle_events.mapped("tid") if tid}
         start_at = min(vehicle_events.mapped("detected_at")) if vehicle_events else False
         end_at = max(vehicle_events.mapped("detected_at")) if vehicle_events else False
@@ -830,6 +838,8 @@ class ParkingDetectionEvent(models.Model):
         movement_state,
         user_events=False,
         authorized_borrow_map=False,
+        consume_vehicle_events=False,
+        consume_user_events=False,
     ):
         event_type = movement_state.get("event_type")
         supporting_users = user_events or self.browse()
@@ -839,7 +849,10 @@ class ParkingDetectionEvent(models.Model):
             movement_state=movement_state,
             authorized_borrow_map=authorized_borrow_map,
         )
-        self._consume_detection_group(group, vehicle_events=vehicle_events)
+        self._consume_detection_group(
+            group | (consume_user_events or self.browse()),
+            vehicle_events=consume_vehicle_events or vehicle_events,
+        )
         return parking_log
 
     @api.model
@@ -868,6 +881,7 @@ class ParkingDetectionEvent(models.Model):
             if tid in blocked_tids:
                 continue
             source_events = match["events"].exists()
+            consume_vehicle_events = match.get("consume_events", source_events).exists()
             if not source_events:
                 continue
 
@@ -888,6 +902,7 @@ class ParkingDetectionEvent(models.Model):
             # rows are physically deleted by the winning movement instead of being
             # retained as a processed technical history.
             source_events = source_events.exists()
+            consume_vehicle_events = consume_vehicle_events.exists()
             source_events.invalidate_recordset(["error_code"])
             movement_events = source_events.filtered(lambda rec: not rec.error_code)
             if not movement_events or len(movement_events) != len(source_events):
@@ -904,18 +919,23 @@ class ParkingDetectionEvent(models.Model):
                 ("event_time", "<=", match["end_at"]),
             ], order="event_time desc, id desc", limit=1)
             if recent:
-                self._consume_detection_group(movement_events)
+                self._consume_detection_group(
+                    movement_events, vehicle_events=consume_vehicle_events
+                )
                 continue
 
             movement_state = ParkingLog._resolve_vehicle_movement(
                 vehicle, match["end_at"], lane.parking_area_id
             )
             if movement_state.get("action") == "ignore":
-                self._consume_detection_group(movement_events)
+                self._consume_detection_group(
+                    movement_events, vehicle_events=consume_vehicle_events
+                )
                 continue
 
             event_type = movement_state.get("event_type")
             matched_user_events = self.browse()
+            consume_user_events = self.browse()
             authorized_borrow_map = False
             if event_type == "check_out" and movement_state.get("action") != "deny":
                 deadline = match["end_at"] + timedelta(seconds=duration)
@@ -923,22 +943,28 @@ class ParkingDetectionEvent(models.Model):
                 candidates = self._user_candidates_from_pool(
                     user_events, match["end_at"], duration, consumed_user_ids
                 )
-                candidate_users = candidates.mapped("user_id")
-                authorized_borrow_map = ParkingLog._authorized_user_borrow_map(
-                    vehicle, match["end_at"]
-                )
-                has_one_authorized_identity = (
-                    len(candidate_users) == 1 and candidate_users.id in authorized_borrow_map
-                )
-                has_ambiguous_identities = len(candidate_users) > 1
-                if not (
-                    has_one_authorized_identity
-                    or has_ambiguous_identities
-                    or deadline_reached
-                ):
-                    blocked_tids.add(tid)
-                    continue
-                matched_user_events = candidates
+                # Gatekeeper operating rule: one Vehicle + one User may occupy a
+                # Lane read zone at a time. As soon as a User read exists, select
+                # the read nearest to Vehicle sequence completion and resolve
+                # Owner/Borrower authorization immediately. Only the absence of a
+                # User read keeps the Vehicle pending until the Lane window closes.
+                nearest_user_event = candidates[:1]
+                if not nearest_user_event:
+                    if not deadline_reached:
+                        blocked_tids.add(tid)
+                        continue
+                else:
+                    matched_user_events = nearest_user_event
+                    selected_user = nearest_user_event.user_id
+                    # Consume all repeated reads of the selected User inside this
+                    # crossing window so they cannot leak into the next Vehicle.
+                    # Reads belonging to any other User remain untouched.
+                    consume_user_events = candidates.filtered(
+                        lambda event: event.user_id.id == selected_user.id
+                    )
+                    authorized_borrow_map = ParkingLog._authorized_user_borrow_map(
+                        vehicle, match["end_at"]
+                    )
 
             try:
                 with self.env.cr.savepoint():
@@ -947,18 +973,27 @@ class ParkingDetectionEvent(models.Model):
                         movement_state,
                         user_events=matched_user_events,
                         authorized_borrow_map=authorized_borrow_map,
+                        consume_vehicle_events=consume_vehicle_events,
+                        consume_user_events=consume_user_events,
                     )
                     logs |= parking_log
-                    consumed_user_ids.update(matched_user_events.ids)
+                    consumed_user_ids.update(consume_user_events.ids)
             except Exception:
                 _logger.exception(
                     "Parking Antenna Sequence processing failed: lane=%s event_type=%s ids=%s",
                     lane.id, event_type, movement_events.ids,
                 )
-                movement_events.exists().write({"error_code": "processing_error"})
-                if matched_user_events:
-                    matched_user_events.exists().write({"error_code": "processing_error"})
-                    consumed_user_ids.update(matched_user_events.ids)
+                failed_vehicle_events = (movement_events | consume_vehicle_events).exists().filtered(
+                    lambda rec: not rec.error_code
+                )
+                if failed_vehicle_events:
+                    failed_vehicle_events.write({"error_code": "processing_error"})
+                failed_user_events = consume_user_events.exists().filtered(
+                    lambda rec: not rec.error_code
+                )
+                if failed_user_events:
+                    failed_user_events.write({"error_code": "processing_error"})
+                    consumed_user_ids.update(failed_user_events.ids)
 
         if finalize_expired:
             self._expire_stale_vehicle_events(lane, now)

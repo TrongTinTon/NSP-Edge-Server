@@ -46,7 +46,10 @@ class ParkingLog(models.Model):
     )
     reason_code = fields.Selection([
         ("missing_user_tid", "Missing User RFID Tag"),
-        ("multiple_user_tags", "Multiple User RFID Tags"),
+        # Historical compatibility only. Runtime no longer emits this reason from
+        # 19.0.10.46.0 onward; keeping the value prevents old immutable logs from
+        # becoming unreadable during module upgrade.
+        ("multiple_user_tags", "Multiple User RFID Tags (Legacy)"),
         ("user_tag_not_assigned", "User Tag Not Assigned (Legacy)"),
         ("unauthorized_vehicle_user", "Unauthorized Vehicle User"),
         ("vehicle_checked_in_other_area", "Vehicle Checked In at Another Parking Area"),

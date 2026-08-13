@@ -1306,9 +1306,9 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         assignments = RuntimeAssignment.search([
             ("tid", "in", list(tids)),
         ]) if tids else RuntimeAssignment.browse()
-        # Do not filter inactive/unresolved assignments out of the transport batch.
-        # Edge classifies them once: resolvable observations enter the short-lived
-        # matcher buffer; meaningful failures become temporary structured errors.
+        # Preserve all transport-valid observations in the in-memory batch. The
+        # Detection model drops unknown TIDs before topology resolution/persistence,
+        # while invalid/inactive known assignments remain short-lived diagnostics.
         assignment_by_tid = {assignment.tid: assignment for assignment in assignments}
         batch = [
             (payload, assignment_by_tid.get(payload["tid"], RuntimeAssignment.browse()))
@@ -1322,6 +1322,7 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 )
                 if batch else {
                     "received": 0,
+                    "ignored_unknown_tid_detections": 0,
                     "candidate_records_created": 0,
                     "error_records_created": 0,
                     "duplicates": 0,
