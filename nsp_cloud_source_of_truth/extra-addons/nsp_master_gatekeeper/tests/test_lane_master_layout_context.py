@@ -14,7 +14,7 @@ class TestLaneMasterLayoutContext(TransactionCase):
         for field_name in (
             "parking_area_id", "edge_server_id", "controller_id",
             "reader_config_ids", "antenna_sequence_ids",
-            "tolerance_type", "tolerance_value", "setup_state",
+            "setup_state",
         ):
             self.assertNotIn(field_name, Lane._fields)
 
@@ -23,11 +23,13 @@ class TestLaneMasterLayoutContext(TransactionCase):
         for field_name in (
             "parking_area_id", "lane_id", "edge_server_id", "controller_id",
             "reader_config_ids", "antenna_sequence_ids",
-            "tolerance_type", "tolerance_value", "setup_state",
+            "setup_state",
         ):
             self.assertIn(field_name, LayoutLane._fields)
         self.assertEqual(LayoutLane._fields["lane_id"].comodel_name, "nsp.parking.lane")
         self.assertEqual(LayoutLane._fields["parking_area_id"].comodel_name, "nsp.parking.area")
+        self.assertNotIn("tolerance_type", LayoutLane._fields)
+        self.assertNotIn("tolerance_value", LayoutLane._fields)
 
     def test_parking_layout_references_contextual_layout_lanes(self):
         Area = self.env["nsp.parking.area"]
@@ -73,3 +75,17 @@ def test_business_terminology_distinguishes_lane_master_from_lane_configuration(
     assert '<list string="Lanes"' in lane_view
     assert '<h3>Parking Lanes</h3>' not in parking_view
     assert 'string="Parking Lanes"' not in parking_model
+
+
+def test_runtime_contract_has_no_timing_tolerance():
+    root = Path(__file__).resolve().parents[1]
+    parking = (root / "models/parking_config.py").read_text(encoding="utf-8")
+    sync = (root / "models/sync_api_service.py").read_text(encoding="utf-8")
+    calibration = (root / "models/lane_calibration/calibration_timeline.py").read_text(encoding="utf-8")
+    views = (root / "views/calibration_result_views.xml").read_text(encoding="utf-8")
+    assert "timing_tolerance" not in parking
+    assert "timing_tolerance" not in sync
+    assert "tolerance_type" not in parking
+    assert "tolerance_value" not in parking
+    assert "tolerance_percent" not in calibration
+    assert "tolerance_percent" not in views

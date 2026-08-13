@@ -476,7 +476,6 @@ class NspMeasurementSessionCalibrationResult(models.Model):
             "revision": self.revision,
             "reference_tid": self.target_line_ids[:1].tid,
             "accepted_pass_count": total_samples,
-            "tolerance_percent": 30.0,
             "line_ids": values,
         })
         return result.action_open_form()
@@ -638,7 +637,6 @@ class NspMeasurementResult(models.Model):
     accepted_pass_count = fields.Integer(readonly=True)
     accepted_at = fields.Datetime(readonly=True)
     accepted_by_id = fields.Many2one("res.users", readonly=True)
-    tolerance_percent = fields.Float(default=30.0, required=True)
     line_ids = fields.One2many("nsp.measurement.result.line", "result_id", string="Accepted Timeline")
     total_duration = fields.Float(compute="_compute_total_duration", digits=(8, 3))
     path_display = fields.Char(compute="_compute_total_duration")
@@ -700,7 +698,6 @@ class NspMeasurementResult(models.Model):
             "path_display": self.path_display or "",
             "total_duration": round(float(self.total_duration or 0.0), 3),
             "accepted_pass_count": self.accepted_pass_count,
-            "tolerance_percent": float(self.tolerance_percent or 0.0),
             "accepted_at": fields.Datetime.to_string(self.accepted_at) if self.accepted_at else None,
             "reference_tid": self.reference_tid or "",
             "lines": [line._workspace_payload() for line in self.line_ids.sorted("sequence")],

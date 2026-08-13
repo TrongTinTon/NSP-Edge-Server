@@ -34,3 +34,24 @@
         display: inline;
     }
 }
+
+.nsp-parking-layout__lanes-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin: 24px 0 12px;
+}
+
+.nsp-parking-layout__lanes-header h3 {
+    margin: 0 0 3px;
+    font-size: 18px;
+    font-weight: 750;
+}
+
+@media (max-width: 900px) {
+    .nsp-parking-layout__lanes-header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+}

@@ -288,10 +288,6 @@ class NspParkingArea(models.Model):
                 "server_code": lane.edge_server_id.edge_server_code or "",
                 "controller_code": lane.controller_id.controller_id or "",
                 "antenna_sequence": antenna_sequence,
-                "timing_tolerance": {
-                    "type": lane.tolerance_type or "percent",
-                    "value": float(lane.tolerance_value or 0.0),
-                },
                 "readers": [
                     {
                         **reader_payload,
@@ -339,7 +335,7 @@ class NspParkingArea(models.Model):
             raise ValidationError(_("Published Lane Configurations must be an array."))
         allowed_lane = {
             "lane_code", "lane_name", "server_code", "controller_code",
-            "antenna_sequence", "timing_tolerance", "readers",
+            "antenna_sequence", "readers",
         }
         required_lane = allowed_lane
         for lane in lanes:
@@ -756,11 +752,6 @@ class NspParkingLayoutLane(models.Model):
         string="Applied Reader Configuration", copy=True,
     )
     reader_config_count = fields.Integer(string="Configured Readers", compute="_compute_reader_config_count")
-    tolerance_type = fields.Selection(
-        [("percent", "Percentage (%)"), ("seconds", "Seconds")],
-        string="Tolerance Type", default="percent", required=True,
-    )
-    tolerance_value = fields.Float(string="Tolerance Value", default=30.0, required=True)
     total_path_duration = fields.Float(string="Total Path Duration", compute="_compute_total_path_duration", digits=(8, 3))
     parking_area_state = fields.Selection(related="parking_area_id.state", string="Layout State", readonly=True)
     configuration_state = fields.Selection(
@@ -774,15 +765,11 @@ class NspParkingLayoutLane(models.Model):
             "parking_layout_lane_unique", "unique(parking_area_id, lane_id)",
             "A Lane can be referenced only once in one Parking Layout.",
         ),
-        (
-            "parking_layout_lane_tolerance_nonnegative", "CHECK(tolerance_value >= 0)",
-            "Timing Tolerance cannot be negative.",
-        ),
     ]
 
     _DIRECT_CONFIGURATION_FIELDS = frozenset({
         "edge_server_id", "controller_id", "reader_config_ids",
-        "antenna_sequence_ids", "tolerance_type", "tolerance_value",
+        "antenna_sequence_ids",
     })
 
     @api.constrains("parking_area_id", "lane_id")

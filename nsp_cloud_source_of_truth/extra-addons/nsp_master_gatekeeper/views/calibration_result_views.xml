@@ -21,7 +21,6 @@
                         <group>
                             <field name="path_display" readonly="1"/>
                             <field name="total_duration" readonly="1"/>
-                            <field name="tolerance_percent"/>
                             <field name="accepted_at" readonly="1"/>
                         </group>
                     </group>

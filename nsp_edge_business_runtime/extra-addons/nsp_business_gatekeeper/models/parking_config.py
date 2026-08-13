@@ -615,14 +615,30 @@ class NspParkingLayoutLaneReaderConfig(models.Model):
 
     def _compute_reader_status(self):
         Observation = self.env["nsp.reader.observation"].sudo()
+        controller_ids = set()
+        serials = set()
         for config in self:
-            controller = config.layout_lane_id.controller_id
+            controller_id = config.layout_lane_id.controller_id.id
             serial = str(config.reader_id.serial_number or "").strip().upper()
-            observation = Observation.search([
-                ("controller_id", "=", controller.id),
-                ("serial_number", "=", serial),
-            ], limit=1) if controller and serial else Observation.browse()
-            config.reader_status = observation.status if observation else "offline"
+            if controller_id and serial:
+                controller_ids.add(controller_id)
+                serials.add(serial)
+
+        status_by_key = {}
+        if controller_ids and serials:
+            observations = Observation.search([
+                ("controller_id", "in", list(controller_ids)),
+                ("serial_number", "in", list(serials)),
+            ])
+            status_by_key = {
+                (row.controller_id.id, str(row.serial_number or "").strip().upper()): row.status
+                for row in observations
+            }
+
+        for config in self:
+            controller_id = config.layout_lane_id.controller_id.id
+            serial = str(config.reader_id.serial_number or "").strip().upper()
+            config.reader_status = status_by_key.get((controller_id, serial), "offline")
 
     @api.depends("port_ids.port_no")
     def _compute_port_summary(self):

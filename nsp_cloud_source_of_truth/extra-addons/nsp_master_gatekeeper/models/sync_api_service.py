@@ -645,9 +645,6 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         if missing_readers:
             raise ValueError("published_sequence_reader_missing:%s" % ",".join(missing_readers))
 
-        tolerance = lane.get("timing_tolerance") or {}
-        if not isinstance(tolerance, dict):
-            raise ValueError("published_timing_tolerance_invalid:%s" % lane_code)
         return ({
             "lane_code": lane_code,
             "lane_name": str(lane.get("lane_name") or lane_code).strip(),
@@ -655,10 +652,6 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "controller_code": controller_code,
             "readers": readers,
             "antenna_sequence": runtime_sequence,
-            "timing_tolerance": {
-                "type": str(tolerance.get("type") or "percent").strip().lower(),
-                "value": float(tolerance.get("value") or 0.0),
-            },
         }, readers, server_code, controller_code)
 
     @api.model

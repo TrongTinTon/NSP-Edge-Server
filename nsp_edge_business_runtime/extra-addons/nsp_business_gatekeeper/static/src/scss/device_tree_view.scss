@@ -139,15 +139,30 @@
     }
 
     &__dot {
+        position: relative;
+        display: inline-block;
         width: 8px;
         height: 8px;
         flex: 0 0 8px;
         border-radius: 50%;
-        background: var(--nsp-tree-gray);
+        color: var(--nsp-tree-gray);
+        background: currentColor;
 
-        &.is-online { background: var(--nsp-tree-green); }
-        &.is-offline { background: var(--nsp-tree-red); }
-        &.is-unknown { background: var(--nsp-tree-gray); }
+        &::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            z-index: -1;
+            border-radius: inherit;
+            background: currentColor;
+            opacity: .28;
+            animation: nsp-device-tree-dot-pulse 1.8s ease-out infinite;
+        }
+
+        &.is-online { color: var(--nsp-tree-green); }
+        &.is-degraded { color: #D97706; }
+        &.is-offline { color: var(--nsp-tree-red); }
+        &.is-unknown { color: var(--nsp-tree-gray); }
     }
 
     &__config-panel { background: #F9FAFB; }
@@ -193,6 +208,7 @@
     &__operational {
         font-weight: 600;
         &.is-online { color: #15803D; }
+        &.is-degraded { color: #B45309; }
         &.is-offline { color: #B91C1C; }
         &.is-unknown { color: var(--nsp-tree-muted); }
     }
@@ -384,130 +400,169 @@
     }
 }
 
-.nsp-device-mapping-dialog {
-    padding: 4px 2px;
-
-    &__hint {
-        margin: 0 0 14px;
-        color: #6B7280;
-        font-size: 12px;
-        line-height: 1.5;
-    }
-
-    &__fields {
-        display: grid;
-        gap: 14px;
-
-        label > span {
-            display: block;
-            margin-bottom: 6px;
-            color: #374151;
-            font-size: 12px;
-            font-weight: 650;
-        }
-    }
-}
-
-/* Parking Lane Antenna Sequence: editor left, live preview right. */
+/* Parking Lane Antenna Sequence: compact editor + published visual preview. */
 .o_nsp_parking_lane_form {
     .nsp-parking-sequence-grid {
         display: grid;
-        grid-template-columns: minmax(0, 1.2fr) minmax(300px, .8fr);
-        gap: 24px;
+        grid-template-columns: minmax(0, 1fr) minmax(420px, 1.6fr);
+        gap: 16px;
         align-items: start;
     }
 
     .nsp-parking-sequence-grid__editor,
-    .nsp-parking-sequence-grid__preview {
-        min-width: 0;
-    }
-
-    .nsp-parking-sequence-grid__preview {
-        min-height: 330px;
-        padding-left: 24px;
-        border-left: 1px solid #E5E7EB;
-    }
+    .nsp-parking-sequence-grid__preview { min-width: 0; }
 
     .nsp-parking-sequence-grid__preview-head {
-        margin-bottom: 16px;
-
-        h4 {
-            margin: 0 0 4px;
-            color: #111827;
-            font-size: 14px;
-            font-weight: 700;
-        }
-
-        p {
-            margin: 0;
-            color: #6B7280;
-            font-size: 11px;
-            line-height: 1.45;
-        }
+        margin-bottom: 12px;
+        h4 { margin: 0 0 4px; color: #111827; font-size: 14px; font-weight: 700; }
+        p { margin: 0; color: #6B7280; font-size: 11px; line-height: 1.45; }
     }
 
-    .nsp-lane-preview {
+    .nsp-parking-sequence-grid__preview-body {
+        display: grid;
+        grid-template-columns: minmax(260px, 1.15fr) minmax(180px, .85fr);
+        gap: 16px;
+        align-items: stretch;
+    }
+
+    .nsp-parking-sequence-grid__preview-sequence,
+    .nsp-parking-sequence-grid__preview-illustration {
+        min-width: 0;
+        padding: 14px;
+        border: 1px solid #E5E7EB;
+        border-radius: 11px;
+        background: #fff;
+    }
+
+    .nsp-parking-sequence-grid__preview-illustration {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .nsp-parking-sequence-grid__vehicle-figure {
         display: flex;
         flex-direction: column;
         align-items: center;
+        gap: 10px;
         width: 100%;
+        img { display: block; width: 100%; max-width: 240px; height: auto; object-fit: contain; }
     }
 
-    .nsp-lane-preview__card {
+    .nsp-parking-sequence-grid__vehicle-caption {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        color: #6B7280;
+        font-size: 10px;
+        strong { color: #374151; font-size: 11px; }
+    }
+
+    .nsp-lane-preview__timeline { width: 100%; }
+    .nsp-lane-preview__timeline-title {
+        margin: 0 0 8px 2px;
+        color: #9CA3AF;
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: .08em;
+    }
+
+    .nsp-lane-preview__step-row {
+        display: grid;
+        grid-template-columns: 34px minmax(0, 1fr);
+        gap: 8px;
+        align-items: center;
+    }
+
+    .nsp-lane-preview__rail-cell { display: flex; justify-content: center; }
+    .nsp-lane-preview__step-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        background: #2563EB;
+        color: #fff;
+        font-size: 11px;
+        font-weight: 800;
+    }
+
+    .nsp-lane-preview__antenna-card {
         display: flex;
         align-items: center;
-        gap: 11px;
-        width: 100%;
-        min-height: 60px;
-        padding: 11px 13px;
+        gap: 10px;
+        min-height: 54px;
+        padding: 10px 12px;
         border: 1px solid #E5E7EB;
         border-radius: 9px;
         background: #fff;
     }
 
-    .nsp-lane-preview__index {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
+    .nsp-lane-preview__signal {
+        position: relative;
         width: 28px;
         height: 28px;
         flex: 0 0 28px;
+    }
+    .nsp-lane-preview__signal-ring {
+        position: absolute;
+        inset: 50% auto auto 50%;
+        border: 1px solid #60A5FA;
+        border-radius: 50%;
+        transform: translate(-50%, -50%);
+    }
+    .nsp-lane-preview__signal-ring--1 { width: 12px; height: 12px; }
+    .nsp-lane-preview__signal-ring--2 { width: 20px; height: 20px; opacity: .7; }
+    .nsp-lane-preview__signal-ring--3 { width: 28px; height: 28px; opacity: .4; }
+    .nsp-lane-preview__signal-dot {
+        position: absolute;
+        top: 50%; left: 50%;
+        width: 5px; height: 5px;
         border-radius: 50%;
         background: #2563EB;
-        color: #fff;
-        font-size: 12px;
+        transform: translate(-50%, -50%);
+    }
+
+    .nsp-lane-preview__antenna-info { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+    .nsp-lane-preview__antenna-badge {
+        display: inline-flex;
+        width: fit-content;
+        max-width: 100%;
+        padding: 3px 8px;
+        border: 1px solid #DBEAFE;
+        border-radius: 999px;
+        background: #EFF6FF;
+        color: #1D4ED8;
+        font-size: 10px;
         font-weight: 800;
     }
-
-    .nsp-lane-preview__body {
-        min-width: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-
-        strong {
-            overflow: hidden;
-            color: #111827;
-            font-size: 12px;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        span {
-            color: #6B7280;
-            font-size: 11px;
-        }
+    .nsp-lane-preview__reader-name {
+        overflow: hidden;
+        color: #374151;
+        font-size: 11px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
+    .nsp-lane-preview__reader-label { margin-right: 4px; color: #9CA3AF; }
 
-    .nsp-lane-preview__connector {
-        min-height: 50px;
+    .nsp-lane-preview__transition-row {
+        display: grid;
+        grid-template-columns: 34px minmax(0, 1fr);
+        gap: 8px;
+        min-height: 42px;
+    }
+    .nsp-lane-preview__transition-marker {
+        position: relative;
         display: flex;
-        flex-direction: column;
-        align-items: center;
         justify-content: center;
+        span { width: 1px; height: 100%; background: #CBD5E1; }
     }
-
+    .nsp-lane-preview__transition-content { display: flex; align-items: center; }
     .nsp-lane-preview__duration {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
         padding: 3px 8px;
         border: 1px solid #E5E7EB;
         border-radius: 999px;
@@ -516,13 +571,7 @@
         font-size: 10px;
         font-weight: 650;
     }
-
-    .nsp-lane-preview__arrow {
-        margin-top: 4px;
-        color: #9CA3AF;
-        font-size: 14px;
-    }
-
+    .nsp-lane-preview__timeline-end { margin-left: 8px; color: #9CA3AF; font-size: 14px; }
     .nsp-lane-preview__empty {
         min-height: 220px;
         display: flex;
@@ -538,20 +587,14 @@
 }
 
 @media (max-width: 1100px) {
-    .o_nsp_parking_lane_form .nsp-parking-sequence-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .o_nsp_parking_lane_form .nsp-parking-sequence-grid__preview {
-        padding-top: 18px;
-        padding-left: 0;
-        border-top: 1px solid #E5E7EB;
-        border-left: 0;
-    }
+    .o_nsp_parking_lane_form .nsp-parking-sequence-grid { grid-template-columns: 1fr; }
 }
 
+@media (max-width: 760px) {
+    .o_nsp_parking_lane_form .nsp-parking-sequence-grid__preview-body { grid-template-columns: 1fr; }
+}
 
-/* Explicit Reader Configuration view/edit mode. */
+/* Read-only Edge presentation shared with the Master Device Tree. */
 .nsp-device-tree {
     &__section-title-line {
         display: flex;
@@ -572,104 +615,22 @@
         font-size: 10px;
         font-weight: 700;
         line-height: 1;
-
-        &.is-edit {
-            border-color: #BFDBFE;
-            background: var(--nsp-tree-primary-soft);
-            color: var(--nsp-tree-primary);
-        }
     }
 
-    &__edit-button {
-        white-space: nowrap;
+    &__antenna-badges {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        min-height: 30px;
     }
 }
 
-/* Hierarchy-native actions: add/edit/remove are attached to the node they affect. */
-.nsp-device-tree {
-    &__add-node {
-        width: 100%;
-        min-height: 34px;
-        margin: 0 0 6px;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 6px 10px;
-        border: 1px dashed #CBD5E1;
-        border-radius: 8px;
-        background: #fff;
-        color: var(--nsp-tree-primary);
-        font-size: 12px;
-        font-weight: 600;
-        text-align: left;
-
-        &:hover {
-            background: var(--nsp-tree-primary-soft);
-            border-color: #93C5FD;
-        }
-    }
-
-    &__row--group > &__group-main {
-        min-width: 0;
-    }
-
-    &__row--group > &__row-actions {
-        margin-left: auto;
-    }
+@keyframes nsp-device-tree-dot-pulse {
+    0% { transform: scale(1); opacity: .28; }
+    72%, 100% { transform: scale(3); opacity: 0; }
 }
 
-
-.nsp-device-tree {
-    &__ports-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        margin-bottom: 8px;
-
-        label { margin: 0; }
-    }
-
-    &__ports-list {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-    }
-
-    &__port-row {
-        min-height: 34px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-        padding: 5px 8px;
-        border: 1px solid var(--nsp-tree-border);
-        border-radius: 7px;
-        background: #fff;
-    }
-
-    &__port-chip {
-        font-size: 12px;
-        font-weight: 700;
-    }
-
-    &__port-actions {
-        display: flex;
-        gap: 4px;
-    }
-
-    &__port-edit {
-        width: 100%;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-
-        input { max-width: 90px; }
-    }
-
-    &__ports-empty {
-        padding: 8px 0;
-        color: var(--nsp-tree-muted);
-        font-size: 11px;
-    }
+@media (prefers-reduced-motion: reduce) {
+    .nsp-device-tree__dot::after { animation: none; opacity: 0; }
 }
