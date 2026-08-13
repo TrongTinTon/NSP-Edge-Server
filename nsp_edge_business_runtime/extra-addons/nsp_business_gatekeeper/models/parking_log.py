@@ -55,7 +55,7 @@ class ParkingLog(models.Model):
         ("vehicle_not_found", "Vehicle Not Found (Legacy)"),
         ("check_out_without_check_in", "Check-out Without Check-in (Legacy)"),
         ("unknown", "Unknown"),
-    ], string="Decision Reason", index=True, copy=False)
+    ], string="Decision Reason", copy=False)
     # Direct contextual FKs are intentionally retained. They avoid joins on the
     # hottest history queries and preserve stable business identity.
     parking_area_id = fields.Many2one(
@@ -97,15 +97,16 @@ class ParkingLog(models.Model):
         string="Source Detections", readonly=True,
     )
 
-    parking_area_display = fields.Char(string="Parking Area", compute="_compute_display_values")
-    lane_display = fields.Char(string="Lane", compute="_compute_display_values")
-    vehicle_display = fields.Char(string="Vehicle", compute="_compute_display_values")
+    vehicle_display = fields.Char(string="Vehicle", compute="_compute_vehicle_display")
 
     _sql_constraints = [
         ("log_uid_unique", "unique(log_uid)", "Parking Log UID must be unique."),
     ]
 
     def init(self):
+        self.env.cr.execute(
+            "DROP INDEX IF EXISTS nsp_parking_log_reason_code_index"
+        )
         # Latest allowed movement is the hot path for Vehicle continuity.
         self.env.cr.execute(
             """
@@ -149,23 +150,13 @@ class ParkingLog(models.Model):
                     "Parking Log Lane must match the Lane Configuration Lane Master."
                 ))
 
-    @api.depends(
-        "parking_area_id", "parking_area_id.name",
-        "layout_lane_id", "layout_lane_id.parking_area_id",
-        "lane_id", "lane_id.name",
-        "vehicle_id", "vehicle_id.license_plate", "vehicle_tid",
-    )
-    def _compute_display_values(self):
-        for rec in self:
-            area = rec.parking_area_id or (
-                rec.layout_lane_id.parking_area_id if rec.layout_lane_id else False
-            )
-            rec.parking_area_display = area.name if area else "-"
-            rec.lane_display = rec.lane_id.display_name if rec.lane_id else "-"
-            rec.vehicle_display = (
-                (rec.vehicle_id.license_plate if rec.vehicle_id else "")
-                or (rec.vehicle_id.display_name if rec.vehicle_id else "")
-                or rec.vehicle_tid
+    @api.depends("vehicle_id", "vehicle_id.license_plate", "vehicle_tid")
+    def _compute_vehicle_display(self):
+        for record in self:
+            record.vehicle_display = (
+                (record.vehicle_id.license_plate if record.vehicle_id else "")
+                or (record.vehicle_id.display_name if record.vehicle_id else "")
+                or record.vehicle_tid
                 or "-"
             )
 

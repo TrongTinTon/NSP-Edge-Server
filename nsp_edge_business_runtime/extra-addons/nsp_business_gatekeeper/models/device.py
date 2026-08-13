@@ -1,6 +1,4 @@
 # -*- coding: utf-8 -*-
-import json
-
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
 from odoo.addons.nsp_core.utils import new_management_code

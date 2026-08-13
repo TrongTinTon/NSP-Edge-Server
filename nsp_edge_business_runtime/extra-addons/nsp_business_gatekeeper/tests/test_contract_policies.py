@@ -89,9 +89,11 @@ class TestGatekeeperContractPolicies(TransactionCase):
         )
         for contextual in (
             "edge_server_id", "controller_id", "reader_config_ids",
-            "antenna_sequence_ids", "tolerance_type", "tolerance_value",
+            "antenna_sequence_ids",
         ):
             self.assertIn(contextual, LayoutLane._fields)
+        self.assertNotIn("tolerance_type", LayoutLane._fields)
+        self.assertNotIn("tolerance_value", LayoutLane._fields)
 
     def test_device_configuration_owns_reader_ports(self):
         ReaderConfig = self.env["nsp.parking.layout.lane.reader.config"]
@@ -102,18 +104,43 @@ class TestGatekeeperContractPolicies(TransactionCase):
             "nsp.parking.layout.lane.reader.port",
         )
         self.assertEqual(
-            ReaderPort._fields["layout_lane_id"].comodel_name,
-            "nsp.parking.layout.lane",
+            ReaderPort._fields["reader_config_id"].comodel_name,
+            "nsp.parking.layout.lane.reader.config",
         )
+        self.assertNotIn("layout_lane_id", ReaderPort._fields)
+        self.assertNotIn("reader_id", ReaderPort._fields)
         self.assertEqual(
             Sequence._fields["layout_lane_id"].comodel_name,
             "nsp.parking.layout.lane",
         )
+        self.assertNotIn("cumulative_time", Sequence._fields)
+        self.assertNotIn("is_first_point", Sequence._fields)
+
+    def test_lane_calibration_keeps_only_runtime_fields(self):
+        Session = self.env["nsp.measurement.session"]
+        Target = self.env["nsp.measurement.target.line"]
+        ReaderConfig = self.env["nsp.parking.layout.lane.reader.config"]
+        Parking = self.env["nsp.parking.area"]
+
+        for obsolete in (
+            "target_count", "target_tag_count", "reader_count", "controller_ids",
+            "controller_count", "event_count", "live_dashboard",
+            "is_cloud_deployment", "applied_at",
+        ):
+            self.assertNotIn(obsolete, Session._fields)
+        for obsolete in ("vehicle_id", "vehicle_tid", "detection_state", "detection_count"):
+            self.assertNotIn(obsolete, Target._fields)
+        for obsolete in ("source_type", "source_revision"):
+            self.assertNotIn(obsolete, ReaderConfig._fields)
+        for obsolete in ("is_published", "whitelist_count", "configuration_summary"):
+            self.assertNotIn(obsolete, Parking._fields)
 
     def test_parking_runtime_history_keeps_master_and_context_identity(self):
         Detection = self.env["nsp.parking.detection.event"]
         ParkingLog = self.env["nsp.parking.log"]
         self.assertEqual(Detection._fields["lane_id"].comodel_name, "nsp.parking.lane")
+        self.assertFalse(Detection._fields["lane_id"].store)
+        self.assertFalse(Detection._fields["error_message"].store)
         self.assertEqual(
             Detection._fields["layout_lane_id"].comodel_name,
             "nsp.parking.layout.lane",
@@ -216,8 +243,6 @@ class TestGatekeeperContractPolicies(TransactionCase):
             "edge_server_id": edge.id,
             "controller_id": controller.id,
             "active": True,
-            "tolerance_type": "percent",
-            "tolerance_value": 30,
         })
         config_out = LayoutLane.create({
             "parking_area_id": parking.id,
@@ -225,8 +250,6 @@ class TestGatekeeperContractPolicies(TransactionCase):
             "edge_server_id": edge.id,
             "controller_id": controller.id,
             "active": True,
-            "tolerance_type": "percent",
-            "tolerance_value": 30,
         })
         configs = ReaderConfig.create([
             {

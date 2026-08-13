@@ -96,7 +96,7 @@ class NspSyncJobParkingLayout(models.Model):
                 raise UserError(_("Parking Lanes must contain objects."))
             unsupported_lane = set(lane_item) - {
                 "lane_code", "lane_name", "server_code", "controller_code",
-                "antenna_sequence", "timing_tolerance", "readers",
+                "antenna_sequence", "readers",
             }
             if unsupported_lane:
                 raise UserError(_("Unsupported Parking Lane field(s): %s") % ", ".join(sorted(unsupported_lane)))
@@ -114,19 +114,6 @@ class NspSyncJobParkingLayout(models.Model):
                 raise UserError(_("Controller %s is missing or inactive.") % controller_code)
             if not edge or not edge.active or edge.cloud_removed:
                 raise UserError(_("Server %s is missing or inactive.") % server_code)
-
-            tolerance = lane_item.get("timing_tolerance") or {}
-            if not isinstance(tolerance, dict) or set(tolerance) - {"type", "value"}:
-                raise UserError(_("Timing Tolerance must contain only type and value."))
-            tolerance_type = str(tolerance.get("type") or "percent").strip().lower()
-            if tolerance_type not in ("percent", "seconds"):
-                raise UserError(_("Timing Tolerance type must be percent or seconds."))
-            try:
-                tolerance_value = float(tolerance.get("value") or 0.0)
-            except (TypeError, ValueError) as exc:
-                raise UserError(_("Timing Tolerance value must be numeric.")) from exc
-            if tolerance_value < 0:
-                raise UserError(_("Timing Tolerance cannot be negative."))
 
             lane_readers = lane_item.get("readers") or []
             if not isinstance(lane_readers, list) or not lane_readers:
@@ -201,7 +188,6 @@ class NspSyncJobParkingLayout(models.Model):
                     "reader_id": reader.id,
                     "ports": sorted(port_numbers),
                     **config,
-                    "source_type": "published_layout",
                 })
 
             sequence = lane_item.get("antenna_sequence") or []
@@ -210,7 +196,6 @@ class NspSyncJobParkingLayout(models.Model):
             if state == "operational" and len(sequence) < 2:
                 raise UserError(_("Operational Lane %s requires at least two Antenna Sequence points.") % lane_code)
             seen_refs = set()
-            cumulative = 0.0
             for expected_order, row in enumerate(sequence, start=1):
                 if not isinstance(row, dict):
                     raise UserError(_("Antenna Sequence rows must contain objects."))
@@ -244,14 +229,12 @@ class NspSyncJobParkingLayout(models.Model):
                 if expected_order > 1 and duration <= 0.0:
                     raise UserError(_("Every Antenna after the first requires a positive Max Duration."))
                 seen_refs.add(ref)
-                cumulative += 0.0 if expected_order == 1 else duration
                 sequence_specs.append({
                     "lane_code": lane_code,
                     "sequence": expected_order,
                     "reader_id": reader.id,
                     "port_no": port_no,
                     "duration_from_previous": 0.0 if expected_order == 1 else duration,
-                    "cumulative_time": cumulative,
                 })
 
             lane_master_specs[lane_code] = {
@@ -264,8 +247,6 @@ class NspSyncJobParkingLayout(models.Model):
                 "parking_area_id": parking.id,
                 "edge_server_id": edge.id,
                 "controller_id": controller.id,
-                "tolerance_type": tolerance_type,
-                "tolerance_value": tolerance_value,
                 "active": True,
             }
 
@@ -348,21 +329,25 @@ class NspSyncJobParkingLayout(models.Model):
 
     def _validate_operational_parking_topology(self):
         self.ensure_one()
-        configured_ports = self.env["nsp.parking.layout.lane.reader.port"].sudo().search([
+        reader_configs = self.env["nsp.parking.layout.lane.reader.config"].sudo().search([
             ("layout_lane_id.active", "=", True),
             ("layout_lane_id.parking_area_id.state", "=", "operational"),
         ])
-        # Device Configuration owns Reader/Antenna membership. The same physical
-        # point may be reused by multiple logical Lane Configurations inside one
-        # Parking Layout, but two operational Parking Layouts must never own it.
+        # Reader Port owns only reader_config_id + port_no. Lane and Reader are
+        # already owned by Reader Configuration and must not be duplicated on each
+        # port row. The same physical point may be reused by logical Lanes inside
+        # one Parking Layout, but never by two operational Parking Layouts.
         areas_by_ref = {}
         conflicts = []
-        for row in configured_ports:
-            ref = (row.reader_id.id, int(row.port_no or 0))
-            area_ids = areas_by_ref.setdefault(ref, set())
-            area_ids.add(row.layout_lane_id.parking_area_id.id)
-            if len(area_ids) > 1:
-                conflicts.append("%s / Port %s" % (row.reader_id.display_name, row.port_no))
+        for config in reader_configs:
+            area_id = config.layout_lane_id.parking_area_id.id
+            reader = config.reader_id
+            for port in config.port_ids:
+                ref = (reader.id, int(port.port_no or 0))
+                area_ids = areas_by_ref.setdefault(ref, set())
+                area_ids.add(area_id)
+                if len(area_ids) > 1:
+                    conflicts.append("%s / Port %s" % (reader.display_name, port.port_no))
         if conflicts:
             raise UserError(_(
                 "Operational Parking Layouts cannot share Reader/Antenna points: %s"

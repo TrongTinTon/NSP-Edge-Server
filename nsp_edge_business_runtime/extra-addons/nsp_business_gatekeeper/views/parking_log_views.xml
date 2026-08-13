@@ -41,8 +41,8 @@
         <field name="arch" type="xml">
             <list string="Parking Logs" create="0" edit="0" delete="0">
                 <field name="event_time"/>
-                <field name="parking_area_display" string="Parking Area"/>
-                <field name="lane_display" string="Lane"/>
+                <field name="parking_area_id" string="Parking Area"/>
+                <field name="lane_id" string="Lane"/>
                 <field name="vehicle_display" string="Vehicle"/>
                 <field name="user_id" optional="show"/>
                 <field name="event_type" widget="badge"

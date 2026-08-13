@@ -145,9 +145,7 @@
                   <field name="sequence" string="#"/>
                   <field name="reader_id" string="Reader"/>
                   <field name="port_no" string="Antenna"/>
-                  <field name="is_first_point" column_invisible="1"/>
                   <field name="duration_from_previous" string="Max Duration from Previous (s)"/>
-                  <field name="cumulative_time" string="Cumulative (s)" optional="hide"/>
                 </list>
               </field>
             </section>

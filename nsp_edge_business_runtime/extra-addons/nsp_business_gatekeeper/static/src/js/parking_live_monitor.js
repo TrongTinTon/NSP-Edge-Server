@@ -231,7 +231,7 @@ export class NspParkingLiveMonitor extends Component {
     }
 
     _vehicleKey(item) {
-        return String(item?.vehicle_key || item?.vehicle_id || item?.license_plate || "");
+        return String(item?.vehicle_key || item?.license_plate || "");
     }
 
     _markSeen(item) {

@@ -12,7 +12,6 @@
                 <field name="vehicle_id"/>
                 <field name="user_id"/>
                 <field name="layout_lane_id"/>
-                <field name="lane_id"/>
                 <field name="layout_revision"/>
                 <field name="reader_id"/>
                 <field name="port_no"/>
@@ -33,7 +32,6 @@
                 <filter string="Not Linked to Parking Log" name="unlinked_parking_log"
                         domain="[('parking_log_id','=',False)]"/>
                 <separator/>
-                <filter string="Lane" name="group_lane" context="{'group_by':'lane_id'}"/>
                 <filter string="Lane Configuration" name="group_layout_lane" context="{'group_by':'layout_lane_id'}"/>
                 <filter string="Reader" name="group_reader" context="{'group_by':'reader_id'}"/>
                 <filter string="State" name="group_state" context="{'group_by':'state'}"/>

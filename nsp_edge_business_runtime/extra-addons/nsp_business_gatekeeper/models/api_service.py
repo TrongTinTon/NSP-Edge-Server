@@ -193,19 +193,6 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
         ))
 
     @api.model
-    def _whitelisted_devices(self, devices):
-        """Return Readers whose Serial exists in Device Whitelist."""
-        serials = [str(value or "").strip().upper() for value in devices.mapped("serial_number") if value]
-        if not serials:
-            return devices.browse()
-        allowed = set(self.env["nsp.device.whitelist"].sudo().search([
-            ("serial_number", "in", serials),
-            ("active", "=", True),
-            ("device_type_code", "=", "RFID_READER"),
-        ]).mapped("serial_number"))
-        return devices.filtered(lambda reader: reader.serial_number in allowed)
-
-    @api.model
     def _normalize_observation_ports(self, values):
         if values is None:
             return []
@@ -497,29 +484,6 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             "revision": int(session.revision or 1),
             "readers": readers,
         }
-
-
-    @api.model
-    def _measurement_session_payload(self, session, include_detail=False):
-        payload = self._measurement_config_payload(session)
-        payload.update({
-            "event_count": int(session.event_count or 0),
-            "created_at": self._iso_datetime(session.create_date),
-        })
-        if session.started_at:
-            payload["started_at"] = self._iso_datetime(session.started_at)
-        if session.ended_at:
-            payload["ended_at"] = self._iso_datetime(session.ended_at)
-        if include_detail:
-            payload["port_summary"] = [
-                {
-                    **row,
-                    "first_read_at": self._iso_datetime(row.get("first_read_at")),
-                    "last_read_at": self._iso_datetime(row.get("last_read_at")),
-                }
-                for row in session._port_summary()
-            ]
-        return payload
 
 
     @api.model

@@ -10,9 +10,6 @@ from ..services.raw_rfid_tag import normalize_raw_tid
 _logger = logging.getLogger(__name__)
 
 
-_DURATION_EPSILON_SECONDS = 0.001
-
-
 class NspSyncBusinessAdapter(models.Model):
     _inherit = "nsp.sync.job"
 
@@ -194,7 +191,7 @@ class NspSyncBusinessAdapter(models.Model):
             for row in sequence_rows
         )
         allowed_duration = sum(
-            layout_lane.allowed_duration_for_step(row.sequence)
+            float(row.duration_from_previous or 0.0)
             for row in sequence_rows[1:]
         ) if layout_lane else 0.0
         last_step = sequence_rows[-1:]
@@ -1095,7 +1092,7 @@ class NspSyncBusinessAdapter(models.Model):
             "target_line_ids": [(5, 0, 0), (0, 0, {"tid": calibration_tid})],
         }
         if reset_lifecycle:
-            values.update({"started_at": False, "ended_at": False, "applied_at": False})
+            values.update({"started_at": False, "ended_at": False})
         if session:
             session.write(values)
         else:

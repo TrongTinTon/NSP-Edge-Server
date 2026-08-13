@@ -40,8 +40,6 @@ class NspParkingArea(models.Model):
     runtime_synced_at = fields.Datetime(
         string="Synchronized At", readonly=True, copy=False, index=True,
     )
-    is_published = fields.Boolean(compute="_compute_is_published")
-
     # Parking Layout owns only contextual Lane Configuration rows. Lane Master is
     # independent and survives Layout replacement/removal.
     layout_lane_ids = fields.One2many(
@@ -62,7 +60,6 @@ class NspParkingArea(models.Model):
     controller_count = fields.Integer(compute="_compute_counts")
     reader_count = fields.Integer(compute="_compute_counts")
     lane_count = fields.Integer(compute="_compute_counts")
-    whitelist_count = fields.Integer(compute="_compute_whitelist_count")
     ready_lane_count = fields.Integer(
         string="Ready Lanes", compute="_compute_configuration_health",
     )
@@ -77,9 +74,6 @@ class NspParkingArea(models.Model):
         ],
         string="Configuration", compute="_compute_configuration_health",
     )
-    configuration_summary = fields.Char(
-        string="Configuration Summary", compute="_compute_configuration_health",
-    )
     published_edge_server_codes = fields.Char(
         string="Published Edge Servers", compute="_compute_published_edge_server_codes",
     )
@@ -87,11 +81,6 @@ class NspParkingArea(models.Model):
     _sql_constraints = [
         ("code_unique", "unique(code)", "Parking Area Code must be unique."),
     ]
-
-    @api.depends("published_revision")
-    def _compute_is_published(self):
-        for record in self:
-            record.is_published = bool(record.published_revision)
 
     @api.depends(
         "layout_lane_ids.active",
@@ -145,22 +134,10 @@ class NspParkingArea(models.Model):
             record.incomplete_lane_count = len(incomplete)
             if not active_configurations:
                 record.configuration_state = "empty"
-                record.configuration_summary = _("No active Lane Configuration is synchronized.")
             elif incomplete:
                 record.configuration_state = "incomplete"
-                record.configuration_summary = _(
-                    "%(ready)s ready · %(incomplete)s need attention"
-                ) % {"ready": len(ready), "incomplete": len(incomplete)}
             else:
                 record.configuration_state = "ready"
-                record.configuration_summary = _(
-                    "All %(count)s active Lane Configurations match the synchronized runtime snapshot."
-                ) % {"count": len(active_configurations)}
-
-    def _compute_whitelist_count(self):
-        count = self.env["nsp.device.whitelist"].sudo().search_count([])
-        for record in self:
-            record.whitelist_count = count
 
     @api.model
     def _normalize_code(self, value):
@@ -224,15 +201,6 @@ class NspParkingArea(models.Model):
             "items": [log._live_monitor_payload() for log in logs[::-1]],
         }
 
-    def _lane_payload(self):
-        self.ensure_one()
-        configurations = self.layout_lane_ids.filtered("active").sorted(
-            key=lambda row: (
-                (row.lane_id.name or "").casefold(), row.lane_id.code or "", row.id
-            )
-        )
-        return [row._runtime_payload() for row in configurations]
-
     def _operational_issues(self):
         self.ensure_one()
         issues = []
@@ -245,61 +213,6 @@ class NspParkingArea(models.Model):
             except ValidationError as exc:
                 issues.append(str(exc))
         return issues
-
-    def prepare_sync_payload(self):
-        self.ensure_one()
-        return {
-            "parking_area_code": self.code,
-            "parking_area_name": self.name,
-            "branch_code": self.branch_id.code or "",
-            "state": self.state,
-            "published_revision": int(self.published_revision or 0),
-            "lanes": self._lane_payload(),
-        }
-
-    def _open_related_action(self, action_xmlid, records, name, context=None):
-        self.ensure_one()
-        self.check_access("read")
-        action = self.env.ref(action_xmlid).read()[0]
-        action.update({
-            "name": name,
-            "domain": [("id", "in", records.ids)] if records else [],
-            "context": dict(context or {}),
-        })
-        return action
-
-    def action_open_controllers(self):
-        self.ensure_one()
-        return self._open_related_action(
-            "nsp_business_gatekeeper.action_nsp_controllers",
-            self.controller_ids,
-            _("Controllers"),
-        )
-
-    def action_open_readers(self):
-        self.ensure_one()
-        context = {
-            "default_controller_id": self.controller_ids.id
-        } if len(self.controller_ids) == 1 else {}
-        return self._open_related_action(
-            "nsp_business_gatekeeper.nsp_device_action",
-            self.reader_ids,
-            _("Readers"),
-            context,
-        )
-
-    def action_open_lanes(self):
-        self.ensure_one()
-        self.check_access("read")
-        action = self.env.ref(
-            "nsp_business_gatekeeper.action_nsp_parking_layout_lane"
-        ).read()[0]
-        action.update({
-            "name": _("Lane Configurations"),
-            "domain": [("parking_area_id", "=", self.id)],
-            "context": {"create": False, "edit": False, "delete": False},
-        })
-        return action
 
 
 class NspParkingLane(models.Model):
@@ -426,12 +339,6 @@ class NspParkingLayoutLane(models.Model):
         related="parking_area_id.state", string="Layout State", readonly=True,
     )
     active = fields.Boolean(default=True, index=True)
-    tolerance_type = fields.Selection(
-        [("percent", "Percentage (%)"), ("seconds", "Seconds")],
-        string="Tolerance Type", default="percent", required=True,
-    )
-    tolerance_value = fields.Float(string="Tolerance Value", default=30.0, required=True)
-
     antenna_sequence_ids = fields.One2many(
         "nsp.parking.layout.lane.sequence", "layout_lane_id", string="Antenna Sequence",
     )
@@ -467,10 +374,6 @@ class NspParkingLayoutLane(models.Model):
         (
             "parking_layout_lane_unique", "unique(parking_area_id, lane_id)",
             "A Lane can be referenced only once in one Parking Layout.",
-        ),
-        (
-            "parking_layout_lane_tolerance_nonnegative", "CHECK(tolerance_value >= 0)",
-            "Timing Tolerance cannot be negative.",
         ),
     ]
 
@@ -609,23 +512,14 @@ class NspParkingLayoutLane(models.Model):
                     ))
         return True
 
-    def allowed_duration_for_step(self, sequence):
-        self.ensure_one()
-        line = self.antenna_sequence_ids.filtered(
-            lambda item: item.sequence == sequence
-        )[:1]
-        base = float(line.duration_from_previous or 0.0) if line else 0.0
-        if self.tolerance_type == "seconds":
-            return base + float(self.tolerance_value or 0.0)
-        return base * (1.0 + float(self.tolerance_value or 0.0) / 100.0)
-
     def max_sequence_window(self):
+        """Return the configured Lane window from transition Max Duration values."""
         self.ensure_one()
         ordered = self.antenna_sequence_ids.sorted("sequence")
         if len(ordered) < 2:
             return 1.0
         return max(1.0, sum(
-            self.allowed_duration_for_step(row.sequence) for row in ordered[1:]
+            float(row.duration_from_previous or 0.0) for row in ordered[1:]
         ))
 
     def _validate_runtime_configuration(self):
@@ -661,53 +555,6 @@ class NspParkingLayoutLane(models.Model):
             configuration._validate_reader_configs()
         return True
 
-    def _runtime_payload(self):
-        self.ensure_one()
-        sequence_payload = []
-        for order, row in enumerate(self.antenna_sequence_ids.sorted("sequence"), start=1):
-            sequence_payload.append({
-                "sequence": order,
-                "reader_code": row.reader_id.device_code or "",
-                "reader_serial_number": row.reader_id.serial_number or "",
-                "port_no": int(row.port_no or 0),
-                "duration_from_previous_seconds": (
-                    0.0 if order == 1 else float(row.duration_from_previous or 0.0)
-                ),
-            })
-        readers = []
-        for config in self.reader_config_ids.sorted(
-            key=lambda row: (
-                row.reader_id.serial_number or "", row.reader_id.device_code or "", row.id
-            )
-        ):
-            readers.append({
-                "technical_code": config.reader_id.device_code or "",
-                "serial_number": config.reader_id.serial_number or "",
-                "reader_name": config.reader_id.name or config.reader_id.serial_number or "",
-                "reader_parameters": {
-                    "power_dbm": int(config.power_dbm or 0),
-                    "read_interval_ms": int(config.read_interval_ms or 200),
-                    "tid_start_address": int(config.tid_start_address or 0),
-                    "tid_length": int(config.tid_length or 4),
-                },
-                "ports": [
-                    {"port_no": int(port.port_no or 0)}
-                    for port in config.port_ids.sorted("port_no")
-                ],
-            })
-        return {
-            "lane_code": self.lane_id.code or "",
-            "lane_name": self.lane_id.name or "",
-            "server_code": self.edge_server_id.edge_server_code or "",
-            "controller_code": self.controller_id.controller_id or "",
-            "antenna_sequence": sequence_payload,
-            "timing_tolerance": {
-                "type": self.tolerance_type,
-                "value": float(self.tolerance_value or 0.0),
-            },
-            "readers": readers,
-        }
-
 
 class NspParkingLayoutLaneReaderConfig(models.Model):
     _name = "nsp.parking.layout.lane.reader.config"
@@ -733,14 +580,6 @@ class NspParkingLayoutLaneReaderConfig(models.Model):
     read_interval_ms = fields.Integer(string="Read Interval (ms)", required=True)
     tid_start_address = fields.Integer(string="TID Start Address (Words)", required=True)
     tid_length = fields.Integer(string="TID Length (Words)", required=True)
-    source_type = fields.Selection(
-        [("published_layout", "Published Layout")],
-        string="Source", required=True, default="published_layout", readonly=True,
-    )
-    source_revision = fields.Integer(
-        string="Layout Revision", related="layout_lane_id.parking_area_id.published_revision",
-        readonly=True,
-    )
     port_ids = fields.One2many(
         "nsp.parking.layout.lane.reader.port", "reader_config_id", string="Reader Ports",
     )
@@ -818,12 +657,6 @@ class NspParkingLayoutLaneReaderPort(models.Model):
         "nsp.parking.layout.lane.reader.config",
         required=True, ondelete="cascade", index=True,
     )
-    layout_lane_id = fields.Many2one(
-        related="reader_config_id.layout_lane_id", store=True, readonly=True, index=True,
-    )
-    reader_id = fields.Many2one(
-        related="reader_config_id.reader_id", store=True, readonly=True, index=True,
-    )
     port_no = fields.Integer(required=True, index=True)
 
     _sql_constraints = [
@@ -846,25 +679,34 @@ class NspParkingLayoutLaneSequencePoint(models.Model):
     _order = "layout_lane_id, sequence, id"
 
     layout_lane_id = fields.Many2one(
-        "nsp.parking.layout.lane", required=True, ondelete="cascade", index=True,
+        "nsp.parking.layout.lane", required=True, ondelete="cascade",
     )
-    sequence = fields.Integer(required=True, index=True)
+    sequence = fields.Integer(required=True)
     reader_id = fields.Many2one(
-        "nsp.device", required=True, ondelete="restrict", index=True,
+        "nsp.device", required=True, ondelete="restrict",
     )
-    port_no = fields.Integer(required=True, index=True)
+    port_no = fields.Integer(required=True)
     duration_from_previous = fields.Float(
         required=True, digits=(8, 3), default=0.0,
     )
-    cumulative_time = fields.Float(digits=(8, 3), default=0.0)
-    is_first_point = fields.Boolean(
-        string="First Point", compute="_compute_is_first_point", readonly=True,
-    )
 
-    @api.depends("sequence")
-    def _compute_is_first_point(self):
-        for record in self:
-            record.is_first_point = int(record.sequence or 0) == 1
+    def init(self):
+        # Lane-first access is already covered by the two unique constraints.
+        # Detection topology resolution is Reader/Port-first, so keep one index
+        # matching that hot query instead of four standalone indexes.
+        for index_name in (
+            "nsp_parking_layout_lane_sequence_layout_lane_id_index",
+            "nsp_parking_layout_lane_sequence_sequence_index",
+            "nsp_parking_layout_lane_sequence_reader_id_index",
+            "nsp_parking_layout_lane_sequence_port_no_index",
+        ):
+            self.env.cr.execute('DROP INDEX IF EXISTS "%s"' % index_name)
+        self.env.cr.execute(
+            """
+            CREATE INDEX IF NOT EXISTS nsp_parking_lane_sequence_reader_port_idx
+                ON nsp_parking_layout_lane_sequence (reader_id, port_no, layout_lane_id)
+            """
+        )
 
     _sql_constraints = [
         (
@@ -906,13 +748,3 @@ class NspParkingLayoutLaneSequencePoint(models.Model):
                     "Antenna Sequence Reader/Antenna must be declared in Device Configuration."
                 ))
 
-    def _sync_payload(self):
-        self.ensure_one()
-        return {
-            "sequence": int(self.sequence or 0),
-            "reader_code": self.reader_id.device_code or "",
-            "reader_serial_number": self.reader_id.serial_number or "",
-            "port_no": int(self.port_no or 0),
-            "duration_from_previous_seconds": float(self.duration_from_previous or 0.0),
-            "cumulative_time_seconds": float(self.cumulative_time or 0.0),
-        }

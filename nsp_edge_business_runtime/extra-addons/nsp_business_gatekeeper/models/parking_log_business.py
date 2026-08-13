@@ -36,9 +36,6 @@ class ParkingLogBusiness(models.Model):
                 "action": "ignore",
                 "event_type": False,
                 "reason_code": "stale_movement",
-                "reason_message": _(
-                    "Movement is older than the latest allowed Parking Log and was ignored."
-                ),
                 "previous_log": latest,
             }
 
@@ -50,9 +47,6 @@ class ParkingLogBusiness(models.Model):
                     "action": "deny",
                     "event_type": event_type,
                     "reason_code": "vehicle_checked_in_other_area",
-                    "reason_message": _(
-                        "Vehicle is currently checked in at another Parking Area (%s)."
-                    ) % (previous_area.display_name or "-"),
                     "previous_log": latest,
                 }
 
@@ -60,7 +54,6 @@ class ParkingLogBusiness(models.Model):
             "action": "allow",
             "event_type": event_type,
             "reason_code": False,
-            "reason_message": False,
             "previous_log": latest,
         }
 
@@ -198,29 +191,26 @@ class ParkingLogBusiness(models.Model):
         if event_type not in ("check_in", "check_out"):
             raise ValidationError(_("unresolved_parking_event_type"))
 
-        errors = []
+        reason_codes = []
         if parking_area.state != "operational":
-            errors.append(("parking_area_not_operational", _("Parking Area is not operational.")))
+            reason_codes.append("parking_area_not_operational")
         if state.get("action") == "deny":
-            errors.append((state.get("reason_code") or "unknown", state.get("reason_message") or ""))
+            reason_codes.append(state.get("reason_code") or "unknown")
 
         user = self.env["nsp.user"].browse()
         user_tid = False
         borrow = self.env["nsp.vehicle.borrow"].browse()
         # A continuity/configuration denial is already final. Do not spend another
         # query/window waiting for User authorization that cannot change the outcome.
-        final_context_denial = bool(errors)
+        final_context_denial = bool(reason_codes)
         if event_type == "check_out" and not final_context_denial:
             user_events = detections.filtered(lambda rec: bool(rec.user_id))
             unique_users = user_events.mapped("user_id")
             unique_tids = {event.tid for event in user_events if event.tid}
             if len(unique_users) > 1 or len(unique_tids) > 1:
-                errors.append((
-                    "multiple_user_tags",
-                    _("Check-out detected more than one User RFID identity in the movement window."),
-                ))
+                reason_codes.append("multiple_user_tags")
             elif not unique_users:
-                errors.append(("missing_user_tid", _("User RFID Tag/TID is required for Check-out.")))
+                reason_codes.append("missing_user_tid")
             else:
                 user = unique_users[:1]
                 user_event = user_events.sorted(key=lambda rec: (rec.detected_at, rec.id))[-1:]
@@ -229,19 +219,16 @@ class ParkingLogBusiness(models.Model):
                 if authorized is False:
                     authorized = self._authorized_user_borrow_map(vehicle, event_time)
                 if user.id not in authorized:
-                    errors.append((
-                        "unauthorized_vehicle_user",
-                        _("User is not the Vehicle owner and has no active Vehicle Borrow permission."),
-                    ))
+                    reason_codes.append("unauthorized_vehicle_user")
                 else:
                     borrow = authorized[user.id]
 
-        reason_code = errors[0][0] if errors else False
+        reason_code = reason_codes[0] if reason_codes else False
         vals = {
             "log_uid": self._log_uid_for_group(layout_lane, event_type, detections),
             "event_time": event_time,
             "event_type": event_type,
-            "decision": "denied" if errors else "allowed",
+            "decision": "denied" if reason_codes else "allowed",
             "reason_code": reason_code,
             "parking_area_id": parking_area.id,
             "layout_lane_id": layout_lane.id,

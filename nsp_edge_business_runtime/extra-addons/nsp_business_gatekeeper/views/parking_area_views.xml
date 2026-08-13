@@ -62,7 +62,6 @@
                  readonly="1"/>
         </header>
         <sheet>
-          <field name="is_published" invisible="1"/>
           <div class="oe_button_box" name="button_box">
             <button name="action_open_live_monitor" type="object"
                     class="oe_stat_button" icon="fa-desktop"

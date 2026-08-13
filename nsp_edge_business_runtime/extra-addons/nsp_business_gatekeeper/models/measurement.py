@@ -2,7 +2,7 @@
 from datetime import timedelta
 
 from odoo import api, fields, models, _
-from odoo.exceptions import UserError, ValidationError
+from odoo.exceptions import ValidationError
 from odoo.addons.nsp_core.utils import new_management_code
 from ..services.raw_rfid_tag import normalize_raw_tid
 
@@ -39,8 +39,6 @@ class NspMeasurementSession(models.Model):
         string="Calibration Tag",
         copy=True,
     )
-    target_count = fields.Integer(string="Calibration Tags", compute="_compute_scope_counts")
-    target_tag_count = fields.Integer(string="Calibration Tags", compute="_compute_scope_counts")
     device_node_ids = fields.One2many(
         "nsp.measurement.device.node",
         "session_id",
@@ -53,14 +51,6 @@ class NspMeasurementSession(models.Model):
     calibration_tid = fields.Char(
         string="Calibration Tag", compute="_compute_calibration_tid", readonly=True,
     )
-    reader_count = fields.Integer(compute="_compute_scope_counts")
-    controller_ids = fields.Many2many(
-        "nsp.controller",
-        string="Controllers",
-        compute="_compute_scope_counts",
-        readonly=True,
-    )
-    controller_count = fields.Integer(compute="_compute_scope_counts")
     revision = fields.Integer(
         string="Revision",
         required=True,
@@ -71,7 +61,6 @@ class NspMeasurementSession(models.Model):
     )
     started_at = fields.Datetime(readonly=True, copy=False)
     ended_at = fields.Datetime(readonly=True, copy=False)
-    applied_at = fields.Datetime(readonly=True, copy=False)
     status = fields.Selection(
         [
             ("draft", "Draft"),
@@ -92,15 +81,6 @@ class NspMeasurementSession(models.Model):
         "session_id",
         string="Measurement Observations",
         readonly=True,
-    )
-    event_count = fields.Integer(compute="_compute_event_count")
-    live_dashboard = fields.Boolean(
-        string="Live Measurement Dashboard",
-        compute="_compute_live_ui",
-    )
-    is_cloud_deployment = fields.Boolean(
-        string="Cloud Deployment",
-        compute="_compute_live_ui",
     )
 
     _sql_constraints = [
@@ -125,47 +105,6 @@ class NspMeasurementSession(models.Model):
     def _compute_calibration_tid(self):
         for session in self:
             session.calibration_tid = session.target_line_ids[:1].tid or ""
-
-    def _deployment_role(self):
-        # Deployment ownership is defined by the installed Gatekeeper module.
-        return "edge_server"
-
-    def _compute_live_ui(self):
-        is_cloud = self._deployment_role() == "cloud"
-        for session in self:
-            session.live_dashboard = True
-            session.is_cloud_deployment = is_cloud
-
-    @api.depends("device_node_ids", "device_node_ids.device_type", "device_node_ids.controller_id", "device_node_ids.reader_id", "target_line_ids")
-    def _compute_scope_counts(self):
-        Controller = self.env["nsp.controller"]
-        for session in self:
-            controller_nodes = session.device_node_ids.filtered(
-                lambda node: node.device_type == "controller" and node.controller_id
-            )
-            reader_nodes = session.device_node_ids.filtered(
-                lambda node: node.device_type == "reader" and node.reader_id
-            )
-            controllers = controller_nodes.mapped("controller_id")
-            session.controller_ids = controllers if controllers else Controller.browse()
-            session.controller_count = len(controllers)
-            session.reader_count = len(reader_nodes)
-            session.target_count = len(session.target_line_ids)
-            session.target_tag_count = len(session.target_line_ids.filtered("tid"))
-
-    @api.depends("event_ids", "revision")
-    def _compute_event_count(self):
-        ids = [record.id for record in self if record.id]
-        counts = {}
-        if ids:
-            rows = self.env["nsp.measurement.event"].sudo()._read_group(
-                [("session_id", "in", ids)],
-                ["session_id", "revision"],
-                ["__count"],
-            )
-            counts = {(session.id, revision): count for session, revision, count in rows}
-        for session in self:
-            session.event_count = counts.get((session.id, session.revision), 0)
 
     def _sanitize_target_commands(self, commands):
         """Normalize the single raw Calibration Tag without runtime assignment lookup."""
@@ -349,10 +288,6 @@ class NspMeasurementSession(models.Model):
             lambda node: (node.reader_id.serial_number or "").strip().upper() == serial
         )[:1]
 
-    # Compatibility alias for event-processing code migrated from Reader Line.
-    def _measurement_line_for_serial(self, serial_number):
-        return self._measurement_node_for_serial(serial_number)
-
     def _reader_power_for_serial(self, serial_number):
         node = self._measurement_node_for_serial(serial_number)
         return int(node.power_dbm or 0) if node else 0
@@ -361,326 +296,11 @@ class NspMeasurementSession(models.Model):
         node = self._measurement_node_for_serial(serial_number)
         return int(node.read_interval_ms or 0) if node else 0
 
-    def _controller_codes(self):
-        self.ensure_one()
-        return sorted({
-            str(node.controller_id.controller_id or "").strip().upper()
-            for node in self._controller_nodes()
-            if node.controller_id
-        })
-
-    def _edge_server_codes(self):
-        self.ensure_one()
-        return sorted({
-            str(node.server_id.edge_server_code or "").strip().upper()
-            for node in self._server_nodes()
-            if node.server_id
-        })
-
-
-
-
-
-
-
-
-    def action_view_events(self):
-        self.ensure_one()
-        self.check_access("read")
-        module = "nsp_business_gatekeeper"
-        action = self.env.ref("%s.action_nsp_measurement_event" % module).read()[0]
-        action["domain"] = [("session_id", "=", self.id)]
-        action["context"] = {
-            "search_default_session_id": self.id,
-            "search_default_group_revision": 1,
-        }
-        return action
-
-    def _measurement_form_action(self, view_xmlid, name):
-        self.ensure_one()
-        self.check_access("read")
-        view = self.env.ref(view_xmlid)
-        return {
-            "type": "ir.actions.act_window",
-            "name": name,
-            "res_model": self._name,
-            "res_id": self.id,
-            "view_mode": "form",
-            "views": [(view.id, "form")],
-            "target": "current",
-            "context": {
-                **dict(self.env.context),
-                "active_id": self.id,
-                "active_ids": [self.id],
-                "active_model": self._name,
-                "form_view_initial_mode": "view",
-            },
-        }
-
-    def action_open_live(self):
-        """Compatibility alias for the unified Lane Calibration form.
-
-        Deprecated since NSP 19.0. Removal target: NSP 20.0, after all
-        frontend clients use ``action_open_session_form``.
-        """
-        self.ensure_one()
-        return self.action_open_session_form()
-
-    def action_open_session_form(self):
-        self.ensure_one()
-        module = "nsp_business_gatekeeper"
-        return self._measurement_form_action(
-            f"{module}.view_nsp_measurement_session_form",
-            _("Lane Calibration"),
-        )
-
-    def action_live_measure_again(self):
-        self.ensure_one()
-        self.action_measure_again()
-        return self.action_open_live()
-
-    def action_live_complete(self):
-        self.ensure_one()
-        self.action_complete()
-        return self.action_open_live()
-
-    def action_live_cancel(self):
-        self.ensure_one()
-        self.action_cancel()
-        return self.action_open_live()
-
-    def action_live_apply_to_operation(self):
-        self.ensure_one()
-        self.action_apply_to_operation()
-        return self.action_open_live()
-
-    def _target_coverage(self):
-        """Return raw calibration-tag coverage for the current revision."""
-        self.ensure_one()
-        targets = self.target_line_ids.sorted(key=lambda line: (line.tid or "", line.id))
-        rows = self.env["nsp.measurement.event"].sudo()._read_group(
-            [("session_id", "=", self.id), ("revision", "=", self.revision)],
-            ["tid"],
-            ["__count", "read_at:min", "read_at:max"],
-            order="tid",
-        )
-        stats = {
-            tid: {
-                "read_count": int(count or 0),
-                "first_read_at": first_read,
-                "last_read_at": last_read,
-            }
-            for tid, count, first_read, last_read in rows
-        }
-        result = []
-        for line in targets:
-            data = stats.get(line.tid, {})
-            read_count = int(data.get("read_count") or 0)
-            result.append({
-                "id": line.id,
-                "tid": line.tid or "",
-                "detected": bool(read_count),
-                "read_count": read_count,
-                "first_read_at": fields.Datetime.to_string(data.get("first_read_at"))
-                if data.get("first_read_at") else None,
-                "last_read_at": fields.Datetime.to_string(data.get("last_read_at"))
-                if data.get("last_read_at") else None,
-            })
-        return result
-
-    @api.model
-    @api.model
-    def get_live_snapshot(self, session_id, last_event_id=0, limit=2000):
-        try:
-            record_id = int(session_id or 0)
-            limit = min(max(int(limit or 2000), 100), 5000)
-        except (TypeError, ValueError):
-            record_id, limit = 0, 2000
-        session = self.browse(record_id).exists()
-        if not session:
-            return {"found": False}
-        session.check_access("read")
-        events = self.env["nsp.measurement.event"].search(
-            [("session_id", "=", session.id), ("revision", "=", session.revision)],
-            order="read_at asc, read_at_ms asc, id asc",
-            limit=limit,
-        )
-        steps = session._build_detection_steps(events)
-        tags = session._target_coverage()
-        detected_tag_count = sum(1 for tag in tags if tag["detected"])
-        controllers = []
-        for node in session._controller_nodes().sorted(
-            key=lambda item: ((item.controller_id.controller_id or ""), item.id)
-        ):
-            controller = node.controller_id
-            server_node = node.parent_id if node.parent_id.device_type == "server" else False
-            controllers.append({
-                "id": controller.id,
-                "code": controller.controller_id or "",
-                "name": controller.controller_name or "",
-                "edge_server_code": server_node.server_id.edge_server_code if server_node and server_node.server_id else "",
-                "edge_status": server_node.server_id.status if server_node and server_node.server_id else "",
-            })
-        readers = []
-        reader_nodes = session._reader_nodes().sorted(
-            key=lambda item: ((item.reader_id.name or ""), (item.reader_id.serial_number or ""), item.id)
-        )
-        controller_ids = reader_nodes.mapped("parent_id.controller_id").ids
-        serials = [
-            str(value or "").strip().upper()
-            for value in reader_nodes.mapped("reader_id.serial_number") if value
-        ]
-        observations = self.env["nsp.reader.observation"].sudo().search([
-            ("controller_id", "in", controller_ids),
-            ("serial_number", "in", serials),
-        ]) if controller_ids and serials else self.env["nsp.reader.observation"].browse()
-        observation_by_key = {
-            (row.controller_id.id, str(row.serial_number or "").strip().upper()): row
-            for row in observations
-        }
-        for node in reader_nodes:
-            reader = node.reader_id
-            controller_node = node.parent_id if node.parent_id.device_type == "controller" else False
-            controller = controller_node.controller_id if controller_node else self.env["nsp.controller"]
-            observation = observation_by_key.get((
-                controller.id if controller else 0,
-                str(reader.serial_number or "").strip().upper(),
-            ))
-            readers.append({
-                "reader_node_id": node.id,
-                "id": reader.id,
-                "name": reader.name or reader.serial_number or "",
-                "serial_number": reader.serial_number or "",
-                "controller_code": controller.controller_id if controller else "",
-                "controller_name": controller.controller_name if controller else "",
-                "status": observation.status if observation else "offline",
-                "runtime_power_dbm": int(observation.power_dbm or 0) if observation else 0,
-                "runtime_read_interval_ms": int(observation.read_interval_ms or 0) if observation else 0,
-                "reader_power_dbm": int(node.power_dbm or 0),
-                "read_interval_ms": int(node.read_interval_ms or 0),
-                "firmware_version": observation.firmware_version or "" if observation else "",
-                "ports": sorted(node.reader_port_ids.mapped("port_no")),
-            })
-        return {
-            "found": True,
-            "session_id": session.id,
-            "deployment_role": session._deployment_role(),
-            "measurement_code": session.measurement_code,
-            "revision": int(session.revision or 1),
-            "status": session.status,
-            "controllers": controllers,
-            "controller_count": len(controllers),
-            "edge_server_codes": session._edge_server_codes(),
-            "tags": tags,
-            "tag_count": len(tags),
-            "detected_tag_count": detected_tag_count,
-            "coverage_percent": round((detected_tag_count * 100.0 / len(tags)), 1) if tags else 0.0,
-            "readers": readers,
-            "reader_count": len(readers),
-            "started_at": fields.Datetime.to_string(session.started_at) if session.started_at else None,
-            "ended_at": fields.Datetime.to_string(session.ended_at) if session.ended_at else None,
-            "applied_at": fields.Datetime.to_string(session.applied_at) if session.applied_at else None,
-            "raw_event_count": int(session.event_count or 0),
-            "detection_count": len(steps),
-            "unique_reader_ports": len({(step["serial_number"], step["port_no"]) for step in steps}),
-            "unique_readers": len({step["serial_number"] for step in steps}),
-            "unique_controllers": len({step["controller_code"] for step in steps}),
-            "first_detection": steps[0] if steps else False,
-            "last_detection": steps[-1] if steps else False,
-            "steps": steps,
-            "last_event_id": max(events.ids or [int(last_event_id or 0)]),
-            "server_time": fields.Datetime.to_string(fields.Datetime.now()),
-        }
-
-    def _event_timestamp(self, event):
-        self.ensure_one()
-        if not event.read_at:
-            return None
-        base = fields.Datetime.to_string(event.read_at).replace(" ", "T")
-        return "%s.%03dZ" % (base, int(event.read_at_ms or 0))
-
-    def _build_detection_steps(self, events):
-        """Collapse consecutive reads for the same target and Reader Port."""
-        self.ensure_one()
-        nodes = {
-            (node.reader_id.serial_number or "").strip().upper(): node
-            for node in self._reader_nodes()
-        }
-        targets_by_tid = {
-            line.tid: {
-                "assignment_role": "calibration_tag",
-                "assigned_to": _("Calibration Tag"),
-                "license_plate": "",
-            }
-            for line in self.target_line_ids
-            if line.tid
-        }
-        steps = []
-        current = None
-        for event in events:
-            key = (event.tid, event.serial_number, int(event.port_no or 0))
-            if current and current["_key"] == key:
-                current["last_seen_at"] = self._event_timestamp(event)
-                current["read_count"] += 1
-                continue
-            if current:
-                current.pop("_key", None)
-                steps.append(current)
-            node = nodes.get((event.serial_number or "").strip().upper())
-            target = targets_by_tid.get(event.tid)
-            controller_node = node.parent_id if node and node.parent_id.device_type == "controller" else False
-            controller = controller_node.controller_id if controller_node else self.env["nsp.controller"]
-            current = {
-                "_key": key,
-                "sequence_no": len(steps) + 1,
-                "first_seen_at": self._event_timestamp(event),
-                "last_seen_at": self._event_timestamp(event),
-                "tid": event.tid,
-                "assignment_role": target.get("assignment_role", "") if target else "",
-                "assigned_to": target.get("assigned_to", "") if target else "",
-                "license_plate": target.get("license_plate", "") if target else "",
-                "controller_code": controller.controller_id if controller else "",
-                "serial_number": event.serial_number,
-                "reader_name": node.reader_id.name if node else event.serial_number,
-                "port_no": int(event.port_no or 0),
-                "read_count": 1,
-            }
-        if current:
-            current.pop("_key", None)
-            steps.append(current)
-        for index, step in enumerate(steps, start=1):
-            step["sequence_no"] = index
-        return steps
-
-    def _port_summary(self):
-        self.ensure_one()
-        rows = self.env["nsp.measurement.event"].sudo()._read_group(
-            [("session_id", "=", self.id), ("revision", "=", self.revision)],
-            ["tid", "serial_number", "port_no"],
-            ["__count", "read_at:min", "read_at:max"],
-            order="tid, serial_number, port_no",
-        )
-        return [
-            {
-                "tid": tid,
-                "serial_number": serial_number,
-                "port_no": int(port_no or 0),
-                "read_count": int(count or 0),
-                "first_read_at": first_read,
-                "last_read_at": last_read,
-            }
-            for tid, serial_number, port_no, count, first_read, last_read in rows
-        ]
-
     @api.model
     def cron_cleanup_expired_measurements(self):
-        role = self._deployment_role()
-        param = (
-            "nsp_master_gatekeeper.measurement_retention_days"
-            if role == "cloud"
-            else "nsp_business_gatekeeper.measurement_retention_days"
+        value = self.env["ir.config_parameter"].sudo().get_param(
+            "nsp_business_gatekeeper.measurement_retention_days", "7"
         )
-        value = self.env["ir.config_parameter"].sudo().get_param(param, "7")
         try:
             retention_days = max(int(value), 1)
         except (TypeError, ValueError):
@@ -700,15 +320,17 @@ class NspMeasurementSession(models.Model):
                 ("record_key", "in", events.mapped("event_uid")),
             ]).unlink()
         events.unlink()
-        if role != "cloud":
-            stale_sessions = self.sudo().search([
-                ("status", "in", ["completed", "applied", "failed", "cancelled"]),
-                ("ended_at", "!=", False),
-                ("ended_at", "<", cutoff),
-            ])
-            empty_sessions = stale_sessions.filtered(lambda session: not session.event_ids)
-            if empty_sessions:
-                empty_sessions.with_context(measurement_sync=True).unlink()
+
+        # Let PostgreSQL test emptiness instead of prefetching event_ids for every
+        # stale Session in Python. Keep the batch bounded like the Event cleanup.
+        stale_empty_sessions = self.sudo().search([
+            ("status", "in", ["completed", "applied", "failed", "cancelled"]),
+            ("ended_at", "!=", False),
+            ("ended_at", "<", cutoff),
+            ("event_ids", "=", False),
+        ], limit=1000)
+        if stale_empty_sessions:
+            stale_empty_sessions.with_context(measurement_sync=True).unlink()
         return count
 
 
@@ -733,27 +355,6 @@ class NspMeasurementTargetLine(models.Model):
             "RFID runtime assignment and is not mapped to a Vehicle or User."
         ),
     )
-    detection_state = fields.Selection(
-        [("pending", "Not Detected"), ("detected", "Detected")],
-        compute="_compute_detection_state",
-    )
-    detection_count = fields.Integer(compute="_compute_detection_state")
-
-    # Storage-only compatibility with the former Vehicle-based calibration table.
-    # The Edge raw-TID workflow never resolves or uses this field. It remains
-    # optional through NSP 19.x so the existing table can be upgraded in place.
-    # Removal target: NSP 20.0 via an explicit migration.
-    vehicle_id = fields.Many2one(
-        "nsp.vehicle",
-        string="Deprecated Vehicle",
-        required=False,
-        ondelete="restrict",
-        copy=False,
-    )
-
-    # Compatibility alias for NSP 19.0 callers. Removal target: NSP 20.0.
-    vehicle_tid = fields.Char(related="tid", string="Deprecated TID Alias", readonly=False)
-
     _sql_constraints = [
         (
             "measurement_target_tid_unique",
@@ -764,34 +365,10 @@ class NspMeasurementTargetLine(models.Model):
 
     @api.model
     def _normalize_tid(self, value):
-        from ..services.raw_rfid_tag import normalize_raw_tid
         try:
             return normalize_raw_tid(value)
         except ValueError as exc:
             raise ValidationError(_("Raw TID must contain hexadecimal characters only.")) from exc
-
-    @api.depends("session_id.revision", "session_id.event_ids")
-    def _compute_detection_state(self):
-        session_ids = self.mapped("session_id").ids
-        counts = {}
-        if session_ids:
-            rows = self.env["nsp.measurement.event"].sudo()._read_group(
-                [("session_id", "in", session_ids)],
-                ["session_id", "revision", "tid"],
-                ["__count"],
-            )
-            counts = {
-                (session.id, int(revision or 1), tid): int(count or 0)
-                for session, revision, tid, count in rows
-            }
-        for line in self:
-            count = counts.get((
-                line.session_id.id,
-                int(line.session_id.revision or 1),
-                line.tid,
-            ), 0)
-            line.detection_count = count
-            line.detection_state = "detected" if count else "pending"
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -864,8 +441,7 @@ class NspMeasurementDeviceNode(models.Model):
     device_name = fields.Char(compute="_compute_device_meta")
     device_status = fields.Char(compute="_compute_device_meta")
     serial_number = fields.Char(compute="_compute_device_meta")
-    port_count = fields.Integer(compute="_compute_port_count")
-    port_numbers = fields.Char(compute="_compute_port_count")
+    port_numbers = fields.Char(compute="_compute_port_numbers")
 
     _sql_constraints = [
         ("measurement_source_node_unique", "unique(session_id, source_node_id)", "Cloud Node ID must be unique per Lane Calibration."),
@@ -915,10 +491,9 @@ class NspMeasurementDeviceNode(models.Model):
                 node.serial_number = ""
 
     @api.depends("reader_port_ids", "reader_port_ids.port_no")
-    def _compute_port_count(self):
+    def _compute_port_numbers(self):
         for node in self:
             ports = sorted({int(port.port_no or 0) for port in node.reader_port_ids if int(port.port_no or 0) > 0})
-            node.port_count = len(ports)
             node.port_numbers = ", ".join("P%s" % port_no for port_no in ports)
 
     def _validate_node(self):

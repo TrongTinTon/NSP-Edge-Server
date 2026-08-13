@@ -2,7 +2,6 @@ from . import branch
 from . import controllers_model
 from . import device
 from . import reader_observation
-from . import runtime_state
 from . import device_type
 from . import device_whitelist
 from . import rfid_runtime_assignment

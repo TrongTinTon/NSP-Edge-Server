@@ -33,41 +33,41 @@ class ParkingDetectionEvent(models.Model):
         help="Controller-generated idempotency key for one detected TID.",
     )
     detected_at = fields.Datetime(
-        string="Detected At", required=True, index=True, readonly=True,
+        string="Detected At", required=True, readonly=True,
         help="UTC time reported by the Controller.",
     )
     controller_id = fields.Many2one(
         "nsp.controller", string="Controller",
-        ondelete="restrict", readonly=True, index=True,
+        ondelete="restrict", readonly=True,
         help="Authenticated Controller that physically reported this RFID detection.",
     )
     serial_number = fields.Char(
-        string="Reader Serial", readonly=True, index=True,
+        string="Reader Serial", readonly=True,
         help="Raw SDK Reader serial reported by the Controller. Kept even when Reader identity cannot be resolved.",
     )
     layout_lane_id = fields.Many2one(
         "nsp.parking.layout.lane", string="Lane Configuration",
-        ondelete="restrict", readonly=True, index=True,
+        ondelete="restrict", readonly=True,
         help="Resolved contextual Lane candidate. Empty when raw detection cannot be mapped to runtime topology.",
     )
     lane_id = fields.Many2one(
         "nsp.parking.lane", string="Lane",
-        ondelete="restrict", readonly=True, index=True,
-        help="Stable Lane Master identity after Edge topology resolution.",
+        related="layout_lane_id.lane_id", store=False, readonly=True,
+        help="Presentation-only Lane Master resolved from the contextual Lane Configuration.",
     )
     reader_id = fields.Many2one(
         "nsp.device", string="Reader",
-        ondelete="restrict", readonly=True, index=True,
+        ondelete="restrict", readonly=True,
         help="Resolved Reader Master identity. Empty when the reported serial is unknown to Edge.",
     )
     port_no = fields.Integer(
-        string="Port", required=True, readonly=True, index=True,
+        string="Port", required=True, readonly=True,
     )
     tid = fields.Char(
-        string="RFID TID", required=True, readonly=True, index=True,
+        string="RFID TID", required=True, readonly=True,
     )
     layout_revision = fields.Integer(
-        string="Parking Layout Revision", default=0, readonly=True, index=True,
+        string="Parking Layout Revision", default=0, readonly=True,
         help="Published Parking Layout revision used to resolve this detection.",
     )
     rssi_dbm = fields.Float(
@@ -76,11 +76,11 @@ class ParkingDetectionEvent(models.Model):
     )
     user_id = fields.Many2one(
         "nsp.user", string="Resolved User", ondelete="restrict",
-        readonly=True, index=True,
+        readonly=True,
     )
     vehicle_id = fields.Many2one(
         "nsp.vehicle", string="Resolved Vehicle", ondelete="restrict",
-        readonly=True, index=True,
+        readonly=True,
     )
     state = fields.Selection(
         [
@@ -104,13 +104,17 @@ class ParkingDetectionEvent(models.Model):
             ("sequence_timeout", "Sequence Timeout"),
             ("vehicle_not_found", "Vehicle Not Found"),
             ("processing_error", "Processing Error"),
+            ("consumed_by_other_lane", "Consumed by Another Lane"),
+            ("stale_movement", "Stale Movement Ignored"),
         ],
-        string="Processing Error", readonly=True, copy=False, index=True,
+        string="Processing Result", readonly=True, copy=False,
     )
-    error_message = fields.Text(string="Processing Message", readonly=True, copy=False)
+    error_message = fields.Char(
+        string="Processing Message", compute="_compute_error_message", readonly=True,
+    )
     parking_log_id = fields.Many2one(
         "nsp.parking.log", string="Parking Log",
-        ondelete="set null", index=True, copy=False, readonly=True,
+        ondelete="set null", copy=False, readonly=True,
     )
 
     _sql_constraints = [
@@ -127,28 +131,42 @@ class ParkingDetectionEvent(models.Model):
     ]
 
     def init(self):
+        # Detection is a high-write short-retention table. Keep only indexes that
+        # match runtime queries; standalone indexes on every searchable UI field
+        # multiply INSERT/UPDATE cost without helping the parking hot path.
         self.env.cr.execute(
             """
-            DROP INDEX IF EXISTS nsp_parking_detection_pending_lane_idx;
-            CREATE INDEX nsp_parking_detection_pending_lane_idx
-                ON nsp_parking_detection_event (layout_lane_id, layout_revision, detected_at, id)
-             WHERE state = 'pending' AND parking_log_id IS NULL
-            """
-        )
-        self.env.cr.execute(
-            """
-            DROP INDEX IF EXISTS nsp_parking_detection_sequence_idx;
-            CREATE INDEX nsp_parking_detection_sequence_idx
+            CREATE INDEX IF NOT EXISTS nsp_parking_detection_pending_lane_idx
+                ON nsp_parking_detection_event (layout_lane_id, detected_at, id)
+             WHERE state = 'pending' AND parking_log_id IS NULL;
+
+            CREATE INDEX IF NOT EXISTS nsp_parking_detection_pending_vehicle_idx
                 ON nsp_parking_detection_event
-                   (layout_lane_id, layout_revision, tid, reader_id, port_no, detected_at, id)
-             WHERE state = 'pending' AND parking_log_id IS NULL
+                   (layout_lane_id, layout_revision, tid, detected_at, id)
+             WHERE state = 'pending'
+               AND parking_log_id IS NULL
+               AND vehicle_id IS NOT NULL;
+
+            CREATE INDEX IF NOT EXISTS nsp_parking_detection_pending_user_idx
+                ON nsp_parking_detection_event
+                   (layout_lane_id, layout_revision, detected_at, id)
+             WHERE state = 'pending'
+               AND parking_log_id IS NULL
+               AND user_id IS NOT NULL;
             """
         )
         self.env.cr.execute(
             """
             CREATE INDEX IF NOT EXISTS nsp_parking_detection_cleanup_idx
-                ON nsp_parking_detection_event (detected_at)
+                ON nsp_parking_detection_event (detected_at, id)
              WHERE state IN ('processed', 'error')
+            """
+        )
+        self.env.cr.execute(
+            """
+            CREATE INDEX IF NOT EXISTS nsp_parking_detection_parking_log_idx
+                ON nsp_parking_detection_event (parking_log_id, id)
+             WHERE parking_log_id IS NOT NULL
             """
         )
         self.env.cr.execute(
@@ -159,25 +177,24 @@ class ParkingDetectionEvent(models.Model):
             """
         )
 
-    @api.constrains("layout_lane_id", "lane_id", "reader_id", "port_no")
-    def _check_lane_configuration_scope(self):
-        for event in self:
-            configuration = event.layout_lane_id
-            if not configuration:
-                continue
-            if event.lane_id != configuration.lane_id:
-                raise ValidationError(_(
-                    "Detection Lane Master must match the contextual Lane Configuration."
-                ))
-            configured_ports = {
-                (config.reader_id.id, int(port.port_no or 0))
-                for config in configuration.reader_config_ids
-                for port in config.port_ids
-            }
-            if (event.reader_id.id, int(event.port_no or 0)) not in configured_ports:
-                raise ValidationError(_(
-                    "Detection Reader Port is not declared in the Lane Configuration Device Configuration."
-                ))
+        # Drop legacy Odoo-created standalone indexes. Names follow Odoo's normal
+        # <table>_<column>_index convention; IF EXISTS keeps upgrades portable.
+        for index_name in (
+            "nsp_parking_detection_event_detected_at_index",
+            "nsp_parking_detection_event_controller_id_index",
+            "nsp_parking_detection_event_serial_number_index",
+            "nsp_parking_detection_event_layout_lane_id_index",
+            "nsp_parking_detection_event_lane_id_index",
+            "nsp_parking_detection_event_reader_id_index",
+            "nsp_parking_detection_event_port_no_index",
+            "nsp_parking_detection_event_tid_index",
+            "nsp_parking_detection_event_layout_revision_index",
+            "nsp_parking_detection_event_user_id_index",
+            "nsp_parking_detection_event_vehicle_id_index",
+            "nsp_parking_detection_event_error_code_index",
+            "nsp_parking_detection_event_parking_log_id_index",
+        ):
+            self.env.cr.execute('DROP INDEX IF EXISTS "%s"' % index_name)
 
     @api.model
     def _deployment_role(self):
@@ -274,8 +291,19 @@ class ParkingDetectionEvent(models.Model):
             "controller_not_in_scope": _("Reader/Port exists, but this Controller is not referenced by the Lane Configuration."),
             "ambiguous_reader_port_layout": _("Reader/Port resolves to more than one Parking Layout."),
             "parking_area_not_operational": _("Parking Area runtime is not operational."),
+            "layout_revision_superseded": _("Detection belongs to a superseded Parking Layout revision."),
+            "sequence_timeout": _("RFID detection expired before a complete movement could be resolved."),
+            "vehicle_not_found": _("Vehicle identity is missing for the matched Antenna Sequence."),
+            "processing_error": _("Parking Log processing failed. See Edge logs for details."),
+            "consumed_by_other_lane": _("Consumed by another matching logical Lane."),
+            "stale_movement": _("Movement is older than the latest allowed Parking Log and was ignored."),
         }
-        return messages.get(code, _("Raw detection could not be resolved by Edge."))
+        return messages.get(code, False)
+
+    @api.depends("state", "error_code")
+    def _compute_error_message(self):
+        for record in self:
+            record.error_message = self._detection_error_message(record.error_code) or False
 
     @api.model
     def _persist_unresolved_detection(
@@ -295,7 +323,6 @@ class ParkingDetectionEvent(models.Model):
             "vehicle_id": assignment.vehicle_id.id if assignment and assignment.vehicle_id else False,
             "state": "error",
             "error_code": error_code if error_code in dict(self._fields["error_code"].selection) else "processing_error",
-            "error_message": self._detection_error_message(error_code),
         }
         return self.create_idempotent(vals)
 
@@ -370,7 +397,38 @@ class ParkingDetectionEvent(models.Model):
         return resolved, errors, device_by_serial
 
     @api.model
-    def _ingest_controller_detection(self, controller, payload, assignment, topology_cache):
+    def _runtime_snapshot_for_topology(self, topology_cache):
+        """Lock each touched Parking Area once and cache its runtime revision.
+
+        A Controller batch can contain hundreds of reads that resolve to the same
+        Lane/Area. Re-acquiring the same advisory lock and invalidating the Area on
+        every candidate only adds SQL round-trips; the transaction lock already
+        protects one immutable snapshot for the whole ingest transaction.
+        """
+        area_ids = sorted({
+            lane.parking_area_id.id
+            for topologies in topology_cache.values()
+            for _reader, lane, _port_no in topologies
+            if lane.parking_area_id
+        })
+        areas = self.env["nsp.parking.area"].sudo().browse(area_ids).exists()
+
+        snapshots = {}
+        for area in areas:
+            self._acquire_parking_area_runtime_lock(area, shared=True)
+        if areas:
+            areas.invalidate_recordset(["state", "published_revision"])
+        for area in areas:
+            snapshots[area.id] = {
+                "state": area.state,
+                "revision": int(area.published_revision or 0),
+            }
+        return snapshots
+
+    @api.model
+    def _ingest_controller_detection(
+        self, controller, payload, assignment, topology_cache, runtime_snapshot
+    ):
         if not isinstance(payload, dict):
             raise ValidationError(_("invalid_payload"))
 
@@ -419,10 +477,9 @@ class ParkingDetectionEvent(models.Model):
         duplicate_count = 0
         for reader, lane, candidate_port_no in topologies:
             parking_area = lane.parking_area_id
-            self._acquire_parking_area_runtime_lock(parking_area, shared=True)
-            parking_area.invalidate_recordset(["state", "published_revision"])
-            layout_revision = int(parking_area.published_revision or 0)
-            if parking_area.state != "operational" or layout_revision <= 0:
+            runtime = runtime_snapshot.get(parking_area.id, {})
+            layout_revision = int(runtime.get("revision") or 0)
+            if runtime.get("state") != "operational" or layout_revision <= 0:
                 raise ValidationError(_("parking_area_not_operational"))
 
             vals = {
@@ -431,7 +488,6 @@ class ParkingDetectionEvent(models.Model):
                 "controller_id": controller.id,
                 "serial_number": serial_number,
                 "layout_lane_id": lane.id,
-                "lane_id": lane.lane_id.id,
                 "reader_id": reader.id,
                 "port_no": candidate_port_no,
                 "tid": tid,
@@ -465,6 +521,7 @@ class ParkingDetectionEvent(models.Model):
         topology_cache, topology_errors, device_by_serial = self._resolve_topology_batch(
             controller, detections
         )
+        runtime_snapshot = self._runtime_snapshot_for_topology(topology_cache)
         touched_lanes = self.env["nsp.parking.layout.lane"].browse()
         stats = {
             "received": len(detections),
@@ -508,7 +565,7 @@ class ParkingDetectionEvent(models.Model):
             try:
                 with self.env.cr.savepoint():
                     records, new_lanes, duplicates = self._ingest_controller_detection(
-                        controller, payload, assignment, topology_cache
+                        controller, payload, assignment, topology_cache, runtime_snapshot
                     )
                 touched_lanes |= new_lanes
                 stats["duplicates"] += duplicates
@@ -607,13 +664,11 @@ class ParkingDetectionEvent(models.Model):
             values = {
                 "state": "error",
                 "error_code": "layout_revision_superseded",
-                "error_message": _("Detection belongs to a superseded Parking Layout revision."),
             }
         else:
             values = {
                 "state": "error",
                 "error_code": "parking_area_not_operational",
-                "error_message": _("Parking Area runtime is not operational."),
             }
         affected = self.sudo().search(domain)
         if affected:
@@ -632,7 +687,6 @@ class ParkingDetectionEvent(models.Model):
             stale.write({
                 "state": "error",
                 "error_code": "layout_revision_superseded",
-                "error_message": _("Detection belongs to a superseded Parking Layout revision."),
             })
         return len(stale)
 
@@ -705,12 +759,8 @@ class ParkingDetectionEvent(models.Model):
         ))
 
     @api.model
-    def _lane_max_duration(self, lane):
-        return lane.max_sequence_window()
-
-    @api.model
     def _expire_orphan_user_events(self, lane, now):
-        cutoff = now - timedelta(seconds=self._lane_max_duration(lane))
+        cutoff = now - timedelta(seconds=lane.max_sequence_window())
         stale = self.search([
             ("layout_lane_id", "=", lane.id),
             ("state", "=", "pending"),
@@ -723,7 +773,6 @@ class ParkingDetectionEvent(models.Model):
             stale.write({
                 "state": "error",
                 "error_code": "sequence_timeout",
-                "error_message": _("User RFID detection expired without a matching vehicle movement."),
             })
 
 
@@ -752,7 +801,7 @@ class ParkingDetectionEvent(models.Model):
             (row.reader_id.id, int(row.port_no or 0)) for row in rows
         ]
         allowed_durations = [
-            0.0 if index == 0 else max(0.001, lane.allowed_duration_for_step(row.sequence))
+            0.0 if index == 0 else max(0.001, float(row.duration_from_previous or 0.0))
             for index, row in enumerate(rows)
         ]
 
@@ -805,7 +854,7 @@ class ParkingDetectionEvent(models.Model):
 
     @api.model
     def _expire_stale_vehicle_events(self, lane, now):
-        cutoff = now - timedelta(seconds=self._lane_max_duration(lane))
+        cutoff = now - timedelta(seconds=lane.max_sequence_window())
         stale = self.search([
             ("layout_lane_id", "=", lane.id),
             ("state", "=", "pending"),
@@ -818,7 +867,6 @@ class ParkingDetectionEvent(models.Model):
             stale.write({
                 "state": "error",
                 "error_code": "sequence_timeout",
-                "error_message": _("Vehicle RFID detections expired before a complete movement sequence was matched."),
             })
 
     def _create_log_for_vehicle(
@@ -857,7 +905,7 @@ class ParkingDetectionEvent(models.Model):
             if siblings:
                 siblings.write({
                     "state": "processed",
-                    "error_message": _("Consumed by a matching logical Lane Antenna Sequence."),
+                    "error_code": "consumed_by_other_lane",
                 })
         return parking_log
 
@@ -873,7 +921,7 @@ class ParkingDetectionEvent(models.Model):
 
         ParkingLog = self.env["nsp.parking.log"].sudo()
         layout_revision = int(lane.parking_area_id.published_revision or 0)
-        max_window = max(0.001, float(self._lane_max_duration(lane) or 0.001))
+        max_window = max(0.001, float(lane.max_sequence_window() or 0.001))
         user_pool_start = min(item["end_at"] for item in matches) - timedelta(seconds=max_window)
         user_pool_end = max(item["end_at"] for item in matches) + timedelta(seconds=max_window)
         user_events = self._pending_user_pool(
@@ -899,7 +947,6 @@ class ParkingDetectionEvent(models.Model):
                 source_events.filtered(lambda rec: rec.state == "pending").write({
                     "state": "error",
                     "error_code": "vehicle_not_found",
-                    "error_message": _("Vehicle identity is missing for the matched Antenna Sequence."),
                 })
                 continue
 
@@ -932,7 +979,7 @@ class ParkingDetectionEvent(models.Model):
                     "state": "processed",
                     "parking_log_id": sibling_winner.parking_log_id.id
                     if sibling_winner.parking_log_id else False,
-                    "error_message": _("Consumed by another matching logical Lane."),
+                    "error_code": "consumed_by_other_lane",
                 })
                 continue
 
@@ -958,7 +1005,7 @@ class ParkingDetectionEvent(models.Model):
                 movement_events.write({
                     "state": "processed",
                     "parking_log_id": False,
-                    "error_message": movement_state.get("reason_message") or False,
+                    "error_code": "stale_movement",
                 })
                 continue
 
@@ -1003,13 +1050,12 @@ class ParkingDetectionEvent(models.Model):
                     "Parking Antenna Sequence processing failed: lane=%s event_type=%s ids=%s",
                     lane.id, event_type, movement_events.ids,
                 )
-                message = _("Parking Log processing failed. See Edge logs for details.")
                 movement_events.write({
-                    "state": "error", "error_code": "processing_error", "error_message": message,
+                    "state": "error", "error_code": "processing_error",
                 })
                 if matched_user_events:
                     matched_user_events.write({
-                        "state": "error", "error_code": "processing_error", "error_message": message,
+                        "state": "error", "error_code": "processing_error",
                     })
                     consumed_user_ids.update(matched_user_events.ids)
 
@@ -1059,11 +1105,40 @@ class ParkingDetectionEvent(models.Model):
             retention_days = max(1, int(raw_days))
         except (TypeError, ValueError):
             retention_days = 7
+
         terminal_cutoff = fields.Datetime.now() - timedelta(days=retention_days)
-        old = self.search([
-            ("state", "in", ["processed", "error"]),
-            ("detected_at", "<", terminal_cutoff),
-        ], order="detected_at asc, id asc", limit=20000)
-        if old:
-            old.unlink()
+        # Detection rows are leaf technical evidence: nothing owns them and Parking
+        # Log only exposes the reverse One2many. Delete by indexed keyset batches
+        # instead of materializing tens of thousands of ORM records every hour.
+        batch_size = 50000
+        max_batches = 10
+        deleted = 0
+        for _batch in range(max_batches):
+            self.env.cr.execute(
+                """
+                WITH doomed AS (
+                    SELECT id
+                      FROM nsp_parking_detection_event
+                     WHERE state IN ('processed', 'error')
+                       AND detected_at < %s
+                     ORDER BY detected_at ASC, id ASC
+                     LIMIT %s
+                )
+                DELETE FROM nsp_parking_detection_event AS event
+                 USING doomed
+                 WHERE event.id = doomed.id
+                """,
+                (terminal_cutoff, batch_size),
+            )
+            count = self.env.cr.rowcount
+            deleted += count
+            if count < batch_size:
+                break
+        if deleted:
+            self.invalidate_model()
+            self.env["nsp.parking.log"].invalidate_model(["source_detection_ids"])
+            _logger.info(
+                "Parking Detection cleanup deleted %s terminal rows older than %s",
+                deleted, terminal_cutoff,
+            )
         return True
