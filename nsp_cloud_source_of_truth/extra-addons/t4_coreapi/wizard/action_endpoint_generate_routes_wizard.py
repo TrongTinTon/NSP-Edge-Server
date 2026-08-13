@@ -40,7 +40,10 @@ class ActionEndpointGenerateRoutesWizard(models.TransientModel):
             'tag': 'display_notification',
             'params': {
                 'title': _('Core API Routes'),
-                'message': _('Generated routes for %(applications)s application(s): %(created)s created, %(updated)s updated.') % result,
+                'message': _(
+                    'API Actions: %(actions_created)s created, %(actions_updated)s updated. '
+                    'Gateway Routes for %(applications)s application(s): %(created)s created, %(updated)s updated.'
+                ) % result,
                 'type': 'success',
                 'sticky': False,
                 'next': {'type': 'ir.actions.act_window_close'},
