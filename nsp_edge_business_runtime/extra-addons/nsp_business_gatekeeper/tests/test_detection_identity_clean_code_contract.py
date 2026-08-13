@@ -38,7 +38,7 @@ def test_detection_correlation_does_not_own_owner_borrow_authorization():
     process = detection[process_start:process_end]
     assert "_authorized_user_borrow_map" not in process
     assert "authorized_borrow_map" not in process
-    assert "authorized = self._authorized_user_borrow_map(vehicle, event_time)" in business
+    assert "authorized, borrow = self._resolve_user_authorization(" in business
 
 
 def test_match_window_is_named_as_window_not_observed_duration():

@@ -50,7 +50,7 @@ def test_any_present_user_resolves_checkout_immediately_without_authorization_wa
     assert "blocked_tids.add(tid)" in selection_block
     assert "matched_user_events = nearest_user_event" in selection_block
     assert "_authorized_user_borrow_map" not in selection_block
-    assert "authorized = self._authorized_user_borrow_map(vehicle, event_time)" in business
+    assert "authorized, borrow = self._resolve_user_authorization(" in business
 
 
 def test_only_missing_user_waits_until_lane_deadline():

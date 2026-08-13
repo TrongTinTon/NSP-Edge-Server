@@ -85,7 +85,7 @@
                                 </div>
                                 <div class="nsp-parking-live-monitor__entry-status">
                                     <span class="nsp-parking-live-monitor__ok-dot"/>
-                                    <span><t t-esc="row.item.event_type === 'check_out' ? 'RA' : 'VÀO'"/></span>
+                                    <span>VÀO</span>
                                 </div>
                             </t>
                             <t t-else="">

@@ -10,10 +10,18 @@ class ParkingLogLiveMonitor(models.Model):
     def _live_monitor_display_meta(self):
         self.ensure_one()
         if self.decision == "allowed":
+            # Live Monitor's main grid represents Vehicle entries only. A successful
+            # Check-out clears any previous alert for the Vehicle but must not create
+            # another entry card. Parking Logs still retain the Check-out history.
+            if self.event_type == "check_out":
+                return {
+                    "display_kind": "clear",
+                    "display_title": "",
+                    "display_reason": "",
+                }
             return {
                 "display_kind": "entry",
-                "display_title": _("ĐƯỢC PHÉP LẤY XE")
-                if self.event_type == "check_out" else _("MỜI VÀO"),
+                "display_title": _("MỜI VÀO"),
                 "display_reason": "",
             }
         reasons = {

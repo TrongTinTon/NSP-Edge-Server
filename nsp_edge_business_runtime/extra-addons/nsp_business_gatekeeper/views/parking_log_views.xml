@@ -5,13 +5,11 @@
         <field name="model">nsp.parking.log</field>
         <field name="arch" type="xml">
             <search>
-                <field name="log_uid"/>
+                <field name="event_time"/>
                 <field name="parking_area_id"/>
                 <field name="lane_id"/>
                 <field name="vehicle_id"/>
-                <field name="vehicle_tid"/>
                 <field name="user_id"/>
-                <field name="user_tid"/>
                 <field name="event_type"/>
                 <field name="decision"/>
                 <field name="reason_code"/>
@@ -26,9 +24,9 @@
                 <separator/>
                 <filter string="Parking Area" name="group_parking_area" context="{'group_by':'parking_area_id'}"/>
                 <filter string="Lane" name="group_lane" context="{'group_by':'lane_id'}"/>
-                <filter string="Event Type" name="group_event_type" context="{'group_by':'event_type'}"/>
+                <filter string="Event" name="group_event_type" context="{'group_by':'event_type'}"/>
                 <filter string="Decision" name="group_decision" context="{'group_by':'decision'}"/>
-                <filter string="Decision Reason" name="group_reason" context="{'group_by':'reason_code'}"/>
+                <filter string="Reason" name="group_reason" context="{'group_by':'reason_code'}"/>
                 <filter string="Vehicle" name="group_vehicle" context="{'group_by':'vehicle_id'}"/>
             </search>
         </field>
@@ -43,20 +41,14 @@
                 <field name="parking_area_id" string="Parking Area"/>
                 <field name="lane_id" string="Lane"/>
                 <field name="vehicle_display" string="Vehicle"/>
-                <field name="user_id" optional="show"/>
-                <field name="event_type" widget="badge"
+                <field name="user_id" string="User"/>
+                <field name="event_type" string="Event" widget="badge"
                        decoration-success="event_type == 'check_in'"
                        decoration-info="event_type == 'check_out'"/>
                 <field name="decision" widget="badge"
                        decoration-success="decision == 'allowed'"
                        decoration-danger="decision == 'denied'"/>
-                <field name="reason_code" string="Reason" widget="badge" optional="show"/>
-                <field name="layout_revision" optional="hide"/>
-                <field name="layout_lane_id" optional="hide"/>
-                <field name="vehicle_tid" optional="hide"/>
-                <field name="user_tid" optional="hide"/>
-                <field name="borrow_id" optional="hide"/>
-                <field name="log_uid" optional="hide"/>
+                <field name="reason_code" string="Reason" widget="badge"/>
             </list>
         </field>
     </record>
@@ -69,28 +61,16 @@
                 <sheet>
                     <group>
                         <group string="Parking Event">
-                            <field name="log_uid"/>
                             <field name="event_time"/>
-                            <field name="event_type" widget="badge"/>
+                            <field name="event_type" string="Event" widget="badge"/>
                             <field name="decision" widget="badge"/>
-                            <field name="reason_code"/>
+                            <field name="reason_code" string="Reason"/>
                         </group>
-                        <group string="Parking Context">
+                        <group string="Context">
                             <field name="parking_area_id"/>
                             <field name="lane_id"/>
-                            <field name="layout_lane_id"/>
-                            <field name="layout_revision"/>
-                        </group>
-                    </group>
-                    <group>
-                        <group string="Vehicle">
-                            <field name="vehicle_id"/>
-                            <field name="vehicle_tid"/>
-                        </group>
-                        <group string="Check-out Authorization">
-                            <field name="user_id"/>
-                            <field name="user_tid"/>
-                            <field name="borrow_id"/>
+                            <field name="vehicle_display" string="Vehicle"/>
+                            <field name="user_id" string="User"/>
                         </group>
                     </group>
                 </sheet>

@@ -2,7 +2,7 @@
 import logging
 
 from odoo import api, fields, models, _
-from odoo.exceptions import AccessError
+from odoo.exceptions import AccessError, ValidationError
 
 
 _logger = logging.getLogger(__name__)
@@ -130,6 +130,19 @@ class ParkingLog(models.Model):
              WHERE vehicle_id IS NOT NULL
             """
         )
+
+    @api.constrains("decision", "reason_code")
+    def _check_decision_reason_consistency(self):
+        """Keep the immutable business outcome internally consistent."""
+        for record in self:
+            if record.decision == "allowed" and record.reason_code:
+                raise ValidationError(_(
+                    "Allowed Parking Logs cannot contain a denial reason."
+                ))
+            if record.decision == "denied" and not record.reason_code:
+                raise ValidationError(_(
+                    "Denied Parking Logs must contain a reason."
+                ))
 
     @api.depends("vehicle_id", "vehicle_id.license_plate", "vehicle_tid")
     def _compute_vehicle_display(self):

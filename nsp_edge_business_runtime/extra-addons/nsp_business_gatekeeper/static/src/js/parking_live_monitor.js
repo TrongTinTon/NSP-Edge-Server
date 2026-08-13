@@ -290,6 +290,10 @@ export class NspParkingLiveMonitor extends Component {
         if (payload.display_kind === "none" || payload.display_kind === "ignore") {
             return;
         }
+        if (payload.display_kind === "clear") {
+            this.clearVehicleAlert(payload);
+            return;
+        }
         if (payload.display_kind === "alert") {
             if (!fromSnapshot || this._isRecent(payload, ALERT_HOLD_MS)) {
                 this.addAlert(payload);

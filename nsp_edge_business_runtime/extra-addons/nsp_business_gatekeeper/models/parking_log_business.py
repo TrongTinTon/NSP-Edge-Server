@@ -58,30 +58,30 @@ class ParkingLogBusiness(models.Model):
         }
 
     @api.model
-    def _authorized_user_borrow_map(self, vehicle, event_time):
-        """Return authorized User IDs mapped to the Borrow record, if any.
+    def _resolve_user_authorization(self, vehicle, user, event_time):
+        """Authorize the one User selected by Detection correlation.
 
-        Owner maps to an empty Borrow record. Active borrowers are loaded in one
-        query and reused both for candidate readiness and final audit linkage.
+        Detection owns temporal User selection. Parking business only validates
+        whether that selected User is the active Vehicle owner or has an active
+        Borrow covering the movement time. The query therefore targets one User
+        instead of loading every borrower for the Vehicle.
         """
         Borrow = self.env["nsp.vehicle.borrow"].sudo()
-        if not vehicle or not vehicle.active:
-            return {}
-        authorized = {}
-        if vehicle.owner_id and vehicle.owner_id.active:
-            authorized[vehicle.owner_id.id] = Borrow.browse()
-        borrows = Borrow.search([
+        empty_borrow = Borrow.browse()
+        if not vehicle or not vehicle.active or not user or not user.active:
+            return False, empty_borrow
+        if vehicle.owner_id and vehicle.owner_id.active and vehicle.owner_id == user:
+            return True, empty_borrow
+
+        borrow = Borrow.search([
             ("vehicle_id", "=", vehicle.id),
+            ("borrower_id", "=", user.id),
             ("state", "=", "active"),
             ("returned_at", "=", False),
             ("valid_from", "<=", event_time),
             ("valid_to", ">=", event_time),
-            ("borrower_id.active", "=", True),
-        ])
-        for borrow in borrows:
-            if borrow.borrower_id:
-                authorized[borrow.borrower_id.id] = borrow
-        return authorized
+        ], order="valid_from desc, id desc", limit=1)
+        return bool(borrow), borrow
 
     @api.model
     def _log_uid_for_group(self, layout_lane, event_type, detections):
@@ -188,22 +188,21 @@ class ParkingLogBusiness(models.Model):
         if event_type not in ("check_in", "check_out"):
             raise ValidationError(_("unresolved_parking_event_type"))
 
-        reason_codes = []
+        reason_code = False
         if parking_area.state != "operational":
-            reason_codes.append("parking_area_not_operational")
-        if state.get("action") == "deny":
-            reason_codes.append(state.get("reason_code") or "unknown")
+            reason_code = "parking_area_not_operational"
+        elif state.get("action") == "deny":
+            reason_code = state.get("reason_code") or "unknown"
 
         user = self.env["nsp.user"].browse()
         user_tid = False
         borrow = self.env["nsp.vehicle.borrow"].browse()
-        # A continuity/configuration denial is already final. Do not spend another
-        # query/window waiting for User authorization that cannot change the outcome.
-        final_context_denial = bool(reason_codes)
-        if event_type == "check_out" and not final_context_denial:
+        # A continuity/configuration denial is already final. User authorization
+        # cannot change it, so avoid an unnecessary Borrow lookup.
+        if event_type == "check_out" and not reason_code:
             user_events = detections.filtered(lambda rec: bool(rec.user_id))
             if not user_events:
-                reason_codes.append("missing_user_tid")
+                reason_code = "missing_user_tid"
             else:
                 # Detection correlation owns User selection and must provide exactly
                 # one supporting User read. Parking business owns authorization only.
@@ -212,18 +211,17 @@ class ParkingLogBusiness(models.Model):
                 user_event = user_events[:1]
                 user = user_event.user_id
                 user_tid = user_event.tid
-                authorized = self._authorized_user_borrow_map(vehicle, event_time)
-                if user.id not in authorized:
-                    reason_codes.append("unauthorized_vehicle_user")
-                else:
-                    borrow = authorized[user.id]
-
-        reason_code = reason_codes[0] if reason_codes else False
+                authorized, borrow = self._resolve_user_authorization(
+                    vehicle, user, event_time
+                )
+                if not authorized:
+                    reason_code = "unauthorized_vehicle_user"
+                    borrow = self.env["nsp.vehicle.borrow"].browse()
         vals = {
             "log_uid": self._log_uid_for_group(layout_lane, event_type, detections),
             "event_time": event_time,
             "event_type": event_type,
-            "decision": "denied" if reason_codes else "allowed",
+            "decision": "denied" if reason_code else "allowed",
             "reason_code": reason_code,
             "parking_area_id": parking_area.id,
             "layout_lane_id": layout_lane.id,
