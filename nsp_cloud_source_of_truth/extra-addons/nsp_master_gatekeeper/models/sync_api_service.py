@@ -1484,18 +1484,15 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         areas = Area.search([("code", "in", list(area_codes))]) if area_codes else Area.browse()
         area_by_code = {str(record.code or "").strip().upper(): record for record in areas}
 
-        LayoutLane = self.env["nsp.parking.layout.lane"].sudo().with_context(active_test=False)
-        layout_lanes = LayoutLane.search([
-            ("parking_area_id", "in", areas.ids),
-            ("lane_id.code", "in", list(lane_codes)),
-        ]) if areas and lane_codes else LayoutLane.browse()
-        lane_by_key = {
-            (
-                str(record.parking_area_id.code or "").strip().upper(),
-                str(record.lane_id.code or "").strip().upper(),
-            ): record
-            for record in layout_lanes
-            if record.parking_area_id and record.lane_id
+        # Parking Logs reference the stable Lane Master, not the mutable contextual
+        # Lane Configuration. Current published payload is used only to authorize a
+        # *new* event for this Edge/revision; historical rows remain independent.
+        Lane = self.env["nsp.parking.lane"].sudo().with_context(active_test=False)
+        lanes = Lane.search([("code", "in", list(lane_codes))]) if lane_codes else Lane.browse()
+        lane_by_code = {
+            str(record.code or "").strip().upper(): record
+            for record in lanes
+            if record.code
         }
 
         edge_code = str(edge_server.edge_server_code or "").strip().upper()
@@ -1530,7 +1527,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
 
         return {
             "area_by_code": area_by_code,
-            "lane_by_key": lane_by_key,
+            "lane_by_code": lane_by_code,
             "valid_route_keys": valid_route_keys,
             "vehicle_by_code": {str(record.vehicle_code or "").strip().upper(): record for record in vehicles},
             "user_by_code": {str(record.user_code or "").strip().upper(): record for record in users},
@@ -1573,15 +1570,10 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             raise ValueError("invalid_layout_revision")
 
         area = cache["area_by_code"].get(area_code)
-        layout_lane = cache["lane_by_key"].get((area_code, lane_code))
-        if not area or not layout_lane:
+        lane = cache["lane_by_code"].get(lane_code)
+        if not area or not lane or lane.branch_id != area.branch_id:
             raise ValueError("parking_lane_not_found")
         existing = cache["log_by_uid"].get(uid)
-        if not existing and (area_code, lane_code, revision) not in cache["valid_route_keys"]:
-            current_revision = int(area.published_revision or 0)
-            if current_revision and revision < current_revision:
-                raise ValueError("stale_parking_layout_revision")
-            raise ValueError("lane_not_in_edge_scope")
 
         event_time = self._safe_datetime_value(item.get("event_time"), default_now=False)
         if not event_time:
@@ -1597,7 +1589,7 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         if reason_code and reason_code not in cache["reason_codes"]:
             raise ValueError("invalid_reason_code")
         if decision == "denied" and not reason_code:
-            reason_code = "unknown"
+            raise ValueError("denied_event_requires_reason")
         if decision == "allowed" and reason_code:
             raise ValueError("allowed_event_cannot_have_reason")
 
@@ -1625,15 +1617,14 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         if borrow and user and borrow.borrower_id != user:
             raise ValueError("borrow_user_mismatch")
 
-        return uid, {
+        vals = {
             "log_uid": uid,
             "event_time": event_time,
             "event_type": event_type,
             "decision": decision,
             "reason_code": reason_code or False,
             "parking_area_id": area.id,
-            "layout_lane_id": layout_lane.id,
-            "lane_id": layout_lane.lane_id.id,
+            "lane_id": lane.id,
             "layout_revision": revision,
             "vehicle_id": vehicle.id if vehicle else False,
             "vehicle_tid": vehicle_tid,
@@ -1641,6 +1632,23 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             "user_tid": user_tid or False,
             "borrow_id": borrow.id if borrow else False,
         }
+
+        # Idempotency is evaluated before current published-route validation. Once
+        # Cloud has accepted a log_uid, an identical Edge retry must remain a
+        # duplicate even after Parking Layout publication advances to a new revision.
+        if existing:
+            Log = self.env["nsp.parking.log"].sudo()
+            if Log._business_values(existing) != Log._business_values(vals):
+                raise ValueError("log_uid_conflict")
+            return uid, vals
+
+        if (area_code, lane_code, revision) not in cache["valid_route_keys"]:
+            current_revision = int(area.published_revision or 0)
+            if current_revision and revision < current_revision:
+                raise ValueError("stale_parking_layout_revision")
+            raise ValueError("lane_not_in_edge_scope")
+
+        return uid, vals
 
     @endpoint("NSP Edge Parking Logs", route_path="edge/parking-logs", methods="POST", code="nsp_edge_parking_logs")
     def api_parking_logs(self):

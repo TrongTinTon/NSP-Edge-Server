@@ -4,7 +4,7 @@ import logging
 from psycopg2 import IntegrityError
 
 from odoo import api, fields, models, _
-from odoo.exceptions import AccessError
+from odoo.exceptions import AccessError, ValidationError
 
 
 _logger = logging.getLogger(__name__)
@@ -50,8 +50,13 @@ class ParkingLog(models.Model):
         "nsp.parking.area", string="Parking Area", ondelete="restrict", readonly=True,
     )
     layout_lane_id = fields.Many2one(
-        "nsp.parking.layout.lane", string="Lane Configuration",
-        ondelete="restrict", readonly=True,
+        "nsp.parking.layout.lane", string="Legacy Lane Configuration",
+        ondelete="set null", readonly=True,
+        help=(
+            "Legacy compatibility reference only. New Parking Logs use the stable "
+            "Parking Area + Lane + Layout Revision historical context and do not "
+            "persist a mutable Lane Configuration reference."
+        ),
     )
     lane_id = fields.Many2one(
         "nsp.parking.lane", string="Lane", ondelete="restrict", readonly=True, index=True,
@@ -126,7 +131,6 @@ class ParkingLog(models.Model):
             "decision": value("decision") or "",
             "reason_code": value("reason_code") or "",
             "parking_area_id": int(value("parking_area_id") or 0),
-            "layout_lane_id": int(value("layout_lane_id") or 0),
             "lane_id": int(value("lane_id") or 0),
             "layout_revision": int(value("layout_revision") or 0),
             "vehicle_id": int(value("vehicle_id") or 0),
@@ -135,6 +139,14 @@ class ParkingLog(models.Model):
             "user_tid": str(value("user_tid") or "").strip(),
             "borrow_id": int(value("borrow_id") or 0),
         }
+
+    @api.constrains("decision", "reason_code")
+    def _check_decision_reason_consistency(self):
+        for record in self:
+            if record.decision == "allowed" and record.reason_code:
+                raise ValidationError(_("Allowed Parking Logs cannot contain a Reason."))
+            if record.decision == "denied" and not record.reason_code:
+                raise ValidationError(_("Denied Parking Logs require a Reason."))
 
     @api.model
     def create_idempotent(self, vals, existing_by_uid=None):
@@ -178,10 +190,17 @@ class ParkingLog(models.Model):
     def _live_monitor_display_meta(self):
         self.ensure_one()
         if self.decision == "allowed":
+            # The main grid represents Vehicle entries. A successful Check-out
+            # clears an outstanding alert but must not create another entry card.
+            if self.event_type == "check_out":
+                return {
+                    "display_kind": "clear",
+                    "display_title": "",
+                    "display_reason": "",
+                }
             return {
                 "display_kind": "entry",
-                "display_title": _("ĐƯỢC PHÉP LẤY XE")
-                if self.event_type == "check_out" else _("MỜI VÀO"),
+                "display_title": _("MỜI VÀO"),
                 "display_reason": "",
             }
         reasons = {

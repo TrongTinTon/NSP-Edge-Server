@@ -6,3 +6,6 @@ from . import test_antenna_sequence_order
 from . import test_first_antenna_duration
 from . import test_device_tree_ui_contract
 from . import test_lane_master_layout_context
+
+from . import test_parking_log_master_runtime_contract
+from . import test_parking_log_master_clean_1341_contract
