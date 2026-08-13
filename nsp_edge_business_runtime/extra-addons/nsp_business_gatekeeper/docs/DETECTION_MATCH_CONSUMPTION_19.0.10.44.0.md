@@ -30,4 +30,4 @@ Cleanup also includes the claimed physical `event_uid` values so all sibling Lan
 - Antenna Sequence and Max Duration remain the only sequence timing rules.
 - Abandoned/invalidated candidates are not claimed by a later successful match; they remain pending until they match independently or expire.
 - Parking Log creation still uses only the selected sequence events plus supporting User events; ignored repeated reads are cleanup metadata only.
-- If Parking business processing fails after a sequence match, every claimed Vehicle read is marked `processing_error` so an ignored repeat cannot remain pending and be reused as a new traversal.
+- Historical note: from 19.0.10.56.0 onward, only deterministic `ValidationError` failures terminalize claimed reads as `processing_error`; unexpected runtime/database failures roll back and keep the traversal pending for retry.

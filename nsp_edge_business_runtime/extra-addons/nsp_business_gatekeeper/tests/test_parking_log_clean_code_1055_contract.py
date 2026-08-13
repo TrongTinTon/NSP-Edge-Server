@@ -71,7 +71,7 @@ def test_allowed_checkout_is_not_live_monitor_entry():
     assert 'payload.display_kind === "clear"' in js
     assert 'this.clearVehicleAlert(payload);' in js
     assert "row.item.event_type === 'check_out' ? 'RA' : 'VÀO'" not in xml
-    assert '<span>VÀO</span>' in xml
+    assert 'entryStatusLabel(row.item)' in xml
 
 
 def test_parking_log_search_hides_technical_identifiers():

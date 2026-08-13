@@ -1,1 +1,3 @@
 from . import test_contract_policies
+from . import test_live_monitor_master_ui_1056_contract
+from . import test_detection_parking_log_retry_1056_contract

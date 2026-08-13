@@ -68,7 +68,7 @@ def test_repeated_internal_point_prefers_latest_valid_anchor():
     assert [ids(path) for path in matches] == [[1, 3, 4]]
 
 
-def test_out_of_order_lane_point_preserves_strict_sequence_semantics():
+def test_premature_future_point_is_tolerated_as_rfid_overlap():
     events = [
         event("A", 0, 1),
         event("C", 0.5, 2),
@@ -76,7 +76,8 @@ def test_out_of_order_lane_point_preserves_strict_sequence_semantics():
         event("C", 1.5, 4),
     ]
 
-    assert match(events, ["A", "B", "C"], [0, 2, 2]) == []
+    matches = match(events, ["A", "B", "C"], [0, 2, 2])
+    assert [ids(path) for path in matches] == [[1, 3, 4]]
 
 
 def test_too_late_next_point_does_not_prevent_new_repeated_start_anchor():
@@ -154,11 +155,11 @@ def test_successful_match_claims_internal_repeated_read_even_when_not_selected_a
     assert ids(details[0]["consumed_events"]) == [1, 2, 3, 4]
 
 
-def test_invalidated_candidate_reads_are_not_claimed_by_later_successful_crossing():
+def test_expired_overlap_candidate_is_not_claimed_by_later_crossing():
     events = [
         event("A", 0, 1),
-        event("C", 0.5, 2),  # invalidates A@0 candidate
-        event("A", 10, 3),
+        event("C", 0.5, 2),  # premature overlap is claimed only by this candidate
+        event("A", 10, 3),  # expires the old A->B candidate and starts a new one
         event("B", 11, 4),
         event("C", 12, 5),
     ]

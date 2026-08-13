@@ -56,6 +56,14 @@ class ParkingLogLiveMonitor(models.Model):
             (gate_user.name or _("Unknown employee")).strip().upper()
             if gate_user else _("Unknown employee").upper()
         )
+        avatar_url = ""
+        if gate_user:
+            avatar_field = next(
+                (name for name in ("avatar_128", "image_128", "image_1920") if name in gate_user._fields),
+                "",
+            )
+            if avatar_field:
+                avatar_url = f"/web/image/nsp.user/{gate_user.id}/{avatar_field}"
         return {
             "id": self.id,
             "log_uid": self.log_uid,
@@ -63,10 +71,12 @@ class ParkingLogLiveMonitor(models.Model):
             "lane_name": self.lane_id.name if self.lane_id else "",
             "event_type": self.event_type,
             "event_time": fields.Datetime.to_string(self.event_time) if self.event_time else "",
+            "decision": self.decision,
             "vehicle_key": str(vehicle.id if vehicle else (self.vehicle_tid or self.log_uid)),
             "vehicle_type": vehicle_type_code or "other",
             "license_plate": license_plate,
             "employee_name": employee_name,
+            "avatar_url": avatar_url,
             **self._live_monitor_display_meta(),
         }
 

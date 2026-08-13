@@ -54,3 +54,8 @@ Targeted tests cover:
 
 A randomized equivalence check over 40,000 timelines without consecutive
 repeated points produced the same matches as the previous strict matcher.
+
+
+## Superseded overlap behavior — 19.0.10.57.0
+
+The original 19.0.10.43.0 strict out-of-order invalidation rule is superseded for raw RFID overlap. Already-passed Reader/Port reads and premature future Reader/Port reads no longer rewind or invalidate active ordered progress. Only the immediate next configured point advances the sequence, and selected transition gaps still obey Max Duration. See `DETECTION_TO_PARKING_LOG_RFID_OVERLAP_19.0.10.57.0.md`.

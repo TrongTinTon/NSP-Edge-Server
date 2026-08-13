@@ -547,6 +547,8 @@ class ParkingDetectionEvent(models.Model):
             "candidate_records_created": 0,
             "error_records_created": 0,
             "duplicates": 0,
+            "parking_logs_created": 0,
+            "processing_deferred_lanes": 0,
         }
 
         for payload, assignment in known_detections:
@@ -607,8 +609,16 @@ class ParkingDetectionEvent(models.Model):
             # must not roll back the acquisition batch or force Controller retries.
             try:
                 with self.env.cr.savepoint():
-                    self._process_pending_for_lane(lane, finalize_expired=False)
+                    created_logs = self._process_pending_for_lane(
+                        lane, finalize_expired=False
+                    )
+                stats["parking_logs_created"] += len(created_logs)
             except Exception:
+                # Acquisition is already durable. Unexpected runtime/database errors
+                # must leave the candidate rows pending so a later processor run can
+                # retry the exact same traversal instead of permanently dead-lettering
+                # a valid physical crossing.
+                stats["processing_deferred_lanes"] += 1
                 _logger.exception(
                     "Parking business processing deferred after raw detection ingest: "
                     "controller=%s layout_lane=%s pending_events_preserved=true",
@@ -827,6 +837,17 @@ class ParkingDetectionEvent(models.Model):
                 })
 
         matches.sort(key=lambda item: (item["end_at"], item["start_at"], item["tid"]))
+        if matches:
+            _logger.info(
+                "Parking Vehicle sequence matched: layout_lane=%s lane=%s revision=%s matches=%s",
+                lane.id, lane.lane_id.code or lane.lane_id.id,
+                int(lane.parking_area_id.published_revision or 0), len(matches),
+            )
+        elif vehicle_events:
+            _logger.debug(
+                "Parking Vehicle sequence pending: layout_lane=%s lane=%s expected=%s vehicle_reads=%s",
+                lane.id, lane.lane_id.code or lane.lane_id.id, expected_keys, len(vehicle_events),
+            )
         return matches
 
     @api.model
@@ -1014,10 +1035,21 @@ class ParkingDetectionEvent(models.Model):
                         consume_user_events=consume_user_events,
                     )
                     logs |= parking_log
+                    if parking_log:
+                        _logger.info(
+                            "Parking Log committed from Detection sequence: log_uid=%s lane=%s "
+                            "vehicle=%s event_type=%s decision=%s",
+                            parking_log.log_uid, lane.lane_id.code or lane.lane_id.id,
+                            vehicle.license_plate or vehicle.display_name,
+                            parking_log.event_type, parking_log.decision,
+                        )
                     consumed_user_ids.update(consume_user_events.ids)
-            except Exception:
+            except ValidationError:
+                # Deterministic business/configuration contract failures are terminal
+                # for this matched traversal. Mark every claimed read so it cannot be
+                # reinterpreted later as a different physical crossing.
                 _logger.exception(
-                    "Parking Antenna Sequence processing failed: lane=%s event_type=%s ids=%s",
+                    "Parking Antenna Sequence validation failed: lane=%s event_type=%s ids=%s",
                     lane.id, event_type, movement_events.ids,
                 )
                 failed_vehicle_events = (movement_events | consume_vehicle_events).exists().filtered(
@@ -1031,6 +1063,16 @@ class ParkingDetectionEvent(models.Model):
                 if failed_user_events:
                     failed_user_events.write({"error_code": "processing_error"})
                     consumed_user_ids.update(failed_user_events.ids)
+            except Exception:
+                # Unexpected runtime/database errors are retryable. The surrounding
+                # savepoint rolls back partial Parking Log/consumption work and this
+                # re-raise keeps Detection rows pending (error_code = NULL).
+                _logger.exception(
+                    "Parking Antenna Sequence runtime failure deferred for retry: "
+                    "lane=%s event_type=%s ids=%s",
+                    lane.id, event_type, movement_events.ids,
+                )
+                raise
 
         if finalize_expired:
             self._expire_stale_vehicle_events(lane, now)
@@ -1065,7 +1107,15 @@ class ParkingDetectionEvent(models.Model):
         lane_ids = self._pending_lane_ids_in_event_order()
         Lane = self.env["nsp.parking.layout.lane"].sudo()
         for lane in Lane.browse(lane_ids).exists():
-            self._process_pending_for_lane(lane, now=now)
+            try:
+                with self.env.cr.savepoint():
+                    self._process_pending_for_lane(lane, now=now)
+            except Exception:
+                _logger.exception(
+                    "Parking Detection processor deferred Lane after runtime failure: "
+                    "layout_lane=%s pending_events_preserved=true",
+                    lane.id,
+                )
         return True
 
     @api.model

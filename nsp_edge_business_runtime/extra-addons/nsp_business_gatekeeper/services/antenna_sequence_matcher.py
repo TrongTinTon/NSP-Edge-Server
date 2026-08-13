@@ -8,23 +8,27 @@ sequence and each transition's Max Duration.
 
 
 def match_ordered_sequence_details(events, expected_keys, allowed_durations, *, key_of, time_of):
-    """Return ordered matches plus every raw read claimed by each traversal.
+    """Return ordered Lane matches while tolerating normal RFID overlap.
 
-    ``expected_keys`` contains the Lane Configuration Reader/Port path.
-    ``allowed_durations[i]`` is the Max Duration from step ``i - 1`` to step
-    ``i``; index 0 is ignored.
+    ``expected_keys`` is the configured ordered Reader/Port path.
+    ``allowed_durations[i]`` is the Max Duration from selected step ``i - 1``
+    to selected step ``i``; index 0 is ignored.
 
-    ``path`` contains only the observations that become the matched Antenna
-    Sequence. ``consumed_events`` additionally contains repeated observations of
-    the current sequence point that the matcher intentionally ignored or replaced
-    while building that successful traversal. This lets the working-buffer cleanup
-    remove those reads after the crossing is committed without collapsing the raw
-    timeline before matching.
+    RFID read zones overlap in real installations. After a Vehicle has progressed
+    from A to B, Reader A can still report the same TID; likewise Reader C can be
+    observed briefly before B produces the selected transition read. Those overlap
+    observations must not rewind or invalidate an otherwise ordered traversal.
 
-    Reads from another sequence point keep the strict-order contract: the first
-    point starts/restarts a candidate and any other out-of-order point invalidates
-    the current candidate. Observing the immediate next point after its Max
-    Duration also invalidates that traversal.
+    Matching therefore advances only on the *immediate next* configured point.
+    Reads of already-passed points and premature future points are claimed as RF
+    overlap and ignored for progression while the active transition is still
+    within its Max Duration. Once the active transition deadline has expired, the
+    candidate is dropped; a new read of the first point may immediately start a
+    new traversal.
+
+    ``path`` contains only selected observations. ``consumed_events`` additionally
+    contains repeated/overlap reads claimed by the successful traversal so they can
+    be removed from the short-lived Detection buffer after the Parking Log commits.
     """
     expected_keys = tuple(expected_keys or ())
     allowed_durations = tuple(allowed_durations or ())
@@ -32,34 +36,58 @@ def match_ordered_sequence_details(events, expected_keys, allowed_durations, *, 
         return []
     if len(allowed_durations) != len(expected_keys):
         raise ValueError("allowed_durations must align with expected_keys")
+    if len(set(expected_keys)) != len(expected_keys):
+        raise ValueError("expected_keys must be unique")
 
+    key_index = {key: index for index, key in enumerate(expected_keys)}
     matches = []
     path = []
     claimed = []
     step_index = -1
     last_index = len(expected_keys) - 1
 
+    def reset():
+        nonlocal path, claimed, step_index
+        path = []
+        claimed = []
+        step_index = -1
+
+    def start(event):
+        nonlocal path, claimed, step_index
+        path = [event]
+        claimed = [event]
+        step_index = 0
+
     for event in events:
         key = key_of(event)
         detected_at = time_of(event)
+        event_index = key_index.get(key)
 
         if not path:
-            if key == expected_keys[0]:
-                path = [event]
-                claimed = [event]
-                step_index = 0
+            if event_index == 0:
+                start(event)
             continue
+
+        # Before interpreting overlap, expire a candidate once the immediate next
+        # transition can no longer satisfy its configured Max Duration. This also
+        # lets a new first-point read begin a later physical crossing cleanly.
+        next_index = step_index + 1
+        if next_index <= last_index:
+            current_at = time_of(path[step_index])
+            next_allowed = max(0.001, float(allowed_durations[next_index] or 0.0))
+            if (detected_at - current_at).total_seconds() > next_allowed:
+                reset()
+                if event_index == 0:
+                    start(event)
+                continue
 
         current_key = expected_keys[step_index]
         if key == current_key:
-            # This physical read belongs to the active traversal even when it does
-            # not replace the selected anchor. Keep it in ``claimed`` so a
-            # successful crossing can clean it from the working buffer later.
             claimed.append(event)
 
-            # Repeated observation of the current physical point. For the first
-            # point, the newest observation is always the best anchor. For a later
-            # point, replace only if its preceding transition stays valid.
+            # Repeated current-point reads may improve the selected transition
+            # anchor. The first point can always move forward. Internal points can
+            # move only while their preceding transition remains valid.
             if step_index == 0:
                 path[0] = event
                 continue
@@ -72,7 +100,7 @@ def match_ordered_sequence_details(events, expected_keys, allowed_durations, *, 
             continue
 
         next_index = step_index + 1
-        if next_index <= last_index and key == expected_keys[next_index]:
+        if next_index <= last_index and event_index == next_index:
             current_at = time_of(path[step_index])
             gap = (detected_at - current_at).total_seconds()
             allowed = max(0.001, float(allowed_durations[next_index] or 0.0))
@@ -85,30 +113,25 @@ def match_ordered_sequence_details(events, expected_keys, allowed_durations, *, 
                         "path": tuple(path),
                         "consumed_events": tuple(claimed),
                     })
-                    path = []
-                    claimed = []
-                    step_index = -1
+                    reset()
             else:
-                # The immediate next Lane point was observed, but outside its
-                # configured Max Duration. Preserve strict-order semantics: this
-                # candidate is no longer a valid traversal and none of its reads
-                # are claimed by a later successful match.
-                path = []
-                claimed = []
-                step_index = -1
+                # Defensive fallback; the deadline check above normally handles
+                # this branch before we reach it.
+                reset()
+                if event_index == 0:
+                    start(event)
             continue
 
-        if key == expected_keys[0]:
-            # A new first point starts a distinct candidate. Abandoned reads from
-            # the invalidated candidate remain pending until their own expiry.
-            path = [event]
-            claimed = [event]
-            step_index = 0
-        else:
-            # Preserve strict ordered-sequence semantics for other Lane points.
-            path = []
-            claimed = []
-            step_index = -1
+        if event_index is not None:
+            # Same TID observed by an already-passed antenna or by a future antenna
+            # before the immediate next transition. This is normal RFID overlap,
+            # not evidence that the Vehicle reversed direction. Claim the read so
+            # a later successful traversal can clean it, but do not alter progress.
+            claimed.append(event)
+            continue
+
+        # Topology normally guarantees every candidate Reader/Port belongs to this
+        # Lane sequence. An unrelated key is ignored rather than poisoning progress.
 
     return matches
 
