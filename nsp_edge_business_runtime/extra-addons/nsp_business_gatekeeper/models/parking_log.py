@@ -2,7 +2,7 @@
 import logging
 
 from odoo import api, fields, models, _
-from odoo.exceptions import AccessError, ValidationError
+from odoo.exceptions import AccessError
 
 
 _logger = logging.getLogger(__name__)
@@ -92,11 +92,6 @@ class ParkingLog(models.Model):
         "nsp.vehicle.borrow", string="Vehicle Borrow", ondelete="set null",
     )
 
-    source_detection_ids = fields.One2many(
-        "nsp.parking.detection.event", "parking_log_id",
-        string="Source Detections", readonly=True,
-    )
-
     vehicle_display = fields.Char(string="Vehicle", compute="_compute_vehicle_display")
 
     _sql_constraints = [
@@ -133,23 +128,6 @@ class ParkingLog(models.Model):
             """
         )
 
-    @api.constrains("parking_area_id", "layout_lane_id", "lane_id")
-    def _check_context_scope(self):
-        for record in self:
-            configuration = record.layout_lane_id
-            if not configuration:
-                # Compatibility for historical rows only. Runtime-created logs always
-                # carry a contextual Lane Configuration.
-                continue
-            if record.parking_area_id and configuration.parking_area_id != record.parking_area_id:
-                raise ValidationError(_(
-                    "Parking Log Parking Area must match the Lane Configuration."
-                ))
-            if record.lane_id and configuration.lane_id != record.lane_id:
-                raise ValidationError(_(
-                    "Parking Log Lane must match the Lane Configuration Lane Master."
-                ))
-
     @api.depends("vehicle_id", "vehicle_id.license_plate", "vehicle_tid")
     def _compute_vehicle_display(self):
         for record in self:
@@ -162,31 +140,10 @@ class ParkingLog(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        layout_lane_ids = {
-            int(vals.get("layout_lane_id") or 0) for vals in vals_list
-            if vals.get("layout_lane_id")
-        }
-        configurations = self.env["nsp.parking.layout.lane"].browse(
-            list(layout_lane_ids)
-        ).exists()
-        configuration_by_id = {row.id: row for row in configurations}
-
-        prepared = []
-        for source in vals_list:
-            vals = dict(source)
-            configuration = configuration_by_id.get(int(vals.get("layout_lane_id") or 0))
-            if configuration:
-                vals.setdefault("parking_area_id", configuration.parking_area_id.id)
-                vals.setdefault("lane_id", configuration.lane_id.id)
-                vals.setdefault(
-                    "layout_revision",
-                    int(configuration.parking_area_id.published_revision or 0),
-                )
-            prepared.append(vals)
-
-        records = super().create(prepared)
+        records = super().create(vals_list)
         try:
-            # A bus/presentation SQL failure must not poison the outer transaction.
+            # Live Monitor is presentation-only; a bus failure must not poison the
+            # authoritative Parking business transaction.
             with self.env.cr.savepoint():
                 records._broadcast_live_monitor()
         except Exception:
@@ -194,14 +151,10 @@ class ParkingLog(models.Model):
         return records
 
     def write(self, vals):
-        if self.env.context.get("nsp_parking_log_system_write"):
-            return super().write(vals)
         raise AccessError(_(
             "Parking Logs are immutable Edge business history. "
             "Create a correcting business event instead of modifying an existing log."
         ))
 
     def unlink(self):
-        if self.env.context.get("nsp_parking_log_system_unlink"):
-            return super().unlink()
         raise AccessError(_("Parking Logs are immutable and cannot be deleted."))

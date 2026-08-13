@@ -1248,20 +1248,15 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                     details={"index": index, "fields": missing, "record_key": event_uid},
                 )
 
-            raw_rssi = item.get("rssi_dbm")
-            if raw_rssi in (None, ""):
-                raw_rssi = item.get("rssi")
-            try:
-                rssi_dbm = float(raw_rssi or 0.0)
-            except (TypeError, ValueError):
-                rssi_dbm = 0.0
+            # RSSI remains accepted for Controller wire compatibility but is not
+            # persisted in the Parking Detection working buffer because runtime
+            # matching does not use it.
             payload = {
                 "event_uid": event_uid,
                 "serial_number": serial_number,
                 "port_no": port_no,
                 "detected_at": detected_at,
                 "tid": tid,
-                "rssi_dbm": rssi_dbm,
             }
             normalized.append(payload)
             tids.add(tid)
@@ -1275,9 +1270,8 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
             ("tid", "in", list(tids)),
         ]) if tids else RuntimeAssignment.browse()
         # Do not filter inactive/unresolved assignments out of the transport batch.
-        # Edge must persist every syntactically valid physical observation first,
-        # then record resolution failures in Detection Logs instead of silently
-        # ACKing and dropping them.
+        # Edge classifies them once: resolvable observations enter the short-lived
+        # matcher buffer; meaningful failures become temporary structured errors.
         assignment_by_tid = {assignment.tid: assignment for assignment in assignments}
         batch = [
             (payload, assignment_by_tid.get(payload["tid"], RuntimeAssignment.browse()))
@@ -1311,6 +1305,6 @@ class NspBusinessGatekeeperApiService(models.AbstractModel):
                 "controller_code": controller.controller_id,
                 **ingest_result,
             },
-            message="Parking detections accepted and persisted on Edge.",
+            message="Parking detections accepted by Edge.",
         )
 

@@ -138,9 +138,11 @@ class TestGatekeeperContractPolicies(TransactionCase):
     def test_parking_runtime_history_keeps_master_and_context_identity(self):
         Detection = self.env["nsp.parking.detection.event"]
         ParkingLog = self.env["nsp.parking.log"]
-        self.assertEqual(Detection._fields["lane_id"].comodel_name, "nsp.parking.lane")
-        self.assertFalse(Detection._fields["lane_id"].store)
-        self.assertFalse(Detection._fields["error_message"].store)
+        self.assertNotIn("lane_id", Detection._fields)
+        self.assertNotIn("state", Detection._fields)
+        self.assertNotIn("error_message", Detection._fields)
+        self.assertNotIn("parking_log_id", Detection._fields)
+        self.assertNotIn("rssi_dbm", Detection._fields)
         self.assertEqual(
             Detection._fields["layout_lane_id"].comodel_name,
             "nsp.parking.layout.lane",
@@ -150,10 +152,7 @@ class TestGatekeeperContractPolicies(TransactionCase):
             ParkingLog._fields["layout_lane_id"].comodel_name,
             "nsp.parking.layout.lane",
         )
-        self.assertEqual(
-            Detection._fields["parking_log_id"].comodel_name,
-            "nsp.parking.log",
-        )
+        self.assertNotIn("source_detection_ids", ParkingLog._fields)
         self.assertFalse(ParkingLog._log_access)
         for required in (
             "log_uid", "event_time", "event_type", "decision", "reason_code",

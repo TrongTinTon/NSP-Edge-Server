@@ -15,27 +15,18 @@
                 <field name="layout_revision"/>
                 <field name="reader_id"/>
                 <field name="port_no"/>
-                <field name="state"/>
                 <field name="error_code"/>
-                <field name="parking_log_id"/>
 
-                <filter string="Pending" name="pending" domain="[('state','=','pending')]"/>
-                <filter string="Processed" name="processed" domain="[('state','=','processed')]"/>
-                <filter string="Errors" name="error" domain="[('state','=','error')]"/>
+                <filter string="Pending" name="pending" domain="[('error_code','=',False)]"/>
+                <filter string="Errors" name="error" domain="[('error_code','!=',False)]"/>
                 <separator/>
                 <filter string="Vehicle RFID" name="vehicle_tags" domain="[('vehicle_id','!=',False)]"/>
                 <filter string="User RFID" name="user_tags" domain="[('user_id','!=',False)]"/>
                 <filter string="Unresolved RFID" name="unresolved_tags"
                         domain="[('vehicle_id','=',False),('user_id','=',False)]"/>
-                <filter string="Linked to Parking Log" name="linked_parking_log"
-                        domain="[('parking_log_id','!=',False)]"/>
-                <filter string="Not Linked to Parking Log" name="unlinked_parking_log"
-                        domain="[('parking_log_id','=',False)]"/>
                 <separator/>
                 <filter string="Lane Configuration" name="group_layout_lane" context="{'group_by':'layout_lane_id'}"/>
                 <filter string="Reader" name="group_reader" context="{'group_by':'reader_id'}"/>
-                <filter string="State" name="group_state" context="{'group_by':'state'}"/>
-                <filter string="Parking Log" name="group_parking_log" context="{'group_by':'parking_log_id'}"/>
             </search>
         </field>
     </record>
@@ -45,27 +36,18 @@
         <field name="model">nsp.parking.detection.event</field>
         <field name="arch" type="xml">
             <list string="Detection Logs" create="0" edit="0" delete="0"
-                  decoration-danger="state == 'error'"
-                  decoration-warning="state == 'pending'">
+                  decoration-danger="error_code">
                 <field name="detected_at"/>
                 <field name="controller_id" optional="show"/>
                 <field name="serial_number" optional="show"/>
                 <field name="reader_id" optional="show"/>
                 <field name="port_no"/>
-                <field name="lane_id" optional="show"/>
                 <field name="tid"/>
-                <field name="rssi_dbm" optional="show"/>
                 <field name="vehicle_id" optional="show"/>
                 <field name="user_id" optional="show"/>
-                <field name="state" widget="badge"
-                       decoration-success="state == 'processed'"
-                       decoration-danger="state == 'error'"
-                       decoration-warning="state == 'pending'"/>
-                <field name="parking_log_id" optional="show"/>
                 <field name="error_code" optional="show"/>
                 <field name="layout_lane_id" optional="hide"/>
                 <field name="layout_revision" optional="hide"/>
-                <field name="error_message" optional="hide"/>
                 <field name="event_uid" optional="hide"/>
             </list>
         </field>
@@ -81,9 +63,7 @@
                         <group string="Detection">
                             <field name="event_uid"/>
                             <field name="detected_at"/>
-                            <field name="state" widget="badge"/>
                             <field name="error_code"/>
-                            <field name="error_message"/>
                         </group>
                         <group string="Physical Observation">
                             <field name="controller_id"/>
@@ -91,19 +71,16 @@
                             <field name="reader_id"/>
                             <field name="port_no"/>
                             <field name="tid"/>
-                            <field name="rssi_dbm"/>
                         </group>
                     </group>
                     <group>
                         <group string="Edge Resolution">
                             <field name="layout_lane_id"/>
-                            <field name="lane_id"/>
                             <field name="layout_revision"/>
                         </group>
-                        <group string="Resolved Identity / Business Link">
+                        <group string="Resolved Identity">
                             <field name="vehicle_id"/>
                             <field name="user_id"/>
-                            <field name="parking_log_id"/>
                         </group>
                     </group>
                 </sheet>
@@ -118,7 +95,7 @@
         <field name="search_view_id" ref="view_nsp_parking_detection_event_search"/>
         <field name="help" type="html">
             <p class="o_view_nocontent_smiling_face">No Detection Logs found.</p>
-            <p>Detection Logs are short-lived technical RFID evidence received from Controllers and resolved by the Edge.</p>
+            <p>Detection Logs contain only pending RFID work and short-lived resolution errors on Edge.</p>
         </field>
     </record>
 </odoo>

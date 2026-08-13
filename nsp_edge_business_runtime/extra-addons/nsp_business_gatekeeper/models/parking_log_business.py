@@ -152,7 +152,7 @@ class ParkingLogBusiness(models.Model):
         authorized_borrow_map=False,
     ):
         """Create one business Parking Log from a matched Lane detection group."""
-        detections = detections.filtered(lambda rec: rec.state == "pending")
+        detections = detections.filtered(lambda rec: not rec.error_code)
         if not detections:
             raise ValidationError(_("empty_detection_group"))
 
@@ -162,8 +162,6 @@ class ParkingLogBusiness(models.Model):
         lane = layout_lane.lane_id
         if any(rec.layout_lane_id != layout_lane for rec in detections):
             raise ValidationError(_("mixed_detection_group"))
-        if any(rec.lane_id != lane for rec in detections):
-            raise ValidationError(_("mixed_lane_master_detection_group"))
 
         vehicle_events = detections.filtered(lambda rec: bool(rec.vehicle_id))
         if not vehicle_events:

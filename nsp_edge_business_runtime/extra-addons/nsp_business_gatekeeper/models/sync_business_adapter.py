@@ -196,18 +196,10 @@ class NspSyncBusinessAdapter(models.Model):
         ) if layout_lane else 0.0
         last_step = sequence_rows[-1:]
 
-        # Source detections are intentionally short-lived. They are used only when
-        # still available; Cloud sync must not make long-term Parking Log storage
-        # depend on technical acquisition evidence.
-        vehicle_reads = record.source_detection_ids.filtered("vehicle_id").sorted(
-            key=lambda event: (event.detected_at, event.id)
-        )
+        # Detection rows are a working buffer and are deleted after a movement is
+        # consumed. Keep the legacy transport field for compatibility, but do not
+        # make Cloud push depend on retained technical Detection history.
         observed_duration = 0.0
-        if len(vehicle_reads) >= 2:
-            observed_duration = max(
-                0.0,
-                (vehicle_reads[-1].detected_at - vehicle_reads[0].detected_at).total_seconds(),
-            )
         payload = {
             "record_key": record.log_uid,
             # External compatibility fields; internal Edge semantics are Parking Log.
@@ -270,7 +262,6 @@ class NspSyncBusinessAdapter(models.Model):
             # Batch-prefetch all relations touched by the legacy transport serializer.
             # This keeps Cloud push bounded to a handful of queries instead of N+1.
             selected.mapped("layout_lane_id.antenna_sequence_ids.reader_id")
-            selected.mapped("source_detection_ids")
             selected.mapped("vehicle_id")
             selected.mapped("user_id")
             selected.mapped("borrow_id")

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-def test_raw_detection_is_persisted_before_business_resolution():
+def test_detection_working_buffer_keeps_unresolved_receipt_evidence():
     root = Path(__file__).resolve().parents[1]
     api = (root / 'models' / 'api_service.py').read_text(encoding='utf-8')
     model = (root / 'models' / 'parking_detection_event.py').read_text(encoding='utf-8')
@@ -11,9 +11,9 @@ def test_raw_detection_is_persisted_before_business_resolution():
     assert 'assignment_by_tid.get(payload["tid"], RuntimeAssignment.browse())' in api
     assert '"error_records_created"' in api
     assert '"persisted"' in api
-    assert 'Parking detections accepted and persisted on Edge.' in api
+    assert 'Parking detections accepted by Edge.' in api
 
-    assert 'def _persist_unresolved_detection' in model
+    assert 'def _unresolved_detection_values' in model
     assert '"rfid_assignment_not_found"' in model
     assert '"device_not_found"' in model
     assert '"no_reader_port_timeline"' in model

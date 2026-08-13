@@ -94,23 +94,6 @@
                             <field name="borrow_id"/>
                         </group>
                     </group>
-                    <notebook>
-                        <page string="Source Detections">
-                            <field name="source_detection_ids" readonly="1">
-                                <list create="0" edit="0" delete="0">
-                                    <field name="detected_at"/>
-                                    <field name="reader_id"/>
-                                    <field name="port_no"/>
-                                    <field name="tid"/>
-                                    <field name="rssi_dbm" optional="show"/>
-                                    <field name="vehicle_id" optional="show"/>
-                                    <field name="user_id" optional="show"/>
-                                    <field name="state" widget="badge"/>
-                                    <field name="event_uid" optional="hide"/>
-                                </list>
-                            </field>
-                        </page>
-                    </notebook>
                 </sheet>
             </form>
         </field>
