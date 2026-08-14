@@ -7,7 +7,6 @@
             <search string="Notifications">
                 <field name="name"/>
                 <field name="message"/>
-                <field name="controller_code"/>
                 <field name="recipient_user_id"/>
                 <field name="transaction_uid"/>
                 <filter string="Unread" name="unread" domain="[('state','=','unread')]"/>
@@ -41,7 +40,6 @@
                 <field name="name"/>
                 <field name="recipient_user_id" optional="show"/>
                 <field name="parking_event_type" optional="show"/>
-                <field name="controller_code" optional="hide"/>
             </list>
         </field>
     </record>
@@ -73,7 +71,6 @@
                             <field name="recipient_user_id" readonly="1"/>
                             <field name="parking_event_type" readonly="1"/>
                             <field name="transaction_uid" readonly="1" widget="CopyClipboardChar"/>
-                            <field name="controller_code" readonly="1"/>
                             <field name="source_model" readonly="1"/>
                             <field name="source_record_id" readonly="1"/>
                             <field name="read_at" readonly="1"/>

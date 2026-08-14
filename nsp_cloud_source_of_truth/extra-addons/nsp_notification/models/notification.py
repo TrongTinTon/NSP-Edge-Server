@@ -26,13 +26,14 @@ class NspNotification(models.Model):
     ], string="State", required=True, default="unread", index=True)
     event_time = fields.Datetime(string="Event Time", required=True, default=fields.Datetime.now, index=True)
 
-    controller_code = fields.Char(string="Controller Code", index=True, readonly=True)
     source_model = fields.Char(string="Source Model", readonly=True)
     source_record_id = fields.Integer(string="Source Record ID", readonly=True)
     recipient_user_id = fields.Many2one(
         "nsp.user", string="Recipient", readonly=True, index=True, ondelete="set null"
     )
-    transaction_uid = fields.Char(string="Parking Transaction UID", readonly=True, index=True)
+    # Kept as transaction_uid for backward compatibility with existing Mobile/Push
+    # payloads. The value now contains the source Parking Log log_uid.
+    transaction_uid = fields.Char(string="Parking Log UID", readonly=True, index=True)
     parking_event_type = fields.Selection(
         [("check_in", "Check-in"), ("check_out", "Check-out")],
         string="Parking Event", readonly=True, index=True,
@@ -68,22 +69,30 @@ class NspNotification(models.Model):
         ))
 
     @api.model
-    def notify_parking_transaction(self, transaction):
-        """Create one owner-facing notification from an immutable Parking Transaction.
+    def notify_parking_log(self, parking_log):
+        """Create one owner-facing notification from an immutable Cloud Parking Log.
 
-        Notification stores only the compact business event. Raw RFID detections
-        remain in Gatekeeper and are never copied into the notification layer.
+        Notification stores only the compact business event. Reader/Controller
+        diagnostics remain outside the Cloud Parking Log/Notification layer.
         """
-        transaction.ensure_one()
-        vehicle = transaction.vehicle_id
+        parking_log.ensure_one()
+        vehicle = parking_log.vehicle_id
         owner = vehicle.owner_id if vehicle else self.env["nsp.user"].browse()
         if not owner:
             return self.browse()
 
-        event_type = transaction.event_type
-        plate = transaction.license_plate or (vehicle.license_plate if vehicle else False) or transaction.vehicle_tid or _("Vehicle")
-        lane = transaction.lane_display or _("Parking lane")
-        denied = transaction.status == "denied"
+        event_type = parking_log.event_type
+        plate = (
+            (vehicle.license_plate if vehicle else False)
+            or parking_log.vehicle_tid
+            or _("Vehicle")
+        )
+        lane = (
+            parking_log.lane_id.display_name
+            if parking_log.lane_id
+            else _("Parking lane")
+        )
+        denied = parking_log.decision == "denied"
         if event_type == "check_in":
             title = _("Vehicle checked in: %s") % plate
             message = _("Vehicle %(vehicle)s checked in at %(lane)s.") % {
@@ -96,13 +105,19 @@ class NspNotification(models.Model):
             }
         if denied:
             title = _("Parking denied: %s") % plate
-            reason = transaction.error_message or transaction.error_code or _("Parking access denied")
+            reason_labels = dict(parking_log._fields["reason_code"]._description_selection(self.env))
+            reason = (
+                reason_labels.get(parking_log.reason_code)
+                or parking_log.reason_code
+                or _("Parking access denied")
+            )
             message = _("%(event)s Access was denied: %(reason)s") % {
                 "event": message, "reason": reason,
             }
 
+        log_uid = parking_log.log_uid or str(parking_log.id)
         dedupe_key = "parking:%s:owner:%s" % (
-            transaction.transaction_uid or transaction.id,
+            log_uid,
             owner.user_code or owner.id,
         )
         existing = self.sudo().with_context(active_test=False).search(
@@ -116,12 +131,11 @@ class NspNotification(models.Model):
             "category": "parking",
             "severity": "warning" if denied else "info",
             "state": "unread",
-            "event_time": transaction.event_time or fields.Datetime.now(),
-            "controller_code": transaction.controller_id.controller_id if transaction.controller_id else transaction.controller_code or False,
-            "source_model": transaction._name,
-            "source_record_id": transaction.id,
+            "event_time": parking_log.event_time or fields.Datetime.now(),
+            "source_model": parking_log._name,
+            "source_record_id": parking_log.id,
             "recipient_user_id": owner.id,
-            "transaction_uid": transaction.transaction_uid or False,
+            "transaction_uid": parking_log.log_uid or False,
             "parking_event_type": event_type,
             "dedupe_key": dedupe_key,
             "active": True,

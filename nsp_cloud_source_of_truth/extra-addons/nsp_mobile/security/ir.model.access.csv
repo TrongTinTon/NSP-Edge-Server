@@ -10,7 +10,7 @@ access_nsp_user_friendship_self_service,nsp.user.friendship Self Service,nsp_use
 access_nsp_vehicle_self_service,nsp.vehicle Self Service,nsp_vehicle.model_nsp_vehicle,base.group_user,1,0,0,0
 access_nsp_vehicle_borrow_self_service,nsp.vehicle.borrow Self Service,nsp_vehicle.model_nsp_vehicle_borrow,base.group_user,1,1,1,0
 access_nsp_notification_self_service,nsp.notification Self Service,nsp_notification.model_nsp_notification,base.group_user,1,1,0,0
-access_nsp_parking_transaction_self_service,nsp.parking.transaction Self Service,nsp_master_gatekeeper.model_nsp_parking_transaction,base.group_user,1,0,0,0
+access_nsp_parking_log_self_service,nsp.parking.log Self Service,nsp_master_gatekeeper.model_nsp_parking_log,base.group_user,1,0,0,0
 access_nsp_vehicle_type_self_service,nsp.vehicle.type Self Service,nsp_vehicle.model_nsp_vehicle_type,base.group_user,1,0,0,0
 access_nsp_vehicle_color_self_service,nsp.vehicle.color Self Service,nsp_vehicle.model_nsp_vehicle_color,base.group_user,1,0,0,0
 access_nsp_reference_brand_self_service,nsp.reference.brand Self Service,nsp_core.model_nsp_reference_brand,base.group_user,1,0,0,0

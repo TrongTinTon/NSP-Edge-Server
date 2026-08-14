@@ -2,14 +2,12 @@
 
 ## 1. Identity contract
 
-- Mobile signs in with the active internal Odoo User (`res.users`) login and password.
-- Each internal Odoo User resolves to exactly one active `nsp.user` business profile through `nsp.user.odoo_user_id`.
-- Login never creates an `nsp.user` automatically; the business identity and Odoo account must be linked before Mobile login.
-- The access token subject remains `res.users`; business authorization and data ownership use the linked `nsp.user`.
+- Mobile authenticates with an active internal Odoo account (`res.users`) because Odoo owns the login credential and password policy.
+- The Odoo account must resolve to exactly one active `nsp.user` business identity through `nsp.user.odoo_user_id`.
+- The Mobile token subject is `nsp.user`; business authorization and ownership never infer identity from name, email or phone.
 - A successful login binds the token to one `nsp.mobile.session` and one `nsp.mobile.device`.
 - Business APIs never accept `user_id`, `odoo_user_id` or `user_code` to choose the current identity.
-- Standard Odoo activation, Groups, ACLs and Record Rules remain authoritative.
-- Accounts requiring an Odoo MFA step are rejected until a Mobile MFA flow is implemented; MFA is never bypassed.
+- Odoo account activation and MFA policy are enforced before a Mobile token is issued.
 
 ## 2. Route convention
 
@@ -32,24 +30,10 @@ Rules:
 
 | Method | Route | Purpose |
 |---|---|---|
-| POST | `/v1/mobile/auth/login` | Authenticate the Odoo User, register/update the login device, open a Mobile session and issue tokens. |
-| POST | `/v1/mobile/auth/refresh` | Rotate the refresh token and issue a new access token for the same Odoo User, session and device. |
+| POST | `/v1/mobile/auth/login` | Authenticate the Odoo account, resolve its NSP User identity, register/update the device, open a Mobile session and issue a business-identity token. |
+| POST | `/v1/mobile/auth/refresh` | Rotate the refresh token and issue a new access token for the same NSP User identity, session and device. |
 | POST | `/v1/mobile/auth/logout` | Revoke the current Mobile session and all tokens bound to that session. |
-| PATCH | `/v1/mobile/auth/password` | Change the standard Odoo User password and require login again. |
-
-
-### Login eligibility
-
-A login succeeds only when all conditions are true:
-
-1. `res.users.login` and the standard Odoo password are valid.
-2. The Odoo User is active and belongs to the internal user group.
-3. The account does not require an uncompleted Odoo MFA step.
-4. Exactly one active `nsp.user` has `odoo_user_id` equal to the authenticated Odoo User.
-5. The Odoo User can read that linked `nsp.user` through the installed ACLs and Record Rules.
-6. `device.device_uid` is present.
-
-An unlinked or inactive NSP profile returns HTTP `403`. Invalid Odoo credentials return HTTP `401`. The API does not create or relink business identities during authentication.
+| PATCH | `/v1/mobile/auth/password` | Change the linked Odoo account password and require login again. |
 
 ### Login request
 
@@ -82,8 +66,8 @@ FCM/APNS server credentials are configured only on Cloud in `nsp_notification`. 
 | DELETE | `/v1/mobile/device` | Unregister the current device and revoke its active Mobile session. |
 | POST | `/v1/mobile/device/heartbeat` | Update device/session last-seen and synchronization timestamps. |
 | GET | `/v1/mobile/vehicles` | List active vehicles owned by the current NSP User. |
-| GET | `/v1/mobile/vehicles/detail?vehicle_id=...` | Read one owned vehicle, latest allowed parking transaction and active borrow state. |
-| GET | `/v1/mobile/parking/transactions?vehicle_id=...` | Read paginated Parking Transactions for vehicles owned by the current NSP User. |
+| GET | `/v1/mobile/vehicles/detail?vehicle_id=...` | Read one owned vehicle, latest allowed Parking Log and active borrow state. |
+| GET | `/v1/mobile/parking/logs?vehicle_id=...` | Read paginated Parking Logs for vehicles owned by the current NSP User. |
 | GET | `/v1/mobile/friends/search?q=...` | Search active NSP Users for friend discovery. |
 | GET | `/v1/mobile/friends` | List accepted friendships. |
 | GET | `/v1/mobile/friend-requests` | List pending sent and received friend requests. |
@@ -110,7 +94,7 @@ FCM/APNS server credentials are configured only on Cloud in `nsp_notification`. 
 | `POST /v1/mobile/devices/heartbeat` | `POST /v1/mobile/device/heartbeat` |
 | `POST /v1/mobile/devices/unregister` | `DELETE /v1/mobile/device` |
 | `GET /v1/mobile/vehicle` | `GET /v1/mobile/vehicles/detail` |
-| `GET /v1/mobile/parking-history` | `GET /v1/mobile/parking/transactions` |
+| `GET /v1/mobile/parking-history` | `GET /v1/mobile/parking/logs` |
 | `GET /v1/mobile/friends/requests` | `GET /v1/mobile/friend-requests` |
 | `POST /v1/mobile/friends/request` | `POST /v1/mobile/friend-requests` |
 | `POST /v1/mobile/friends/accept` | `POST /v1/mobile/friend-requests/accept` |
@@ -128,3 +112,19 @@ FCM/APNS server credentials are configured only on Cloud in `nsp_notification`. 
 - `nsp.notification.delivery` records transport state per channel/device.
 - FCM and APNS credentials, queueing, retry and provider calls belong to Cloud `nsp_notification`.
 - Mobile stores no FCM Service Account or APNS private key. It only registers its device token through login or `PATCH /v1/mobile/device`.
+
+
+## Parking Log response
+
+`GET /v1/mobile/parking/logs` returns immutable Cloud Parking Log evidence.
+The endpoint reads immutable `nsp.parking.log` records from Cloud.
+Each item exposes `log_uid`, event/decision fields, parking context, vehicle/user RFID evidence and `borrow_id` when applicable.
+
+
+## Vehicle master contract (19.0.5.0.3)
+
+`GET /v1/mobile/vehicles/config` returns active `vehicle_types`, `brands`, `models`, and `colors`.
+
+`POST /v1/mobile/vehicles/register` accepts `license_plate` and optional `vehicle_type_id`, `brand_id`, `model_id`, `color_id`, `image`. Brand/Model IDs use `nsp.reference.brand` / `nsp.reference.model`.
+
+Notification items expose both `parking_event_type` and `parking_event_badge`. The badge distinguishes `Check-in` (`success`) from `Check-out` (`info`).

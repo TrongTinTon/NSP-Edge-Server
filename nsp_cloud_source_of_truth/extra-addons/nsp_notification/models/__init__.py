@@ -2,4 +2,4 @@
 from . import provider_config
 from . import notification
 from . import delivery
-from . import parking_transaction
+from . import parking_log

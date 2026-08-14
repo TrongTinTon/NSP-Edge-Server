@@ -1,12 +1,12 @@
 {
     'name': 'NSP Mobile',
-    'summary': 'Cloud Mobile API using standard Odoo User authentication and permissions',
+    'summary': 'Cloud Mobile API for NSP business identities with Odoo credential authentication',
     'description': (
-        'Cloud-only NSP Mobile API. Authentication uses an internal res.users account with a mandatory one-to-one nsp.user profile and '
-        'standard Odoo Groups, ACLs and Record Rules. The module issues device-bound Mobile '
-        'Tokens for profile, vehicles, parking history, friends, vehicle borrowing and notifications.'
+        'Cloud-only NSP Mobile API. Authentication uses an internal res.users credential linked one-to-one to an active nsp.user business identity. '
+        'Mobile Tokens remain bound to the nsp.user identity, session and device. The module exposes profile, vehicles, Parking Logs, '
+        'friendships, vehicle borrowing and notifications.'
     ),
-    'version': '19.0.5.1.0',
+    'version': '19.0.5.0.3',
     'sequence': 45,
     'author': 'BKU Team',
     'category': 'Services',

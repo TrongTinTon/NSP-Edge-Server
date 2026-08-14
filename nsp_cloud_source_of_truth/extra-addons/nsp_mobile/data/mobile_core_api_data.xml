@@ -7,8 +7,7 @@
         <field name="state">active</field>
         <field name="token_ttl_hours">1</field>
         <field name="refresh_token_ttl_days">30</field>
-        <field name="rate_limit_per_minute">180</field>
-        <field name="notes">System Mobile Application. Mobile login authenticates an internal Odoo User and requires exactly one pre-linked active NSP User business profile. Login never creates or relinks the business identity. Tokens remain bound to res.users, the Mobile session and the current device.</field>
+        <field name="notes">System Mobile Application. Mobile login authenticates an internal Odoo User, resolves exactly one linked NSP User business identity, and issues a token bound to that NSP User, the Mobile session and the current device.</field>
     </record>
     <record id="action_endpoint_manager_nsp_mobile" model="action.endpoint.manager">
         <field name="name">NSP Mobile Core API Endpoints</field>
@@ -116,22 +115,22 @@
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="route_active" eval="True"/>
     </record>
-    <record id="action_core_api_nsp_mobile_parking_transactions" model="ir.actions.core_api">
-        <field name="name">NSP Mobile Parking Transactions</field>
+    <record id="action_core_api_nsp_mobile_parking_logs" model="ir.actions.core_api">
+        <field name="name">NSP Mobile Parking Logs</field>
         <field name="model_id" ref="model_nsp_mobile_api_service"/>
-        <field name="code">model.api_parking_transactions()</field>
+        <field name="code">model.api_parking_logs()</field>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
-        <field name="endpoint_code">nsp_mobile_parking_transactions</field>
-        <field name="route_suffix">mobile/parking/transactions</field>
+        <field name="endpoint_code">nsp_mobile_parking_logs</field>
+        <field name="route_suffix">mobile/parking/logs</field>
         <field name="http_methods">GET</field>
     </record>
-    <record id="endpoint_nsp_mobile_parking_transactions" model="core.api.endpoint">
-        <field name="name">NSP Mobile Parking Transactions</field>
-        <field name="code">nsp_mobile_parking_transactions</field>
+    <record id="endpoint_nsp_mobile_parking_logs" model="core.api.endpoint">
+        <field name="name">NSP Mobile Parking Logs</field>
+        <field name="code">nsp_mobile_parking_logs</field>
         <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
-        <field name="route_suffix">mobile/parking/transactions</field>
+        <field name="route_suffix">mobile/parking/logs</field>
         <field name="http_methods">GET</field>
-        <field name="action_id" ref="action_core_api_nsp_mobile_parking_transactions"/>
+        <field name="action_id" ref="action_core_api_nsp_mobile_parking_logs"/>
         <field name="application_id" ref="core_api_application_nsp_mobile"/>
         <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
         <field name="route_active" eval="True"/>
@@ -417,4 +416,48 @@
         <field name="route_active" eval="True"/>
     </record>
     <function model="nsp.mobile.api.service" name="_cleanup_obsolete_routes"/>
+
+    <!-- Vehicle Config -->
+    <record id="action_core_api_nsp_mobile_vehicle_config" model="ir.actions.core_api">
+        <field name="name">NSP Mobile Vehicle Config</field>
+        <field name="model_id" ref="model_nsp_mobile_api_service"/>
+        <field name="code">model.api_vehicle_config()</field>
+        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
+        <field name="endpoint_code">nsp_mobile_vehicle_config</field>
+        <field name="route_suffix">mobile/vehicles/config</field>
+        <field name="http_methods">GET</field>
+    </record>
+    <record id="endpoint_nsp_mobile_vehicle_config" model="core.api.endpoint">
+        <field name="name">NSP Mobile Vehicle Config</field>
+        <field name="code">nsp_mobile_vehicle_config</field>
+        <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
+        <field name="route_suffix">mobile/vehicles/config</field>
+        <field name="http_methods">GET</field>
+        <field name="action_id" ref="action_core_api_nsp_mobile_vehicle_config"/>
+        <field name="application_id" ref="core_api_application_nsp_mobile"/>
+        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
+        <field name="route_active" eval="True"/>
+    </record>
+
+    <!-- Vehicle Register -->
+    <record id="action_core_api_nsp_mobile_vehicle_register" model="ir.actions.core_api">
+        <field name="name">NSP Mobile Vehicle Register</field>
+        <field name="model_id" ref="model_nsp_mobile_api_service"/>
+        <field name="code">model.api_vehicle_register()</field>
+        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
+        <field name="endpoint_code">nsp_mobile_vehicle_register</field>
+        <field name="route_suffix">mobile/vehicles/register</field>
+        <field name="http_methods">POST</field>
+    </record>
+    <record id="endpoint_nsp_mobile_vehicle_register" model="core.api.endpoint">
+        <field name="name">NSP Mobile Vehicle Register</field>
+        <field name="code">nsp_mobile_vehicle_register</field>
+        <field name="version_id" ref="t4_coreapi.core_api_version_v1"/>
+        <field name="route_suffix">mobile/vehicles/register</field>
+        <field name="http_methods">POST</field>
+        <field name="action_id" ref="action_core_api_nsp_mobile_vehicle_register"/>
+        <field name="application_id" ref="core_api_application_nsp_mobile"/>
+        <field name="endpoint_manager_id" ref="action_endpoint_manager_nsp_mobile"/>
+        <field name="route_active" eval="True"/>
+    </record>
 </odoo>

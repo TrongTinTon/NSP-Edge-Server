@@ -4,3 +4,4 @@ from . import nsp_user
 from . import res_users
 from . import notification
 from . import api_service
+from . import api_vehicle

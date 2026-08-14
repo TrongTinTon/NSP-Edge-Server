@@ -11,7 +11,7 @@
         <field name="name">NSP User: Odoo User self-service read</field>
         <field name="model_id" ref="nsp_user.model_nsp_user"/>
         <field name="groups" eval="[(4, ref('base.group_user'))]"/>
-        <field name="domain_force">[('active', '=', True), ('odoo_user_id', '!=', False)]</field>
+        <field name="domain_force">[('active', '=', True)]</field>
         <field name="perm_read" eval="True"/>
         <field name="perm_write" eval="False"/>
         <field name="perm_create" eval="False"/>
@@ -75,9 +75,9 @@
     </record>
 
     <!-- Owner-facing parking history and notifications. -->
-    <record id="rule_nsp_parking_transaction_self_service_read" model="ir.rule">
-        <field name="name">NSP Parking Transaction: Odoo User owner read</field>
-        <field name="model_id" ref="nsp_master_gatekeeper.model_nsp_parking_transaction"/>
+    <record id="rule_nsp_parking_log_self_service_read" model="ir.rule">
+        <field name="name">NSP Parking Log: Odoo User owner read</field>
+        <field name="model_id" ref="nsp_master_gatekeeper.model_nsp_parking_log"/>
         <field name="groups" eval="[(4, ref('base.group_user'))]"/>
         <field name="domain_force">[('vehicle_id.owner_id.odoo_user_id', '=', user.id)]</field>
         <field name="perm_read" eval="True"/>
@@ -262,9 +262,9 @@
         <field name="perm_unlink" eval="True"/>
     </record>
 
-    <record id="rule_nsp_parking_transaction_operator_all_read" model="ir.rule">
-        <field name="name">NSP Parking Transaction: operator all read</field>
-        <field name="model_id" ref="nsp_master_gatekeeper.model_nsp_parking_transaction"/>
+    <record id="rule_nsp_parking_log_operator_all_read" model="ir.rule">
+        <field name="name">NSP Parking Log: operator all read</field>
+        <field name="model_id" ref="nsp_master_gatekeeper.model_nsp_parking_log"/>
         <field name="groups" eval="[(4, ref('nsp_core.group_nsp_operator'))]"/>
         <field name="domain_force">[(1, '=', 1)]</field>
         <field name="perm_read" eval="True"/>
@@ -272,9 +272,9 @@
         <field name="perm_create" eval="False"/>
         <field name="perm_unlink" eval="False"/>
     </record>
-    <record id="rule_nsp_parking_transaction_it_all_read" model="ir.rule">
-        <field name="name">NSP Parking Transaction: IT all read</field>
-        <field name="model_id" ref="nsp_master_gatekeeper.model_nsp_parking_transaction"/>
+    <record id="rule_nsp_parking_log_it_all_read" model="ir.rule">
+        <field name="name">NSP Parking Log: IT all read</field>
+        <field name="model_id" ref="nsp_master_gatekeeper.model_nsp_parking_log"/>
         <field name="groups" eval="[(4, ref('nsp_core.group_nsp_it_parking'))]"/>
         <field name="domain_force">[(1, '=', 1)]</field>
         <field name="perm_read" eval="True"/>
