@@ -7,9 +7,7 @@
     <field name="arch" type="xml">
       <list string="Lanes" decoration-muted="not active">
         <field name="name" string="Lane" decoration-bf="1"/>
-        <field name="code" string="Code"/>
         <field name="branch_id" string="Branch"/>
-        <field name="layout_count" string="Parking Layouts" readonly="1"/>
         <field name="active" widget="boolean_toggle"/>
       </list>
     </field>
@@ -24,23 +22,11 @@
           <div class="oe_title">
             <label for="name" string="Lane"/>
             <h1><field name="name" placeholder="Lane name..."/></h1>
-            <div class="text-muted"><field name="code" readonly="1" class="oe_inline"/></div>
           </div>
           <group>
             <field name="branch_id" required="1"/>
             <field name="active"/>
-            <field name="layout_count" readonly="1"/>
           </group>
-          <separator string="Used in Parking Layouts"/>
-          <field name="layout_lane_ids" readonly="1">
-            <list create="0" edit="0" delete="0">
-              <field name="parking_area_id" string="Parking Layout"/>
-              <field name="setup_state" widget="badge"/>
-              <field name="configuration_state" widget="badge"/>
-              <field name="edge_server_id" string="Server"/>
-              <field name="controller_id" string="Controller"/>
-            </list>
-          </field>
         </sheet>
       </form>
     </field>
