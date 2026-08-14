@@ -6,23 +6,24 @@
         <field name="inherit_id" ref="nsp_user.view_nsp_user_form"/>
         <field name="arch" type="xml">
             <xpath expr="//page[@name='nsp_user_friends']" position="before">
-                <page string="Vehicles" name="nsp_user_vehicles">
+                <page string="Vehicles" name="nsp_user_vehicles" invisible="not can_edit_profile">
                     <field name="vehicle_ids" nolabel="1" context="{'default_owner_id': id}">
                         <list editable="bottom" open_form_view="1" delete="0">
-                            <field name="license_plate" string="Plate" decoration-bf="1"/>
-                            <field name="vehicle_type_id" string="Type" optional="show"
+                            <field name="can_administer_vehicle" column_invisible="1"/>
+                            <field name="license_plate" string="Plate" decoration-bf="1" readonly="not can_administer_vehicle"/>
+                            <field name="vehicle_type_id" string="Type" optional="show" readonly="not can_administer_vehicle"
                                    options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
                                    context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_type_form'}"/>
-                            <field name="brand_id" string="Brand" optional="show"
+                            <field name="brand_id" string="Brand" optional="show" readonly="not can_administer_vehicle"
                                    options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
                                    context="{'form_view_ref': 'nsp_core.view_nsp_reference_brand_form'}"/>
-                            <field name="model_id" string="Model" domain="[('brand_id', '=', brand_id)]" optional="show"
+                            <field name="model_id" string="Model" readonly="not can_administer_vehicle" domain="[('brand_id', '=', brand_id)]" optional="show"
                                    options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
                                    context="{'form_view_ref': 'nsp_core.view_nsp_reference_model_form', 'default_brand_id': brand_id}"/>
-                            <field name="color_id" string="Color" optional="hide"
+                            <field name="color_id" string="Color" optional="hide" readonly="not can_administer_vehicle"
                                    options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
                                    context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_color_form'}"/>
-                            <field name="active" widget="boolean_toggle" optional="hide"/>
+                            <field name="active" widget="boolean_toggle" optional="hide" readonly="not can_administer_vehicle"/>
                         </list>
                     </field>
                 </page>

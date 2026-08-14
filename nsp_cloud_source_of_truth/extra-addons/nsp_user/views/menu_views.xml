@@ -5,6 +5,6 @@
         parent="nsp_core.menu_nsp_master_data"
         action="action_nsp_user"
         sequence="10"
-        groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking"
+        groups="base.group_user"
     />
 </odoo>

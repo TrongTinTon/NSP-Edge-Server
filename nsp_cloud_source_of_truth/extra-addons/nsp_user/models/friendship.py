@@ -1,5 +1,5 @@
 from odoo import _, api, fields, models
-from odoo.exceptions import ValidationError
+from odoo.exceptions import AccessError, ValidationError
 
 
 class NspUserFriendship(models.Model):
@@ -37,6 +37,27 @@ class NspUserFriendship(models.Model):
         "UNIQUE(pair_key)",
         "A friendship already exists between these users.",
     )
+
+    @api.model
+    def _is_friendship_admin(self):
+        return self.env["nsp.user"]._is_friendship_admin()
+
+    @api.model
+    def _current_identity(self, required=True):
+        return self.env["nsp.user"]._current_nsp_identity(required=required)
+
+    def _check_self_relationship_access(self, accept_only=False):
+        if self._is_friendship_admin():
+            return True
+        identity = self._current_identity(required=True)
+        for record in self:
+            if accept_only:
+                allowed = record.addressee_id == identity
+            else:
+                allowed = identity in (record.requester_id, record.addressee_id)
+            if not allowed:
+                raise AccessError(_("You can manage only your own friendship requests."))
+        return True
 
     def init(self):
         self.env.cr.execute(
@@ -76,6 +97,10 @@ class NspUserFriendship(models.Model):
                 raise ValidationError(_("Requester and Friend are required."))
             if requester_id == addressee_id:
                 raise ValidationError(_("A user cannot add themselves as a friend."))
+            if not self._is_friendship_admin():
+                identity = self._current_identity(required=True)
+                if requester_id != identity.id:
+                    raise AccessError(_("Friend requests must be sent from your own NSP identity."))
             values.update(
                 {
                     "pair_key": self._make_pair_key(requester_id, addressee_id),
@@ -92,12 +117,58 @@ class NspUserFriendship(models.Model):
             if record.requester_id == record.addressee_id:
                 raise ValidationError(_("A user cannot add themselves as a friend."))
 
+    def write(self, vals):
+        if not self._is_friendship_admin() and not self.env.context.get(
+            "nsp_friendship_action"
+        ):
+            raise AccessError(_("Use the friendship actions to change a relationship."))
+        return super().write(vals)
+
+    def unlink(self):
+        self._check_self_relationship_access(accept_only=False)
+        return super().unlink()
+
     def action_accept(self):
-        self.filtered(lambda record: record.state == "pending").write(
-            {"state": "accepted", "accepted_at": fields.Datetime.now()}
-        )
+        self._check_self_relationship_access(accept_only=True)
+        self.filtered(lambda record: record.state == "pending").with_context(
+            nsp_friendship_action=True
+        ).write({"state": "accepted", "accepted_at": fields.Datetime.now()})
         return True
 
     def action_cancel(self):
+        self._check_self_relationship_access(accept_only=False)
         self.unlink()
         return True
+
+    @api.model
+    def accepted_friends_map(self, users):
+        """Return accepted friend IDs for each User with one batched query.
+
+        This is the stable service used by Vehicle Borrow validation; it does not
+        bypass lending authorization and returns only accepted relationships.
+        """
+        users = users.exists()
+        result = {user_id: [] for user_id in users.ids}
+        if not users:
+            return result
+
+        user_ids = set(users.ids)
+        friendships = self.sudo().search(
+            [
+                ("state", "=", "accepted"),
+                "|",
+                ("requester_id", "in", list(user_ids)),
+                ("addressee_id", "in", list(user_ids)),
+            ]
+        )
+        mapped = {user_id: set() for user_id in user_ids}
+        for friendship in friendships:
+            requester_id = friendship.requester_id.id
+            addressee_id = friendship.addressee_id.id
+            if requester_id in user_ids:
+                mapped[requester_id].add(addressee_id)
+            if addressee_id in user_ids:
+                mapped[addressee_id].add(requester_id)
+        for user_id in result:
+            result[user_id] = sorted(mapped.get(user_id, set()))
+        return result

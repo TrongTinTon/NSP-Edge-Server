@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- Internal users may edit only their own NSP identity. Read access remains directory-wide. -->
+    <record id="rule_nsp_user_self_write" model="ir.rule">
+        <field name="name">NSP User - own profile self service</field>
+        <field name="model_id" ref="model_nsp_user"/>
+        <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+        <field name="domain_force">[('odoo_user_id', '=', user.id)]</field>
+        <field name="perm_read" eval="False"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
+    <!-- HR and IT are not constrained by the self-profile write rule. -->
+    <record id="rule_nsp_user_admin_write_all" model="ir.rule">
+        <field name="name">NSP User - Parking administrators write all</field>
+        <field name="model_id" ref="model_nsp_user"/>
+        <field name="groups" eval="[(4, ref('nsp_core.group_nsp_hr_parking')), (4, ref('nsp_core.group_nsp_it_parking')), (4, ref('base.group_system'))]"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="perm_read" eval="False"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
+    <!-- A normal user may see and act only on friendships involving their own NSP identity. -->
+    <record id="rule_nsp_friendship_self" model="ir.rule">
+        <field name="name">NSP Friendship - own relationships</field>
+        <field name="model_id" ref="model_nsp_user_friendship"/>
+        <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+        <field name="domain_force">['|', ('requester_id.odoo_user_id', '=', user.id), ('addressee_id.odoo_user_id', '=', user.id)]</field>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
+
+    <!-- HR and Operator preserve their existing read-all inspection scope. -->
+    <record id="rule_nsp_friendship_parking_read_all" model="ir.rule">
+        <field name="name">NSP Friendship - Parking roles read all</field>
+        <field name="model_id" ref="model_nsp_user_friendship"/>
+        <field name="groups" eval="[(4, ref('nsp_core.group_nsp_hr_parking')), (4, ref('nsp_core.group_nsp_operator'))]"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="False"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
+    <!-- IT Parking Admin / Odoo System Administrator have unrestricted friendship administration. -->
+    <record id="rule_nsp_friendship_it_all" model="ir.rule">
+        <field name="name">NSP Friendship - IT unrestricted</field>
+        <field name="model_id" ref="model_nsp_user_friendship"/>
+        <field name="groups" eval="[(4, ref('nsp_core.group_nsp_it_parking')), (4, ref('base.group_system'))]"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
+</odoo>

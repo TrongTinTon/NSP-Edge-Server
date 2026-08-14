@@ -2,7 +2,7 @@ from collections import defaultdict
 
 from odoo import _, api, fields, models
 from odoo.addons.nsp_core.utils import new_management_code
-from odoo.exceptions import ValidationError
+from odoo.exceptions import AccessError, ValidationError
 
 
 def _normalize_code(value):
@@ -67,6 +67,23 @@ class NspUser(models.Model):
         string="Accepted Friendships",
     )
 
+    is_current_identity = fields.Boolean(
+        compute="_compute_self_service_state",
+        string="Current Identity",
+    )
+    can_edit_profile = fields.Boolean(
+        compute="_compute_self_service_state",
+        string="Can Edit Profile",
+    )
+    can_manage_friendships = fields.Boolean(
+        compute="_compute_self_service_state",
+        string="Can Manage Friendships",
+    )
+    can_send_friend_request = fields.Boolean(
+        compute="_compute_self_service_state",
+        string="Can Send Friend Request",
+    )
+
     _user_code_unique = models.Constraint(
         "UNIQUE(user_code)",
         "User Technical Code must be unique.",
@@ -75,6 +92,102 @@ class NspUser(models.Model):
         "UNIQUE(odoo_user_id)",
         "An Odoo User can be linked to only one NSP User.",
     )
+
+    @api.model
+    def _current_nsp_identity(self, required=False):
+        identity = self.sudo().search(
+            [("odoo_user_id", "=", self.env.user.id)],
+            limit=1,
+        )
+        if required and not identity:
+            raise AccessError(
+                _(
+                    "Your Odoo account is not linked to an NSP User identity. "
+                    "Please contact the IT Parking Admin."
+                )
+            )
+        return identity
+
+    @api.model
+    def _is_user_master_admin(self):
+        return bool(
+            self.env.is_superuser()
+            or self.env.user.has_group("base.group_system")
+            or self.env.user.has_group("nsp_core.group_nsp_it_parking")
+            or self.env.user.has_group("nsp_core.group_nsp_hr_parking")
+        )
+
+    @api.model
+    def _is_friendship_admin(self):
+        return bool(
+            self.env.is_superuser()
+            or self.env.user.has_group("base.group_system")
+            or self.env.user.has_group("nsp_core.group_nsp_it_parking")
+        )
+
+    @api.depends("active", "odoo_user_id")
+    def _compute_self_service_state(self):
+        current_identity = self._current_nsp_identity(required=False)
+        friendship_admin = self._is_friendship_admin()
+        user_admin = self._is_user_master_admin()
+        current_id = current_identity.id if current_identity else 0
+
+        pair_keys = {}
+        for record in self:
+            record_id = record.id if isinstance(record.id, int) else 0
+            if current_id and record_id and record_id != current_id:
+                pair_keys[record_id] = self.env["nsp.user.friendship"]._make_pair_key(
+                    current_id, record_id
+                )
+
+        existing_pairs = set()
+        if pair_keys:
+            existing_pairs = set(
+                self.env["nsp.user.friendship"]
+                .sudo()
+                .search([("pair_key", "in", list(pair_keys.values()))])
+                .mapped("pair_key")
+            )
+
+        for record in self:
+            record_id = record.id if isinstance(record.id, int) else 0
+            is_current = bool(current_id and record_id == current_id)
+            record.is_current_identity = is_current
+            record.can_edit_profile = bool(is_current or user_admin)
+            record.can_manage_friendships = bool(is_current or friendship_admin)
+            record.can_send_friend_request = bool(
+                current_id
+                and record_id
+                and record_id != current_id
+                and record.active
+                and pair_keys.get(record_id) not in existing_pairs
+            )
+
+    def action_send_friend_request(self):
+        current_identity = self._current_nsp_identity(required=True)
+        Friendship = self.env["nsp.user.friendship"]
+        for target in self:
+            if target == current_identity:
+                raise ValidationError(_("You cannot add yourself as a friend."))
+            if not target.active:
+                raise ValidationError(_("Archived users cannot receive friend requests."))
+            Friendship.create(
+                {
+                    "requester_id": current_identity.id,
+                    "addressee_id": target.id,
+                }
+            )
+        return {
+            "type": "ir.actions.client",
+            "tag": "display_notification",
+            "params": {
+                "title": _("Friend Request"),
+                "message": _("Friend request sent."),
+                "type": "success",
+                "sticky": False,
+                "next": {"type": "ir.actions.client", "tag": "reload"},
+            },
+        }
 
     @api.depends(
         "friendship_sent_ids.state",
@@ -130,6 +243,13 @@ class NspUser(models.Model):
 
     def write(self, vals):
         values = dict(vals)
+        if not self._is_user_master_admin():
+            forbidden = {"active", "odoo_user_id", "user_code"}.intersection(values)
+            if forbidden:
+                raise AccessError(
+                    _("Only HR Parking Officer or IT Parking Admin can change system identity fields.")
+                )
+
         if "user_code" in values:
             normalized_code = _normalize_code(values.get("user_code"))
             if any(
@@ -155,9 +275,13 @@ class NspUser(models.Model):
                 )
 
     def action_archive(self):
+        if not self._is_user_master_admin():
+            raise AccessError(_("Only HR Parking Officer or IT Parking Admin can archive users."))
         self.filtered("active").write({"active": False})
         return True
 
     def action_unarchive(self):
+        if not self._is_user_master_admin():
+            raise AccessError(_("Only HR Parking Officer or IT Parking Admin can restore users."))
         self.filtered(lambda record: not record.active).write({"active": True})
         return True

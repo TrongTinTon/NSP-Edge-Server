@@ -10,6 +10,7 @@
                 <field name="email"/>
                 <field name="odoo_user_id" string="System Login" groups="base.group_system"/>
                 <filter string="Active" name="active" domain="[('active','=',True)]"/>
+                <filter string="My Profile" name="my_profile" domain="[('odoo_user_id','=',uid)]"/>
                 <filter string="Archived" name="archived" domain="[('active','=',False)]"/>
             </search>
         </field>
@@ -37,26 +38,35 @@
             <form string="User">
                 <header>
                     <button name="action_archive" type="object" string="Archive" icon="fa-archive"
-                            help="Archive user" invisible="not active" class="btn-secondary"/>
+                            help="Archive user" invisible="not active" class="btn-secondary"
+                            groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking,base.group_system"/>
                     <button name="action_unarchive" type="object" string="Restore" icon="fa-undo"
-                            help="Restore user" invisible="active" class="btn-primary"/>
+                            help="Restore user" invisible="active" class="btn-primary"
+                            groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking,base.group_system"/>
+                    <button name="action_send_friend_request" type="object" string="Add Friend"
+                            icon="fa-user-plus" class="btn-primary"
+                            invisible="not can_send_friend_request" groups="base.group_user"/>
                     <field name="active" invisible="1"/>
+                    <field name="is_current_identity" invisible="1"/>
+                    <field name="can_edit_profile" invisible="1"/>
+                    <field name="can_manage_friendships" invisible="1"/>
+                    <field name="can_send_friend_request" invisible="1"/>
                 </header>
                 <sheet>
                     <field name="image_1920" widget="image" class="oe_avatar"
-                           options="{'preview_image': 'image_128'}"/>
+                           options="{'preview_image': 'image_128'}" readonly="not can_edit_profile"/>
                     <div class="oe_title">
-                        <h1><field name="name" placeholder="Name"/></h1>
+                        <h1><field name="name" placeholder="Name" readonly="not can_edit_profile"/></h1>
                     </div>
                     <group>
                         <group>
-                            <field name="phone" widget="phone"/>
-                            <field name="email" widget="email"/>
+                            <field name="phone" widget="phone" readonly="not can_edit_profile"/>
+                            <field name="email" widget="email" readonly="not can_edit_profile"/>
                         </group>
                     </group>
                     <notebook>
                         <page string="Friends" name="nsp_user_friends"
-                              groups="nsp_core.group_nsp_it_parking,base.group_system">
+                              invisible="not can_manage_friendships">
                             <div class="o_horizontal_separator fw-bolder">
                                 <i class="fa fa-users me-2"/>Friends
                             </div>

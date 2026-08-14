@@ -1,6 +1,6 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_nsp_vehicle_hr,nsp.vehicle HR,model_nsp_vehicle,nsp_core.group_nsp_hr_parking,1,1,1,0
-access_nsp_vehicle_it,nsp.vehicle IT,model_nsp_vehicle,nsp_core.group_nsp_it_parking,1,1,1,0
+access_nsp_vehicle_it,nsp.vehicle IT,model_nsp_vehicle,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_vehicle_operator,nsp.vehicle Operator,model_nsp_vehicle,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_vehicle_type_hr,nsp.vehicle.type HR,model_nsp_vehicle_type,nsp_core.group_nsp_hr_parking,1,1,1,0
 access_nsp_vehicle_type_it,nsp.vehicle.type IT,model_nsp_vehicle_type,nsp_core.group_nsp_it_parking,1,1,1,1
@@ -9,3 +9,7 @@ access_nsp_vehicle_color_it,nsp.vehicle.color IT,model_nsp_vehicle_color,nsp_cor
 access_nsp_vehicle_borrow_hr,nsp.vehicle.borrow HR,model_nsp_vehicle_borrow,nsp_core.group_nsp_hr_parking,1,1,1,0
 access_nsp_vehicle_borrow_it,nsp.vehicle.borrow IT,model_nsp_vehicle_borrow,nsp_core.group_nsp_it_parking,1,1,1,1
 access_nsp_vehicle_borrow_operator,nsp.vehicle.borrow Operator,model_nsp_vehicle_borrow,nsp_core.group_nsp_operator,1,0,0,0
+access_nsp_vehicle_internal,nsp.vehicle Internal User,model_nsp_vehicle,base.group_user,1,1,0,0
+access_nsp_vehicle_type_internal,nsp.vehicle.type Internal User,model_nsp_vehicle_type,base.group_user,1,0,0,0
+access_nsp_vehicle_color_internal,nsp.vehicle.color Internal User,model_nsp_vehicle_color,base.group_user,1,0,0,0
+access_nsp_vehicle_borrow_internal,nsp.vehicle.borrow Internal User,model_nsp_vehicle_borrow,base.group_user,1,1,1,0

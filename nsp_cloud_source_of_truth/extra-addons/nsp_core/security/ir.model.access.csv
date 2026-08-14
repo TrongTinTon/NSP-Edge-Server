@@ -8,3 +8,6 @@ access_nsp_reference_model_it,nsp.reference.model IT,model_nsp_reference_model,n
 access_nsp_reference_vendor_operator,nsp.reference.vendor Operator,model_nsp_reference_vendor,nsp_core.group_nsp_operator,1,0,0,0
 access_nsp_reference_vendor_hr,nsp.reference.vendor HR,model_nsp_reference_vendor,nsp_core.group_nsp_hr_parking,1,0,0,0
 access_nsp_reference_vendor_it,nsp.reference.vendor IT,model_nsp_reference_vendor,nsp_core.group_nsp_it_parking,1,1,1,1
+access_nsp_reference_brand_internal,nsp.reference.brand Internal User,model_nsp_reference_brand,base.group_user,1,0,0,0
+access_nsp_reference_model_internal,nsp.reference.model Internal User,model_nsp_reference_model,base.group_user,1,0,0,0
+access_nsp_reference_vendor_internal,nsp.reference.vendor Internal User,model_nsp_reference_vendor,base.group_user,1,0,0,0

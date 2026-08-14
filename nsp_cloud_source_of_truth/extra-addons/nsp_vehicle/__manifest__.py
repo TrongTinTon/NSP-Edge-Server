@@ -2,7 +2,7 @@
     "name": "NSP Vehicle",
     "summary": "Vehicle master data, ownership and borrowing for NSP",
     "description": "Manage vehicles, ownership, reference data and temporary borrowing permissions.",
-    "version": "19.0.19.0.0",
+    "version": "19.0.19.1.0",
     "sequence": 30,
     "author": "BKU Team",
     "category": "Services",
@@ -17,6 +17,7 @@
     "auto_install": False,
     "data": [
         "security/ir.model.access.csv",
+        "security/nsp_vehicle_rules.xml",
         "data/vehicle_borrow_sequence.xml",
         "data/vehicle_master_data.xml",
         "views/vehicle_master_data_views.xml",

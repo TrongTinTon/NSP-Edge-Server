@@ -1,5 +1,5 @@
 from odoo import api, fields, models, _
-from odoo.exceptions import ValidationError
+from odoo.exceptions import AccessError, ValidationError
 from odoo.addons.nsp_core.utils import new_management_code
 
 
@@ -65,10 +65,40 @@ class Vehicle(models.Model):
         string="Authorized Users",
     )
 
+    can_administer_vehicle = fields.Boolean(
+        compute="_compute_vehicle_ui_access",
+        string="Can Administer Vehicle",
+    )
+    can_manage_access = fields.Boolean(
+        compute="_compute_vehicle_ui_access",
+        string="Can Manage Vehicle Access",
+    )
+
     _sql_constraints = [
         ("vehicle_code_uniq", "unique(vehicle_code)", "Vehicle Technical Code must be unique."),
         ("license_plate_uniq", "unique(license_plate)", "This license plate already exists in the system!"),
     ]
+
+    @api.model
+    def _is_vehicle_admin(self):
+        return bool(
+            self.env.is_superuser()
+            or self.env.user.has_group("base.group_system")
+            or self.env.user.has_group("nsp_core.group_nsp_it_parking")
+            or self.env.user.has_group("nsp_core.group_nsp_hr_parking")
+        )
+
+    @api.model
+    def _current_identity(self, required=True):
+        return self.env["nsp.user"]._current_nsp_identity(required=required)
+
+    def _compute_vehicle_ui_access(self):
+        admin = self._is_vehicle_admin()
+        identity = self._current_identity(required=False)
+        for vehicle in self:
+            is_owner = bool(identity and vehicle.owner_id == identity)
+            vehicle.can_administer_vehicle = admin
+            vehicle.can_manage_access = bool(admin or is_owner)
 
     @api.model
     def _normalize_license_plate(self, value):
@@ -88,6 +118,16 @@ class Vehicle(models.Model):
 
     def write(self, vals):
         values = dict(vals)
+        if not self._is_vehicle_admin():
+            identity = self._current_identity(required=True)
+            if any(vehicle.owner_id != identity for vehicle in self):
+                raise AccessError(_("You can modify only vehicles that you own."))
+            forbidden = {"owner_id", "vehicle_code", "active"}.intersection(values)
+            if forbidden:
+                raise AccessError(
+                    _("Only HR Parking Officer or IT Parking Admin can change Vehicle ownership or system state.")
+                )
+
         if "vehicle_code" in values:
             normalized = str(values.get("vehicle_code") or "").strip().upper()
             if any(vehicle.vehicle_code and vehicle.vehicle_code != normalized for vehicle in self):
@@ -110,9 +150,13 @@ class Vehicle(models.Model):
                 raise ValidationError(_("Vehicle Model must belong to the selected Brand."))
 
     def action_archive(self):
+        if not self._is_vehicle_admin():
+            raise AccessError(_("Only HR Parking Officer or IT Parking Admin can archive vehicles."))
         self.filtered("active").write({"active": False})
         return True
 
     def action_unarchive(self):
+        if not self._is_vehicle_admin():
+            raise AccessError(_("Only HR Parking Officer or IT Parking Admin can restore vehicles."))
         self.filtered(lambda vehicle: not vehicle.active).write({"active": True})
         return True

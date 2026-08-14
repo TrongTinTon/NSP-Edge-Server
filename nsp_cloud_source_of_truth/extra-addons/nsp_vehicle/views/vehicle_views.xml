@@ -44,34 +44,38 @@
             <form string="Vehicle">
                 <header>
                     <button name="action_archive" type="object" string="Archive" icon="fa-archive"
-                            help="Archive vehicle" invisible="not active" class="btn-secondary"/>
+                            help="Archive vehicle" invisible="not active" class="btn-secondary"
+                            groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking,base.group_system"/>
                     <button name="action_unarchive" type="object" string="Restore" icon="fa-undo"
-                            help="Restore vehicle" invisible="active" class="btn-primary"/>
+                            help="Restore vehicle" invisible="active" class="btn-primary"
+                            groups="nsp_core.group_nsp_hr_parking,nsp_core.group_nsp_it_parking,base.group_system"/>
                     <field name="active" invisible="1"/>
+                    <field name="can_administer_vehicle" invisible="1"/>
+                    <field name="can_manage_access" invisible="1"/>
                 </header>
                 <sheet>
                     <field name="image_1920" widget="image" class="oe_avatar"
-                           options="{'preview_image': 'image_128'}"/>
+                           options="{'preview_image': 'image_128'}" readonly="not can_administer_vehicle"/>
                     <div class="oe_title">
-                        <h1><field name="license_plate" placeholder="Plate"/></h1>
+                        <h1><field name="license_plate" placeholder="Plate" readonly="not can_administer_vehicle"/></h1>
                     </div>
                     <group string="Details">
-                        <field name="owner_id" string="Owner"/>
-                        <field name="vehicle_type_id" string="Type"
+                        <field name="owner_id" string="Owner" readonly="not can_administer_vehicle"/>
+                        <field name="vehicle_type_id" string="Type" readonly="not can_administer_vehicle"
                                options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
                                context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_type_form'}"/>
-                        <field name="brand_id"
+                        <field name="brand_id" readonly="not can_administer_vehicle"
                                options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
                                context="{'form_view_ref': 'nsp_core.view_nsp_reference_brand_form'}"/>
-                        <field name="model_id" domain="[('brand_id', '=', brand_id)]"
+                        <field name="model_id" readonly="not can_administer_vehicle" domain="[('brand_id', '=', brand_id)]"
                                options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
                                context="{'form_view_ref': 'nsp_core.view_nsp_reference_model_form', 'default_brand_id': brand_id}"/>
-                        <field name="color_id"
+                        <field name="color_id" readonly="not can_administer_vehicle"
                                options="{'no_create': False, 'no_quick_create': False, 'no_create_edit': False, 'no_open': False}"
                                context="{'form_view_ref': 'nsp_vehicle.view_nsp_vehicle_color_form'}"/>
                     </group>
                     <notebook>
-                        <page string="Access" name="nsp_vehicle_access">
+                        <page string="Access" name="nsp_vehicle_access" invisible="not can_manage_access">
                             <field name="borrow_ids" nolabel="1" context="{'default_vehicle_id': id}">
                                 <list editable="bottom" decoration-success="active_now"
                                       decoration-muted="state in ('returned','cancelled')">
