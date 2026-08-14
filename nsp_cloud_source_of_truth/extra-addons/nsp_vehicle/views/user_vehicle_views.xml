@@ -5,8 +5,11 @@
         <field name="model">nsp.user</field>
         <field name="inherit_id" ref="nsp_user.view_nsp_user_form"/>
         <field name="arch" type="xml">
+            <xpath expr="//header" position="inside">
+                <field name="can_manage_vehicles" invisible="1"/>
+            </xpath>
             <xpath expr="//page[@name='nsp_user_friends']" position="before">
-                <page string="Vehicles" name="nsp_user_vehicles" invisible="not can_edit_profile">
+                <page string="Vehicles" name="nsp_user_vehicles" invisible="not can_manage_vehicles">
                     <field name="vehicle_ids" nolabel="1" context="{'default_owner_id': id}">
                         <list editable="bottom" open_form_view="1" delete="0">
                             <field name="can_administer_vehicle" column_invisible="1"/>

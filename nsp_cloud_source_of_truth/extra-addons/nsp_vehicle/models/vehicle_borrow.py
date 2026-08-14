@@ -53,7 +53,19 @@ class NspVehicleBorrow(models.Model):
 
     @api.model
     def _current_identity(self, required=True):
-        return self.env["nsp.user"]._current_nsp_identity(required=required)
+        User = self.env["nsp.user"]
+        resolver = getattr(User, "_current_nsp_identity", None)
+        if resolver:
+            return resolver(required=required)
+        identity = User.sudo().search([
+            ("odoo_user_id", "=", self.env.user.id),
+            ("active", "=", True),
+        ], limit=1)
+        if required and not identity:
+            raise AccessError(_(
+                "Your Odoo account is not linked to an active NSP User identity."
+            ))
+        return identity
 
     def _check_owner_self_service(self):
         if self._is_borrow_admin():
@@ -165,19 +177,35 @@ class NspVehicleBorrow(models.Model):
     def create(self, vals_list):
         seq = self.env["ir.sequence"].sudo()
         prepared = []
-        identity = self._current_identity(required=True) if not self._is_borrow_admin() else self.env["nsp.user"].browse([])
+        sync_create = bool(self.env.context.get("vehicle_borrow_sync"))
+        is_admin = self._is_borrow_admin()
+        identity = (
+            self._current_identity(required=True)
+            if not is_admin and not sync_create
+            else self.env["nsp.user"].browse([])
+        )
         Vehicle = self.env["nsp.vehicle"].sudo()
         for source in vals_list:
             vals = dict(source)
-            if not self._is_borrow_admin():
+
+            # A user-created Cloud authorization always starts as Active.  Do not
+            # trust a readonly/state value round-tripped by the web client, even for
+            # HR/IT administrators.  Only Cloud -> Edge snapshot application may
+            # create a historical Returned/Cancelled record directly.
+            if not sync_create:
+                vals["state"] = "active"
+                vals["returned_at"] = False
+
+            if not is_admin and not sync_create:
                 vehicle = Vehicle.browse(int(vals.get("vehicle_id") or 0)).exists()
                 if not vehicle or vehicle.owner_id != identity:
                     raise AccessError(_("You can lend only a Vehicle that you own."))
-                vals["state"] = "active"
-                vals["returned_at"] = False
+
             if vals.get("borrow_code", "New") == "New":
                 vals["borrow_code"] = seq.next_by_code("nsp.vehicle.borrow") or "BORROW"
             vals.setdefault("state", "active")
+            if vals.get("state") in ("active", "cancelled"):
+                vals["returned_at"] = False
             prepared.append(vals)
         records = super().create(prepared)
         records._validate_borrower()

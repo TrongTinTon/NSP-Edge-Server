@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- Vehicle directory may be read through ACL; normal users may modify only vehicles they own. -->
+    <record id="rule_nsp_vehicle_self_write" model="ir.rule">
+        <field name="name">NSP Vehicle - owner self service</field>
+        <field name="model_id" ref="model_nsp_vehicle"/>
+        <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+        <field name="domain_force">[('owner_id.odoo_user_id', '=', user.id)]</field>
+        <field name="perm_read" eval="False"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
+    <record id="rule_nsp_vehicle_admin_write_all" model="ir.rule">
+        <field name="name">NSP Vehicle - Parking administrators write all</field>
+        <field name="model_id" ref="model_nsp_vehicle"/>
+        <field name="groups" eval="[(4, ref('nsp_core.group_nsp_hr_parking')), (4, ref('nsp_core.group_nsp_it_parking')), (4, ref('base.group_system'))]"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="perm_read" eval="False"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
+    <!-- Users see only lending records involving themselves. -->
+    <record id="rule_nsp_vehicle_borrow_self_read" model="ir.rule">
+        <field name="name">NSP Vehicle Borrow - own involvement</field>
+        <field name="model_id" ref="model_nsp_vehicle_borrow"/>
+        <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+        <field name="domain_force">['|', ('vehicle_id.owner_id.odoo_user_id', '=', user.id), ('borrower_id.odoo_user_id', '=', user.id)]</field>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="False"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
+    <!-- Only the owner may create/update their own lending authorization. -->
+    <record id="rule_nsp_vehicle_borrow_owner_manage" model="ir.rule">
+        <field name="name">NSP Vehicle Borrow - owner manages</field>
+        <field name="model_id" ref="model_nsp_vehicle_borrow"/>
+        <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+        <field name="domain_force">[('vehicle_id.owner_id.odoo_user_id', '=', user.id)]</field>
+        <field name="perm_read" eval="False"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
+    <!-- Operator/HR preserve system-wide inspection; HR may administer borrows. -->
+    <record id="rule_nsp_vehicle_borrow_operator_read_all" model="ir.rule">
+        <field name="name">NSP Vehicle Borrow - Operator read all</field>
+        <field name="model_id" ref="model_nsp_vehicle_borrow"/>
+        <field name="groups" eval="[(4, ref('nsp_core.group_nsp_operator'))]"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="False"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
+    <record id="rule_nsp_vehicle_borrow_hr_all" model="ir.rule">
+        <field name="name">NSP Vehicle Borrow - HR administer all</field>
+        <field name="model_id" ref="model_nsp_vehicle_borrow"/>
+        <field name="groups" eval="[(4, ref('nsp_core.group_nsp_hr_parking'))]"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
+    <record id="rule_nsp_vehicle_borrow_it_all" model="ir.rule">
+        <field name="name">NSP Vehicle Borrow - IT unrestricted</field>
+        <field name="model_id" ref="model_nsp_vehicle_borrow"/>
+        <field name="groups" eval="[(4, ref('nsp_core.group_nsp_it_parking')), (4, ref('base.group_system'))]"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
+</odoo>

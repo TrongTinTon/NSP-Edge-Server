@@ -12,4 +12,4 @@ def test_allowed_borrowers_depend_on_friendship_state():
 
 
 def test_manifest_version():
-    assert '"version": "19.0.19.4.1"' in (ROOT / "__manifest__.py").read_text()
+    assert '"version": "19.0.19.3.0"' in (ROOT / "__manifest__.py").read_text()

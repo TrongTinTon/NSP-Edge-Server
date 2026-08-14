@@ -2,7 +2,7 @@
 from datetime import timedelta
 
 from odoo import api, fields, models, _
-from odoo.exceptions import UserError, ValidationError
+from odoo.exceptions import AccessError, UserError, ValidationError
 
 
 class NspVehicleBorrow(models.Model):
@@ -42,6 +42,27 @@ class NspVehicleBorrow(models.Model):
         ("borrow_code_unique", "unique(borrow_code)", "Borrow Code must be unique."),
     ]
 
+    @api.model
+    def _is_borrow_admin(self):
+        return bool(
+            self.env.is_superuser()
+            or self.env.user.has_group("base.group_system")
+            or self.env.user.has_group("nsp_core.group_nsp_it_parking")
+            or self.env.user.has_group("nsp_core.group_nsp_hr_parking")
+        )
+
+    @api.model
+    def _current_identity(self, required=True):
+        return self.env["nsp.user"]._current_nsp_identity(required=required)
+
+    def _check_owner_self_service(self):
+        if self._is_borrow_admin():
+            return True
+        identity = self._current_identity(required=True)
+        if any(record.vehicle_id.owner_id != identity for record in self):
+            raise AccessError(_("Only the Vehicle Owner can manage this lending authorization."))
+        return True
+
     def init(self):
         self.env.cr.execute(
             """
@@ -66,13 +87,23 @@ class NspVehicleBorrow(models.Model):
                 rec.borrower_id.name or _("User"),
             )
 
-    @api.depends("vehicle_id.owner_id")
+    @api.depends(
+        "vehicle_id.owner_id",
+        "vehicle_id.owner_id.friendship_sent_ids.state",
+        "vehicle_id.owner_id.friendship_sent_ids.addressee_id",
+        "vehicle_id.owner_id.friendship_received_ids.state",
+        "vehicle_id.owner_id.friendship_received_ids.requester_id",
+    )
     def _compute_allowed_borrower_ids(self):
         owners = self.mapped("vehicle_id.owner_id")
         friend_map = self.env["nsp.user.friendship"].sudo().accepted_friends_map(owners)
         for rec in self:
             owner_id = rec.vehicle_id.owner_id.id if rec.vehicle_id.owner_id else 0
             rec.allowed_borrower_ids = self.env["nsp.user"].browse(friend_map.get(owner_id, []))
+
+    @api.onchange("vehicle_id")
+    def _onchange_vehicle_id_refresh_allowed_borrowers(self):
+        self._compute_allowed_borrower_ids()
 
     @api.depends("state", "valid_from", "valid_to", "returned_at")
     def _compute_active_now(self):
@@ -134,11 +165,35 @@ class NspVehicleBorrow(models.Model):
     def create(self, vals_list):
         seq = self.env["ir.sequence"].sudo()
         prepared = []
+        sync_create = bool(self.env.context.get("vehicle_borrow_sync"))
+        is_admin = self._is_borrow_admin()
+        identity = (
+            self._current_identity(required=True)
+            if not is_admin and not sync_create
+            else self.env["nsp.user"].browse([])
+        )
+        Vehicle = self.env["nsp.vehicle"].sudo()
         for source in vals_list:
             vals = dict(source)
+
+            # A user-created Cloud authorization always starts as Active.  Do not
+            # trust a readonly/state value round-tripped by the web client, even for
+            # HR/IT administrators.  Only Cloud -> Edge snapshot application may
+            # create a historical Returned/Cancelled record directly.
+            if not sync_create:
+                vals["state"] = "active"
+                vals["returned_at"] = False
+
+            if not is_admin and not sync_create:
+                vehicle = Vehicle.browse(int(vals.get("vehicle_id") or 0)).exists()
+                if not vehicle or vehicle.owner_id != identity:
+                    raise AccessError(_("You can lend only a Vehicle that you own."))
+
             if vals.get("borrow_code", "New") == "New":
                 vals["borrow_code"] = seq.next_by_code("nsp.vehicle.borrow") or "BORROW"
             vals.setdefault("state", "active")
+            if vals.get("state") in ("active", "cancelled"):
+                vals["returned_at"] = False
             prepared.append(vals)
         records = super().create(prepared)
         records._validate_borrower()
@@ -146,27 +201,40 @@ class NspVehicleBorrow(models.Model):
         return records
 
     def write(self, vals):
-        result = super().write(vals)
+        values = dict(vals)
+        if not self._is_borrow_admin() and not self.env.context.get("nsp_borrow_action"):
+            self._check_owner_self_service()
+            forbidden = {"vehicle_id", "borrow_code", "state", "returned_at"}.intersection(values)
+            if forbidden:
+                raise AccessError(_("Use the End or Cancel actions to change lending state."))
+
+        result = super().write(values)
         if not self.env.context.get("vehicle_borrow_sync") and (
-            "vehicle_id" in vals or "borrower_id" in vals or vals.get("state") == "active"
+            "vehicle_id" in values or "borrower_id" in values or values.get("state") == "active"
         ):
             self._validate_borrower()
-        if any(key in vals for key in ("vehicle_id", "valid_from", "valid_to", "state")):
+        if any(key in values for key in ("vehicle_id", "valid_from", "valid_to", "state")):
             self._check_overlap()
         return result
 
     def action_return_vehicle(self):
+        self._check_owner_self_service()
         if self.filtered(lambda rec: rec.state != "active"):
             raise UserError(_("Only an active vehicle borrow can be ended."))
         if self:
-            self.write({"state": "returned", "returned_at": fields.Datetime.now()})
+            self.with_context(nsp_borrow_action=True).write(
+                {"state": "returned", "returned_at": fields.Datetime.now()}
+            )
         return True
 
     def action_cancel(self):
+        self._check_owner_self_service()
         if self.filtered(lambda rec: rec.state == "returned"):
             raise UserError(_("Returned vehicle borrows cannot be cancelled."))
         if self:
-            self.write({"state": "cancelled", "returned_at": False})
+            self.with_context(nsp_borrow_action=True).write(
+                {"state": "cancelled", "returned_at": False}
+            )
         return True
 
     @api.model
