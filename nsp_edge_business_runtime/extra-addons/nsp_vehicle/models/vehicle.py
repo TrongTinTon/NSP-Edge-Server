@@ -90,7 +90,16 @@ class Vehicle(models.Model):
 
     @api.model
     def _current_identity(self, required=True):
-        return self.env["nsp.user"]._current_nsp_identity(required=required)
+        User = self.env["nsp.user"]
+        resolver = getattr(User, "_current_nsp_identity", None)
+        if callable(resolver):
+            return resolver(required=required)
+        identity = User.sudo().search([("odoo_user_id", "=", self.env.user.id)], limit=1)
+        if required and not identity:
+            raise AccessError(_(
+                "Your Odoo account is not linked to an NSP User identity. Please contact IT."
+            ))
+        return identity
 
     def _compute_vehicle_ui_access(self):
         admin = self._is_vehicle_admin()
