@@ -929,7 +929,7 @@ class NspParkingLayoutLane(models.Model):
         return True
 
     @api.depends(
-        "active", "setup_state", "edge_server_id", "controller_id",
+        "active", "edge_server_id", "controller_id",
         "antenna_sequence_ids", "antenna_sequence_ids.sequence",
         "antenna_sequence_ids.reader_id", "antenna_sequence_ids.port_no",
         "antenna_sequence_ids.duration_from_previous", "reader_config_ids",
@@ -946,8 +946,9 @@ class NspParkingLayoutLane(models.Model):
             issues = []
             if not layout_lane.lane_id or not layout_lane.lane_id.active:
                 issues.append(_("Lane master is missing or inactive"))
-            if layout_lane.setup_state == "draft":
-                issues.append(_("Lane Setup is Draft; save Lane Setup before publishing"))
+            # Readiness reflects the actual configuration only. The legacy
+            # setup_state marker is not a user-facing completeness gate;
+            # Operational/Publish performs the authoritative validation.
             if not layout_lane.edge_server_id:
                 issues.append(_("Server is missing"))
             if not layout_lane.controller_id:

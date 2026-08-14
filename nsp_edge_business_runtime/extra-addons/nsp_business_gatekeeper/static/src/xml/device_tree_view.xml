@@ -4,57 +4,98 @@
         <div class="nsp-device-tree">
             <aside class="nsp-device-tree__tree-panel">
                 <div class="nsp-device-tree__tree-scroll">
-                    <t t-if="tree.length">
-                        <t t-foreach="tree" t-as="server" t-key="server.key">
-                            <div class="nsp-device-tree__node nsp-device-tree__node--server">
-                                <div class="nsp-device-tree__row nsp-device-tree__row--group">
-                                    <button type="button" class="nsp-device-tree__group-main" t-on-click="() => this.toggleExpanded(server.key)">
-                                        <span class="nsp-device-tree__chevron"><i t-att-class="isExpanded(server.key) ? 'fa fa-chevron-down' : 'fa fa-chevron-right'"/></span>
-                                        <span class="nsp-device-tree__icon"><i class="fa fa-server"/></span>
-                                        <span class="nsp-device-tree__name" t-esc="server.name"/>
-                                        <span t-att-class="'nsp-device-tree__dot is-' + server.status"/>
-                                    </button>
-                                </div>
-                                <div t-if="isExpanded(server.key)" class="nsp-device-tree__children">
-                                    <t t-foreach="server.controllers" t-as="controller" t-key="controller.key">
-                                        <div class="nsp-device-tree__node nsp-device-tree__node--controller">
-                                            <div class="nsp-device-tree__row nsp-device-tree__row--group">
-                                                <button type="button" class="nsp-device-tree__group-main" t-on-click="() => this.toggleExpanded(controller.key)">
-                                                    <span class="nsp-device-tree__chevron"><i t-att-class="isExpanded(controller.key) ? 'fa fa-chevron-down' : 'fa fa-chevron-right'"/></span>
-                                                    <span class="nsp-device-tree__icon"><i class="fa fa-sitemap"/></span>
-                                                    <span class="nsp-device-tree__name" t-esc="controller.name"/>
-                                                    <span t-att-class="'nsp-device-tree__dot is-' + controller.status"/>
+                    <t t-if="mode === 'parking_lane'">
+                        <t t-if="parkingControllers.length">
+                            <t t-foreach="parkingControllers" t-as="controller" t-key="controller.key">
+                                <div class="nsp-device-tree__node nsp-device-tree__node--controller">
+                                    <div class="nsp-device-tree__row nsp-device-tree__row--group">
+                                        <button type="button" class="nsp-device-tree__group-main" t-on-click="() => this.toggleExpanded(controller.key)">
+                                            <span class="nsp-device-tree__chevron"><i t-att-class="isExpanded(controller.key) ? 'fa fa-chevron-down' : 'fa fa-chevron-right'"/></span>
+                                            <span class="nsp-device-tree__icon"><i class="fa fa-sitemap"/></span>
+                                            <span class="nsp-device-tree__name" t-esc="controller.name"/>
+                                            <span t-att-class="'nsp-device-tree__dot is-' + controller.status"/>
+                                        </button>
+                                    </div>
+                                    <div t-if="isExpanded(controller.key)" class="nsp-device-tree__children">
+                                        <t t-foreach="controller.readers" t-as="entry" t-key="entry.key">
+                                            <div t-att-class="'nsp-device-tree__row nsp-device-tree__row--reader ' + (selectedEntry &amp;&amp; selectedEntry.key === entry.key ? 'is-selected' : '')">
+                                                <button type="button" class="nsp-device-tree__reader-main" t-on-click="() => this.selectReader(entry)">
+                                                    <span class="nsp-device-tree__chevron"/>
+                                                    <span class="nsp-device-tree__icon"><i class="fa fa-microchip"/></span>
+                                                    <span class="nsp-device-tree__reader-copy">
+                                                        <span class="nsp-device-tree__name" t-esc="entry.reader.name"/>
+                                                        <span class="nsp-device-tree__reader-status">
+                                                            <span t-att-class="'nsp-device-tree__dot is-' + entry.reader.status"/>
+                                                            <span t-esc="statusLabel(entry.reader.status)"/>
+                                                        </span>
+                                                    </span>
                                                 </button>
                                             </div>
-                                            <div t-if="isExpanded(controller.key)" class="nsp-device-tree__children">
-                                                <t t-foreach="controller.readers" t-as="entry" t-key="entry.key">
-                                                    <div t-att-class="'nsp-device-tree__row nsp-device-tree__row--reader ' + (selectedEntry &amp;&amp; selectedEntry.key === entry.key ? 'is-selected' : '')">
-                                                        <button type="button" class="nsp-device-tree__reader-main" t-on-click="() => this.selectReader(entry)">
-                                                            <span class="nsp-device-tree__chevron"/>
-                                                            <span class="nsp-device-tree__icon"><i class="fa fa-microchip"/></span>
-                                                            <span class="nsp-device-tree__reader-copy">
-                                                                <span class="nsp-device-tree__name" t-esc="entry.reader.name"/>
-                                                                <span class="nsp-device-tree__reader-status">
-                                                                    <span t-att-class="'nsp-device-tree__dot is-' + entry.reader.status"/>
-                                                                    <span t-esc="statusLabel(entry.reader.status)"/>
-                                                                </span>
-                                                            </span>
-                                                        </button>
-                                                    </div>
-                                                </t>
-                                            </div>
-                                        </div>
-                                    </t>
+                                        </t>
+                                    </div>
                                 </div>
-                            </div>
+                            </t>
                         </t>
+                        <div t-elif="!state.loaded" class="nsp-device-tree__empty">Loading Device Configuration...</div>
+                        <div t-else="" class="nsp-device-tree__empty">
+                            <i class="fa fa-sitemap"/>
+                            <strong>No Device Tree mapping</strong>
+                            <span>The synchronized configuration has no complete Controller → Reader hierarchy.</span>
+                        </div>
                     </t>
-                    <div t-elif="!state.loaded" class="nsp-device-tree__empty">Loading Device Configuration...</div>
-                    <div t-else="" class="nsp-device-tree__empty">
-                        <i class="fa fa-sitemap"/>
-                        <strong>No Device Tree mapping</strong>
-                        <span>The released configuration has no complete Server → Controller → Reader hierarchy.</span>
-                    </div>
+                    <t t-else="">
+                        <t t-if="tree.length">
+                            <t t-foreach="tree" t-as="server" t-key="server.key">
+                                <div class="nsp-device-tree__node nsp-device-tree__node--server">
+                                    <div class="nsp-device-tree__row nsp-device-tree__row--group">
+                                        <button type="button" class="nsp-device-tree__group-main" t-on-click="() => this.toggleExpanded(server.key)">
+                                            <span class="nsp-device-tree__chevron"><i t-att-class="isExpanded(server.key) ? 'fa fa-chevron-down' : 'fa fa-chevron-right'"/></span>
+                                            <span class="nsp-device-tree__icon"><i class="fa fa-server"/></span>
+                                            <span class="nsp-device-tree__name" t-esc="server.name"/>
+                                            <span t-att-class="'nsp-device-tree__dot is-' + server.status"/>
+                                        </button>
+                                    </div>
+                                    <div t-if="isExpanded(server.key)" class="nsp-device-tree__children">
+                                        <t t-foreach="server.controllers" t-as="controller" t-key="controller.key">
+                                            <div class="nsp-device-tree__node nsp-device-tree__node--controller">
+                                                <div class="nsp-device-tree__row nsp-device-tree__row--group">
+                                                    <button type="button" class="nsp-device-tree__group-main" t-on-click="() => this.toggleExpanded(controller.key)">
+                                                        <span class="nsp-device-tree__chevron"><i t-att-class="isExpanded(controller.key) ? 'fa fa-chevron-down' : 'fa fa-chevron-right'"/></span>
+                                                        <span class="nsp-device-tree__icon"><i class="fa fa-sitemap"/></span>
+                                                        <span class="nsp-device-tree__name" t-esc="controller.name"/>
+                                                        <span t-att-class="'nsp-device-tree__dot is-' + controller.status"/>
+                                                    </button>
+                                                </div>
+                                                <div t-if="isExpanded(controller.key)" class="nsp-device-tree__children">
+                                                    <t t-foreach="controller.readers" t-as="entry" t-key="entry.key">
+                                                        <div t-att-class="'nsp-device-tree__row nsp-device-tree__row--reader ' + (selectedEntry &amp;&amp; selectedEntry.key === entry.key ? 'is-selected' : '')">
+                                                            <button type="button" class="nsp-device-tree__reader-main" t-on-click="() => this.selectReader(entry)">
+                                                                <span class="nsp-device-tree__chevron"/>
+                                                                <span class="nsp-device-tree__icon"><i class="fa fa-microchip"/></span>
+                                                                <span class="nsp-device-tree__reader-copy">
+                                                                    <span class="nsp-device-tree__name" t-esc="entry.reader.name"/>
+                                                                    <span class="nsp-device-tree__reader-status">
+                                                                        <span t-att-class="'nsp-device-tree__dot is-' + entry.reader.status"/>
+                                                                        <span t-esc="statusLabel(entry.reader.status)"/>
+                                                                    </span>
+                                                                </span>
+                                                            </button>
+                                                        </div>
+                                                    </t>
+                                                </div>
+                                            </div>
+                                        </t>
+                                    </div>
+                                </div>
+                            </t>
+                        </t>
+                        <div t-elif="!state.loaded" class="nsp-device-tree__empty">Loading Device Configuration...</div>
+                        <div t-else="" class="nsp-device-tree__empty">
+                            <i class="fa fa-sitemap"/>
+                            <strong>No Device Tree mapping</strong>
+                            <span>The released calibration configuration has no complete Server → Controller → Reader hierarchy.</span>
+                        </div>
+                    </t>
                 </div>
             </aside>
 

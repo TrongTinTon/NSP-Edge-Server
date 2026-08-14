@@ -1,5 +1,6 @@
-<?xml version='1.0' encoding='UTF-8'?>
-<odoo><record id="view_nsp_parking_area_search" model="ir.ui.view">
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+  <record id="view_nsp_parking_area_search" model="ir.ui.view">
     <field name="name">nsp.parking.operation.search</field>
     <field name="model">nsp.parking.area</field>
     <field name="arch" type="xml">
@@ -10,7 +11,6 @@
         <filter string="Operational" name="operational" domain="[('state','=','operational')]"/>
         <filter string="Maintenance" name="maintenance" domain="[('state','=','maintenance')]"/>
         <filter string="Blocked" name="blocked" domain="[('state','=','blocked')]"/>
-        <filter string="Published" name="published" domain="[('published_payload_json','!=',False)]"/>
         <separator/>
         <group>
           <filter string="Branch" name="group_branch" context="{'group_by':'branch_id'}"/>
@@ -24,16 +24,17 @@
     <field name="name">nsp.parking.operation.list</field>
     <field name="model">nsp.parking.area</field>
     <field name="arch" type="xml">
-      <list string="Parking Layout" decoration-success="configuration_state == 'ready'" decoration-warning="configuration_state == 'incomplete'" decoration-muted="configuration_state == 'empty'">
-        <field name="state" widget="badge" decoration-success="state == 'operational'" decoration-warning="state in ('draft','maintenance')" decoration-danger="state == 'blocked'"/>
+      <list string="Parking Layout"
+            decoration-success="configuration_state == 'ready'"
+            decoration-warning="configuration_state == 'incomplete'"
+            decoration-danger="configuration_state == 'empty'">
+        <field name="configuration_state" column_invisible="1"/>
+        <field name="state" widget="badge"
+               decoration-success="state == 'operational'"
+               decoration-warning="state in ('draft','maintenance')"
+               decoration-danger="state == 'blocked'"/>
         <field name="name" string="Layout" decoration-bf="1"/>
         <field name="branch_id" string="Branch"/>
-        <field name="lane_count" string="Lane Configurations"/>
-        <field name="ready_lane_count" string="Ready"/>
-        <field name="incomplete_lane_count" string="Attention"/>
-        <field name="configuration_state" string="Readiness" widget="badge" decoration-success="configuration_state == 'ready'" decoration-warning="configuration_state == 'incomplete'" decoration-muted="configuration_state == 'empty'"/>
-        <field name="published_revision" string="Rev."/>
-        <field name="published_at" string="Published" optional="hide"/>
       </list>
     </field>
   </record>
@@ -44,17 +45,29 @@
     <field name="arch" type="xml">
       <form string="Parking Layout">
         <header>
-          <button name="action_set_operational" type="object" string="Publish" icon="fa-cloud-upload" class="oe_highlight" help="Validate and publish this draft revision to Edge." invisible="state != 'draft'"/>
-          <button name="action_set_maintenance" type="object" string="Maintenance" icon="fa-wrench" help="Publish Maintenance state." invisible="not is_published or state == 'maintenance' or state == 'draft'"/>
-          <button name="action_set_blocked" type="object" string="Block" icon="fa-ban" help="Publish Blocked state." invisible="not is_published or state == 'blocked' or state == 'draft'"/>
-          <button name="action_set_operational" type="object" string="Resume" icon="fa-play" class="oe_highlight" help="Return the published runtime snapshot to Operational state." invisible="not is_published or state not in ('maintenance','blocked')"/>
-          <button name="action_reset_to_draft" type="object" string="Revise" icon="fa-pencil" help="Open an editable draft while the last published revision remains active on Edge." invisible="state == 'draft'"/>
+          <button name="action_set_operational" type="object" string="Publish" icon="fa-cloud-upload" class="oe_highlight"
+                  help="Validate the complete Parking Layout and publish this draft revision to Edge."
+                  invisible="state != 'draft'"/>
+          <button name="action_set_maintenance" type="object" string="Maintenance" icon="fa-wrench"
+                  help="Publish Maintenance state."
+                  invisible="not is_published or state == 'maintenance' or state == 'draft'"/>
+          <button name="action_set_blocked" type="object" string="Block" icon="fa-ban"
+                  help="Publish Blocked state."
+                  invisible="not is_published or state == 'blocked' or state == 'draft'"/>
+          <button name="action_set_operational" type="object" string="Resume" icon="fa-play" class="oe_highlight"
+                  help="Validate and return the published runtime snapshot to Operational state."
+                  invisible="not is_published or state not in ('maintenance','blocked')"/>
+          <button name="action_reset_to_draft" type="object" string="Revise" icon="fa-pencil"
+                  help="Open an editable draft while the last published revision remains active on Edge."
+                  invisible="state == 'draft'"/>
           <field name="state" widget="statusbar" statusbar_visible="draft,operational,maintenance,blocked"/>
         </header>
         <sheet>
           <field name="is_published" invisible="1"/>
           <div class="oe_button_box" name="button_box">
-            <button name="action_open_live_monitor" type="object" class="oe_stat_button" icon="fa-desktop" help="Open the live parking monitor." groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking,base.group_system">
+            <button name="action_open_live_monitor" type="object" class="oe_stat_button" icon="fa-desktop"
+                    help="Open the live parking monitor."
+                    groups="nsp_core.group_nsp_operator,nsp_core.group_nsp_it_parking,base.group_system">
               <span class="o_stat_text">Live Monitor</span>
             </button>
           </div>
@@ -62,58 +75,16 @@
           <div class="oe_title">
             <label for="name" string="Parking Layout"/>
             <h1><field name="name" placeholder="Parking Layout" readonly="state != 'draft'"/></h1>
-            <div class="text-muted">
-              <field name="code" readonly="1" class="oe_inline"/>
-            </div>
+            <div class="text-muted"><field name="code" readonly="1" class="oe_inline"/></div>
           </div>
 
-          <div class="nsp-parking-layout-summary row g-3 mb-4">
-            <div class="col-12 col-md-6 col-xl-4">
-              <div class="nsp-parking-layout-card">
-                <div class="nsp-parking-layout-card__label">LANE CONFIGURATIONS</div>
-                <div class="nsp-parking-layout-card__value"><field name="lane_count" readonly="1" nolabel="1"/></div>
-                <div class="nsp-parking-layout-card__meta">
-                  <field name="ready_lane_count" readonly="1" nolabel="1"/> ready ·
-                  <field name="incomplete_lane_count" readonly="1" nolabel="1"/> attention
-                </div>
-              </div>
-            </div>
-            <div class="col-12 col-md-6 col-xl-4">
-              <div class="nsp-parking-layout-card">
-                <div class="nsp-parking-layout-card__label">INFRASTRUCTURE</div>
-                <div class="nsp-parking-layout-card__value"><field name="reader_count" readonly="1" nolabel="1"/> Readers</div>
-                <div class="nsp-parking-layout-card__meta">
-                  <field name="edge_server_count" readonly="1" nolabel="1"/> Edge ·
-                  <field name="controller_count" readonly="1" nolabel="1"/> Controllers
-                </div>
-              </div>
-            </div>
-            <div class="col-12 col-md-6 col-xl-4">
-              <div class="nsp-parking-layout-card">
-                <div class="nsp-parking-layout-card__label">PUBLISHED SNAPSHOT</div>
-                <div class="nsp-parking-layout-card__value">Revision <field name="published_revision" readonly="1" nolabel="1"/></div>
-                <div class="nsp-parking-layout-card__meta">
-                  <field name="published_at" readonly="1" nolabel="1"/>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <group>
-            <group string="Layout Identity">
-              <field name="branch_id" string="Branch" readonly="state != 'draft'" context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_branch_form'}"/>
-            </group>
-            <group string="Runtime Snapshot">
-              <field name="published_edge_server_codes" string="Published Edge Servers" readonly="1"/>
-              <field name="configuration_state" string="Configuration" widget="badge" readonly="1" decoration-success="configuration_state == 'ready'" decoration-warning="configuration_state == 'incomplete'" decoration-muted="configuration_state == 'empty'"/>
-            </group>
+          <group string="Layout Identity">
+            <field name="branch_id" string="Branch" readonly="state != 'draft'"
+                   context="{'form_view_ref': 'nsp_master_gatekeeper.view_nsp_branch_form'}"/>
           </group>
 
           <div class="nsp-parking-layout__lanes-header">
-            <div>
-              <h3>Lane Configurations</h3>
-              <p class="text-muted mb-0">Select a Lane master and configure its Device Tree, Reader settings and Antenna Sequence for this Parking Layout only.</p>
-            </div>
+            <h3>Lane Configurations</h3>
           </div>
           <div class="alert alert-info" role="alert" invisible="state != 'draft' or not is_published">
             You are editing a new draft. The last published revision remains active on Edge until this layout is published again.
@@ -121,22 +92,17 @@
           <field name="layout_lane_ids"
                  mode="list,form"
                  readonly="state != 'draft'"
-                 context="{'default_parking_area_id': id, 'default_branch_id': branch_id, 'default_setup_state': 'applied', 'lane_configuration_form': True, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_parking_layout_lane_form'}">
-            <list create="1" edit="1" delete="1" decoration-muted="not active">
+                 context="{'default_parking_area_id': id, 'default_branch_id': branch_id, 'lane_configuration_form': True, 'form_view_ref': 'nsp_master_gatekeeper.view_nsp_parking_layout_lane_form'}">
+            <list create="1" edit="1" delete="1"
+                  decoration-success="configuration_state == 'ready'"
+                  decoration-warning="configuration_state == 'incomplete'"
+                  decoration-danger="configuration_state == 'disabled' or not active">
               <control>
                 <create string="Add Lane"/>
               </control>
-              <field name="parking_area_state" column_invisible="1"/>
-              <field name="lane_id" string="Lane" decoration-bf="1"/>
-              <field name="sequence_point_count" string="Sequence Points" readonly="1"/>
-              <field name="reader_config_count" string="Readers" readonly="1"/>
-              <field name="setup_state"
-                     string="Setup Status"
-                     widget="badge"
-                     readonly="1"
-                     decoration-success="setup_state == 'applied'"
-                     decoration-warning="setup_state == 'draft'"/>
-              <field name="active" widget="boolean_toggle" optional="hide"/>
+              <field name="configuration_state" column_invisible="1"/>
+              <field name="active" column_invisible="1"/>
+              <field name="lane_id" string="Lane Name" decoration-bf="1"/>
             </list>
           </field>
         </sheet>
@@ -150,5 +116,4 @@
     <field name="view_mode">list,form</field>
     <field name="search_view_id" ref="view_nsp_parking_area_search"/>
   </record>
-
-  </odoo>
+</odoo>

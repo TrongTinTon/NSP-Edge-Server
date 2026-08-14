@@ -12,7 +12,6 @@
         <filter string="Operational" name="operational" domain="[('state','=','operational')]"/>
         <filter string="Maintenance" name="maintenance" domain="[('state','=','maintenance')]"/>
         <filter string="Blocked" name="blocked" domain="[('state','=','blocked')]"/>
-        <filter string="Published" name="published" domain="[('published_revision','&gt;',0)]"/>
         <separator/>
         <group>
           <filter string="Branch" name="group_branch" context="{'group_by':'branch_id'}"/>
@@ -26,27 +25,17 @@
     <field name="name">nsp.parking.operation.list</field>
     <field name="model">nsp.parking.area</field>
     <field name="arch" type="xml">
-      <list string="Parking Layout"
-            create="0" edit="0" delete="0"
+      <list string="Parking Layout" create="0" edit="0" delete="0"
             decoration-success="configuration_state == 'ready'"
             decoration-warning="configuration_state == 'incomplete'"
-            decoration-muted="configuration_state == 'empty'">
+            decoration-danger="configuration_state == 'empty'">
+        <field name="configuration_state" column_invisible="1"/>
         <field name="state" widget="badge"
                decoration-success="state == 'operational'"
                decoration-warning="state in ('draft','maintenance')"
                decoration-danger="state == 'blocked'"/>
         <field name="name" string="Layout" decoration-bf="1"/>
         <field name="branch_id" string="Branch"/>
-        <field name="lane_count" string="Lanes"/>
-        <field name="ready_lane_count" string="Ready"/>
-        <field name="incomplete_lane_count" string="Attention"/>
-        <field name="configuration_state" string="Readiness" widget="badge"
-               decoration-success="configuration_state == 'ready'"
-               decoration-warning="configuration_state == 'incomplete'"
-               decoration-muted="configuration_state == 'empty'"/>
-        <field name="published_revision" string="Layout Rev."/>
-        <field name="runtime_snapshot_revision" string="Snapshot Rev."/>
-        <field name="runtime_synced_at" string="Synchronized" optional="hide"/>
       </list>
     </field>
   </record>
@@ -77,74 +66,24 @@
             <div class="text-muted"><field name="code" readonly="1" class="oe_inline"/></div>
           </div>
 
-          <div class="alert alert-info" role="alert">
-            Read-only runtime projection synchronized from Cloud. Update and publish the Parking Layout on Cloud to change this configuration.
-          </div>
-
-          <div class="nsp-parking-layout-summary row g-3 mb-4">
-            <div class="col-12 col-md-6 col-xl-4">
-              <div class="nsp-parking-layout-card">
-                <div class="nsp-parking-layout-card__label">LANES</div>
-                <div class="nsp-parking-layout-card__value"><field name="lane_count" readonly="1" nolabel="1"/></div>
-                <div class="nsp-parking-layout-card__meta">
-                  <field name="ready_lane_count" readonly="1" nolabel="1"/> ready ·
-                  <field name="incomplete_lane_count" readonly="1" nolabel="1"/> attention
-                </div>
-              </div>
-            </div>
-            <div class="col-12 col-md-6 col-xl-4">
-              <div class="nsp-parking-layout-card">
-                <div class="nsp-parking-layout-card__label">INFRASTRUCTURE</div>
-                <div class="nsp-parking-layout-card__value"><field name="reader_count" readonly="1" nolabel="1"/> Readers</div>
-                <div class="nsp-parking-layout-card__meta">
-                  <field name="edge_server_count" readonly="1" nolabel="1"/> Edge ·
-                  <field name="controller_count" readonly="1" nolabel="1"/> Controllers
-                </div>
-              </div>
-            </div>
-            <div class="col-12 col-md-6 col-xl-4">
-              <div class="nsp-parking-layout-card">
-                <div class="nsp-parking-layout-card__label">SYNCHRONIZED SNAPSHOT</div>
-                <div class="nsp-parking-layout-card__value">Layout Rev. <field name="published_revision" readonly="1" nolabel="1"/></div>
-                <div class="nsp-parking-layout-card__meta">Snapshot Rev. <field name="runtime_snapshot_revision" readonly="1" nolabel="1"/> · <field name="runtime_synced_at" readonly="1" nolabel="1"/></div>
-              </div>
-            </div>
-          </div>
-
-          <group>
-            <group string="Layout Identity">
-              <field name="branch_id" string="Branch" readonly="1"/>
-            </group>
-            <group string="Runtime Snapshot">
-              <field name="published_edge_server_codes" string="Published Edge Servers" readonly="1"/>
-              <field name="configuration_state" string="Configuration" widget="badge" readonly="1"
-                     decoration-success="configuration_state == 'ready'"
-                     decoration-warning="configuration_state == 'incomplete'"
-                     decoration-muted="configuration_state == 'empty'"/>
-            </group>
+          <group string="Layout Identity">
+            <field name="branch_id" string="Branch" readonly="1"/>
           </group>
 
           <div class="nsp-parking-layout__lanes-header">
-            <div>
-              <h3>Lane Configurations</h3>
-              <p class="text-muted mb-0">View each synchronized Lane Configuration, its Device Configuration and Antenna Sequence.</p>
-            </div>
+            <h3>Lane Configurations</h3>
           </div>
           <field name="layout_lane_ids"
                  mode="list,form"
                  readonly="1"
                  context="{'form_view_ref': 'nsp_business_gatekeeper.view_nsp_parking_layout_lane_form', 'create': False, 'edit': False, 'delete': False}">
-            <list create="0" edit="0" delete="0" decoration-muted="not active">
-              <field name="parking_area_state" column_invisible="1"/>
-              <field name="lane_id" string="Lane" decoration-bf="1"/>
-              <field name="edge_server_id" string="Server"/>
-              <field name="controller_id" string="Controller"/>
-              <field name="sequence_point_count" string="Sequence Points" readonly="1"/>
-              <field name="reader_config_count" string="Readers" readonly="1"/>
-              <field name="total_path_duration" string="Max Window (s)" readonly="1"/>
-              <field name="configuration_issue" string="Configuration" readonly="1" optional="show"/>
+            <list create="0" edit="0" delete="0"
+                  decoration-success="configuration_state == 'ready'"
+                  decoration-warning="configuration_state == 'incomplete'"
+                  decoration-danger="configuration_state == 'disabled' or not active">
               <field name="configuration_state" column_invisible="1"/>
-              <field name="active" widget="boolean_toggle" readonly="1" optional="hide"/>
+              <field name="active" column_invisible="1"/>
+              <field name="lane_id" string="Lane Name" decoration-bf="1"/>
             </list>
           </field>
         </sheet>

@@ -204,11 +204,6 @@ export class NspDeviceTreeView extends Component {
 
     _parkingEntries() {
         const data = this.props.record?.data || {};
-        const server = {
-            id: many2oneId(data.edge_server_id),
-            name: data.edge_server_name || many2oneLabel(data.edge_server_id, "Server"),
-            status: this._status(data.edge_server_status),
-        };
         const controller = {
             id: many2oneId(data.controller_id),
             name: data.controller_name || many2oneLabel(data.controller_id, "Controller"),
@@ -216,7 +211,6 @@ export class NspDeviceTreeView extends Component {
         };
         return this.state.parkingReaders.map((row, index) => ({
             key: `lane-reader-${row.id || index}`,
-            server,
             controller,
             reader: {
                 id: many2oneId(row.reader_id),
@@ -277,18 +271,21 @@ export class NspDeviceTreeView extends Component {
                 }));
         }
 
+        return [];
+    }
+
+    get parkingControllers() {
+        if (this.mode !== "parking_lane") {
+            return [];
+        }
         const first = this.entries[0];
-        if (!first?.server.id) {
+        if (!first?.controller.id) {
             return [];
         }
         return [{
-            key: `server-${first.server.id}`,
-            ...first.server,
-            controllers: first.controller.id ? [{
-                key: `server-${first.server.id}-controller-${first.controller.id}`,
-                ...first.controller,
-                readers: this.entries,
-            }] : [],
+            key: `controller-${first.controller.id}`,
+            ...first.controller,
+            readers: this.entries,
         }];
     }
 
@@ -305,7 +302,13 @@ export class NspDeviceTreeView extends Component {
 
     get breadcrumb() {
         const entry = this.selectedEntry;
-        return entry ? `${entry.server.name} > ${entry.controller.name} > ${entry.reader.name}` : "";
+        if (!entry) {
+            return "";
+        }
+        if (this.mode === "parking_lane") {
+            return `${entry.controller.name} > ${entry.reader.name}`;
+        }
+        return `${entry.server.name} > ${entry.controller.name} > ${entry.reader.name}`;
     }
 
     isExpanded(key) {

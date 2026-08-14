@@ -65,17 +65,11 @@
       <list string="Lane Configurations" create="0" edit="0" delete="0"
             decoration-success="configuration_state == 'ready'"
             decoration-warning="configuration_state == 'incomplete'"
-            decoration-muted="configuration_state == 'disabled'">
-        <field name="parking_area_id" string="Parking Layout"/>
-        <field name="lane_id" string="Lane" decoration-bf="1"/>
-        <field name="edge_server_id" string="Server"/>
-        <field name="controller_id" string="Controller"/>
-        <field name="reader_config_count" string="Readers"/>
-        <field name="sequence_point_count" string="Sequence Points"/>
-        <field name="total_path_duration" string="Max Window (s)"/>
-        <field name="configuration_issue" string="Configuration" optional="show"/>
+            decoration-danger="configuration_state == 'disabled' or not active">
         <field name="configuration_state" column_invisible="1"/>
-        <field name="active" widget="boolean_toggle" readonly="1"/>
+        <field name="active" column_invisible="1"/>
+        <field name="parking_area_id" string="Parking Layout"/>
+        <field name="lane_id" string="Lane Name" decoration-bf="1"/>
       </list>
     </field>
   </record>
@@ -87,8 +81,6 @@
       <form string="Lane Configuration" create="0" edit="0" delete="0" class="o_nsp_parking_lane_form">
         <sheet>
           <field name="parking_area_state" invisible="1"/>
-          <field name="edge_server_name" invisible="1"/>
-          <field name="edge_server_status" invisible="1"/>
           <field name="controller_name" invisible="1"/>
           <field name="controller_status" invisible="1"/>
 
@@ -97,25 +89,10 @@
             <h1><field name="lane_id" readonly="1"/></h1>
           </div>
 
-          <div class="alert alert-info" role="alert">
-            Read-only Lane Configuration synchronized from Cloud. Lane Master identity is independent; this record owns the runtime Server, Controller, Reader Configuration and Antenna Sequence for this Parking Layout.
-          </div>
-
-          <group>
-            <group string="Context">
-              <field name="parking_area_id" string="Parking Layout" readonly="1"/>
-              <field name="branch_id" readonly="1"/>
-              <field name="active" readonly="1"/>
-            </group>
-            <group string="Infrastructure">
-              <field name="edge_server_id" string="Server" readonly="1"/>
-              <field name="controller_id" string="Controller" readonly="1"/>
-              <field name="configuration_state" widget="badge" readonly="1"
-                     decoration-success="configuration_state == 'ready'"
-                     decoration-warning="configuration_state == 'incomplete'"
-                     decoration-muted="configuration_state == 'disabled'"/>
-              <field name="configuration_issue" readonly="1"/>
-            </group>
+          <group col="6">
+            <field name="parking_area_id" string="Parking Layout" readonly="1"/>
+            <field name="branch_id" string="Branch" readonly="1"/>
+            <field name="active" string="Active" readonly="1"/>
           </group>
 
           <separator string="Device Configuration"/>
@@ -127,7 +104,6 @@
             <section class="nsp-parking-sequence-grid__editor">
               <field name="antenna_sequence_ids" nolabel="1" readonly="1">
                 <list create="0" edit="0" delete="0" default_order="sequence asc, id asc">
-                  <field name="sequence" string="#"/>
                   <field name="reader_id" string="Reader"/>
                   <field name="port_no" string="Antenna"/>
                   <field name="duration_from_previous" string="Max Duration from Previous (s)"/>
