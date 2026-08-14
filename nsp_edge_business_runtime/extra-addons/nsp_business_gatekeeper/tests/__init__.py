@@ -10,3 +10,5 @@ from . import test_live_monitor_gradient_1063_contract
 from . import test_live_monitor_checkin_checkout_1064_contract
 from . import test_lane_configuration_simplified_1066_contract
 from . import test_lane_master_ui_simplified_1067_contract
+
+from . import test_cloud_master_data_projection_1069_contract

@@ -87,13 +87,23 @@ class NspVehicleBorrow(models.Model):
                 rec.borrower_id.name or _("User"),
             )
 
-    @api.depends("vehicle_id.owner_id")
+    @api.depends(
+        "vehicle_id.owner_id",
+        "vehicle_id.owner_id.friendship_sent_ids.state",
+        "vehicle_id.owner_id.friendship_sent_ids.addressee_id",
+        "vehicle_id.owner_id.friendship_received_ids.state",
+        "vehicle_id.owner_id.friendship_received_ids.requester_id",
+    )
     def _compute_allowed_borrower_ids(self):
         owners = self.mapped("vehicle_id.owner_id")
         friend_map = self.env["nsp.user.friendship"].sudo().accepted_friends_map(owners)
         for rec in self:
             owner_id = rec.vehicle_id.owner_id.id if rec.vehicle_id.owner_id else 0
             rec.allowed_borrower_ids = self.env["nsp.user"].browse(friend_map.get(owner_id, []))
+
+    @api.onchange("vehicle_id")
+    def _onchange_vehicle_id_refresh_allowed_borrowers(self):
+        self._compute_allowed_borrower_ids()
 
     @api.depends("state", "valid_from", "valid_to", "returned_at")
     def _compute_active_now(self):

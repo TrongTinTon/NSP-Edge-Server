@@ -1,0 +1,1 @@
+from . import test_borrow_friend_refresh_193_contract

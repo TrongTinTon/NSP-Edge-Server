@@ -25,7 +25,12 @@ SYNC_ROUTE_SPECS = {
     "edge/users/snapshot": {
         "name": "Users Snapshot",
         "endpoint_code": "nsp_edge_users_snapshot",
-        "direction": "pull", "interval": 5, "batch_size": 500, "kind": "user",
+        "direction": "pull", "interval": 1, "batch_size": 500, "kind": "user",
+    },
+    "edge/friendships/snapshot": {
+        "name": "Friendships Snapshot",
+        "endpoint_code": "nsp_edge_friendships_snapshot",
+        "direction": "pull", "interval": 1, "batch_size": 500, "kind": "friendship",
     },
     "edge/vehicle-reference/snapshot": {
         "name": "Vehicle Reference Snapshot",
@@ -35,7 +40,7 @@ SYNC_ROUTE_SPECS = {
     "edge/vehicles/snapshot": {
         "name": "Vehicles Snapshot",
         "endpoint_code": "nsp_edge_vehicles_snapshot",
-        "direction": "pull", "interval": 5, "batch_size": 500, "kind": "vehicle",
+        "direction": "pull", "interval": 1, "batch_size": 500, "kind": "vehicle",
     },
     "edge/rfid-assignments/snapshot": {
         "name": "RFID Runtime Assignments Snapshot",
@@ -45,7 +50,7 @@ SYNC_ROUTE_SPECS = {
     "edge/vehicle-borrows/snapshot": {
         "name": "Vehicle Borrows Snapshot",
         "endpoint_code": "nsp_edge_vehicle_borrows_snapshot",
-        "direction": "pull", "interval": 5, "batch_size": 500, "kind": "vehicle_borrow",
+        "direction": "pull", "interval": 1, "batch_size": 500, "kind": "vehicle_borrow",
     },
     "edge/lane-calibrations/snapshot": {
         "name": "Lane Calibration Snapshot",
@@ -267,6 +272,30 @@ class NspSyncJob(models.Model):
         return manager
 
     @api.model
+    def _ensure_friendships_route_xmlid(self, action):
+        action = action.exists()
+        if not action:
+            return False
+        ModelData = self.env["ir.model.data"].sudo()
+        binding = ModelData.search([
+            ("module", "=", "nsp_sync"),
+            ("name", "=", "api_friendships"),
+            ("model", "=", "ir.actions.core_api"),
+        ], limit=1)
+        if binding:
+            if binding.res_id != action.id:
+                binding.write({"res_id": action.id, "noupdate": False})
+            return True
+        ModelData.create({
+            "module": "nsp_sync",
+            "name": "api_friendships",
+            "model": "ir.actions.core_api",
+            "res_id": action.id,
+            "noupdate": False,
+        })
+        return True
+
+    @api.model
     def _ensure_sync_action_definitions(self):
         """Create/repair the local outbound Core API route descriptors.
 
@@ -314,6 +343,14 @@ class NspSyncJob(models.Model):
         if create_vals:
             for action in Action.create(create_vals):
                 resolved[str(action.route_suffix or "").strip().strip("/")] = action
+
+        # New Python code can run before module XML data is upgraded.  If the
+        # self-healing catalogue creates the Friendship descriptor in that window,
+        # bind it immediately to the canonical XML ID.  The later XML loader will
+        # then update this record instead of trying to create a duplicate route.
+        friendship_action = resolved.get("edge/friendships/snapshot")
+        if friendship_action:
+            self._ensure_friendships_route_xmlid(friendship_action)
 
         missing = [route for route in NSP_SYNC_ALLOWED_ROUTES if route not in resolved]
         if missing:
@@ -664,7 +701,7 @@ class NspSyncJob(models.Model):
 
     def _build_pull_payload(self):
         self.ensure_one()
-        if self._action_kind() in ("parking_runtime", "vehicle_config", "rfid_runtime_assignment", "user", "vehicle", "vehicle_borrow", "lane_calibration"):
+        if self._action_kind() in ("parking_runtime", "vehicle_config", "rfid_runtime_assignment", "user", "friendship", "vehicle", "vehicle_borrow", "lane_calibration"):
             return {"edge_server_code": self.edge_server_code}
         payload = {"edge_server_code": self.edge_server_code, "limit": self.batch_size}
         if self.sync_cursor:
@@ -846,10 +883,10 @@ class NspSyncJob(models.Model):
         items = self._items_from_response(data)
         next_cursor = data.get("next_sync_cursor") or False
         has_more = bool(data.get("has_more"))
-        full_snapshot = kind in ("user", "vehicle", "vehicle_borrow", "lane_calibration")
+        full_snapshot = kind in ("user", "friendship", "vehicle", "vehicle_borrow", "lane_calibration")
         if not items:
             removed = 0
-            if kind in ("user", "vehicle", "vehicle_borrow"):
+            if kind in ("user", "friendship", "vehicle", "vehicle_borrow"):
                 removed = self._reconcile_business_snapshot(kind, [])
             elif kind == "lane_calibration":
                 removed = self._reconcile_measurement_snapshot([])
@@ -870,7 +907,7 @@ class NspSyncJob(models.Model):
         results, failed = self._apply_items(kind, items, request_payload=request_payload)
         if failed:
             raise UserError(json.dumps(failed, ensure_ascii=False))
-        if kind in ("user", "vehicle", "vehicle_borrow"):
+        if kind in ("user", "friendship", "vehicle", "vehicle_borrow"):
             removed = self._reconcile_business_snapshot(kind, items)
         elif kind == "lane_calibration":
             removed = self._reconcile_measurement_snapshot(items)

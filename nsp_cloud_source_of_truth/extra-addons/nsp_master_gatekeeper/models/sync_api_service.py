@@ -847,6 +847,33 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
             **self._snapshot_meta(edge_server, "users"),
         }, message="Users snapshot loaded.")
 
+    @endpoint("NSP Edge Friendships Snapshot", route_path="edge/friendships/snapshot", methods="POST", code="nsp_edge_friendships_snapshot")
+    def api_friendships_snapshot(self):
+        data = self._payload()
+        edge_server, error = self._auth_edge_snapshot_request(data)
+        if error:
+            return error
+        Friendship = self.env["nsp.user.friendship"].sudo()
+        records = Friendship.search([], order="id")
+        items = []
+        for friendship in records:
+            requester_code = self._user_code(friendship.requester_id)
+            addressee_code = self._user_code(friendship.addressee_id)
+            if not requester_code or not addressee_code:
+                continue
+            item = {
+                "requester_user_code": requester_code,
+                "addressee_user_code": addressee_code,
+                "state": friendship.state,
+            }
+            if friendship.accepted_at:
+                item["accepted_at"] = self._iso_datetime(friendship.accepted_at)
+            items.append(item)
+        return self._ok({
+            "items": items,
+            **self._snapshot_meta(edge_server, "friendships"),
+        }, message="Friendships snapshot loaded.")
+
     @endpoint("NSP Edge Vehicles Snapshot", route_path="edge/vehicles/snapshot", methods="POST", code="nsp_edge_vehicles_snapshot")
     def api_vehicles_snapshot(self):
         data = self._payload()
@@ -1608,6 +1635,8 @@ class NspMasterGatekeeperSyncApiService(models.AbstractModel):
         vehicle = cache["vehicle_by_code"].get(vehicle_code) if vehicle_code else False
         user = cache["user_by_code"].get(user_code) if user_code else False
         borrow = cache["borrow_by_code"].get(borrow_code) if borrow_code else False
+        if borrow_code and not borrow:
+            raise ValueError("borrow_not_found")
         if vehicle_code and not vehicle:
             raise ValueError("vehicle_not_found")
         if user_code and not user:

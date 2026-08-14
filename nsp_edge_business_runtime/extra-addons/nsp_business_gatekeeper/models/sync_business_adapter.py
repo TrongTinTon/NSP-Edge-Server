@@ -353,6 +353,29 @@ class NspSyncBusinessAdapter(models.Model):
             ]) if codes else self.env["nsp.user"].browse()
             return {"records": {record.user_code: record for record in records}}
 
+        if kind == "friendship":
+            user_codes = set()
+            for item in rows:
+                user_codes.add(str(item.get("requester_user_code") or "").strip().upper())
+                user_codes.add(str(item.get("addressee_user_code") or "").strip().upper())
+            user_codes.discard("")
+            users = self.env["nsp.user"].sudo().with_context(active_test=False).search([
+                ("user_code", "in", list(user_codes)),
+            ]) if user_codes else self.env["nsp.user"].browse()
+            Friendship = self.env["nsp.user.friendship"].sudo()
+            user_by_code = {record.user_code: record for record in users}
+            pair_keys = []
+            for item in rows:
+                requester = user_by_code.get(str(item.get("requester_user_code") or "").strip().upper())
+                addressee = user_by_code.get(str(item.get("addressee_user_code") or "").strip().upper())
+                if requester and addressee:
+                    pair_keys.append(Friendship._make_pair_key(requester.id, addressee.id))
+            friendships = Friendship.search([("pair_key", "in", pair_keys)]) if pair_keys else Friendship.browse()
+            return {
+                "user_by_code": user_by_code,
+                "friendship_by_pair": {record.pair_key: record for record in friendships},
+            }
+
         if kind == "vehicle":
             vehicle_codes = {str(item.get("vehicle_code") or "").strip().upper() for item in rows}
             owner_codes = {str(item.get("owner_user_code") or "").strip().upper() for item in rows}
@@ -653,6 +676,62 @@ class NspSyncBusinessAdapter(models.Model):
                 operation="pull",
             )
         return [record for _group, _item, record in applied], removed
+
+    @api.model
+    def _apply_friendship(self, item, cache=None):
+        if not isinstance(item, dict):
+            raise UserError(_("Friendship snapshot item must be an object."))
+        unsupported = set(item) - {
+            "requester_user_code", "addressee_user_code", "state", "accepted_at"
+        }
+        if unsupported:
+            raise UserError(
+                _("Unsupported Friendship snapshot field(s): %s")
+                % ", ".join(sorted(unsupported))
+            )
+        requester_code = str(item.get("requester_user_code") or "").strip().upper()
+        addressee_code = str(item.get("addressee_user_code") or "").strip().upper()
+        if not requester_code or not addressee_code or requester_code == addressee_code:
+            raise UserError(_("Friendship snapshot requires two different User Codes."))
+        state = str(item.get("state") or "pending").strip().lower()
+        if state not in ("pending", "accepted"):
+            raise UserError(_("Invalid Friendship state: %s") % state)
+        cache = cache or self._prepare_apply_cache("friendship", [item])
+        requester = cache.get("user_by_code", {}).get(requester_code)
+        addressee = cache.get("user_by_code", {}).get(addressee_code)
+        if not requester or not addressee:
+            raise UserError(_("Friendship Users must exist before Friendship sync."))
+
+        Friendship = self.env["nsp.user.friendship"].sudo()
+        pair_key = Friendship._make_pair_key(requester.id, addressee.id)
+        friendship = cache.get("friendship_by_pair", {}).get(pair_key)
+        accepted_at = self._remote_datetime(item.get("accepted_at")) if item.get("accepted_at") else False
+        if friendship:
+            values = {
+                "requester_id": requester.id,
+                "addressee_id": addressee.id,
+                "state": state,
+                "accepted_at": accepted_at if state == "accepted" else False,
+            }
+            self._write_changed(
+                friendship.with_context(nsp_friendship_action=True, nsp_master_data_sync=True),
+                values,
+            )
+            return friendship
+
+        friendship = Friendship.with_context(nsp_master_data_sync=True).create({
+            "requester_id": requester.id,
+            "addressee_id": addressee.id,
+        })
+        if state == "accepted":
+            friendship.with_context(
+                nsp_friendship_action=True, nsp_master_data_sync=True
+            ).write({
+                "state": "accepted",
+                "accepted_at": accepted_at or fields.Datetime.now(),
+            })
+        cache.setdefault("friendship_by_pair", {})[pair_key] = friendship
+        return friendship
 
     @api.model
     def _apply_vehicle(self, item, cache=None):
@@ -1194,6 +1273,7 @@ class NspSyncBusinessAdapter(models.Model):
         Record = self.env["nsp.sync.record"].sudo()
         handlers = {
             "user": self._apply_user,
+            "friendship": self._apply_friendship,
             "vehicle": self._apply_vehicle,
             "vehicle_borrow": self._apply_vehicle_borrow,
             "lane_calibration": self._apply_lane_calibration,
@@ -1202,7 +1282,7 @@ class NspSyncBusinessAdapter(models.Model):
         if not handler:
             raise UserError(_("Unsupported pull route: %s") % self.route_suffix)
         normalized_items = items if isinstance(items, list) else []
-        cached_kinds = {"user", "vehicle", "vehicle_borrow"}
+        cached_kinds = {"user", "friendship", "vehicle", "vehicle_borrow"}
         apply_cache = self._prepare_apply_cache(kind, normalized_items) if kind in cached_kinds else None
         for index, item in enumerate(normalized_items):
             key = self._record_key_from_item(item)
@@ -1310,6 +1390,27 @@ class NspSyncBusinessAdapter(models.Model):
             stale.write({"active": False})
             return len(stale)
 
+        if kind == "friendship":
+            incoming_pairs = set()
+            for item in rows:
+                first = str(item.get("requester_user_code") or "").strip().upper()
+                second = str(item.get("addressee_user_code") or "").strip().upper()
+                if first and second and first != second:
+                    incoming_pairs.add(tuple(sorted((first, second))))
+            Friendship = self.env["nsp.user.friendship"].sudo()
+            stale = Friendship.browse()
+            for friendship in Friendship.search([]):
+                codes = tuple(sorted((
+                    str(friendship.requester_id.user_code or "").strip().upper(),
+                    str(friendship.addressee_id.user_code or "").strip().upper(),
+                )))
+                if codes not in incoming_pairs:
+                    stale |= friendship
+            count = len(stale)
+            if stale:
+                stale.with_context(nsp_master_data_sync=True).unlink()
+            return count
+
         if kind == "vehicle":
             keys = {
                 str(item.get("vehicle_code") or "").strip().upper()
@@ -1350,6 +1451,11 @@ class NspSyncBusinessAdapter(models.Model):
         ):
             if item.get(field_name):
                 return str(item[field_name])
+        requester = str(item.get("requester_user_code") or "").strip().upper()
+        addressee = str(item.get("addressee_user_code") or "").strip().upper()
+        if requester and addressee and requester != addressee:
+            first, second = sorted((requester, addressee))
+            return "friendship:%s:%s" % (first, second)
         return False
 
     @api.model

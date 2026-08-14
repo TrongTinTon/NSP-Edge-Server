@@ -18,3 +18,5 @@ from . import api_service
 from . import sync_job
 from . import sync_parking_layout
 from . import sync_business_adapter
+
+from . import master_data_projection

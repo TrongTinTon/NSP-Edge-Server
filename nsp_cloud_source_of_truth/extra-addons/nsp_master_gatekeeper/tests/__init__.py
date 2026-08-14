@@ -12,3 +12,6 @@ from . import test_parking_log_master_clean_1341_contract
 from . import test_live_monitor_edge_ui_parity_1342_contract
 from . import test_live_monitor_checkin_checkout_1343_contract
 from . import test_lane_master_ui_simplified_1345_contract
+
+from . import test_cloud_master_data_pull_1347_contract
+from . import test_friendships_upgrade_duplicate_action_1349_contract
