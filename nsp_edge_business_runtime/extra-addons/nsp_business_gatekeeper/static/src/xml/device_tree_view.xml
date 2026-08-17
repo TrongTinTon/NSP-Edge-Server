@@ -40,7 +40,7 @@
                         <div t-else="" class="nsp-device-tree__empty">
                             <i class="fa fa-sitemap"/>
                             <strong>No Device Tree mapping</strong>
-                            <span>The synchronized configuration has no complete Controller → Reader hierarchy.</span>
+                            <span>The synchronized configuration has no Controller → Reader mapping.</span>
                         </div>
                     </t>
                     <t t-else="">

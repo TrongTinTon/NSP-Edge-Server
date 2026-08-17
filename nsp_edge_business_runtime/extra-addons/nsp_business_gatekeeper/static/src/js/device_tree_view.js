@@ -279,11 +279,11 @@ export class NspDeviceTreeView extends Component {
             return [];
         }
         const first = this.entries[0];
-        if (!first?.controller.id) {
+        if (!first) {
             return [];
         }
         return [{
-            key: `controller-${first.controller.id}`,
+            key: `controller-${first.controller.id || first.controller.name}`,
             ...first.controller,
             readers: this.entries,
         }];
