@@ -114,7 +114,7 @@ export class NspDeviceTreeView extends Component {
                 [["session_id", "=", sessionId]],
                 [
                     "device_type", "parent_id", "sequence",
-                    "server_id", "controller_id", "reader_id",
+                    "controller_id", "reader_id",
                     "device_name", "device_status", "serial_number", "port_numbers",
                     "runtime_override_enabled",
                     "effective_power_dbm", "effective_read_interval_ms",
@@ -164,19 +164,12 @@ export class NspDeviceTreeView extends Component {
             .filter((node) => node.device_type === "reader")
             .map((readerNode, index) => {
                 const controllerNode = byId.get(many2oneId(readerNode.parent_id));
-                const serverNode = controllerNode && byId.get(many2oneId(controllerNode.parent_id));
-                if (controllerNode?.device_type !== "controller" || serverNode?.device_type !== "server") {
+                if (controllerNode?.device_type !== "controller") {
                     return null;
                 }
                 return {
                     key: `cal-reader-${readerNode.id || index}`,
                     nodeId: Number(readerNode.id || 0),
-                    server: {
-                        nodeId: Number(serverNode.id || 0),
-                        id: many2oneId(serverNode.server_id),
-                        name: serverNode.device_name || many2oneLabel(serverNode.server_id, "Server"),
-                        status: this._status(serverNode.device_status),
-                    },
                     controller: {
                         nodeId: Number(controllerNode.id || 0),
                         id: many2oneId(controllerNode.controller_id),
@@ -253,21 +246,13 @@ export class NspDeviceTreeView extends Component {
                 entriesByController.get(key).push(entry);
             }
             return nodes
-                .filter((node) => node.device_type === "server")
-                .map((serverNode) => ({
-                    key: `cal-server-${serverNode.id}`,
-                    nodeId: Number(serverNode.id || 0),
-                    name: serverNode.device_name || many2oneLabel(serverNode.server_id, "Server"),
-                    status: this._status(serverNode.device_status),
-                    controllers: nodes
-                        .filter((node) => node.device_type === "controller" && many2oneId(node.parent_id) === Number(serverNode.id))
-                        .map((controllerNode) => ({
-                            key: `cal-controller-${controllerNode.id}`,
-                            nodeId: Number(controllerNode.id || 0),
-                            name: controllerNode.device_name || many2oneLabel(controllerNode.controller_id, "Controller"),
-                            status: this._status(controllerNode.device_status),
-                            readers: entriesByController.get(Number(controllerNode.id)) || [],
-                        })),
+                .filter((node) => node.device_type === "controller")
+                .map((controllerNode) => ({
+                    key: `cal-controller-${controllerNode.id}`,
+                    nodeId: Number(controllerNode.id || 0),
+                    name: controllerNode.device_name || many2oneLabel(controllerNode.controller_id, "Controller"),
+                    status: this._status(controllerNode.device_status),
+                    readers: entriesByController.get(Number(controllerNode.id)) || [],
                 }));
         }
 
@@ -305,10 +290,7 @@ export class NspDeviceTreeView extends Component {
         if (!entry) {
             return "";
         }
-        if (this.mode === "parking_lane") {
-            return `${entry.controller.name} > ${entry.reader.name}`;
-        }
-        return `${entry.server.name} > ${entry.controller.name} > ${entry.reader.name}`;
+        return `${entry.controller.name} > ${entry.reader.name}`;
     }
 
     isExpanded(key) {
